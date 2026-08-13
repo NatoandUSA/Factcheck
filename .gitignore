@@ -3,3 +3,8 @@ server/node_modules/
 .env
 dist/
 .DS_Store
+server/app.db
+*.xlsx
+data/imports/processed_*
+
+

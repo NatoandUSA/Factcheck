@@ -3,6 +3,7 @@ const { GoogleGenAI } = require('@google/genai');
 const cors = require('cors');
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
+require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
 
 const app = express();
 app.use(cors());
@@ -107,6 +108,12 @@ db.serialize(() => {
       stmt.finalize();
     }
   });
+
+  // Seed Gemini API key from .env if present
+  if (process.env.GEMINI_API_KEY) {
+    db.run("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", ['gemini_api_key', process.env.GEMINI_API_KEY]);
+    console.log('Gemini API key configured from .env environment.');
+  }
 });
 
 // Mock Auth endpoint (just select a user by email for prototyping)
@@ -361,23 +368,61 @@ setInterval(() => {
     if (err || !onlineAgents) return;
 
     onlineAgents.forEach(agent => {
-      // Agent 1: Trend Scout (Role: RESEARCHER)
+      // Agent 1: Trend Scout (Role: RESEARCHER - Real Data Engine)
       if (agent.role === 'RESEARCHER') {
-        const categories = ['Jewelry', 'Acrylic', 'Blanket', 'Embroidery'];
-        const randomCat = categories[Math.floor(Math.random() * categories.length)];
-        const trendId = Math.floor(Math.random() * 9000);
+        const fs = require('fs');
+        const importsDir = path.resolve(__dirname, '../data/imports');
+        if (!fs.existsSync(importsDir)) {
+          fs.mkdirSync(importsDir, { recursive: true });
+        }
+
+        const files = fs.readdirSync(importsDir).filter(f => f.endsWith('.csv') || f.endsWith('.xlsx'));
         
-        db.run(
-          "INSERT INTO market_trends (category, trending_keywords) VALUES (?, ?)",
-          [randomCat, `viral_trend_${trendId}, best_gift_2026, personalized_${randomCat.toLowerCase()}`],
-          function(err) {
-            if (!err) {
-              const msg = `Discovered new trending keyword cluster for ${randomCat}: viral_trend_${trendId}`;
-              db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, msg]);
-              db.run("UPDATE agents SET lastActive = CURRENT_TIMESTAMP WHERE id = ?", [agent.id]);
+        if (files.length > 0) {
+          // Process real report file dropped into data/imports
+          const fileToProcess = files[0];
+          const fullPath = path.join(importsDir, fileToProcess);
+          
+          try {
+            const XLSX = require('xlsx');
+            const workbook = XLSX.readFile(fullPath);
+            const sheetName = workbook.SheetNames[0];
+            const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName]);
+            
+            if (rows.length > 0) {
+              // Extract top keyword from real report
+              const sampleRow = rows[0];
+              const kwKey = Object.keys(sampleRow).find(k => /keyword|query|search/i.test(k)) || Object.keys(sampleRow)[0];
+              const realKw = String(sampleRow[kwKey] || 'Custom Gift').trim();
+              const category = fileToProcess.toLowerCase().includes('jewelry') ? 'Jewelry' :
+                               fileToProcess.toLowerCase().includes('embroidery') ? 'Embroidery' :
+                               fileToProcess.toLowerCase().includes('blanket') ? 'Blanket' : 'Acrylic';
+
+              db.run(
+                "INSERT INTO market_trends (category, trending_keywords) VALUES (?, ?)",
+                [category, `${realKw}, personalized ${category.toLowerCase()}, best gift 2026`],
+                function(err) {
+                  if (!err) {
+                    const msg = `[REAL DATA] Extracted top keyword "${realKw}" from file: ${fileToProcess}`;
+                    db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, msg]);
+                    db.run("UPDATE agents SET lastActive = CURRENT_TIMESTAMP WHERE id = ?", [agent.id]);
+                  }
+                }
+              );
+              // Move or archive processed file
+              const archivedPath = path.join(importsDir, `processed_${Date.now()}_${fileToProcess}`);
+              fs.renameSync(fullPath, archivedPath);
             }
+          } catch (parseErr) {
+            db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, `Error parsing data file ${fileToProcess}: ${parseErr.message}`]);
           }
-        );
+        } else {
+          // No file in data/imports - log waiting state (NO MOCK DATA GENERATION)
+          const etsyTarget = process.env.ETSY_AGENT_URL || 'https://etsy.theglobalserviceteam.site/';
+          const msg = `[REAL DATA ENGINE] Standing by... Drop .csv/.xlsx report files into data/imports/ or connect to Etsy VPS (${etsyTarget})`;
+          db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, msg]);
+          db.run("UPDATE agents SET lastActive = CURRENT_TIMESTAMP WHERE id = ?", [agent.id]);
+        }
       }
 
       // Agent 2: AI Drafter (Role: DRAFTER)

@@ -1,13 +1,18 @@
 import React, { useState } from 'react';
 import { 
   Copy, Check, Download, AlertTriangle, CheckCircle2, 
-  Layers, ShoppingBag, Tag, BookmarkPlus, Info, ExternalLink, ShieldAlert
+  Layers, ShoppingBag, Tag, BookmarkPlus, Info, ExternalLink, ShieldAlert, Eye, Bot
 } from 'lucide-react';
 import { validateAmazonListing, validateEtsyListing } from '../utils/complianceValidator';
 import { useAuth } from '../context/AuthContext';
+import AmazonPreview from './AmazonPreview';
+import EtsyPreview from './EtsyPreview';
+import AgentChat from './AgentChat';
 
-export default function ListingOutputViewer({ listing, onSaveListing, onShowToast, onApproveListing }) {
+export default function ListingOutputViewer({ listing, onSaveListing, onShowToast, onApproveListing, onListingGenerated }) {
   const [activeMarketTab, setActiveMarketTab] = useState('amazon');
+  const [viewMode, setViewMode] = useState('raw'); // 'raw' | 'preview'
+  const [showChat, setShowChat] = useState(false);
   const [copiedKey, setCopiedKey] = useState(null);
   const { user } = useAuth();
 
@@ -72,7 +77,13 @@ export default function ListingOutputViewer({ listing, onSaveListing, onShowToas
   };
 
   return (
-    <div className="studio-panel">
+    <div style={{ display: 'flex', gap: '16px', alignItems: 'flex-start', width: '100%' }}>
+      {showChat && (
+        <div style={{ width: '380px', flexShrink: 0 }}>
+          <AgentChat onClose={() => setShowChat(false)} contextListing={listing} onListingGenerated={onListingGenerated} />
+        </div>
+      )}
+      <div className="studio-panel" style={{ flex: 1, minWidth: 0, margin: 0 }}>
       {/* Top Header Actions */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', marginBottom: '18px' }}>
         <div className="marketplace-tabs" style={{ marginBottom: 0, paddingBottom: 0, borderBottom: 'none' }}>
@@ -101,7 +112,28 @@ export default function ListingOutputViewer({ listing, onSaveListing, onShowToas
           </button>
         </div>
 
-        <div style={{ display: 'flex', gap: '8px' }}>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <div style={{ background: 'var(--bg-subtle)', padding: '4px', borderRadius: '8px', display: 'flex', gap: '4px', marginRight: '8px' }}>
+            <button 
+              className={`btn btn-sm ${viewMode === 'raw' ? 'btn-primary' : 'btn-secondary'}`}
+              onClick={() => setViewMode('raw')}
+              style={{ background: viewMode === 'raw' ? '#fff' : 'transparent', color: viewMode === 'raw' ? '#1e293b' : 'var(--text-muted)', boxShadow: viewMode === 'raw' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none', border: 'none' }}
+            >
+              Raw Data
+            </button>
+            <button 
+              className={`btn btn-sm ${viewMode === 'preview' ? 'btn-primary' : 'btn-secondary'}`}
+              onClick={() => setViewMode('preview')}
+              style={{ background: viewMode === 'preview' ? '#fff' : 'transparent', color: viewMode === 'preview' ? '#1e293b' : 'var(--text-muted)', boxShadow: viewMode === 'preview' ? '0 1px 3px rgba(0,0,0,0.1)' : 'none', border: 'none' }}
+            >
+              <Eye size={14} style={{ marginRight: '4px' }}/> Live Preview
+            </button>
+          </div>
+
+          <button className={`btn btn-sm ${showChat ? 'btn-secondary' : 'btn-primary'}`} onClick={() => setShowChat(!showChat)} style={{ background: showChat ? 'transparent' : 'var(--primary)', color: showChat ? 'var(--text-muted)' : '#fff' }}>
+            <Bot size={14} />
+            <span>AI Co-Pilot</span>
+          </button>
           <button className="btn btn-secondary btn-sm" onClick={() => onSaveListing(listing)}>
             <BookmarkPlus size={14} />
             <span>Save to Catalog</span>
@@ -143,8 +175,12 @@ export default function ListingOutputViewer({ listing, onSaveListing, onShowToas
       {/* AMAZON FBM TAB */}
       {activeMarketTab === 'amazon' && (
         <div>
-          {/* Amazon Validation Banner */}
-          {!amazonValidation.isValid && (
+          {viewMode === 'preview' ? (
+             <AmazonPreview data={listing} />
+          ) : (
+            <>
+              {/* Amazon Validation Banner */}
+              {!amazonValidation.isValid && (
             <div style={{ background: '#fee2e2', border: '1px solid #fecaca', padding: '10px 14px', borderRadius: '8px', marginBottom: '16px', fontSize: '0.8rem', color: '#991b1b' }}>
               <strong>⚠️ Amazon Compliance Alerts:</strong>
               <ul style={{ paddingLeft: '18px', marginTop: '4px' }}>
@@ -253,14 +289,20 @@ export default function ListingOutputViewer({ listing, onSaveListing, onShowToas
               {listing.amazonDescription}
             </div>
           </div>
+          </>
+          )}
         </div>
       )}
 
       {/* ETSY TAB */}
       {activeMarketTab === 'etsy' && (
         <div>
-          {/* Etsy Validation Banner */}
-          {!etsyValidation.isValid && (
+          {viewMode === 'preview' ? (
+             <EtsyPreview data={listing} />
+          ) : (
+            <>
+              {/* Etsy Validation Banner */}
+              {!etsyValidation.isValid && (
             <div style={{ background: '#fee2e2', border: '1px solid #fecaca', padding: '10px 14px', borderRadius: '8px', marginBottom: '16px', fontSize: '0.8rem', color: '#991b1b' }}>
               <strong>⚠️ Etsy Compliance Alerts:</strong>
               <ul style={{ paddingLeft: '18px', marginTop: '4px' }}>
@@ -370,8 +412,11 @@ export default function ListingOutputViewer({ listing, onSaveListing, onShowToas
               {listing.etsyDescription}
             </div>
           </div>
+          </>
+          )}
         </div>
       )}
+      </div>
     </div>
   );
 }

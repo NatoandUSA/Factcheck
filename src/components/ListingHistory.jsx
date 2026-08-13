@@ -1,11 +1,21 @@
 import React, { useState } from 'react';
-import { History, Eye, Trash2, Download, Search, Sparkles, TrendingUp, ChevronDown, ChevronUp, AlertCircle, RefreshCw } from 'lucide-react';
+import { History, Eye, Trash2, Download, Search, Sparkles, TrendingUp, ChevronDown, ChevronUp, AlertCircle, RefreshCw, CheckCircle } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
 export default function ListingHistory({ history, onSelectListing, onDeleteListing, onClearHistory, onShowToast, onRefresh }) {
   const [searchTerm, setSearchTerm] = useState('');
   const [expandedFeedbackId, setExpandedFeedbackId] = useState(null);
+  const [syncing, setSyncing] = useState(false);
+  const [showToast, setShowToast] = useState(false);
   const { user } = useAuth();
+
+  const handleRefresh = async () => {
+    setSyncing(true);
+    await onRefresh();
+    setSyncing(false);
+    setShowToast(true);
+    setTimeout(() => setShowToast(false), 2000);
+  };
 
   const filteredHistory = history.filter(item => {
     const query = searchTerm.toLowerCase();
@@ -39,7 +49,18 @@ export default function ListingHistory({ history, onSelectListing, onDeleteListi
   };
 
   return (
-    <div className="studio-panel" style={{ maxWidth: '1100px', margin: '0 auto' }}>
+    <div className="studio-panel" style={{ maxWidth: '1100px', margin: '0 auto', position: 'relative' }}>
+      {showToast && (
+        <div style={{
+          position: 'absolute', top: '-40px', right: '0', 
+          background: 'var(--success)', color: 'white', 
+          padding: '8px 12px', borderRadius: '4px', fontSize: '0.8rem',
+          display: 'flex', alignItems: 'center', gap: '6px',
+          animation: 'fade-in 0.3s'
+        }}>
+          <CheckCircle size={14} /> Drafts Synced!
+        </div>
+      )}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px', marginBottom: '20px' }}>
         <div>
           <h2 style={{ fontSize: '1.35rem', display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
@@ -53,9 +74,9 @@ export default function ListingHistory({ history, onSelectListing, onDeleteListi
 
         <div style={{ display: 'flex', gap: '8px' }}>
           {onRefresh && (
-            <button className="btn btn-secondary btn-sm" onClick={onRefresh}>
-              <RefreshCw size={14} />
-              <span>Sync Agent Drafts</span>
+            <button className="btn btn-secondary btn-sm" onClick={handleRefresh} disabled={syncing}>
+              <RefreshCw size={14} className={syncing ? "spin-icon" : ""} />
+              <span>{syncing ? 'Syncing...' : 'Sync Agent Drafts'}</span>
             </button>
           )}
           {history.length > 0 && (

@@ -1,4 +1,5 @@
 const express = require('express');
+const { GoogleGenAI } = require('@google/genai');
 const cors = require('cors');
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
@@ -76,6 +77,13 @@ db.serialize(() => {
     )
   `);
 
+  db.run(`
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT
+    )
+  `);
+
   // Seed default users if empty
   db.get("SELECT COUNT(*) as count FROM users", (err, row) => {
     if (row && row.count === 0) {
@@ -130,7 +138,12 @@ app.post('/api/listings', (req, res) => {
 app.get('/api/listings', (req, res) => {
   db.all("SELECT * FROM listings ORDER BY generatedAt DESC", [], (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
-    res.json(rows.map(r => ({ ...r, payload: JSON.parse(r.payload) })));
+    const safeRows = rows.map(r => {
+      let parsedPayload = {};
+      try { parsedPayload = JSON.parse(r.payload); } catch (e) { parsedPayload = { error: 'Malformed AI Payload' }; }
+      return { ...r, payload: parsedPayload };
+    });
+    res.json(safeRows);
   });
 });
 
@@ -188,6 +201,120 @@ app.get('/api/market-data', (req, res) => {
   if (category === 'Jewelry') data.competitionScore += 30; // Highly competitive
   
   res.json(data);
+});
+
+// API: Save API Key
+app.post('/api/settings/apikey', (req, res) => {
+  const { apiKey } = req.body;
+  if (!apiKey) return res.status(400).json({ error: 'Missing API key' });
+  db.run("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", ['gemini_api_key', apiKey], function(err) {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json({ success: true });
+  });
+});
+
+// API: Chat Co-Pilot
+app.post('/api/chat', (req, res) => {
+  const { messages } = req.body;
+  if (!messages || !Array.isArray(messages)) return res.status(400).json({ error: 'Messages required' });
+
+  db.get("SELECT value FROM settings WHERE key = 'gemini_api_key'", async (err, row) => {
+    if (err || !row || !row.value) {
+      return res.status(400).json({ error: 'Gemini API Key missing. Please set it in Settings.' });
+    }
+
+    try {
+      const client = new GoogleGenAI({ apiKey: row.value });
+      const inputString = messages.map(m => `${m.role.toUpperCase()}: ${m.content}`).join('\n\n');
+      
+      const interaction = await client.interactions.create({
+        model: 'gemini-3.6-flash',
+        input: inputString,
+        system_instruction: `You are an expert E-commerce Copywriter Co-Pilot for Amazon and Etsy.
+
+CRITICAL RULES:
+1. NEVER ask clarifying questions. Always generate a complete listing immediately.
+2. When the user asks to draft, rewrite, or optimize a listing, you MUST include a JSON block in your response.
+3. The JSON block MUST be wrapped in \`\`\`json ... \`\`\` markers.
+4. You may include a brief intro sentence BEFORE the JSON block, but the JSON is MANDATORY.
+
+The JSON block MUST contain ALL of these fields:
+{
+  "amazonTitle": "130-180 chars, keyword-dense, title case",
+  "amazonBullets": ["5 bullets, each starting with [CAPITALIZED HOOK]"],
+  "amazonSearchTerms": "space-separated backend keywords under 240 bytes",
+  "amazonDescription": "<p>HTML formatted product description</p>",
+  "amazonAPlusPoints": ["3 highlight story blurbs"],
+  "etsyTitle": "Under 140 chars, front-loaded keywords",
+  "etsyTags": ["exactly 13 tags", "each under 20 chars"],
+  "etsyMaterials": ["3-5 material strings"],
+  "etsyPersonalizationInstructions": "Clear buyer instructions",
+  "etsyDescription": "Story-driven description with Details, Sizing, How to Order"
+}
+
+If the user asks a general question (not about drafting/writing), respond conversationally WITHOUT a JSON block.`,
+      });
+      
+      const fullReply = interaction.output_text;
+      
+      // Try to extract JSON listing from the response
+      let extractedListing = null;
+      const jsonMatch = fullReply.match(/```json\s*([\s\S]*?)```/);
+      if (jsonMatch && jsonMatch[1]) {
+        try {
+          const parsed = JSON.parse(jsonMatch[1].trim());
+          // Validate it has listing fields
+          if (parsed.amazonTitle || parsed.etsyTitle) {
+            extractedListing = {
+              amazonTitle: parsed.amazonTitle || '',
+              amazonBullets: Array.isArray(parsed.amazonBullets) ? parsed.amazonBullets.slice(0, 5) : [],
+              amazonSearchTerms: parsed.amazonSearchTerms || '',
+              amazonDescription: parsed.amazonDescription || '',
+              amazonAPlusPoints: Array.isArray(parsed.amazonAPlusPoints) ? parsed.amazonAPlusPoints : [],
+              etsyTitle: parsed.etsyTitle || '',
+              etsyTags: Array.isArray(parsed.etsyTags) ? parsed.etsyTags.slice(0, 13).map(t => String(t).substring(0, 20)) : [],
+              etsyMaterials: Array.isArray(parsed.etsyMaterials) ? parsed.etsyMaterials : [],
+              etsyPersonalizationInstructions: parsed.etsyPersonalizationInstructions || '',
+              etsyDescription: parsed.etsyDescription || '',
+              generatedAt: new Date().toISOString(),
+              status: 'NEEDS_QA'
+            };
+          }
+        } catch (parseErr) {
+          console.warn('Could not parse listing JSON from chat response:', parseErr.message);
+        }
+      }
+
+      // Clean the reply text: remove the raw JSON block for display
+      let displayReply = fullReply;
+      if (extractedListing) {
+        displayReply = fullReply.replace(/```json\s*[\s\S]*?```/, '').trim();
+        if (!displayReply) {
+          displayReply = '✅ Listing draft generated and loaded into the editor!';
+        } else {
+          displayReply += '\n\n✅ **Listing loaded into the draft editor!**';
+        }
+      }
+
+      res.json({ reply: displayReply, listing: extractedListing });
+    } catch (apiError) {
+      console.error('Chat API Error:', apiError);
+      res.status(500).json({ error: apiError.message });
+    }
+  });
+});
+
+// API: Analytics Dashboard Data
+app.get('/api/analytics', (req, res) => {
+  // Aggregate feedback actions
+  db.all(`
+    SELECT action, COUNT(*) as count, SUM(revenue) as totalRevenue, SUM(orders) as totalOrders, SUM(views) as totalViews
+    FROM sales_feedback
+    GROUP BY action
+  `, [], (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(rows);
+  });
 });
 
 // -----------------------------------------------------
@@ -255,35 +382,85 @@ setInterval(() => {
 
       // Agent 2: AI Drafter (Role: DRAFTER)
       if (agent.role === 'DRAFTER') {
-        // Find an unprocessed trend
         db.get("SELECT * FROM market_trends WHERE processed = 0 ORDER BY discoveredAt ASC LIMIT 1", (err, trend) => {
           if (!err && trend) {
-            // Mark as processed
             db.run("UPDATE market_trends SET processed = 1 WHERE id = ?", [trend.id]);
             
-            const msg = `Drafting new ${trend.category} listing based on keywords: ${trend.trending_keywords}`;
-            db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, msg]);
-            
-            // Generate a mock payload based on our generator logic
-            const payload = {
-              amazonTitle: `Auto-Drafted ${trend.category} Title (${trend.trending_keywords.split(',')[0]})`,
-              amazonBullets: ['[TRENDING] Built automatically by the drafter agent.', '[QUALITY] High conversion rate expected.', '...', '...', '...'],
-              amazonSearchTerms: trend.trending_keywords.replace(/,/g, ''),
-              etsyTitle: `New Trend ${trend.category} Gift`,
-              categoryName: trend.category,
-              systemNote: `Automatically generated by AI Drafter Agent using live market data: ${trend.trending_keywords}`
-            };
-
-            db.run(
-              "INSERT INTO listings (amazonTitle, etsyTitle, categoryName, status, authorId, payload) VALUES (?, ?, ?, ?, ?, ?)",
-              [payload.amazonTitle, payload.etsyTitle, payload.categoryName, 'NEEDS_QA', 0, JSON.stringify(payload)],
-              function(insertErr) {
-                if (!insertErr) {
-                  db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, `Successfully saved draft (ID: ${this.lastID}) to NEEDS_QA queue.`]);
-                  db.run("UPDATE agents SET lastActive = CURRENT_TIMESTAMP WHERE id = ?", [agent.id]);
+            db.get("SELECT value FROM settings WHERE key = 'gemini_api_key'", async (settingsErr, setting) => {
+              let payload;
+              
+              if (!settingsErr && setting && setting.value) {
+                // We have a real API key, use Gemini!
+                const msg = `Calling real Gemini AI to draft ${trend.category} listing for keywords: ${trend.trending_keywords}`;
+                db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, msg]);
+                
+                try {
+                  const client = new GoogleGenAI({ apiKey: setting.value });
+                  const prompt = `You are a world-class Amazon FBA and Etsy copywriter. Write a highly converting, SEO-optimized e-commerce listing for a ${trend.category} product targeting these trending keywords: ${trend.trending_keywords}.
+                  Return ONLY valid JSON with these exact keys (do not include markdown block wrappers):
+                  - "amazonTitle": max 200 chars, heavily keyword optimized.
+                  - "amazonBullets": array of exactly 5 strings, each 150-250 chars, focusing on benefits, quality, and gifting.
+                  - "amazonSearchTerms": comma separated backend keywords.
+                  - "etsyTitle": max 140 chars, long-tail keyword stuffed for Etsy SEO.
+                  - "etsyDescription": A warm, handmade-feeling description with a hook, product details, and SEO tags at the bottom.
+                  - "etsyTags": array of exactly 13 long-tail keyword strings for Etsy SEO.`;
+                  
+                  const interaction = await client.interactions.create({
+                    model: "gemini-3.6-flash",
+                    input: prompt,
+                    system_instruction: "You are an expert copywriter for Amazon and Etsy. Return ONLY valid JSON."
+                  });
+                  
+                  let text = interaction.output_text;
+                  if (text.includes('\`\`\`json')) {
+                    text = text.split('\`\`\`json')[1].split('\`\`\`')[0].trim();
+                  } else if (text.includes('\`\`\`')) {
+                    text = text.split('\`\`\`')[1].split('\`\`\`')[0].trim();
+                  }
+                  const aiData = JSON.parse(text);
+                  
+                  payload = {
+                    amazonTitle: aiData.amazonTitle || `Auto-Drafted ${trend.category}`,
+                    amazonBullets: aiData.amazonBullets || [],
+                    amazonSearchTerms: aiData.amazonSearchTerms || '',
+                    etsyTitle: aiData.etsyTitle || `New Trend ${trend.category}`,
+                    etsyDescription: aiData.etsyDescription || 'Description coming soon.',
+                    etsyTags: aiData.etsyTags || [],
+                    categoryName: trend.category,
+                    systemNote: `Generated via LIVE Gemini AI Agent using real market data: ${trend.trending_keywords}`
+                  };
+                } catch (apiError) {
+                  db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, `Gemini API failed: ${apiError.message}. Falling back to mock generator.`]);
+                  // fallback happens below
                 }
               }
-            );
+              
+              if (!payload) {
+                // Fallback / Mock Generator
+                const msg = `Drafting new ${trend.category} listing based on keywords (Mock Fallback): ${trend.trending_keywords}`;
+                db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, msg]);
+                
+                payload = {
+                  amazonTitle: `Auto-Drafted ${trend.category} Title (${trend.trending_keywords.split(',')[0]})`,
+                  amazonBullets: ['[TRENDING] Built automatically by the drafter agent.', '[QUALITY] High conversion rate expected.', '...', '...', '...'],
+                  amazonSearchTerms: trend.trending_keywords.replace(/,/g, ''),
+                  etsyTitle: `New Trend ${trend.category} Gift`,
+                  categoryName: trend.category,
+                  systemNote: `Automatically generated by Mock AI Drafter Agent using live market data: ${trend.trending_keywords}`
+                };
+              }
+
+              db.run(
+                "INSERT INTO listings (amazonTitle, etsyTitle, categoryName, status, authorId, payload) VALUES (?, ?, ?, ?, ?, ?)",
+                [payload.amazonTitle, payload.etsyTitle, payload.categoryName, 'NEEDS_QA', 0, JSON.stringify(payload)],
+                function(insertErr) {
+                  if (!insertErr) {
+                    db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, `Successfully saved draft (ID: ${this.lastID}) to NEEDS_QA queue.`]);
+                    db.run("UPDATE agents SET lastActive = CURRENT_TIMESTAMP WHERE id = ?", [agent.id]);
+                  }
+                }
+              );
+            });
           }
         });
       }

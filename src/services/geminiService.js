@@ -1,5 +1,6 @@
 import { CATEGORIES } from '../data/categoryPresets';
 import { getUtf8Bytes } from '../utils/complianceValidator';
+import { GoogleGenAI } from '@google/genai';
 
 const STORAGE_KEY = 'omni_gemini_api_key';
 
@@ -71,8 +72,6 @@ export async function generateListingAI({
  * Direct Gemini API call with structured JSON prompt
  */
 async function callGeminiApi({ apiKey, category, productBrief, occasion, tone, materials, imageBase64, marketData }) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
-
   const promptText = `
 You are an elite E-Commerce Listing & SEO Specialist for Amazon FBM and Etsy specializing in personalized gifts (Jewelry, Acrylic lamps, Blankets, and Embroidery).
 
@@ -119,42 +118,14 @@ Return ONLY a valid raw JSON object (without markdown code fences) with the foll
 }
 `;
 
-  const contents = [];
-  const parts = [{ text: promptText }];
-
-  if (imageBase64) {
-    const mimeMatch = imageBase64.match(/^data:([^;]+);base64,(.+)$/);
-    if (mimeMatch) {
-      parts.push({
-        inlineData: {
-          mimeType: mimeMatch[1],
-          data: mimeMatch[2]
-        }
-      });
-    }
-  }
-
-  contents.push({ parts });
-
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents,
-      generationConfig: {
-        responseMimeType: 'application/json',
-        temperature: 0.7
-      }
-    })
+  const client = new GoogleGenAI({ apiKey });
+  const interaction = await client.interactions.create({
+    model: 'gemini-3.6-flash',
+    input: promptText,
+    system_instruction: "You are an elite E-Commerce Listing & SEO Specialist. Return ONLY raw valid JSON without any markdown formatting blocks.",
   });
 
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`API Error ${response.status}: ${errText}`);
-  }
-
-  const data = await response.json();
-  const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+  const rawText = interaction.output_text;
   if (!rawText) throw new Error('Empty response received from AI model');
 
   const parsed = JSON.parse(rawText.replace(/```json/g, '').replace(/```/g, '').trim());

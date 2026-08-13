@@ -1,5 +1,5 @@
 import React from 'react';
-import { Sparkles, Key, Layers, FileSpreadsheet, History, Home, Bot, UserCircle, LogOut, Server } from 'lucide-react';
+import { Sparkles, Key, Layers, FileSpreadsheet, History, Home, Bot, UserCircle, LogOut, Server, Activity } from 'lucide-react';
 import { getStoredApiKey } from '../services/geminiService';
 import { useAuth } from '../context/AuthContext';
 
@@ -21,6 +21,14 @@ export default function Header({ activeTab, setActiveTab, onOpenApiKeyModal, onO
         </div>
 
         <nav className="nav-tabs">
+          <button
+            className={`nav-tab-btn ${activeTab === 'dashboard' ? 'active' : ''}`}
+            onClick={() => setActiveTab('dashboard')}
+          >
+            <Activity size={16} />
+            <span>Dashboard</span>
+          </button>
+
           <button
             className={`nav-tab-btn ${activeTab === 'single' ? 'active' : ''}`}
             onClick={() => setActiveTab('single')}

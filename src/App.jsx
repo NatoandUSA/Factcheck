@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import Header from './components/Header';
 import SingleListingGenerator from './components/SingleListingGenerator';
 import ListingOutputViewer from './components/ListingOutputViewer';
+import Dashboard from './components/Dashboard';
 import BatchCsvGenerator from './components/BatchCsvGenerator';
 import ListingHistory from './components/ListingHistory';
 import AgentHub from './components/AgentHub';
@@ -15,7 +16,7 @@ import { CATEGORIES, OCCASIONS, TONES } from './data/categoryPresets';
 const HISTORY_STORAGE_KEY = 'omni_listing_history_v1';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState('single');
+  const [activeTab, setActiveTab] = useState('dashboard');
   const [currentListing, setCurrentListing] = useState(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [history, setHistory] = useState([]);
@@ -190,6 +191,13 @@ export default function App() {
       />
 
       <main className="app-container">
+        {/* TAB 0: Analytics Dashboard */}
+        {activeTab === 'dashboard' && (
+          <div style={{ marginTop: '24px' }}>
+            <Dashboard />
+          </div>
+        )}
+
         {/* TAB 1: Single Listing Studio */}
         {activeTab === 'single' && (
           <div className="studio-grid">
@@ -202,6 +210,12 @@ export default function App() {
               onSaveListing={handleSaveToHistory}
               onShowToast={showToast}
               onApproveListing={handleApproveListing}
+              onListingGenerated={(newListing) => {
+                const enriched = { ...newListing, categoryName: 'AI Co-Pilot Draft', generatedAt: new Date().toISOString() };
+                setCurrentListing(enriched);
+                handleSaveToHistory(enriched, false);
+                showToast('✅ AI Co-Pilot listing loaded into draft!');
+              }}
             />
           </div>
         )}

@@ -15,19 +15,40 @@ export default function ApiKeyModal({ isOpen, onClose, onKeySaved }) {
 
   if (!isOpen) return null;
 
-  const handleSave = (e) => {
+  const handleSave = async (e) => {
     e.preventDefault();
     setStoredApiKey(apiKey);
     setSavedSuccess(true);
+    
+    // Sync with backend for Agent Engine
+    try {
+      await fetch('http://localhost:3001/api/settings/apikey', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey })
+      });
+    } catch (err) {
+      console.warn("Failed to sync API key to backend.", err);
+    }
+
     if (onKeySaved) onKeySaved(apiKey);
     setTimeout(() => {
       onClose();
     }, 600);
   };
 
-  const handleClear = () => {
+  const handleClear = async () => {
     setStoredApiKey('');
     setApiKey('');
+    
+    try {
+      await fetch('http://localhost:3001/api/settings/apikey', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey: '' }) // Clear on backend
+      });
+    } catch (err) {}
+
     if (onKeySaved) onKeySaved('');
   };
 
@@ -77,9 +98,9 @@ export default function ApiKeyModal({ isOpen, onClose, onKeySaved }) {
           <div style={{ background: 'var(--bg-subtle)', padding: '12px 14px', borderRadius: '8px', marginBottom: '20px', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: '600', color: 'var(--text-primary)', marginBottom: '4px' }}>
               <ShieldCheck size={16} style={{ color: 'var(--success)' }} />
-              <span>100% Client-Side & Private</span>
+              <span>Synced with Local Storage & Backend Agent Hub</span>
             </div>
-            Your key is saved directly inside your browser's local storage and is never transmitted to any third-party server. If no key is entered, the app uses the built-in intelligent demo engine.
+            Your key is stored in your browser's local storage and synced securely to your local SQLite database for the background Agent Drafter to use. If no key is entered, the app uses the built-in mock engine.
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>

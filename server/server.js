@@ -11,6 +11,8 @@ require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
 const ipGuard = require('./ipGuard');
 const opportunityScorer = require('./opportunityScorer');
 const ytrendsMcp = require('./ytuongMcpClient');
+const ytrendsParser = require('./ytrendsParser');
+
 
 
 
@@ -792,47 +794,70 @@ setInterval(() => {
           fs.mkdirSync(importsDir, { recursive: true });
         }
 
-        const files = fs.readdirSync(importsDir).filter(f => f.endsWith('.csv') || f.endsWith('.xlsx'));
+        const files = fs.readdirSync(importsDir).filter(f => f.endsWith('.csv') || f.endsWith('.xlsx') || f.endsWith('.html') || f.endsWith('.htm'));
         
         if (files.length > 0) {
-          // Process real report file dropped into data/imports
           const fileToProcess = files[0];
           const fullPath = path.join(importsDir, fileToProcess);
           
           try {
-            const XLSX = require('xlsx');
-            const workbook = XLSX.readFile(fullPath);
-            const sheetName = workbook.SheetNames[0];
-            const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName]);
-            
-            if (rows.length > 0) {
-              // Extract top keyword from real report
-              const sampleRow = rows[0];
-              const kwKey = Object.keys(sampleRow).find(k => /keyword|query|search/i.test(k)) || Object.keys(sampleRow)[0];
-              const realKw = String(sampleRow[kwKey] || 'Custom Gift').trim();
-              const category = fileToProcess.toLowerCase().includes('jewelry') ? 'Jewelry' :
-                               fileToProcess.toLowerCase().includes('embroidery') ? 'Embroidery' :
-                               fileToProcess.toLowerCase().includes('blanket') ? 'Blanket' : 'Acrylic';
+            if (fileToProcess.endsWith('.html') || fileToProcess.endsWith('.htm')) {
+              // Parse YTrends HTML Export
+              const parsedItems = ytrendsParser.parseYTrendsFile(fullPath);
+              if (parsedItems.length > 0) {
+                const topKw = parsedItems[0];
+                const category = topKw.keyword.includes('necklace') || topKw.keyword.includes('jewelry') ? 'Jewelry' :
+                                 topKw.keyword.includes('embroidery') ? 'Embroidery' :
+                                 topKw.keyword.includes('blanket') ? 'Blanket' : 'Acrylic';
 
-              db.run(
-                "INSERT INTO market_trends (category, trending_keywords) VALUES (?, ?)",
-                [category, `${realKw}, personalized ${category.toLowerCase()}, best gift 2026`],
-                function(err) {
-                  if (!err) {
-                    const msg = `[REAL DATA] Extracted top keyword "${realKw}" from file: ${fileToProcess}`;
-                    db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, msg]);
-                    db.run("UPDATE agents SET lastActive = CURRENT_TIMESTAMP WHERE id = ?", [agent.id]);
+                db.run(
+                  "INSERT INTO market_trends (category, trending_keywords) VALUES (?, ?)",
+                  [category, `${topKw.keyword}, sold24h:${topKw.sold24h || 0}, conv:${topKw.conversion || '2%'}`],
+                  function(err) {
+                    if (!err) {
+                      const msg = `[YTRENDS HTML IMPORT] Extracted keyword "${topKw.keyword}" (Sold24h: ${topKw.sold24h}, Conv: ${topKw.conversion}) from HTML file: ${fileToProcess}`;
+                      db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, msg]);
+                      db.run("UPDATE agents SET lastActive = CURRENT_TIMESTAMP WHERE id = ?", [agent.id]);
+                    }
                   }
-                }
-              );
-              // Move or archive processed file
-              const archivedPath = path.join(importsDir, `processed_${Date.now()}_${fileToProcess}`);
-              fs.renameSync(fullPath, archivedPath);
+                );
+              }
+            } else {
+              // Process Helium 10 / Amazon XLSX or CSV
+              const XLSX = require('xlsx');
+              const workbook = XLSX.readFile(fullPath);
+              const sheetName = workbook.SheetNames[0];
+              const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName]);
+              
+              if (rows.length > 0) {
+                const sampleRow = rows[0];
+                const kwKey = Object.keys(sampleRow).find(k => /keyword|query|search/i.test(k)) || Object.keys(sampleRow)[0];
+                const realKw = String(sampleRow[kwKey] || 'Custom Gift').trim();
+                const category = fileToProcess.toLowerCase().includes('jewelry') ? 'Jewelry' :
+                                 fileToProcess.toLowerCase().includes('embroidery') ? 'Embroidery' :
+                                 fileToProcess.toLowerCase().includes('blanket') ? 'Blanket' : 'Acrylic';
+
+                db.run(
+                  "INSERT INTO market_trends (category, trending_keywords) VALUES (?, ?)",
+                  [category, `${realKw}, personalized ${category.toLowerCase()}, best gift 2026`],
+                  function(err) {
+                    if (!err) {
+                      const msg = `[AMAZON H10 IMPORT] Extracted top keyword "${realKw}" from file: ${fileToProcess}`;
+                      db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, msg]);
+                      db.run("UPDATE agents SET lastActive = CURRENT_TIMESTAMP WHERE id = ?", [agent.id]);
+                    }
+                  }
+                );
+              }
             }
+            // Archive processed file
+            const archivedPath = path.join(importsDir, `processed_${Date.now()}_${fileToProcess}`);
+            fs.renameSync(fullPath, archivedPath);
           } catch (parseErr) {
             db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, `Error parsing data file ${fileToProcess}: ${parseErr.message}`]);
           }
         } else {
+
           // Query live YTrends MCP Server: https://mcp.trends.ytuong.ai/mcp
           const sampleSeeds = ['embroidered nurse sweatshirt', 'personalized initial necklace', 'custom photo blanket', 'acrylic night light'];
           const targetSeed = sampleSeeds[Math.floor(Math.random() * sampleSeeds.length)];

@@ -32,8 +32,10 @@ export default function Dashboard({ onSelectListing, onApproveListing, onShowToa
   const [draftingTrendId, setDraftingTrendId] = useState(null);
   const [uploadStatus, setUploadStatus] = useState(null);
   const [selectedCategory, setSelectedCategory] = useState('Jewelry');
+  const [activeChannel, setActiveChannel] = useState('ALL'); // 'ALL', 'AMAZON', 'ETSY'
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef(null);
+
 
   const fetchDashboardData = async () => {
     try {
@@ -210,12 +212,90 @@ export default function Dashboard({ onSelectListing, onApproveListing, onShowToa
           }}
         >
           <RefreshCw size={16} className={loading ? 'spinner' : ''} />
-          <span>Làm mới dữ liệu</span>
+        </button>
+      </div>
+
+      {/* Dual Channel Architecture Switcher */}
+      <div style={{
+        display: 'flex',
+        gap: '12px',
+        background: 'var(--panel-bg, #ffffff)',
+        padding: '8px 12px',
+        borderRadius: '14px',
+        border: '1px solid var(--border-color, #e2e8f0)',
+        boxShadow: '0 2px 8px rgba(0,0,0,0.04)'
+      }}>
+        <button
+          onClick={() => setActiveChannel('ALL')}
+          style={{
+            flex: 1,
+            padding: '10px 16px',
+            borderRadius: '10px',
+            border: 'none',
+            background: activeChannel === 'ALL' ? 'var(--primary-color, #0f766e)' : 'transparent',
+            color: activeChannel === 'ALL' ? '#ffffff' : 'var(--text-secondary, #64748b)',
+            fontWeight: 700,
+            fontSize: '0.9rem',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '8px',
+            transition: 'all 0.2s'
+          }}
+        >
+          <Layers size={18} />
+          <span>Tất cả Sàn (Master Feed)</span>
+        </button>
+
+        <button
+          onClick={() => setActiveChannel('AMAZON')}
+          style={{
+            flex: 1,
+            padding: '10px 16px',
+            borderRadius: '10px',
+            border: 'none',
+            background: activeChannel === 'AMAZON' ? '#d97706' : 'transparent',
+            color: activeChannel === 'AMAZON' ? '#ffffff' : 'var(--text-secondary, #64748b)',
+            fontWeight: 700,
+            fontSize: '0.9rem',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '8px',
+            transition: 'all 0.2s'
+          }}
+        >
+          <span>📦 Amazon FBM Studio (H10 & IP Guard)</span>
+        </button>
+
+        <button
+          onClick={() => setActiveChannel('ETSY')}
+          style={{
+            flex: 1,
+            padding: '10px 16px',
+            borderRadius: '10px',
+            border: 'none',
+            background: activeChannel === 'ETSY' ? '#ea580c' : 'transparent',
+            color: activeChannel === 'ETSY' ? '#ffffff' : 'var(--text-secondary, #64748b)',
+            fontWeight: 700,
+            fontSize: '0.9rem',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '8px',
+            transition: 'all 0.2s'
+          }}
+        >
+          <span>🧡 Etsy Studio (YTrends & 13 Tags)</span>
         </button>
       </div>
 
       {/* Metric Cards Grid */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '18px' }}>
+
         
         {/* Card 1: Total Listings */}
         <div className="studio-panel" style={{ padding: '22px 24px', position: 'relative', overflow: 'hidden' }}>
@@ -472,7 +552,7 @@ export default function Dashboard({ onSelectListing, onApproveListing, onShowToa
               type="file" 
               ref={fileInputRef} 
               style={{ display: 'none' }} 
-              accept=".xlsx,.xls,.csv"
+              accept=".xlsx,.xls,.csv,.html,.htm"
               onChange={(e) => {
                 if (e.target.files && e.target.files[0]) {
                   handleFileUpload(e.target.files[0]);
@@ -484,10 +564,11 @@ export default function Dashboard({ onSelectListing, onApproveListing, onShowToa
             </div>
             <div>
               <div style={{ fontWeight: 700, fontSize: '1rem', color: 'var(--text-primary)' }}>
-                {uploading ? 'Đang đọc và phân tích file H10...' : 'Kéo thả file Helium 10 / CSV vào đây hoặc nhấn để chọn'}
+                {uploading ? 'Đang đọc và phân tích dữ liệu thị trường...' : 'Kéo thả file H10 (Excel/CSV) hoặc YTrends (HTML/CSV) vào đây'}
               </div>
               <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '4px' }}>
-                Hỗ trợ Cerebro Reverse ASIN, Magnet Keywords, Black Box (.xlsx, .csv).
+                Hỗ trợ Helium 10 Cerebro/Magnet (.xlsx, .csv) & YTrends Export (.html, .csv).
+
               </div>
             </div>
           </div>

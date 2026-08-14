@@ -10,6 +10,8 @@ require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
 
 const ipGuard = require('./ipGuard');
 const opportunityScorer = require('./opportunityScorer');
+const ytrendsMcp = require('./ytuongMcpClient');
+
 
 
 const app = express();
@@ -262,6 +264,41 @@ app.post('/api/listings/:id/feedback', (req, res) => {
     }
   );
 });
+
+// API: Get YTrends MCP Tools List from https://mcp.trends.ytuong.ai/mcp
+app.get('/api/mcp/tools', async (req, res) => {
+  try {
+    const tools = await ytrendsMcp.listTools();
+    res.json({ success: true, count: tools.length, tools });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// API: Call YTrends MCP Tool (Universal)
+app.post('/api/mcp/call', async (req, res) => {
+  const { toolName, args = {} } = req.body;
+  if (!toolName) return res.status(400).json({ error: 'toolName is required' });
+
+  try {
+    const result = await ytrendsMcp.callTool(toolName, args);
+    res.json({ success: true, toolName, result });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// API: Explore Etsy Niche via YTrends MCP
+app.get('/api/mcp/niche', async (req, res) => {
+  const { seed = 'nurse sweatshirt' } = req.query;
+  try {
+    const data = await ytrendsMcp.exploreNiche(seed);
+    res.json({ success: true, seed, data });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 
 // API: Upload and process Helium 10 / CSV reports
 app.post('/api/upload-h10', upload.single('reportFile'), (req, res) => {
@@ -796,13 +833,41 @@ setInterval(() => {
             db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, `Error parsing data file ${fileToProcess}: ${parseErr.message}`]);
           }
         } else {
-          // No file in data/imports - log waiting state (NO MOCK DATA GENERATION)
-          const etsyTarget = process.env.ETSY_AGENT_URL || 'https://etsy.theglobalserviceteam.site/';
-          const msg = `[REAL DATA ENGINE] Standing by... Drop .csv/.xlsx report files into data/imports/ or connect to Etsy VPS (${etsyTarget})`;
-          db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, msg]);
-          db.run("UPDATE agents SET lastActive = CURRENT_TIMESTAMP WHERE id = ?", [agent.id]);
+          // Query live YTrends MCP Server: https://mcp.trends.ytuong.ai/mcp
+          const sampleSeeds = ['embroidered nurse sweatshirt', 'personalized initial necklace', 'custom photo blanket', 'acrylic night light'];
+          const targetSeed = sampleSeeds[Math.floor(Math.random() * sampleSeeds.length)];
+
+          ytrendsMcp.exploreNiche(targetSeed)
+            .then(mcpData => {
+              const overview = mcpData?.data?.overview || {};
+              const adjacentTags = mcpData?.data?.adjacent_tags || [];
+              const topTags = adjacentTags.slice(0, 3).map(t => t.tag).join(', ');
+              const category = targetSeed.includes('necklace') ? 'Jewelry' :
+                               targetSeed.includes('sweatshirt') || targetSeed.includes('embroidered') ? 'Embroidery' :
+                               targetSeed.includes('blanket') ? 'Blanket' : 'Acrylic';
+
+              const kwPayload = topTags ? `${targetSeed}, ${topTags}` : targetSeed;
+
+              db.run(
+                "INSERT INTO market_trends (category, trending_keywords) VALUES (?, ?)",
+                [category, kwPayload],
+                function(err) {
+                  if (!err) {
+                    const msg = `[YTRENDS MCP LIVE] Extracted niche data for "${targetSeed}" (Rev: $${Math.round(overview.total_revenue_usd || 0)}, OppScore: ${overview.opportunity_score || 50}). Tags: ${topTags || targetSeed}`;
+                    db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, msg]);
+                    db.run("UPDATE agents SET lastActive = CURRENT_TIMESTAMP WHERE id = ?", [agent.id]);
+                  }
+                }
+              );
+            })
+            .catch(mcpErr => {
+              const msg = `[REAL DATA ENGINE] Standing by... Drop .csv/.xlsx report files into data/imports/. YTrends MCP error: ${mcpErr.message}`;
+              db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, msg]);
+              db.run("UPDATE agents SET lastActive = CURRENT_TIMESTAMP WHERE id = ?", [agent.id]);
+            });
         }
       }
+
 
       // Agent 2: AI Drafter (Role: DRAFTER)
       if (agent.role === 'DRAFTER') {

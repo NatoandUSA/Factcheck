@@ -13,6 +13,8 @@ const opportunityScorer = require('./opportunityScorer');
 const ytrendsMcp = require('./ytuongMcpClient');
 const ytrendsParser = require('./ytrendsParser');
 const keywordRanker = require('./keywordRanker');
+const h10Mcp = require('./h10McpClient');
+
 
 
 
@@ -310,6 +312,28 @@ app.get('/api/mcp/niche', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// API: Helium 10 MCP Status & OAuth Check (https://mcp.helium10.com/mcp)
+app.get('/api/mcp/h10/status', async (req, res) => {
+  try {
+    const statusData = await h10Mcp.checkConnection();
+    res.json({ success: true, ...statusData });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// API: Helium 10 MCP Tools List
+app.get('/api/mcp/h10/tools', async (req, res) => {
+  const token = req.headers.authorization?.replace('Bearer ', '') || null;
+  try {
+    const tools = await h10Mcp.listTools(token);
+    res.json({ success: true, count: tools.length, tools });
+  } catch (err) {
+    res.status(401).json({ success: false, error: err.message });
+  }
+});
+
 
 // API: Reset / Wipe Database Endpoint
 app.delete('/api/reset-database', (req, res) => {

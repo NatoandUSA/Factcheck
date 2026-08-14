@@ -255,13 +255,18 @@ export default function ListingOutputViewer({ listing, onSaveListing, onShowToas
             </div>
           )}
 
-          {/* Amazon Title */}
+          {/* Amazon Product Title (Max 75 Chars per July 27, 2026 Policy) */}
           <div className="listing-field-card">
             <div className="field-header">
-              <div className="field-title">Amazon Product Title</div>
+              <div className="field-title">
+                Amazon Product Title 
+                <span style={{ fontSize: '0.75rem', fontWeight: 600, background: '#e0f2fe', color: '#0369a1', padding: '2px 8px', borderRadius: '12px', marginLeft: '8px' }}>
+                  July 27, 2026 Policy: Max 75 Chars
+                </span>
+              </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                <div className={`compliance-meter ${(listing.amazonTitle?.length || 0) <= 200 ? 'valid' : 'invalid'}`}>
-                  {(listing.amazonTitle || '').length} / 200 Chars
+                <div className={`compliance-meter ${(listing.amazonTitle?.length || 0) <= 75 ? 'valid' : 'invalid'}`}>
+                  {(listing.amazonTitle || '').length} / 75 Chars
                 </div>
                 <button
                   className="btn btn-secondary btn-sm"
@@ -275,6 +280,35 @@ export default function ListingOutputViewer({ listing, onSaveListing, onShowToas
             </div>
             <div className="field-content">{listing.amazonTitle}</div>
           </div>
+
+          {/* Amazon Item Highlights (NEW Field: Max 125 Chars per July 27, 2026 Policy) */}
+          <div className="listing-field-card" style={{ borderLeft: '4px solid #0284c7' }}>
+            <div className="field-header">
+              <div className="field-title">
+                Item Highlights (Mới - Tăng tốc SEO & CTR)
+                <span style={{ fontSize: '0.75rem', fontWeight: 600, background: '#fef3c7', color: '#b45309', padding: '2px 8px', borderRadius: '12px', marginLeft: '8px' }}>
+                  New Amazon Field: Max 125 Chars
+                </span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <div className={`compliance-meter ${(listing.itemHighlights?.length || 0) <= 125 ? 'valid' : 'invalid'}`}>
+                  {(listing.itemHighlights || '').length} / 125 Chars
+                </div>
+                <button
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => copyToClipboard(listing.itemHighlights, 'amz-highlights', 'Item Highlights Copied!')}
+                  disabled={!isApproved} style={{ opacity: isApproved ? 1 : 0.5 }}
+                >
+                  {copiedKey === 'amz-highlights' ? <Check size={14} /> : <Copy size={14} />}
+                  <span>{copiedKey === 'amz-highlights' ? 'Copied' : 'Copy'}</span>
+                </button>
+              </div>
+            </div>
+            <div className="field-content" style={{ fontWeight: 600, color: '#0369a1' }}>
+              {listing.itemHighlights || 'Custom cuff embroidery with up to 3 names • Cozy gift for moms • Multiple sweatshirt colors and sizes'}
+            </div>
+          </div>
+
 
           {/* 5 Amazon Bullet Points */}
           <div className="listing-field-card">

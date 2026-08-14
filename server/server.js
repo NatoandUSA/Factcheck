@@ -1003,9 +1003,10 @@ setInterval(() => {
                 
                 try {
                   const client = new GoogleGenAI({ apiKey: setting.value });
-                  const prompt = `You are a world-class Amazon FBA and Etsy copywriter. Write a highly converting, SEO-optimized e-commerce listing for a ${trend.category} product targeting these trending keywords: ${trend.trending_keywords}.
+                  const prompt = `You are a world-class Amazon FBA and Etsy copywriter adhering to July 27, 2026 Amazon Policy. Write a highly converting, SEO-optimized e-commerce listing for a ${trend.category} product targeting these trending keywords: ${trend.trending_keywords}.
                   Return ONLY valid JSON with these exact keys (do not include markdown block wrappers):
-                  - "amazonTitle": max 200 chars, heavily keyword optimized.
+                  - "amazonTitle": max 75 characters (strictly <= 75 chars), focusing on main product + personalization + key placement feature.
+                  - "itemHighlights": max 125 characters (strictly <= 125 chars), short feature/benefit snippets separated by bullet dot • (e.g. Custom cuff embroidery • Cozy gift for moms • Multiple colors).
                   - "amazonBullets": array of exactly 5 strings, each 150-250 chars, focusing on benefits, quality, and gifting.
                   - "amazonDescription": 1000-2000 chars rich Product Description covering material, care instructions, size guide, personalized details, and gift occasions. Use HTML tags (<p>, <ul>, <li>, <b>) for formatting.
                   - "amazonSearchTerms": space separated unique backend keywords (no trademark terms, no commas).
@@ -1029,11 +1030,14 @@ setInterval(() => {
                   
                   // Rank & Deduplicate Keywords
                   const rawKws = (trend.trending_keywords || '').split(/[,|]/);
+                  const title75 = aiData.amazonTitle ? aiData.amazonTitle.substring(0, 75) : keywordRanker.buildAmazonTitle75(rawKws, trend.category);
+                  const highlights125 = aiData.itemHighlights ? aiData.itemHighlights.substring(0, 125) : keywordRanker.buildAmazonItemHighlights125(rawKws, trend.category);
                   const searchTerms = keywordRanker.buildAmazonSearchTerms(rawKws);
                   const etsyTags = keywordRanker.buildEtsyTags(aiData.etsyTags || rawKws, trend.category);
 
                   payload = {
-                    amazonTitle: aiData.amazonTitle || `Auto-Drafted ${trend.category}`,
+                    amazonTitle: title75,
+                    itemHighlights: highlights125,
                     amazonBullets: aiData.amazonBullets || [],
                     amazonDescription: aiData.amazonDescription || `<p><b>High Quality ${trend.category}</b></p><p>Crafted with premium materials and attention to detail. Perfect gift for family and loved ones on birthdays, anniversaries, and holidays.</p><p><b>Features:</b></p><ul><li>Durable & Long-lasting</li><li>Personalized Customization</li><li>Easy Care & Maintenance</li></ul>`,
                     amazonSearchTerms: searchTerms || aiData.amazonSearchTerms || '',
@@ -1041,8 +1045,9 @@ setInterval(() => {
                     etsyDescription: aiData.etsyDescription || 'Description coming soon.',
                     etsyTags: etsyTags,
                     categoryName: trend.category,
-                    systemNote: `Generated via LIVE Gemini AI Agent using real market data: ${trend.trending_keywords}`
+                    systemNote: `Generated via LIVE Gemini AI Agent using real market data (Aug 15 2026 policy compliant): ${trend.trending_keywords}`
                   };
+
 
                 } catch (apiError) {
                   db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, `Gemini API Error: ${apiError.message}. Real listing generation failed.`]);

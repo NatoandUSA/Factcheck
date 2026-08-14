@@ -49,6 +49,49 @@ function rankKeywords(keywordList) {
 }
 
 /**
+ * Build Amazon Title (Strictly <= 75 characters per July 27, 2026 Amazon Policy)
+ */
+function buildAmazonTitle75(keywordList, categoryName = 'Gift') {
+  const ranked = rankKeywords(keywordList);
+  const topKw = ranked.length > 0 ? ranked[0].keyword : categoryName;
+  
+  // Capitalize title case
+  const toTitleCase = (str) => str.replace(/\w\S*/g, (txt) => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase());
+  
+  let baseTitle = `Personalized ${toTitleCase(topKw)}`;
+  if (baseTitle.length > 75) {
+    baseTitle = baseTitle.substring(0, 75).trim();
+  } else if (ranked.length > 1) {
+    const secKw = toTitleCase(ranked[1].keyword);
+    if ((baseTitle + `, ${secKw}`).length <= 75) {
+      baseTitle += `, ${secKw}`;
+    }
+  }
+
+  return baseTitle.substring(0, 75);
+}
+
+/**
+ * Build Amazon Item Highlights (Strictly <= 125 characters per July 27, 2026 Amazon Policy)
+ * Separated by bullet dots •
+ */
+function buildAmazonItemHighlights125(keywordList, categoryName = 'Gift') {
+  const ranked = rankKeywords(keywordList);
+  const toTitleCase = (str) => str.replace(/\w\S*/g, (txt) => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase());
+
+  const highlights = [];
+  highlights.push(`Custom ${toTitleCase(categoryName)} with personalized details`);
+  highlights.push(`Heartfelt gift for family & loved ones`);
+  highlights.push(`Multiple colors & sizes available`);
+
+  let text = highlights.join(' • ');
+  if (text.length > 125) {
+    text = text.substring(0, 122) + '...';
+  }
+  return text.substring(0, 125);
+}
+
+/**
  * Build Amazon Backend Search Terms (Max 249 Bytes, deduplicated words)
  */
 function buildAmazonSearchTerms(keywordList) {
@@ -168,6 +211,8 @@ function buildEtsyTags(keywordList, categoryName = 'Gift') {
 
 module.exports = {
   rankKeywords,
+  buildAmazonTitle75,
+  buildAmazonItemHighlights125,
   buildAmazonSearchTerms,
   buildEtsyTags
 };

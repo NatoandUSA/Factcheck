@@ -96,12 +96,14 @@ function screenListing(listing) {
 
   const textToScan = [
     listing.amazonTitle || '',
+    listing.itemHighlights || '',
     (listing.amazonBullets || []).join(' '),
     listing.amazonSearchTerms || '',
     listing.etsyTitle || '',
     listing.etsyDescription || '',
     (listing.etsyTags || []).join(' ')
   ].join(' ');
+
 
   return screenText(textToScan);
 }

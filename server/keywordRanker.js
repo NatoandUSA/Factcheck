@@ -44,7 +44,6 @@ function rankKeywords(keywordList) {
     };
   }).filter(Boolean);
 
-
   // Sort descending by opportunity score
   return scoredList.sort((a, b) => b.score - a.score);
 }
@@ -82,6 +81,34 @@ function buildAmazonSearchTerms(keywordList) {
       }
     }
     if (currentBytes >= 240) break;
+  }
+
+  // Fallback relevant terms to fill up to 249 bytes if needed
+  const fallbackTerms = [
+    'gifts', 'gift', 'women', 'mom', 'spanish', 'birthday', 'wedding', 'anniversary', 
+    'personalized', 'custom', 'handmade', 'unique', 'keepsake', 'mother', 'daughter', 
+    'regalos', 'para', 'mujer', 'esposa', 'novia', 'navidad', 'cumpleanos', 'collar'
+  ];
+
+  if (currentBytes < 220) {
+    for (let word of fallbackTerms) {
+      word = word.toLowerCase().replace(/[^a-z0-9]/g, '').trim();
+      if (!word || wordsSet.has(word)) continue;
+
+      const ipCheck = ipGuard.screenText(word);
+      if (ipCheck.verdict === 'BLOCK') continue;
+
+      const wordBytes = Buffer.byteLength(word, 'utf8');
+      const addedBytes = resultWords.length > 0 ? wordBytes + 1 : wordBytes;
+
+      if (currentBytes + addedBytes <= 249) {
+        wordsSet.add(word);
+        resultWords.push(word);
+        currentBytes += addedBytes;
+      } else {
+        break;
+      }
+    }
   }
 
   return resultWords.join(' ');

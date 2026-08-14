@@ -14,6 +14,8 @@ const ytrendsMcp = require('./ytuongMcpClient');
 const ytrendsParser = require('./ytrendsParser');
 const keywordRanker = require('./keywordRanker');
 const h10Mcp = require('./h10McpClient');
+const asinBatcher = require('./asinBatcher');
+
 
 
 
@@ -335,8 +337,49 @@ app.get('/api/mcp/h10/tools', async (req, res) => {
 });
 
 
+// API: Helium 10 Xray ASIN Batching Assistant
+app.post('/api/asins/batch', (req, res) => {
+  const { asins, seedKeyword = 'Custom Gift' } = req.body;
+  const result = asinBatcher.batchAsins(asins, seedKeyword);
+  if (!result.success) {
+    return res.status(400).json(result);
+  }
+  res.json(result);
+});
+
+// API: Get Master Keyword List Across Processed Files
+app.get('/api/master-keywords', (req, res) => {
+  db.all("SELECT * FROM market_trends ORDER BY discoveredAt DESC", [], (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    
+    const masterKeywords = [];
+    const seen = new Set();
+
+    rows.forEach(r => {
+      const kws = (r.trending_keywords || '').split(/[,|]/);
+      kws.forEach(kw => {
+        const cleanKw = kw.trim();
+        if (cleanKw && cleanKw.length > 2 && !seen.has(cleanKw.toLowerCase())) {
+          seen.add(cleanKw.toLowerCase());
+          const ipRes = ipGuard.screenText(cleanKw);
+          masterKeywords.push({
+            keyword: cleanKw,
+            category: r.category,
+            discoveredAt: r.discoveredAt,
+            ipVerdict: ipRes.verdict,
+            ipHits: ipRes.hits.map(h => h.term)
+          });
+        }
+      });
+    });
+
+    res.json({ success: true, count: masterKeywords.length, keywords: masterKeywords });
+  });
+});
+
 // API: Reset / Wipe Database Endpoint
 app.delete('/api/reset-database', (req, res) => {
+
   db.serialize(() => {
     db.run("DELETE FROM listings");
     db.run("DELETE FROM market_trends");

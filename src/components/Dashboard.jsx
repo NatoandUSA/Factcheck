@@ -9,6 +9,9 @@ import {
   Zap, AlertCircle, Database, Check, Eye, Play, FileText, ChevronRight, Tag
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import AsinBatcherWidget from './AsinBatcherWidget';
+import MasterKeywordTable from './MasterKeywordTable';
+
 
 const CATEGORY_COLORS = {
   'Jewelry': '#ec4899',
@@ -733,8 +736,15 @@ export default function Dashboard({ onSelectListing, onApproveListing, onShowToa
             </span>
           </div>
         </div>
+      </div>
 
-        {/* Category Breakdown & Distribution */}
+      {/* Step 2: Helium 10 Xray ASIN Batching Assistant */}
+      <AsinBatcherWidget onShowToast={onShowToast} />
+
+      {/* Step 4: Master Keyword List Table */}
+      <MasterKeywordTable />
+
+      {/* Category Breakdown & Distribution */}
         <div className="studio-panel" style={{ padding: '28px', display: 'flex', flexDirection: 'column' }}>
           <h2 style={{ fontSize: '1.25rem', marginBottom: '6px' }}>Phân Bố Listing Theo Danh Mục</h2>
           <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '16px' }}>

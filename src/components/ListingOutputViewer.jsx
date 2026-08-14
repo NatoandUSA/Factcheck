@@ -349,10 +349,13 @@ export default function ListingOutputViewer({ listing, onSaveListing, onShowToas
                 <span>{copiedKey === 'amz-desc' ? 'Copied' : 'Copy'}</span>
               </button>
             </div>
-            <div className="field-content" style={{ fontSize: '0.85rem', maxHeight: '180px', overflowY: 'auto' }}>
-              {listing.amazonDescription}
-            </div>
+            <div 
+              className="field-content" 
+              style={{ fontSize: '0.85rem', maxHeight: '240px', overflowY: 'auto', lineHeight: '1.6' }}
+              dangerouslySetInnerHTML={{ __html: listing.amazonDescription || '<p><i>No description generated.</i></p>' }}
+            />
           </div>
+
 
           {/* Amazon A+ Content Modules */}
           {listing.amazonAPlusContent && (

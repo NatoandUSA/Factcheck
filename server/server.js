@@ -12,6 +12,8 @@ const ipGuard = require('./ipGuard');
 const opportunityScorer = require('./opportunityScorer');
 const ytrendsMcp = require('./ytuongMcpClient');
 const ytrendsParser = require('./ytrendsParser');
+const keywordRanker = require('./keywordRanker');
+
 
 
 
@@ -300,6 +302,22 @@ app.get('/api/mcp/niche', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// API: Reset / Wipe Database Endpoint
+app.delete('/api/reset-database', (req, res) => {
+  db.serialize(() => {
+    db.run("DELETE FROM listings");
+    db.run("DELETE FROM market_trends");
+    db.run("DELETE FROM agent_logs");
+    db.run("DELETE FROM sqlite_sequence WHERE name IN ('listings', 'market_trends', 'agent_logs')", (err) => {
+      if (err) {
+        return res.status(500).json({ error: err.message });
+      }
+      res.json({ success: true, message: 'All database tables wiped and IDs reset successfully.' });
+    });
+  });
+});
+
 
 
 // API: Upload and process Helium 10 / CSV reports
@@ -914,10 +932,11 @@ setInterval(() => {
                   Return ONLY valid JSON with these exact keys (do not include markdown block wrappers):
                   - "amazonTitle": max 200 chars, heavily keyword optimized.
                   - "amazonBullets": array of exactly 5 strings, each 150-250 chars, focusing on benefits, quality, and gifting.
-                  - "amazonSearchTerms": comma separated backend keywords.
+                  - "amazonDescription": 1000-2000 chars rich Product Description covering material, care instructions, size guide, personalized details, and gift occasions. Use HTML tags (<p>, <ul>, <li>, <b>) for formatting.
+                  - "amazonSearchTerms": space separated unique backend keywords (no trademark terms, no commas).
                   - "etsyTitle": max 140 chars, long-tail keyword stuffed for Etsy SEO.
                   - "etsyDescription": A warm, handmade-feeling description with a hook, product details, and SEO tags at the bottom.
-                  - "etsyTags": array of exactly 13 long-tail keyword strings for Etsy SEO.`;
+                  - "etsyTags": array of exactly 13 long-tail keyword strings for Etsy SEO (each <= 20 chars).`;
                   
                   const interaction = await client.interactions.create({
                     model: "gemini-3.6-flash",
@@ -926,23 +945,30 @@ setInterval(() => {
                   });
                   
                   let text = interaction.output_text;
-                  if (text.includes('\`\`\`json')) {
-                    text = text.split('\`\`\`json')[1].split('\`\`\`')[0].trim();
-                  } else if (text.includes('\`\`\`')) {
-                    text = text.split('\`\`\`')[1].split('\`\`\`')[0].trim();
+                  if (text.includes('```json')) {
+                    text = text.split('```json')[1].split('```')[0].trim();
+                  } else if (text.includes('```')) {
+                    text = text.split('```')[1].split('```')[0].trim();
                   }
                   const aiData = JSON.parse(text);
                   
+                  // Rank & Deduplicate Keywords
+                  const rawKws = (trend.trending_keywords || '').split(/[,|]/);
+                  const searchTerms = keywordRanker.buildAmazonSearchTerms(rawKws);
+                  const etsyTags = keywordRanker.buildEtsyTags(aiData.etsyTags || rawKws, trend.category);
+
                   payload = {
                     amazonTitle: aiData.amazonTitle || `Auto-Drafted ${trend.category}`,
                     amazonBullets: aiData.amazonBullets || [],
-                    amazonSearchTerms: aiData.amazonSearchTerms || '',
+                    amazonDescription: aiData.amazonDescription || `<p><b>High Quality ${trend.category}</b></p><p>Crafted with premium materials and attention to detail. Perfect gift for family and loved ones on birthdays, anniversaries, and holidays.</p><p><b>Features:</b></p><ul><li>Durable & Long-lasting</li><li>Personalized Customization</li><li>Easy Care & Maintenance</li></ul>`,
+                    amazonSearchTerms: searchTerms || aiData.amazonSearchTerms || '',
                     etsyTitle: aiData.etsyTitle || `New Trend ${trend.category}`,
                     etsyDescription: aiData.etsyDescription || 'Description coming soon.',
-                    etsyTags: aiData.etsyTags || [],
+                    etsyTags: etsyTags,
                     categoryName: trend.category,
                     systemNote: `Generated via LIVE Gemini AI Agent using real market data: ${trend.trending_keywords}`
                   };
+
                 } catch (apiError) {
                   db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, `Gemini API Error: ${apiError.message}. Real listing generation failed.`]);
                 }

@@ -193,27 +193,63 @@ export default function Dashboard({ onSelectListing, onApproveListing, onShowToa
           </p>
         </div>
 
-        <button 
-          onClick={fetchDashboardData}
-          disabled={loading}
-          className="btn"
-          style={{ 
-            background: 'rgba(255, 255, 255, 0.15)', 
-            color: '#ffffff', 
-            border: '1px solid rgba(255, 255, 255, 0.3)',
-            backdropFilter: 'blur(8px)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            padding: '10px 18px',
-            borderRadius: '10px',
-            cursor: 'pointer',
-            fontWeight: 600
-          }}
-        >
-          <RefreshCw size={16} className={loading ? 'spinner' : ''} />
-        </button>
+        <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+          <button 
+            onClick={fetchDashboardData}
+            disabled={loading}
+            className="btn"
+            style={{ 
+              background: 'rgba(255, 255, 255, 0.15)', 
+              color: '#ffffff', 
+              border: '1px solid rgba(255, 255, 255, 0.3)',
+              backdropFilter: 'blur(8px)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              padding: '10px 18px',
+              borderRadius: '10px',
+              cursor: 'pointer',
+              fontWeight: 600
+            }}
+          >
+            <RefreshCw size={16} className={loading ? 'spinner' : ''} />
+            <span>Làm mới</span>
+          </button>
+
+          <button 
+            onClick={async () => {
+              if (window.confirm('⚠️ Bạn có chắc chắn muốn XÓA TOÀN BỘ dữ liệu cũ để nạp lại dữ liệu mới? Action này sẽ reset toàn bộ Database.')) {
+                try {
+                  const res = await fetch('http://localhost:3001/api/reset-database', { method: 'DELETE' });
+                  if (res.ok) {
+                    onShowToast?.('Đã xóa dữ liệu cũ và Reset DB thành công!', 'success');
+                    fetchDashboardData();
+                  }
+                } catch (e) {
+                  onShowToast?.(`Lỗi: ${e.message}`, 'error');
+                }
+              }
+            }}
+            className="btn"
+            style={{ 
+              background: '#ef4444', 
+              color: '#ffffff', 
+              border: 'none',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              padding: '10px 18px',
+              borderRadius: '10px',
+              cursor: 'pointer',
+              fontWeight: 600,
+              boxShadow: '0 4px 12px rgba(239, 68, 68, 0.3)'
+            }}
+          >
+            <span>🗑️ Reset DB</span>
+          </button>
+        </div>
       </div>
+
 
       {/* Dual Channel Architecture Switcher */}
       <div style={{
@@ -519,11 +555,18 @@ export default function Dashboard({ onSelectListing, onApproveListing, onShowToa
                   fontSize: '0.85rem'
                 }}
               >
+                <option value="Mug">☕ Mug (Cốc/Ly)</option>
+                <option value="Apparel: Shirt">👕 Apparel: Shirt</option>
+                <option value="Apparel: Sweatshirt">🧥 Apparel: Sweatshirt</option>
+                <option value="Apparel: Hoodie">🧥 Apparel: Hoodie</option>
+                <option value="Blanket">🛋️ Blanket (Chăn/Mền)</option>
+                <option value="Hat/Cap">🧢 Hat / Cap (Nón/Mũ)</option>
+                <option value="Ornament">🎄 Ornament (Giáng sinh/Lưu niệm)</option>
                 <option value="Jewelry">✨ Custom Jewelry</option>
-                <option value="Acrylic">💡 Custom Acrylic</option>
-                <option value="Blanket">🛋️ Custom Blanket</option>
                 <option value="Embroidery">🧵 Custom Embroidery</option>
+                <option value="Acrylic">💡 Custom Acrylic</option>
               </select>
+
             </div>
           </div>
 

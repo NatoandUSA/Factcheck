@@ -165,11 +165,18 @@ app.post('/api/listings', (req, res) => {
   const ipResult = ipGuard.screenListing(listingData);
   const oppResult = opportunityScorer.calculateOpportunityScore(listingData);
 
+  const rawKws = `${amazonTitle || ''} ${etsyTitle || ''}`.split(/\s+/);
+  const searchTerms = payload.amazonSearchTerms || keywordRanker.buildAmazonSearchTerms(rawKws);
+  const etsyTags = (payload.etsyTags && payload.etsyTags.length > 0) ? payload.etsyTags : keywordRanker.buildEtsyTags(rawKws, categoryName);
+
   const updatedPayload = {
     ...payload,
     amazonTitle,
     etsyTitle,
     categoryName,
+    amazonSearchTerms: searchTerms,
+    etsyTags: etsyTags,
+    amazonDescription: payload.amazonDescription || `<p><b>High Quality ${categoryName}</b></p><p>Crafted with premium materials and attention to detail. Perfect gift for family and loved ones on birthdays, anniversaries, and holidays.</p><p><b>Features:</b></p><ul><li>Durable & Long-lasting</li><li>Personalized Customization</li><li>Easy Care & Maintenance</li></ul>`,
     ipVerdict: ipResult.verdict,
     ipHits: ipResult.hits,
     opportunityScore: oppResult.overallScore,
@@ -178,6 +185,7 @@ app.post('/api/listings', (req, res) => {
   };
 
   const status = (ipResult.verdict === 'BLOCK') ? 'IP_RISK_BLOCKED' : 'NEEDS_QA';
+
   
   db.run(
     "INSERT INTO listings (amazonTitle, etsyTitle, categoryName, status, authorId, payload) VALUES (?, ?, ?, ?, ?, ?)",

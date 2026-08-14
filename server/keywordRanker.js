@@ -1,8 +1,9 @@
 const ipGuard = require('./ipGuard');
 
 /**
- * Master Keyword Selection & Ranking Engine
- * Ported from AMZ Toolkit (sqp_crosscheck.py & phaseA_master.py) & 22etsy-agent
+ * Master Keyword Selection & Ranking Engine (Updated for Aug 15, 2026 Policy Standards)
+ * Amazon: Title <= 75 chars, Item Highlights <= 125 chars, Search Terms <= 249 UTF-8 bytes
+ * Etsy: Title <= 140 chars (Buyer-friendly, non-stuffed), 13 Tags <= 20 chars
  */
 
 function rankKeywords(keywordList) {
@@ -55,7 +56,6 @@ function buildAmazonTitle75(keywordList, categoryName = 'Gift') {
   const ranked = rankKeywords(keywordList);
   const topKw = ranked.length > 0 ? ranked[0].keyword : categoryName;
   
-  // Capitalize title case
   const toTitleCase = (str) => str.replace(/\w\S*/g, (txt) => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase());
   
   let baseTitle = `Personalized ${toTitleCase(topKw)}`;
@@ -89,6 +89,24 @@ function buildAmazonItemHighlights125(keywordList, categoryName = 'Gift') {
     text = text.substring(0, 122) + '...';
   }
   return text.substring(0, 125);
+}
+
+/**
+ * Build Etsy Title (Buyer-friendly, non-stuffed, Max 140 chars, optimal 70-100 chars per 2026 Etsy Policy)
+ */
+function buildEtsyTitleClean(keywordList, categoryName = 'Handmade Gift') {
+  const ranked = rankKeywords(keywordList);
+  const toTitleCase = (str) => str.replace(/\w\S*/g, (txt) => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase());
+
+  const coreKw = ranked.length > 0 ? toTitleCase(ranked[0].keyword) : categoryName;
+  const secondaryKw = ranked.length > 1 ? toTitleCase(ranked[1].keyword) : 'Custom Handmade Gift';
+
+  let title = `Personalized ${coreKw} - ${secondaryKw}`;
+  if (title.length > 140) {
+    title = title.substring(0, 140).trim();
+  }
+
+  return title;
 }
 
 /**
@@ -165,7 +183,6 @@ function buildEtsyTags(keywordList, categoryName = 'Gift') {
   const tagsSet = new Set();
   const resultTags = [];
 
-  // Default fallback tags per category if list is short
   const defaultTags = [
     `custom ${categoryName.toLowerCase()}`,
     `personalized gift`,
@@ -182,7 +199,6 @@ function buildEtsyTags(keywordList, categoryName = 'Gift') {
     `handmade gift`
   ];
 
-  // First extract from ranked keywords
   for (const item of ranked) {
     let tag = item.keyword.toLowerCase().trim();
     tag = tag.replace(/[^a-z0-9\s]/g, '').trim();
@@ -194,7 +210,6 @@ function buildEtsyTags(keywordList, categoryName = 'Gift') {
     if (resultTags.length >= 13) break;
   }
 
-  // Fill up to 13 tags using defaults if needed
   if (resultTags.length < 13) {
     for (const defTag of defaultTags) {
       const cleanDef = defTag.substring(0, 20).trim();
@@ -214,5 +229,6 @@ module.exports = {
   buildAmazonTitle75,
   buildAmazonItemHighlights125,
   buildAmazonSearchTerms,
+  buildEtsyTitleClean,
   buildEtsyTags
 };

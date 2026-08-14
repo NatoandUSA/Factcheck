@@ -3,11 +3,32 @@ const { GoogleGenAI } = require('@google/genai');
 const cors = require('cors');
 const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
+const fs = require('fs');
+const multer = require('multer');
+const XLSX = require('xlsx');
 require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// Ensure data/imports directory exists
+const importsDir = path.resolve(__dirname, '../data/imports');
+if (!fs.existsSync(importsDir)) {
+  fs.mkdirSync(importsDir, { recursive: true });
+}
+
+// Multer configuration for file upload
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    cb(null, importsDir);
+  },
+  filename: function (req, file, cb) {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, uniqueSuffix + '-' + file.originalname);
+  }
+});
+const upload = multer({ storage: storage });
 
 const dbPath = path.resolve(__dirname, 'app.db');
 const db = new sqlite3.Database(dbPath);
@@ -193,23 +214,332 @@ app.post('/api/listings/:id/feedback', (req, res) => {
   );
 });
 
-// Mock YTrends MCP Endpoint
-app.get('/api/market-data', (req, res) => {
-  const { category } = req.query;
-  
-  // Return mock live market data based on category
-  const data = {
-    searchVolume: Math.floor(Math.random() * 5000) + 1000,
-    competitionScore: Math.floor(Math.random() * 40) + 20, // 0-100 (lower is better)
-    trendingKeywords: ['custom', category?.toLowerCase() || 'gift', 'personalized', '2026', 'trendy'],
-    saturationWarning: false
-  };
-  
-  if (category === 'Jewelry') data.competitionScore += 30; // Highly competitive
-  
-  res.json(data);
+// API: Upload and process Helium 10 / CSV reports
+app.post('/api/upload-h10', upload.single('reportFile'), (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'No file uploaded' });
+  }
+
+  const filePath = req.file.path;
+  const fileName = req.file.originalname;
+  const targetCategory = req.body.category || 'Jewelry';
+
+  try {
+    const workbook = XLSX.readFile(filePath);
+    const sheetName = workbook.SheetNames[0];
+    const rawRows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName]);
+
+    if (!rawRows || rawRows.length === 0) {
+      return res.status(400).json({ error: 'Uploaded file contains no data rows.' });
+    }
+
+    // Detect all multi-dimensional Helium 10 & Data Dive columns
+    const firstRow = rawRows[0];
+    const kwKey = Object.keys(firstRow).find(k => /keyword|phrase|query|search query|search term/i.test(k)) || Object.keys(firstRow)[0];
+    const volKey = Object.keys(firstRow).find(k => /^(search\s*volume|volume|searches)$/i.test(k.trim())) || Object.keys(firstRow).find(k => /volume/i.test(k));
+    const compKey = Object.keys(firstRow).find(k => /competing|competition|competitors/i.test(k));
+    const titleDensityKey = Object.keys(firstRow).find(k => /title\s*density|density/i.test(k));
+    const cprKey = Object.keys(firstRow).find(k => /cpr/i.test(k));
+    const iqKey = Object.keys(firstRow).find(k => /iq\s*score/i.test(k));
+
+    // Common IP / Trademark / Copyright Blacklist & Competitor Brand patterns
+    const IP_TRADEMARK_BLACKLIST = [
+      'disney', 'marvel', 'dc comics', 'spider-man', 'spiderman', 'ghost spider', 'batman', 
+      'superman', 'avengers', 'iron man', 'harry potter', 'star wars', 'pokemon', 'lego', 
+      'barbie', 'hello kitty', 'snoopy', 'grinch', 'nike', 'adidas', 'gucci', 'chanel', 
+      'louis vuitton', 'prada', 'pandora', 'tiffany', 'bangely', 'taylor swift', 'cricut'
+    ];
+
+    // Compute Multi-Dimensional Opportunity Score for each row (Data Dive & H10 A10 Model)
+    const evaluatedKeywords = [];
+    const flaggedIpKeywords = [];
+
+    for (const r of rawRows) {
+      let rawVal = String(r[kwKey] || '').trim();
+      
+      // Clean competitor title spam (e.g. strip pipe '|' and trailing filler)
+      if (rawVal.includes('|')) {
+        rawVal = rawVal.split('|')[0].trim();
+      }
+      rawVal = rawVal.replace(/\s+/g, ' ').replace(/^["']|["']$/g, '').trim();
+
+      if (!rawVal || rawVal.length < 3 || rawVal.length > 80) continue;
+
+      // IP / Trademark Screening
+      const lower = rawVal.toLowerCase();
+      const isIpRisk = IP_TRADEMARK_BLACKLIST.some(ip => lower.includes(ip));
+      if (isIpRisk) {
+        if (!flaggedIpKeywords.includes(rawVal)) {
+          flaggedIpKeywords.push(rawVal);
+        }
+        continue; // Skip trademarked terms
+      }
+
+      // Avoid duplicates
+      if (evaluatedKeywords.some(item => item.keyword.toLowerCase() === rawVal.toLowerCase())) {
+        continue;
+      }
+
+      const searchVolume = volKey && Number(r[volKey]) ? Number(r[volKey]) : 0;
+      const competingProducts = compKey && Number(r[compKey]) ? Number(r[compKey]) : 0;
+      const titleDensity = titleDensityKey && !isNaN(Number(r[titleDensityKey])) ? Number(r[titleDensityKey]) : null;
+      const cpr = cprKey && Number(r[cprKey]) ? Number(r[cprKey]) : null;
+      const rawIq = iqKey && Number(r[iqKey]) ? Number(r[iqKey]) : 0;
+
+      // Calculate A10 Golden Opportunity Score:
+      // High Search Volume + Low Competing Products + Low Title Density = Highest Score
+      let opportunityScore = 0;
+      if (rawIq > 0) {
+        opportunityScore = rawIq;
+      } else if (searchVolume > 0) {
+        const compFactor = Math.sqrt(competingProducts + 10);
+        const tdFactor = (titleDensity !== null && titleDensity >= 0) ? (titleDensity + 1) : 4;
+        // Formula balances high volume while rewarding low competition & low title density
+        opportunityScore = Math.round((searchVolume / (compFactor * tdFactor)) * 100);
+      } else {
+        opportunityScore = 50; // default baseline if no volume column
+      }
+
+      evaluatedKeywords.push({
+        keyword: rawVal,
+        searchVolume,
+        competingProducts,
+        titleDensity,
+        cpr,
+        opportunityScore
+      });
+    }
+
+    if (evaluatedKeywords.length === 0) {
+      return res.status(400).json({ 
+        error: 'Không tìm thấy từ khóa an toàn. Các từ khóa trong file có thể đã bị chặn bởi bộ lọc IP/Trademark.',
+        flaggedIpKeywords
+      });
+    }
+
+    // Sort by Opportunity Score Descending (Highest Potential first)
+    evaluatedKeywords.sort((a, b) => b.opportunityScore - a.opportunityScore);
+
+    // Assign Strategic Tiers (Data Dive MKL Methodology)
+    const topKeywordsDetailed = evaluatedKeywords.slice(0, 15).map((item, idx) => {
+      let tier = 'Tier 3 (Backend Fuel)';
+      let tierBadge = '📦 Backend Terms';
+      if (idx < 3) {
+        tier = 'Tier 1 (Golden Launch - Title Hook)';
+        tierBadge = '👑 Amazon/Etsy Title';
+      } else if (idx < 8) {
+        tier = 'Tier 2 (Core Feature - Bullets/Tags)';
+        tierBadge = '💎 Bullets & 13 Tags';
+      }
+      return {
+        ...item,
+        rank: idx + 1,
+        tier,
+        tierBadge
+      };
+    });
+
+    const keywords = topKeywordsDetailed.map(k => k.keyword);
+    const trendingKeywordsStr = keywords.slice(0, 10).join(', ');
+
+    // Insert into market_trends for AI Drafter
+    db.run(
+      "INSERT INTO market_trends (category, trending_keywords) VALUES (?, ?)",
+      [targetCategory, trendingKeywordsStr],
+      function(dbErr) {
+        if (dbErr) return res.status(500).json({ error: dbErr.message });
+        
+        const trendId = this.lastID;
+        const msg = `[H10 MKL ENGINE] Scored & imported ${keywords.length} keywords from "${fileName}" for ${targetCategory}. Top Opportunity: "${keywords[0]}" (Score: ${topKeywordsDetailed[0].opportunityScore})`;
+        
+        // Log to Agent 1 if exists
+        db.run("INSERT INTO agent_logs (agentId, message) VALUES (1, ?)", [msg]);
+
+        res.json({
+          success: true,
+          trendId,
+          fileName,
+          category: targetCategory,
+          totalRows: rawRows.length,
+          topKeywords: keywords,
+          topKeywordsDetailed,
+          flaggedIpKeywords,
+          trendingKeywordsStr
+        });
+      }
+    );
+  } catch (err) {
+    console.error('H10 File Parse Error:', err);
+    res.status(500).json({ error: `Failed to parse file: ${err.message}` });
+  }
 });
 
+// Real Analytics Summary Endpoint (Driven by real listings & feedback)
+app.get('/api/analytics-summary', (req, res) => {
+  db.get(`
+    SELECT 
+      COUNT(*) as totalListings,
+      SUM(CASE WHEN status = 'MANAGER_APPROVED' THEN 1 ELSE 0 END) as approvedListings,
+      SUM(CASE WHEN status = 'NEEDS_QA' THEN 1 ELSE 0 END) as pendingListings
+    FROM listings
+  `, [], (err, listingStats) => {
+    if (err) return res.status(500).json({ error: err.message });
+
+    db.all(`
+      SELECT categoryName, COUNT(*) as count 
+      FROM listings 
+      GROUP BY categoryName
+    `, [], (catErr, catRows) => {
+      if (catErr) return res.status(500).json({ error: catErr.message });
+
+      db.get(`
+        SELECT COUNT(*) as totalTrends, SUM(CASE WHEN processed = 1 THEN 1 ELSE 0 END) as processedTrends
+        FROM market_trends
+      `, [], (trendErr, trendStats) => {
+        if (trendErr) return res.status(500).json({ error: trendErr.message });
+
+        db.all(`
+          SELECT action, COUNT(*) as count, SUM(revenue) as totalRevenue, SUM(orders) as totalOrders, SUM(views) as totalViews
+          FROM sales_feedback
+          GROUP BY action
+        `, [], (feedErr, feedRows) => {
+          res.json({
+            listingStats: listingStats || { totalListings: 0, approvedListings: 0, pendingListings: 0 },
+            categoryBreakdown: catRows || [],
+            trendStats: trendStats || { totalTrends: 0, processedTrends: 0 },
+            feedbackStats: feedRows || []
+          });
+        });
+      });
+    });
+  });
+});
+// API: Get all imported keyword trends
+app.get('/api/trends', (req, res) => {
+  db.all("SELECT * FROM market_trends ORDER BY discoveredAt DESC LIMIT 30", [], (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(rows);
+  });
+});
+
+// API: Instantly Draft listing for a specific trend using Gemini 3.6 Flash
+app.post('/api/trends/:id/draft', (req, res) => {
+  const { id } = req.params;
+  
+  db.get("SELECT * FROM market_trends WHERE id = ?", [id], (err, trend) => {
+    if (err || !trend) return res.status(404).json({ error: 'Trend cluster not found' });
+
+    db.get("SELECT value FROM settings WHERE key = 'gemini_api_key'", async (sErr, setting) => {
+      if (sErr || !setting || !setting.value) {
+        return res.status(400).json({ error: 'Gemini API Key missing. Please set it in .env or Settings modal.' });
+      }
+
+      try {
+        const client = new GoogleGenAI({ apiKey: setting.value });
+        const prompt = `You are a world-class E-Commerce Copywriting & SEO Specialist with deep mastery of Amazon A10, Data Dive MKL, and Etsy Search Algorithm.
+Write a highly converting, dual-platform e-commerce listing package for a ${trend.category} product targeting these curated keywords: ${trend.trending_keywords}.
+
+STRICT PLATFORM RULES:
+1. AMAZON FBM (A10 Algorithm):
+   - "amazonTitle": 130-180 chars, Title Case, front-load top commercial phrases. Zero prohibited claims (no "best seller", "free shipping", "guarantee").
+   - "amazonBullets": EXACTLY 5 bullet points (150-250 chars each). Each MUST start with a [CAPITALIZED HOOK].
+   - "amazonSearchTerms": Space-separated generic terms strictly under 240 UTF-8 bytes. NO COMMAS.
+   - "amazonDescription": High-converting HTML formatted product description (<p>, <ul>, <strong>).
+   - "amazonAPlusContent": Structured A+ package:
+     {
+       "brandStoryHeadline": "Timeless Emotional Keepsakes",
+       "brandStoryBody": "Crafting personalized gifts that celebrate lifelong relationships.",
+       "modules": [
+         { "moduleType": "Hero Banner Story", "heading": "...", "body": "..." },
+         { "moduleType": "Three Feature Highlights", "features": [{ "title": "...", "desc": "..." }, { "title": "...", "desc": "..." }, { "title": "...", "desc": "..." }] },
+         { "moduleType": "Specifications & Unboxing", "heading": "...", "body": "..." }
+       ]
+     }
+
+2. ETSY (Gift-Giver & Handmade Search):
+   - "etsyTitle": Max 140 chars. Front-load top gift occasion / recipient in first 40 chars for mobile.
+   - "etsyTags": EXACTLY 13 multi-word long-tail tags (<=20 chars each, letters/numbers/spaces only). Focus on recipient and occasion.
+   - "etsyMaterials": Array of 3-5 authentic materials.
+   - "etsyPersonalizationInstructions": Step-by-step buyer guide.
+   - "etsyDescription": Warm, story-driven description with details, sizing, and care instructions.
+
+Return ONLY a valid raw JSON object without markdown code fences:
+{
+  "amazonTitle": "...",
+  "amazonBullets": ["...", "...", "...", "...", "..."],
+  "amazonSearchTerms": "...",
+  "amazonDescription": "...",
+  "amazonAPlusContent": {
+    "brandStoryHeadline": "...",
+    "brandStoryBody": "...",
+    "modules": [
+      { "moduleType": "Hero Banner Story", "heading": "...", "body": "..." },
+      { "moduleType": "Three Feature Highlights", "features": [{ "title": "...", "desc": "..." }, { "title": "...", "desc": "..." }, { "title": "...", "desc": "..." }] },
+      { "moduleType": "Specifications & Unboxing", "heading": "...", "body": "..." }
+    ]
+  },
+  "etsyTitle": "...",
+  "etsyTags": ["...", ... (13 items, <=20 chars each)],
+  "etsyMaterials": ["...", "..."],
+  "etsyPersonalizationInstructions": "...",
+  "etsyDescription": "..."
+}`;
+
+        const interaction = await client.interactions.create({
+          model: "gemini-3.6-flash",
+          input: prompt,
+          system_instruction: "You are an elite E-Commerce Listing & SEO Specialist for Amazon A10 & Etsy. Return ONLY raw JSON without markdown code fences."
+        });
+
+        let text = interaction.output_text;
+        if (text.includes('```json')) {
+          text = text.split('```json')[1].split('```')[0].trim();
+        } else if (text.includes('```')) {
+          text = text.split('```')[1].split('```')[0].trim();
+        }
+        const aiData = JSON.parse(text);
+
+        const payload = {
+          amazonTitle: aiData.amazonTitle || `Personalized ${trend.category}`,
+          amazonBullets: aiData.amazonBullets || [],
+          amazonSearchTerms: aiData.amazonSearchTerms || '',
+          amazonDescription: aiData.amazonDescription || '',
+          amazonAPlusContent: aiData.amazonAPlusContent || null,
+          amazonAPlusPoints: aiData.amazonAPlusPoints || [],
+          etsyTitle: aiData.etsyTitle || `Custom ${trend.category}`,
+          etsyDescription: aiData.etsyDescription || '',
+          etsyTags: (aiData.etsyTags || []).slice(0, 13).map(t => String(t).substring(0, 20)),
+          etsyMaterials: aiData.etsyMaterials || [],
+          etsyPersonalizationInstructions: aiData.etsyPersonalizationInstructions || '',
+          categoryName: trend.category,
+          generatedAt: new Date().toISOString(),
+          status: 'NEEDS_QA'
+        };
+
+        db.run(
+          "INSERT INTO listings (amazonTitle, etsyTitle, categoryName, status, authorId, payload) VALUES (?, ?, ?, ?, ?, ?)",
+          [payload.amazonTitle, payload.etsyTitle, payload.categoryName, 'NEEDS_QA', 0, JSON.stringify(payload)],
+          function(insertErr) {
+            if (insertErr) return res.status(500).json({ error: insertErr.message });
+            
+            // Mark trend as processed
+            db.run("UPDATE market_trends SET processed = 1 WHERE id = ?", [trend.id]);
+            db.run("INSERT INTO agent_logs (agentId, message) VALUES (2, ?)", [`Manually triggered draft generated for ${trend.category} (Listing ID: ${this.lastID})`]);
+
+            res.json({
+              success: true,
+              listingId: this.lastID,
+              listing: { ...payload, dbId: this.lastID }
+            });
+          }
+        );
+      } catch (genErr) {
+        console.error('Manual draft error:', genErr);
+        res.status(500).json({ error: `AI Drafting failed: ${genErr.message}` });
+      }
+    });
+  });
+});
 // API: Save API Key
 app.post('/api/settings/apikey', (req, res) => {
   const { apiKey } = req.body;
@@ -475,36 +805,24 @@ setInterval(() => {
                     systemNote: `Generated via LIVE Gemini AI Agent using real market data: ${trend.trending_keywords}`
                   };
                 } catch (apiError) {
-                  db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, `Gemini API failed: ${apiError.message}. Falling back to mock generator.`]);
-                  // fallback happens below
+                  db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, `Gemini API Error: ${apiError.message}. Real listing generation failed.`]);
                 }
-              }
-              
-              if (!payload) {
-                // Fallback / Mock Generator
-                const msg = `Drafting new ${trend.category} listing based on keywords (Mock Fallback): ${trend.trending_keywords}`;
-                db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, msg]);
-                
-                payload = {
-                  amazonTitle: `Auto-Drafted ${trend.category} Title (${trend.trending_keywords.split(',')[0]})`,
-                  amazonBullets: ['[TRENDING] Built automatically by the drafter agent.', '[QUALITY] High conversion rate expected.', '...', '...', '...'],
-                  amazonSearchTerms: trend.trending_keywords.replace(/,/g, ''),
-                  etsyTitle: `New Trend ${trend.category} Gift`,
-                  categoryName: trend.category,
-                  systemNote: `Automatically generated by Mock AI Drafter Agent using live market data: ${trend.trending_keywords}`
-                };
-              }
 
-              db.run(
-                "INSERT INTO listings (amazonTitle, etsyTitle, categoryName, status, authorId, payload) VALUES (?, ?, ?, ?, ?, ?)",
-                [payload.amazonTitle, payload.etsyTitle, payload.categoryName, 'NEEDS_QA', 0, JSON.stringify(payload)],
-                function(insertErr) {
-                  if (!insertErr) {
-                    db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, `Successfully saved draft (ID: ${this.lastID}) to NEEDS_QA queue.`]);
-                    db.run("UPDATE agents SET lastActive = CURRENT_TIMESTAMP WHERE id = ?", [agent.id]);
-                  }
+                if (payload) {
+                  db.run(
+                    "INSERT INTO listings (amazonTitle, etsyTitle, categoryName, status, authorId, payload) VALUES (?, ?, ?, ?, ?, ?)",
+                    [payload.amazonTitle, payload.etsyTitle, payload.categoryName, 'NEEDS_QA', 0, JSON.stringify(payload)],
+                    function(insertErr) {
+                      if (!insertErr) {
+                        db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, `Successfully saved draft (ID: ${this.lastID}) to NEEDS_QA queue.`]);
+                        db.run("UPDATE agents SET lastActive = CURRENT_TIMESTAMP WHERE id = ?", [agent.id]);
+                      }
+                    }
+                  );
                 }
-              );
+              } else {
+                db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, `[AI Drafter Standby] Gemini API key is missing in .env or Settings. Waiting for key configuration.`]);
+              }
             });
           }
         });

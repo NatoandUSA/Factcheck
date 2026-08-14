@@ -289,6 +289,60 @@ export default function ListingOutputViewer({ listing, onSaveListing, onShowToas
               {listing.amazonDescription}
             </div>
           </div>
+
+          {/* Amazon A+ Content Modules */}
+          {listing.amazonAPlusContent && (
+            <div className="listing-field-card" style={{ borderLeft: '4px solid #ea580c' }}>
+              <div className="field-header">
+                <div className="field-title">
+                  <span>Amazon A+ Content (EBC Modules)</span>
+                  <span style={{ fontSize: '0.7rem', textTransform: 'none', color: '#c2410c', fontWeight: 'bold' }}>
+                    [Brand Story & Feature Modules]
+                  </span>
+                </div>
+                <button
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => copyToClipboard(JSON.stringify(listing.amazonAPlusContent, null, 2), 'amz-aplus', 'A+ Content Copied!')}
+                  disabled={!isApproved} style={{ opacity: isApproved ? 1 : 0.5 }}
+                >
+                  {copiedKey === 'amz-aplus' ? <Check size={14} /> : <Copy size={14} />}
+                  <span>{copiedKey === 'amz-aplus' ? 'Copied' : 'Copy A+ Data'}</span>
+                </button>
+              </div>
+              <div className="field-content" style={{ fontSize: '0.85rem' }}>
+                <div style={{ fontWeight: 700, color: '#0f172a', marginBottom: '4px' }}>
+                  {listing.amazonAPlusContent.brandStoryHeadline}
+                </div>
+                <p style={{ color: '#475569', marginBottom: '12px' }}>
+                  {listing.amazonAPlusContent.brandStoryBody}
+                </p>
+
+                {listing.amazonAPlusContent.modules && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '10px' }}>
+                    {listing.amazonAPlusContent.modules.map((mod, mIdx) => (
+                      <div key={mIdx} style={{ background: '#f8fafc', padding: '10px 14px', borderRadius: '6px', border: '1px solid #e2e8f0' }}>
+                        <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#ea580c', textTransform: 'uppercase' }}>
+                          Module #{mIdx + 1}: {mod.moduleType}
+                        </div>
+                        {mod.heading && <div style={{ fontWeight: 600, fontSize: '0.85rem', marginTop: '2px' }}>{mod.heading}</div>}
+                        {mod.body && <div style={{ fontSize: '0.8rem', color: '#64748b', marginTop: '2px' }}>{mod.body}</div>}
+                        {mod.features && (
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '8px', marginTop: '6px' }}>
+                            {mod.features.map((f, fIdx) => (
+                              <div key={fIdx} style={{ background: '#fff', padding: '6px 10px', borderRadius: '4px', border: '1px solid #cbd5e1' }}>
+                                <strong style={{ fontSize: '0.8rem', color: '#1e293b' }}>{f.title}:</strong>
+                                <span style={{ fontSize: '0.75rem', color: '#64748b', marginLeft: '4px' }}>{f.desc}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
           </>
           )}
         </div>

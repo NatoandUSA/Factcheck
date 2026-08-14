@@ -7,7 +7,6 @@ import BatchCsvGenerator from './components/BatchCsvGenerator';
 import ListingHistory from './components/ListingHistory';
 import AgentHub from './components/AgentHub';
 import ApiKeyModal from './components/ApiKeyModal';
-import HomestayRoadmapModal from './components/HomestayRoadmapModal';
 import LoginModal from './components/LoginModal';
 import { generateListingAI } from './services/geminiService';
 import { useAuth } from './context/AuthContext';
@@ -21,7 +20,6 @@ export default function App() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [history, setHistory] = useState([]);
   const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
-  const [isHomestayModalOpen, setIsHomestayModalOpen] = useState(false);
   const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
   const [toasts, setToasts] = useState([]);
   const { user } = useAuth();
@@ -185,7 +183,6 @@ export default function App() {
         activeTab={activeTab}
         setActiveTab={setActiveTab}
         onOpenApiKeyModal={() => setIsApiKeyModalOpen(true)}
-        onOpenHomestayModal={() => setIsHomestayModalOpen(true)}
         onOpenLoginModal={() => setIsLoginModalOpen(true)}
         historyCount={history.length}
       />
@@ -194,7 +191,11 @@ export default function App() {
         {/* TAB 0: Analytics Dashboard */}
         {activeTab === 'dashboard' && (
           <div style={{ marginTop: '24px' }}>
-            <Dashboard />
+            <Dashboard 
+              onSelectListing={handleSelectFromHistory}
+              onApproveListing={handleApproveListing}
+              onShowToast={showToast}
+            />
           </div>
         )}
 
@@ -240,6 +241,7 @@ export default function App() {
               onClearHistory={handleClearHistory}
               onShowToast={showToast}
               onRefresh={fetchListings}
+              onApproveListing={handleApproveListing}
             />
           </div>
         )}
@@ -257,11 +259,6 @@ export default function App() {
         isOpen={isApiKeyModalOpen}
         onClose={() => setIsApiKeyModalOpen(false)}
         onKeySaved={() => showToast('Gemini API settings updated!')}
-      />
-
-      <HomestayRoadmapModal
-        isOpen={isHomestayModalOpen}
-        onClose={() => setIsHomestayModalOpen(false)}
       />
 
       <LoginModal

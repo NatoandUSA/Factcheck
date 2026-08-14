@@ -1,9 +1,9 @@
 import React from 'react';
-import { Sparkles, Key, Layers, FileSpreadsheet, History, Home, Bot, UserCircle, LogOut, Server, Activity } from 'lucide-react';
+import { Sparkles, Key, Layers, FileSpreadsheet, History, Bot, UserCircle, LogOut, Server, Activity } from 'lucide-react';
 import { getStoredApiKey } from '../services/geminiService';
 import { useAuth } from '../context/AuthContext';
 
-export default function Header({ activeTab, setActiveTab, onOpenApiKeyModal, onOpenHomestayModal, onOpenLoginModal, historyCount = 0 }) {
+export default function Header({ activeTab, setActiveTab, onOpenApiKeyModal, onOpenLoginModal, historyCount = 0 }) {
   const hasKey = Boolean(getStoredApiKey());
   const { user, logout } = useAuth();
 
@@ -60,15 +60,6 @@ export default function Header({ activeTab, setActiveTab, onOpenApiKeyModal, onO
           >
             <Server size={16} />
             <span>Agent Hub</span>
-          </button>
-
-          <button
-            className="nav-tab-btn"
-            onClick={onOpenHomestayModal}
-            style={{ color: '#0f766e', border: '1px dashed #0d9488' }}
-          >
-            <Home size={16} />
-            <span>Hue Homestay Hub</span>
           </button>
         </nav>
 

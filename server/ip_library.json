@@ -1,0 +1,64 @@
+{
+  "meta": {
+    "name": "IP / Legal Safety Library",
+    "purpose": "Fast, curated screen for trademark + copyright risk on Amazon US apparel/POD/embroidery/jewelry listings. Risk-reduction, NOT legal clearance.",
+    "version": "1.1",
+    "updated": "2026-08"
+  },
+  "block": {
+    "brands_apparel": ["nike","adidas","jordan","puma","reebok","under armour","new balance","fila","champion","the north face","north face","patagonia","columbia","carhartt","levis","levi's","wrangler","lululemon","gymshark","vineyard vines","tommy hilfiger","ralph lauren","polo ralph lauren","calvin klein","hollister","abercrombie","american eagle","comfort colors","bella canvas","gildan","next level","anti social social club","supreme","stussy","brandy melville","free people","spanx","skims","figs","cherokee uniforms","dickies","hanes","fruit of the loom"],
+    "brands_luxury": ["gucci","prada","versace","chanel","louis vuitton","dior","hermes","burberry","balenciaga","fendi","givenchy","valentino","celine","saint laurent","ysl","bottega veneta","coach","kate spade","michael kors","tory burch"],
+    "brands_jewelry": ["tiffany","tiffany & co","cartier","pandora","swarovski","david yurman","alex and ani","kendra scott","mejuri","brilliant earth","james avery","return to tiffany"],
+    "brands_tech_auto_other": ["apple","google","microsoft","samsung","sony","nintendo","playstation","xbox","tesla","jeep","ford","chevrolet","chevy","dodge","toyota","honda","bmw","mercedes","harley davidson","john deere","stanley","yeti","hydro flask","hydroflask","rtic","igloo","lego","crocs","vans","converse","dr martens","doc martens","ugg","birkenstock","oakley","ray ban","ray-ban","gopro","dyson"],
+    "brands_food_bev": ["starbucks","coca cola","coca-cola","coke","pepsi","dr pepper","mcdonalds","mcdonald's","burger king","chick fil a","chick-fil-a","in n out","in-n-out","taco bell","chipotle","dunkin","red bull","monster energy","hershey","reeses","reese's","oreo","nutella","jack daniels","jack daniel's","tito's","modelo","corona beer","hersheys"],
+    "characters_franchises": ["disney","mickey mouse","minnie mouse","mickey","minnie","winnie the pooh","pooh","frozen","elsa","anna","olaf","moana","encanto","lilo","stitch","toy story","buzz lightyear","woody","cars pixar","up pixar","inside out","marvel","avengers","spiderman","spider-man","iron man","captain america","thor","hulk","black panther","deadpool","x-men","wolverine","dc comics","batman","superman","wonder woman","aquaman","the flash","joker","harley quinn","star wars","yoda","baby yoda","grogu","mandalorian","darth vader","stormtrooper","the child","harry potter","hogwarts","dumbledore","hermione","gryffindor","pokemon","pikachu","charizard","eevee","hello kitty","sanrio","kuromi","cinnamoroll","my melody","barbie","bratz","bluey","bingo bluey","paw patrol","peppa pig","minions","despicable me","grinch","dr seuss","cat in the hat","the lorax","sesame street","elmo","cookie monster","big bird","super mario","mario","luigi","peach","yoshi","bowser","zelda","link zelda","minecraft","creeper","roblox","fortnite","sonic the hedgehog","sonic","stranger things","hellfire club","squid game","wednesday addams","addams family","cocomelon","gabby dollhouse","gabbys dollhouse","one piece","luffy","naruto","sasuke","dragon ball","goku","vegeta","demon slayer","tanjiro","jujutsu kaisen","gojo","attack on titan","studio ghibli","totoro","spirited away","sailor moon","hunter x hunter","my hero academia","deku","spongebob","patrick star","squidward","scooby doo","scooby-doo","tom and jerry","looney tunes","bugs bunny","tweety","care bears","my little pony","transformers","optimus prime","teenage mutant ninja turtles","tmnt","power rangers","he-man","the simpsons","bart simpson","homer simpson","family guy","peter griffin","rick and morty","the office us","dunder mifflin","friends tv","central perk","game of thrones","house of the dragon","the last of us","bridgerton","barbie movie","wicked movie","taylor nation"],
+    "celebrities_people": ["taylor swift","swiftie","the eras tour","eras tour","beyonce","rihanna","drake","kanye","ye","travis scott","bad bunny","sabrina carpenter","olivia rodrigo","billie eilish","ariana grande","harry styles","zach bryan","morgan wallen","lebron james","stephen curry","kobe bryant","mamba","michael jordan","lionel messi","cristiano ronaldo","travis kelce","patrick mahomes","caitlin clark","shohei ohtani","mr beast","mrbeast","kardashian","kylie jenner","elon musk","donald trump","kamala harris","joe biden","salish matter","jojo siwa"],
+    "sports_leagues_teams_events": ["nfl","nba","mlb","nhl","mls","ncaa","fifa","uefa","premier league","formula 1","f1","nascar","ufc","wwe","super bowl","the masters","wimbledon","olympics","olympic","team usa","world cup","final four","march madness","stanley cup","dallas cowboys","new england patriots","kansas city chiefs","philadelphia eagles","green bay packers","san francisco 49ers","new york yankees","los angeles dodgers","boston red sox","chicago cubs","los angeles lakers","boston celtics","golden state warriors","chicago bulls","real madrid","barcelona fc","manchester united","liverpool fc"],
+    "universities_collegiate": ["harvard","yale","princeton","stanford university","mit","duke university","university of alabama","crimson tide","roll tide","ohio state","buckeyes","university of michigan","wolverines","michigan state","penn state","nittany lions","university of texas","longhorns","texas a&m","aggies","lsu","tigers lsu","university of georgia","bulldogs uga","university of florida","gators","university of oregon","ducks oregon","usc trojans","ucla bruins","notre dame","fighting irish","university of north carolina","tar heels","duke blue devils","clemson tigers","university of tennessee","volunteers","university of kentucky","wildcats","western governors university","wgu","grand canyon university","southern new hampshire university","snhu"],
+    "protected_special": ["red cross","the salvation army","boy scouts","girl scouts","fbi","cia","nasa","us army","navy seals","navy seal","marine corps","semper fi","coast guard","secret service","google play","app store","spotify wrapped","netflix"]
+  },
+  "ambiguous_downgrade": {
+    "stitch": "Disney 'Stitch' — but 'stitch/stitched' is core embroidery vocabulary.",
+    "inside out": "Pixar 'Inside Out' — but 'wash inside out' is a care instruction.",
+    "coach": "Coach (bag brand) — but 'coach' is a common job/gift word.",
+    "champion": "Champion (apparel brand) — but 'champion' is a common word.",
+    "frozen": "Disney 'Frozen' — but 'frozen' is a common word.",
+    "sonic": "Sonic (game/drive-in) — safe as the word.",
+    "supreme": "Supreme (streetwear) — safe as adjective.",
+    "tide": "Tide (detergent) / 'Roll Tide' — safe as ocean/word.",
+    "gap": "Gap (apparel) — safe as common word.",
+    "guess": "Guess (apparel) — safe as verb.",
+    "boss": "Hugo Boss / 'Boss Babe' mark — 'boss' alone as a gift word is usually fine.",
+    "figs": "FIGS (scrubs brand) — safe as fruit/word."
+  },
+  "review_phrases": [
+    {"term": "mama bear", "note": "Registered & aggressively enforced in apparel."},
+    {"term": "boss babe", "note": "Registered trademark in apparel."},
+    {"term": "netflix and chill", "note": "Netflix-related; enforced."},
+    {"term": "raising the bar", "note": "Registered in multiple classes."},
+    {"term": "high five in the face", "note": "Famous registered novelty apparel phrase."},
+    {"term": "adulting", "note": "Registered by apparel sellers."},
+    {"term": "wine not", "note": "Registered in apparel classes."},
+    {"term": "salty", "note": "Registered marks exist in apparel."},
+    {"term": "blessed", "note": "Multiple apparel registrations exist."},
+    {"term": "nurses call the shots", "note": "Check — catchy nurse phrases are increasingly registered."},
+    {"term": "drama free", "note": "Registered apparel marks exist."},
+    {"term": "hot mess", "note": "Registered apparel marks exist."},
+    {"term": "girl dad", "note": "Rising registrations."},
+    {"term": "cat mom", "note": "Some registrations exist."},
+    {"term": "dog mom", "note": "Some registrations exist."},
+    {"term": "the man the myth the legend", "note": "Registrations exist in apparel."}
+  ],
+  "safe_vocab_add": [
+    "nurse","nurses","nursing","rn","bsn","lpn","cna","np","aprn","msn","adn","icu","nicu","picu","er","ed","or","l&d","ldr","med","surg","medsurg","telemetry","oncology","pediatric","peds","geriatric","hospice","cardiac","dialysis","phlebotomy","respiratory","radiology","anesthesia","practitioner","practical","registered","specialty","specialties","specialist","credential","credentials","stethoscope","scrub","scrubs","ward","shift","shifts","rounds","preceptor","pinning","caregiver","clinician","clinic","clinical","medical","healthcare","patient","patients","hospital",
+    "teacher","teachers","teaching","educator","professor","student","students","graduate","graduation","grad","senior","alumni","class","school","college","university","degree","diploma","valedictorian",
+    "engineer","engineering","doctor","dentist","pharmacist","therapist","technician","technologist","paramedic","firefighter","police","officer","veteran","military","army","navy","soldier","trooper",
+    "coach","player","athlete","runner","cyclist","golfer","fisherman","hunter","camper","hiker","gamer","reader","baker","chef","barista","farmer","electrician","plumber","welder","mechanic","trucker","driver","realtor","accountant","lawyer","paralegal","architect","designer","photographer","artist","musician","writer","author",
+    "appreciation","appreciate","thoughtful","thank","thanks","grateful","gratitude","proud","pride","celebrate","celebration","honor","honour","tribute","milestone","achievement","reward","recognition","cherish","memory","memories","keepsake","heartfelt","meaningful","sentimental",
+    "team","coworker","colleague","staff","employee","boss","manager","leader","mentor","job","career","work","workplace","office","profession","professional","occupation","retirement","retired","promotion","anniversary","birthday","occasion","future","new","first","best","favorite","favourite","world","number","est",
+    "personalize","personalized","personalised","customize","customized","customised","custom","monogram","monogrammed","initial","initials","name","named","embroider","embroidered","embroidery","stitch","stitched","applique","applied","thread","threaded","chenille","patch","patches","engrave","engraved","add","added","choose","select","design","designed",
+    "cozy","comfy","comfort","comfortable","relaxed","everyday","classic","modern","cute","chic","trendy","stylish","vintage","retro","aesthetic","minimal","minimalist","boho","preppy","casual","lightweight","heavyweight","midweight","brushed","fleece-lined","ribbed","crew","raglan","dropped","boxy","fitted","true","runs",
+    "spring","summer","fall","autumn","winter","seasonal","cold","warm","weather","layer","layering",
+    "christmas","xmas","holiday","holidays","thanksgiving","halloween","valentine","valentines","easter","hanukkah","new year","mothers","fathers","mother","father","day","week","month","season","annual"
+  ]
+}

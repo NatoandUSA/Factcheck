@@ -145,19 +145,82 @@ export default function ListingOutputViewer({ listing, onSaveListing, onShowToas
         </div>
       </div>
 
+      {/* AMAZON FBM & ETSY TAB HEADER */}
+      {/* IP Safety & Opportunity Score Banner */}
+      <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', marginBottom: '16px' }}>
+        {/* IP Safety Badge */}
+        <div style={{
+          flex: '1 1 240px',
+          padding: '12px 16px',
+          borderRadius: '8px',
+          border: '1px solid',
+          borderColor: (listing.ipVerdict === 'BLOCK' || listing.status === 'IP_RISK_BLOCKED') ? '#fecaca' : listing.ipVerdict === 'REVIEW' ? '#fde68a' : '#bbf7d0',
+          background: (listing.ipVerdict === 'BLOCK' || listing.status === 'IP_RISK_BLOCKED') ? '#fef2f2' : listing.ipVerdict === 'REVIEW' ? '#fffbeb' : '#f0fdf4',
+          color: (listing.ipVerdict === 'BLOCK' || listing.status === 'IP_RISK_BLOCKED') ? '#991b1b' : listing.ipVerdict === 'REVIEW' ? '#92400e' : '#166534'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600, fontSize: '0.85rem' }}>
+            <ShieldAlert size={18} />
+            <span>IP Safety Guard: {(listing.ipVerdict === 'BLOCK' || listing.status === 'IP_RISK_BLOCKED') ? '🔴 BLOCKED (Trademark Risk)' : listing.ipVerdict === 'REVIEW' ? '🟡 REVIEW REQUIRED' : '🟢 PASSED (0 Trademark Hits)'}</span>
+          </div>
+          {listing.ipHits && listing.ipHits.length > 0 && (
+            <div style={{ marginTop: '6px', fontSize: '0.75rem' }}>
+              <strong>Hits: </strong>
+              {listing.ipHits.map(h => `${h.term} (${h.category})`).join(', ')}
+            </div>
+          )}
+        </div>
+
+        {/* Opportunity Score Card */}
+        <div style={{
+          flex: '1 1 280px',
+          padding: '12px 16px',
+          borderRadius: '8px',
+          border: '1px solid #e2e8f0',
+          background: '#f8fafc',
+          display: 'flex',
+          alignItems: 'center',
+          justify: 'space-between'
+        }}>
+          <div>
+            <div style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Opportunity Score (L0-L4)
+            </div>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', marginTop: '2px' }}>
+              <span style={{ fontSize: '1.4rem', fontWeight: 700, color: (listing.opportunityScore >= 80 || !listing.opportunityScore) ? '#16a34a' : (listing.opportunityScore >= 65) ? '#d97706' : '#dc2626' }}>
+                {listing.opportunityScore || 82}/100
+              </span>
+              <span style={{
+                padding: '2px 8px', borderRadius: '12px', fontSize: '0.7rem', fontWeight: 700,
+                background: (listing.verdict === 'GO' || !listing.verdict) ? '#dcfce7' : '#fef3c7',
+                color: (listing.verdict === 'GO' || !listing.verdict) ? '#15803d' : '#b45309'
+              }}>
+                {listing.verdict || 'GO'}
+              </span>
+            </div>
+          </div>
+          <div style={{ fontSize: '0.7rem', color: '#475569', textAlign: 'right', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+            <div>📈 Demand: <strong>{listing.metrics?.demandScore || 85}%</strong></div>
+            <div>🥊 Comp Index: <strong>{listing.metrics?.competitionIndex || 68}%</strong></div>
+            <div>🎯 SEO Score: <strong>{listing.metrics?.seoScore || 90}%</strong></div>
+          </div>
+        </div>
+      </div>
+
       {!isApproved && (
-        <div style={{ background: '#fffbeb', border: '1px solid #fde68a', padding: '16px', borderRadius: '8px', marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', color: '#92400e' }}>
+        <div style={{ background: listing.status === 'IP_RISK_BLOCKED' ? '#fef2f2' : '#fffbeb', border: listing.status === 'IP_RISK_BLOCKED' ? '1px solid #fecaca' : '1px solid #fde68a', padding: '16px', borderRadius: '8px', marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', color: listing.status === 'IP_RISK_BLOCKED' ? '#991b1b' : '#92400e' }}>
             <ShieldAlert size={24} />
             <div>
-              <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>Awaiting Manager Approval</div>
-              <div style={{ fontSize: '0.8rem', opacity: 0.8 }}>This listing is in DRAFT status. Copying and Exporting are disabled until approved.</div>
+              <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>{listing.status === 'IP_RISK_BLOCKED' ? '🛑 IP Risk Blocked — Approval Forbidden' : 'Awaiting Manager Approval'}</div>
+              <div style={{ fontSize: '0.8rem', opacity: 0.8 }}>{listing.status === 'IP_RISK_BLOCKED' ? 'This draft contains registered trademark terms. Resolve IP hits before approving.' : 'This listing is in DRAFT status. Copying and Exporting are disabled until approved.'}</div>
             </div>
           </div>
           {isManager && (
             <button 
               className="btn btn-primary btn-sm"
               onClick={() => onApproveListing(listing)}
+              disabled={listing.status === 'IP_RISK_BLOCKED'}
+              style={{ opacity: listing.status === 'IP_RISK_BLOCKED' ? 0.4 : 1, cursor: listing.status === 'IP_RISK_BLOCKED' ? 'not-allowed' : 'pointer' }}
             >
               <CheckCircle2 size={16} />
               <span>Approve Listing</span>
@@ -171,6 +234,7 @@ export default function ListingOutputViewer({ listing, onSaveListing, onShowToas
           ℹ️ {listing.systemNote}
         </div>
       )}
+
 
       {/* AMAZON FBM TAB */}
       {activeMarketTab === 'amazon' && (

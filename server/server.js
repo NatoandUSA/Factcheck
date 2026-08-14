@@ -8,6 +8,10 @@ const multer = require('multer');
 const XLSX = require('xlsx');
 require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
 
+const ipGuard = require('./ipGuard');
+const opportunityScorer = require('./opportunityScorer');
+
+
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -147,17 +151,34 @@ app.post('/api/login', (req, res) => {
   });
 });
 
-// Create a new listing (DRAFT/NEEDS_QA)
+// Create a new listing (DRAFT/NEEDS_QA or IP_RISK_BLOCKED)
 app.post('/api/listings', (req, res) => {
-  const { amazonTitle, etsyTitle, categoryName, payload, authorId } = req.body;
-  const status = 'NEEDS_QA'; // Always starts in needs QA
+  const { amazonTitle, etsyTitle, categoryName, payload = {}, authorId } = req.body;
+  
+  const listingData = { amazonTitle, etsyTitle, categoryName, ...payload };
+  const ipResult = ipGuard.screenListing(listingData);
+  const oppResult = opportunityScorer.calculateOpportunityScore(listingData);
+
+  const updatedPayload = {
+    ...payload,
+    amazonTitle,
+    etsyTitle,
+    categoryName,
+    ipVerdict: ipResult.verdict,
+    ipHits: ipResult.hits,
+    opportunityScore: oppResult.overallScore,
+    verdict: oppResult.verdict,
+    metrics: oppResult.metrics
+  };
+
+  const status = (ipResult.verdict === 'BLOCK') ? 'IP_RISK_BLOCKED' : 'NEEDS_QA';
   
   db.run(
     "INSERT INTO listings (amazonTitle, etsyTitle, categoryName, status, authorId, payload) VALUES (?, ?, ?, ?, ?, ?)",
-    [amazonTitle, etsyTitle, categoryName, status, authorId, JSON.stringify(payload)],
+    [amazonTitle, etsyTitle, categoryName, status, authorId, JSON.stringify(updatedPayload)],
     function(err) {
       if (err) return res.status(500).json({ error: err.message });
-      res.json({ id: this.lastID, status });
+      res.json({ id: this.lastID, status, payload: updatedPayload });
     }
   );
 });
@@ -169,13 +190,25 @@ app.get('/api/listings', (req, res) => {
     const safeRows = rows.map(r => {
       let parsedPayload = {};
       try { parsedPayload = JSON.parse(r.payload); } catch (e) { parsedPayload = { error: 'Malformed AI Payload' }; }
+      
+      // Dynamic fallback screening if payload lacks scores
+      if (!parsedPayload.ipVerdict) {
+        const ipRes = ipGuard.screenListing(parsedPayload);
+        const oppRes = opportunityScorer.calculateOpportunityScore(parsedPayload);
+        parsedPayload.ipVerdict = ipRes.verdict;
+        parsedPayload.ipHits = ipRes.hits;
+        parsedPayload.opportunityScore = oppRes.overallScore;
+        parsedPayload.verdict = oppRes.verdict;
+        parsedPayload.metrics = oppRes.metrics;
+      }
+
       return { ...r, payload: parsedPayload };
     });
     res.json(safeRows);
   });
 });
 
-// Approve a listing
+// Approve a listing (Blocked if IP_RISK_BLOCKED)
 app.patch('/api/listings/:id/approve', (req, res) => {
   const { id } = req.params;
   const { userId, userRole } = req.body;
@@ -184,11 +217,27 @@ app.patch('/api/listings/:id/approve', (req, res) => {
     return res.status(403).json({ error: 'Only Managers can approve listings.' });
   }
 
-  db.run("UPDATE listings SET status = 'MANAGER_APPROVED' WHERE id = ?", [id], function(err) {
-    if (err) return res.status(500).json({ error: err.message });
-    res.json({ success: true, status: 'MANAGER_APPROVED' });
+  db.get("SELECT * FROM listings WHERE id = ?", [id], (err, row) => {
+    if (err || !row) return res.status(404).json({ error: 'Listing not found.' });
+
+    let parsedPayload = {};
+    try { parsedPayload = JSON.parse(row.payload); } catch(e) {}
+    const ipCheck = ipGuard.screenListing(parsedPayload);
+
+    if (row.status === 'IP_RISK_BLOCKED' || ipCheck.verdict === 'BLOCK') {
+      return res.status(403).json({ 
+        error: 'BLOCKED: Listing contains trademark/IP violations. Resolve IP risk before approval.',
+        hits: ipCheck.hits
+      });
+    }
+
+    db.run("UPDATE listings SET status = 'MANAGER_APPROVED' WHERE id = ?", [id], function(updateErr) {
+      if (updateErr) return res.status(500).json({ error: updateErr.message });
+      res.json({ success: true, status: 'MANAGER_APPROVED' });
+    });
   });
 });
+
 
 // Submit Sales Feedback (7-day loop)
 app.post('/api/listings/:id/feedback', (req, res) => {
@@ -809,17 +858,30 @@ setInterval(() => {
                 }
 
                 if (payload) {
+                  const ipRes = ipGuard.screenListing(payload);
+                  const oppRes = opportunityScorer.calculateOpportunityScore(payload);
+
+                  payload.ipVerdict = ipRes.verdict;
+                  payload.ipHits = ipRes.hits;
+                  payload.opportunityScore = oppRes.overallScore;
+                  payload.verdict = oppRes.verdict;
+                  payload.metrics = oppRes.metrics;
+
+                  const listingStatus = (ipRes.verdict === 'BLOCK') ? 'IP_RISK_BLOCKED' : 'NEEDS_QA';
+
                   db.run(
                     "INSERT INTO listings (amazonTitle, etsyTitle, categoryName, status, authorId, payload) VALUES (?, ?, ?, ?, ?, ?)",
-                    [payload.amazonTitle, payload.etsyTitle, payload.categoryName, 'NEEDS_QA', 0, JSON.stringify(payload)],
+                    [payload.amazonTitle, payload.etsyTitle, payload.categoryName, listingStatus, 0, JSON.stringify(payload)],
                     function(insertErr) {
                       if (!insertErr) {
-                        db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, `Successfully saved draft (ID: ${this.lastID}) to NEEDS_QA queue.`]);
+                        const statusNote = (listingStatus === 'IP_RISK_BLOCKED') ? 'BLOCKED due to IP Trademark risk' : 'NEEDS_QA queue';
+                        db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, `Saved draft (ID: ${this.lastID}, OppScore: ${oppRes.overallScore}/100, IP: ${ipRes.verdict}) to ${statusNote}.`]);
                         db.run("UPDATE agents SET lastActive = CURRENT_TIMESTAMP WHERE id = ?", [agent.id]);
                       }
                     }
                   );
                 }
+
               } else {
                 db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, `[AI Drafter Standby] Gemini API key is missing in .env or Settings. Waiting for key configuration.`]);
               }

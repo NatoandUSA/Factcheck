@@ -16,6 +16,16 @@ function rankKeywords(keywordList) {
     const density = typeof item === 'object' ? (parseFloat(item.titleDensity || item.density) || 10) : 10;
     const cpr = typeof item === 'object' ? (parseFloat(item.cpr) || 8) : 8;
 
+    // Exclude misleading delivery or irrelevant terms (e.g. same day, flowers, typos)
+    const isMisleading = [
+      'same day', 'sameday', 'fresh flowers', 'flowers', 'overnight', '24h', 
+      'express shipping', 'dísan', 'díla', 'dílas', '39 ños'
+    ].some(bad => kw.includes(bad));
+
+    if (isMisleading) {
+      return null;
+    }
+
     // IP Check
     const ipCheck = ipGuard.screenText(kw);
     if (ipCheck.verdict === 'BLOCK') {
@@ -33,6 +43,7 @@ function rankKeywords(keywordList) {
       score
     };
   }).filter(Boolean);
+
 
   // Sort descending by opportunity score
   return scoredList.sort((a, b) => b.score - a.score);

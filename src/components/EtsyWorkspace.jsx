@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import GoogleTrendsWidget from './GoogleTrendsWidget';
 import LearningBoxWidget from './LearningBoxWidget';
+import EtsyMultiSellerScanner from './EtsyMultiSellerScanner';
 import MasterKeywordTable from './MasterKeywordTable';
 import UnifiedIpGateModal from './UnifiedIpGateModal';
 
@@ -187,6 +188,9 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
 
       {/* Google Trends Cross-Check (Anchored on Etsy Seed Phrase) */}
       <GoogleTrendsWidget seedPhrase={seedPhrase} onShowToast={onShowToast} />
+
+      {/* Etsy Top Sellers Deep Reverse-Engineer (5-10 Best Sellers Scanner & Batch Learner) */}
+      <EtsyMultiSellerScanner seedPhrase={seedPhrase} category={selectedCategory} onShowToast={onShowToast} />
 
       {/* Learning Box: Learn Best Seller DNA from Competitor Link / Text */}
       <LearningBoxWidget onShowToast={onShowToast} />

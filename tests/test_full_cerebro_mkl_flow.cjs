@@ -1,9 +1,14 @@
+process.env.NODE_ENV = 'test';
+
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
 
-function httpPostMultipart(filePath) {
+// Import Express app for automatic test server lifecycle
+const { app } = require('../server/server');
+
+function httpPostMultipart(port, filePath) {
   return new Promise((resolve, reject) => {
     const fileContent = fs.readFileSync(filePath);
     const boundary = '--------------------------' + Date.now().toString(16);
@@ -20,7 +25,7 @@ function httpPostMultipart(filePath) {
 
     const options = {
       hostname: 'localhost',
-      port: 3001,
+      port: port,
       path: '/api/upload-h10',
       method: 'POST',
       headers: {
@@ -46,9 +51,9 @@ function httpPostMultipart(filePath) {
   });
 }
 
-function httpGet(pathUrl) {
+function httpGet(port, pathUrl) {
   return new Promise((resolve, reject) => {
-    http.get(`http://localhost:3001${pathUrl}`, (res) => {
+    http.get(`http://localhost:${port}${pathUrl}`, (res) => {
       let body = '';
       res.on('data', chunk => body += chunk);
       res.on('end', () => {
@@ -64,38 +69,41 @@ async function testFullCerebroMklFlow() {
   console.log('  TESTING REAL CEREBRO FILE UPLOAD & MASTER KEYWORD TABLE INTEGRATION');
   console.log('================================================================\n');
 
-  const trackedFixture = path.resolve(__dirname, 'fixtures/sample_cerebro.xlsx');
-  const localDownload = 'C:\\Users\\Admin\\Downloads\\US_AMAZON_cerebro_B0DV4DSJ63_2026-08-15.xlsx';
-  
-  let filePath = fs.existsSync(trackedFixture) ? trackedFixture : localDownload;
-  
-  assert.ok(fs.existsSync(filePath), `CRITICAL TEST FAILURE: Tracked fixture file not found at ${trackedFixture}`);
+  // Start in-process server deterministically for tests (Port 3009)
+  const TEST_PORT = 3009;
+  const server = app.listen(TEST_PORT);
 
+  try {
+    const trackedFixture = path.resolve(__dirname, 'fixtures/sample_cerebro.xlsx');
+    assert.ok(fs.existsSync(trackedFixture), `CRITICAL TEST FAILURE: Tracked fixture file missing at ${trackedFixture}`);
 
-  console.log(`Step 1: Uploading Real Cerebro File (${filePath})...`);
+    console.log(`Step 1: Uploading Tracked Cerebro Fixtures File (${trackedFixture})...`);
 
-  const startTime = Date.now();
-  const uploadRes = await httpPostMultipart(filePath);
-  const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+    const startTime = Date.now();
+    const uploadRes = await httpPostMultipart(TEST_PORT, trackedFixture);
+    const duration = ((Date.now() - startTime) / 1000).toFixed(2);
 
-  assert.strictEqual(uploadRes.status, 200, 'Upload Cerebro file status must be HTTP 200 OK');
-  assert.strictEqual(uploadRes.data?.totalRows, 27018, 'Total parsed rows must be 27018');
-  assert.strictEqual(uploadRes.data?.topKeywordsDetailed?.length, 100, 'Returned MKL items count must be 100');
+    assert.strictEqual(uploadRes.status, 200, 'Upload Cerebro file status must be HTTP 200 OK');
+    assert.strictEqual(uploadRes.data?.totalRows, 27018, 'Total parsed rows must be 27018');
+    assert.strictEqual(uploadRes.data?.topKeywordsDetailed?.length, 100, 'Returned MKL items count must be 100');
 
-  console.log(`Upload HTTP Status: ${uploadRes.status} (Processed 27,018 rows in ${duration}s)`);
-  console.log(`Total Rows Parsed: ${uploadRes.data?.totalRows}`);
-  console.log(`Keywords Returned to Frontend State: ${uploadRes.data?.topKeywordsDetailed?.length}`);
+    console.log(`Upload HTTP Status: ${uploadRes.status} (Processed 27,018 rows in ${duration}s)`);
+    console.log(`Total Rows Parsed: ${uploadRes.data?.totalRows}`);
+    console.log(`Keywords Returned to Frontend State: ${uploadRes.data?.topKeywordsDetailed?.length}`);
 
-  console.log('\nStep 2: Testing GET /api/master-keywords DB Persistence...');
-  const dbRes = await httpGet('/api/master-keywords?marketplace=AMAZON');
-  assert.strictEqual(dbRes.status, 200, 'GET master-keywords status must be 200');
-  assert.ok(dbRes.data?.keywords?.length > 0, 'DB keywords count must be > 0');
+    console.log('\nStep 2: Testing GET /api/master-keywords DB Persistence...');
+    const dbRes = await httpGet(TEST_PORT, '/api/master-keywords?marketplace=AMAZON');
+    assert.strictEqual(dbRes.status, 200, 'GET master-keywords status must be 200');
+    assert.ok(dbRes.data?.keywords?.length > 0, 'DB keywords count must be > 0');
 
-  console.log(`DB Keywords Count: ${dbRes.data?.keywords?.length}`);
+    console.log(`DB Keywords Count: ${dbRes.data?.keywords?.length}`);
 
-  console.log('\n================================================================');
-  console.log('  🟢 100% OPERATIONAL SUCCESS: REAL CEREBRO FILE PARSED & POPULATED!');
-  console.log('================================================================\n');
+    console.log('\n================================================================');
+    console.log('  🟢 100% OPERATIONAL SUCCESS: REAL CEREBRO FILE PARSED & POPULATED!');
+    console.log('================================================================\n');
+  } finally {
+    server.close();
+  }
 }
 
 testFullCerebroMklFlow();

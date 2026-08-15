@@ -5,6 +5,8 @@ dist/
 .DS_Store
 server/app.db
 *.xlsx
+!tests/fixtures/*.xlsx
+
 data/imports/processed_*
 scratch/
 

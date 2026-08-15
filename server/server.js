@@ -33,8 +33,11 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Ensure data/imports directory exists
-const importsDir = path.resolve(__dirname, '../data/imports');
+// Ensure data/imports directory exists (Isolated in test mode)
+const importsDir = process.env.NODE_ENV === 'test'
+  ? path.resolve(__dirname, '../data/test_imports')
+  : path.resolve(__dirname, '../data/imports');
+
 if (!fs.existsSync(importsDir)) {
   fs.mkdirSync(importsDir, { recursive: true });
 }
@@ -51,8 +54,11 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage: storage });
 
-const dbPath = path.resolve(__dirname, 'app.db');
+const dbPath = process.env.NODE_ENV === 'test'
+  ? ':memory:'
+  : path.resolve(__dirname, 'app.db');
 const db = new sqlite3.Database(dbPath);
+
 
 // Initialize DB schema
 db.serialize(() => {
@@ -2043,6 +2049,13 @@ setInterval(() => {
 }, 8000); // Agents evaluate their loops every 8 seconds
 
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
-  console.log(`OmniSeller Backend OS running on port ${PORT}`);
-});
+let serverInstance = null;
+
+if (require.main === module) {
+  serverInstance = app.listen(PORT, () => {
+    console.log(`OmniSeller Backend OS running on port ${PORT}`);
+  });
+}
+
+module.exports = { app, db, serverInstance };
+

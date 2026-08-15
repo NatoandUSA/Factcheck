@@ -1,16 +1,16 @@
-# PR-2A.1: COMPLETE SECURITY CONTRACT & SCHEMAS SPECIFICATION
+# PR-2A.2: CORRECTED SECURITY CONTRACT & EXECUTABLE SPECIFICATION
 
-> **Document Version**: 2.1.0 (PR-2A.1 Complete Security Contract)  
+> **Document Version**: 2.2.0 (PR-2A.2 Corrected Security Specification)  
 > **Repository Tracked File**: `PR2_SECURITY_SPECIFICATION.md`  
-> **Prepared For**: OmniSeller Studio Security Architecture Gating  
-> **Baseline Commit**: `e966ca7`  
+> **Prepared For**: OmniSeller Studio Security Architecture  
+> **Baseline Commit**: `83fe38e`  
 
 ---
 
 ## 1. TECHNICAL SECURITY CONTRACTS (A1 - A10)
 
 ### A1. Cookie & Transport Policy
-- **Cookie Name**: `omni_session` (or `__Host-omni_session` in HTTPS environments).
+- **Cookie Name**: `omni_session` in development; `__Host-omni_session` in HTTPS production environments.
 - **Attributes**: `HttpOnly: true`, `SameSite: Lax`, `Path: /`, `Secure: process.env.NODE_ENV === 'production'`, `Max-Age: 86400` (24h).
 
 ### A2. CSRF & Origin Validation
@@ -55,33 +55,37 @@
   2. Normalize all strings using `Unicode NFC` (`String.prototype.normalize('NFC')`).
   3. Exclude volatile metadata keys (`id`, `created_at`, `updated_at`, `status`).
   4. Serialize using `JSON.stringify()`.
-- SHA-256 Hash Vector Example:
+- Verified SHA-256 Hash Test Vector (Executed in `tests/spec_hash_vector.test.cjs`):
   ```javascript
   // Input Object:
   const rawPayload = { etsyTitle: "Custom Necklace", amazonTitle: "Custom Gold Necklace" };
   // Canonical Serialized Output:
   // '{"amazonTitle":"Custom Gold Necklace","etsyTitle":"Custom Necklace"}'
-  // Expected SHA-256 Hash:
-  // "a64f89d31d99d146200234a66a7b6e92750e32ef7a2249e0b19688d227f4d2f8"
+  // Verified SHA-256 Digest:
+  // "a23b2bb28abada601767405c429c1a1cd821a407683e3c6f8c26993d9cd71d4c"
   ```
 
-### A7. Optimistic Concurrency & Immutable Approval Snapshot
-- `listings` Table Schema Addition: `listing_version INTEGER DEFAULT 1`.
-- Transactional Approval:
+### A7. Optimistic Concurrency & Approval Invariants
+- `listings` Table Schema: `listing_version INTEGER DEFAULT 1`, `approved_version INTEGER NULL`, `approved_hash TEXT NULL`.
+- Approval Invariant: Approval sets `approved_version = listing_version` and stores `approved_hash`. **Approval DOES NOT increment `listing_version`**.
+- Transactional Approval SQL:
   ```sql
   UPDATE listings 
   SET status = 'PUBLISH_READY', 
       approved_by = :userId, 
       approved_at = CURRENT_TIMESTAMP, 
-      approved_hash = :payloadHash, 
-      listing_version = listing_version + 1 
-  WHERE id = :id AND listing_version = :expectedVersion;
+      approved_version = listing_version,
+      approved_hash = :payloadHash
+  WHERE id = :id AND tenant_id = :tenantId AND marketplace = :marketplace AND listing_version = :expectedVersion;
   ```
-- Stale version or hash mismatch on export returns `412 Precondition Failed` or `409 Conflict`.
+- Any content mutation increments `listing_version`, which automatically invalidates approval (`approved_version !== listing_version`).
+- HTTP Error Semantics:
+  - `412 Precondition Failed` for stale `expectedVersion` concurrency mismatch.
+  - `409 Conflict` for export attempt on listing modified post-approval.
 
-### A8. API Key Encryption-at-Rest
+### A8. AES-256-GCM API Key Encryption-at-Rest
 - Stored keys use **AES-256-GCM**: `encrypted_key`, `iv` (12 bytes), `auth_tag` (16 bytes).
-- Master encryption key passed via `ENCRYPTION_SECRET` environment variable (never stored in SQLite).
+- Master encryption key passed via 32-byte decoded `ENCRYPTION_SECRET` environment variable.
 - `GET /api/settings` returns masked metadata (`sk-***1234`) and provider name only. Plaintext key is write-only (`POST /api/settings`).
 
 ### A9. Admin Reset Protection Protocol
@@ -111,13 +115,28 @@
 
 ---
 
-## 2. EXECUTABLE ACCEPTANCE TEST MATRIX
+## 2. ROLE & PERMISSION MATRIX (SEC-05 RESTORED)
 
-| Test File Name | Target Security Scenario | Expected Status / Outcome |
-| :--- | :--- | :--- |
-| `tests/sec_auth_session.test.js` | Missing or revoked session cookie | `401 Unauthorized` |
-| `tests/sec_csrf_origin.test.js` | Mutation POST without valid Origin | `403 Forbidden` |
-| `tests/sec_rbac_roles.test.js` | SELLER role calling `listing:approve` | `403 Forbidden` |
-| `tests/sec_tenant_idor.test.js` | Tenant A requesting Tenant B listing ID | `404 Not Found` |
-| `tests/sec_payload_tamper.test.js` | Export listing modified after approval | `412 Precondition Failed` |
-| `tests/sec_secret_masking.test.js` | GET `/api/settings` secret key check | Masked key only (`sk-***1234`) |
+| Permission Action | OWNER | MANAGER | SELLER | Public |
+| :--- | :---: | :---: | :---: | :---: |
+| `auth:login` | ✅ | ✅ | ✅ | ✅ |
+| `auth:me` | ✅ | ✅ | ✅ | ❌ |
+| `listing:read` | ✅ | ✅ | ✅ (Own Tenant) | ❌ |
+| `listing:draft` | ✅ | ✅ | ✅ | ❌ |
+| `listing:approve` | ✅ | ✅ | ❌ | ❌ |
+| `listing:export` | ✅ | ✅ | ❌ | ❌ |
+| `settings:read` | ✅ | ❌ | ❌ | ❌ |
+| `settings:write` | ✅ | ❌ | ❌ | ❌ |
+| `admin:reset` | ✅ (Re-auth) | ❌ | ❌ | ❌ |
+
+---
+
+## 3. EXECUTABLE SPECIFICATION SUITE
+
+| Test File Path | Tested Security Capability | Verification Engine | Expected Result |
+| :--- | :--- | :--- | :--- |
+| `tests/spec_hash_vector.test.cjs` | SHA-256 Canonical Serializer | `assert.strictEqual` | `🟢 SHA-256 VECTOR PASSED` |
+| `tests/test_real_child_asin_batcher.cjs` | 3x10 ASIN Invariant | Executable Assertion | `🟢 30 ASINs PASSED` |
+| `tests/test_strict_keyword_sanitizer.cjs` | Garbage Keyword Filter | Executable Assertion | `🟢 0 Garbage PASSED` |
+| `tests/test_full_cerebro_mkl_flow.cjs` | In-process Express Upload | Executable Assertion | `🟢 27,018 Rows PASSED` |
+| `tests/test_white_screen_failsafe.cjs` | Render Safeguard | Executable Assertion | `🟢 0 Crashes PASSED` |

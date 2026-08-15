@@ -7,11 +7,13 @@ function runAllTests() {
   console.log('================================================================\n');
 
   const testFiles = [
+    'tests/spec_hash_vector.test.cjs',
     'tests/test_real_child_asin_batcher.cjs',
     'tests/test_strict_keyword_sanitizer.cjs',
     'tests/test_full_cerebro_mkl_flow.cjs',
     'tests/test_white_screen_failsafe.cjs'
   ];
+
 
   let passedCount = 0;
 

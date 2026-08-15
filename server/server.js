@@ -34,13 +34,16 @@ app.use(cors());
 app.use(express.json());
 
 // Ensure data/imports directory exists (Isolated in test mode)
-const importsDir = process.env.NODE_ENV === 'test'
-  ? path.resolve(__dirname, '../data/test_imports')
-  : path.resolve(__dirname, '../data/imports');
+const importsDir = process.env.TEST_IMPORTS_DIR
+  ? process.env.TEST_IMPORTS_DIR
+  : (process.env.NODE_ENV === 'test'
+      ? path.resolve(__dirname, '../data/test_imports')
+      : path.resolve(__dirname, '../data/imports'));
 
 if (!fs.existsSync(importsDir)) {
   fs.mkdirSync(importsDir, { recursive: true });
 }
+
 
 // Multer configuration for file upload
 const storage = multer.diskStorage({

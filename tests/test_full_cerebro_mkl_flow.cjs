@@ -4,9 +4,14 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
+const os = require('os');
 
-// Import Express app for automatic test server lifecycle
-const { app } = require('../server/server');
+// Create temporary directory in OS temp dir for total test isolation
+const tempUploadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'omni-test-imports-'));
+process.env.TEST_IMPORTS_DIR = tempUploadDir;
+
+// Import Express app & db after setting TEST_IMPORTS_DIR
+const { app, db } = require('../server/server');
 
 function httpPostMultipart(port, filePath) {
   return new Promise((resolve, reject) => {
@@ -69,9 +74,10 @@ async function testFullCerebroMklFlow() {
   console.log('  TESTING REAL CEREBRO FILE UPLOAD & MASTER KEYWORD TABLE INTEGRATION');
   console.log('================================================================\n');
 
-  // Start in-process server deterministically for tests (Port 3009)
-  const TEST_PORT = 3009;
-  const server = app.listen(TEST_PORT);
+  // PR-1.1 Fix: Bind to OS-assigned ephemeral port (app.listen(0))
+  const server = app.listen(0);
+  const TEST_PORT = server.address().port;
+  console.log(`Bound in-process server to ephemeral OS port ${TEST_PORT}`);
 
   try {
     const trackedFixture = path.resolve(__dirname, 'fixtures/sample_cerebro.xlsx');
@@ -102,7 +108,14 @@ async function testFullCerebroMklFlow() {
     console.log('  🟢 100% OPERATIONAL SUCCESS: REAL CEREBRO FILE PARSED & POPULATED!');
     console.log('================================================================\n');
   } finally {
-    server.close();
+    // PR-1.1 Fix: Await server shutdown, close SQLite db, and cleanup temp dir
+    await new Promise((res) => server.close(res));
+    if (db && typeof db.close === 'function') {
+      await new Promise((res) => db.close(res));
+    }
+    if (fs.existsSync(tempUploadDir)) {
+      try { fs.rmSync(tempUploadDir, { recursive: true, force: true }); } catch (e) {}
+    }
   }
 }
 

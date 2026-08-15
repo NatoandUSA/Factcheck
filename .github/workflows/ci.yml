@@ -23,8 +23,11 @@ jobs:
         node-version: ${{ matrix.node-version }}
         cache: 'npm'
 
-    - name: Install dependencies
+    - name: Install Root Dependencies
       run: npm ci
+
+    - name: Install Server Dependencies
+      run: npm ci --prefix server
 
     - name: Run Executable Assertion Test Suite
       run: npm test

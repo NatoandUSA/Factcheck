@@ -171,8 +171,19 @@ db.serialize(() => {
   }
 });
 
+// API: Full Database Reset (Wipe all old listings, trends, and templates)
+app.delete('/api/reset-database', (req, res) => {
+  db.serialize(() => {
+    db.run("DELETE FROM listings;");
+    db.run("DELETE FROM market_trends;");
+    db.run("DELETE FROM learned_templates;");
+  });
+  res.json({ success: true, message: 'Đã xóa toàn bộ dữ liệu thử nghiệm cũ! Hệ thống đã được đưa về trạng thái trống sạch 100%.' });
+});
+
 // Mock Auth endpoint (just select a user by email for prototyping)
 app.post('/api/login', (req, res) => {
+
   const { email } = req.body;
   db.get("SELECT * FROM users WHERE email = ?", [email], (err, row) => {
     if (err) return res.status(500).json({ error: err.message });

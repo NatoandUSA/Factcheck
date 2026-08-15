@@ -1,56 +1,123 @@
-# PR-2: REAL AUTHENTICATION & SERVER-DERIVED RBAC SPECIFICATION
+# PR-2A.1: COMPLETE SECURITY CONTRACT & SCHEMAS SPECIFICATION
 
-> **Document Version**: 2.0.0 (PR-2A Versioned Security Specification)  
+> **Document Version**: 2.1.0 (PR-2A.1 Complete Security Contract)  
 > **Repository Tracked File**: `PR2_SECURITY_SPECIFICATION.md`  
-> **Prepared For**: OmniSeller Studio Production Security Architecture  
-> **Baseline Commit**: `ed6620a`  
+> **Prepared For**: OmniSeller Studio Security Architecture Gating  
+> **Baseline Commit**: `e966ca7`  
 
 ---
 
-## 1. THREAT MODEL & HARD SECURITY POSTURES
+## 1. TECHNICAL SECURITY CONTRACTS (A1 - A10)
 
-1. **Zero Client-Asserted Privilege**: `req.body.userRole`, `req.body.userId`, or `req.body.tenantId` is **100% IGNORED** by all authorization middleware.
-2. **Server-Derived Identity (`SEC-01`)**: Authenticated principal `req.user` is derived exclusively from an opaque server-side session token stored in an `HttpOnly`, `SameSite=Lax`, `Path=/` cookie (`omni_session`).
-3. **Cookie Policy & CSRF Protection (`SEC-02`)**:
-   - `HttpOnly: true`, `SameSite: Lax`, `Path: /`, `Max-Age: 86400` (24 hours).
-   - State-changing endpoints (`POST`, `PATCH`, `PUT`, `DELETE`) perform Origin & Referer header verification.
-4. **Password Security (`SEC-03`)**: Passwords hashed using Node.js native `crypto.scrypt` with random 16-byte salt. Generic auth errors to prevent account enumeration.
-5. **Tenant & Marketplace Isolation (`SEC-04`)**: All queries strictly enforce `WHERE tenant_id = req.user.tenant_id AND marketplace = :marketplace`.
-6. **Action-Based Permission Mapping (`SEC-05`)**: Authorization checks explicit permissions (`listing:approve`, `listing:export`, `settings:write`), mapped from server roles (`OWNER`, `MANAGER`, `SELLER`).
-7. **Canonical Payload Serialization & Hashing (`SEC-06`)**:
-   - Canonical SHA-256 hash computed using deterministic key sorting, excluding volatile timestamps.
-8. **Optimistic Concurrency Control (`SEC-07`)**: Listings track `listing_version`. Approving or mutating increments `listing_version`. Approval hash is bound to exact `listing_version`.
-9. **Masked Write-Only Secrets (`SEC-08`)**: API settings endpoints return masked keys (`sk-***1234`). Plaintext secrets are never serialized.
-10. **Protected Admin Reset (`SEC-09`)**: Database reset disabled by default; requires recent re-authentication and explicit confirmation token.
-11. **Append-Only Audit Logging (`SEC-10`)**: All auth, approval, export, and settings events logged to `audit_events` table.
+### A1. Cookie & Transport Policy
+- **Cookie Name**: `omni_session` (or `__Host-omni_session` in HTTPS environments).
+- **Attributes**: `HttpOnly: true`, `SameSite: Lax`, `Path: /`, `Secure: process.env.NODE_ENV === 'production'`, `Max-Age: 86400` (24h).
+
+### A2. CSRF & Origin Validation
+- State-changing HTTP methods (`POST`, `PATCH`, `PUT`, `DELETE`) require `Origin` or `Referer` headers matching the configured host allowlist.
+- Requests with missing or mismatching headers fail closed with `403 Forbidden`.
+
+### A3. Server-Side Session Schema & Lifecycle
+- Raw session tokens are 32-byte cryptographically secure random buffers (`crypto.randomBytes(32).toString('hex')`).
+- Only SHA-256 hashes of session tokens are stored in the database (`token_hash = crypto.createHash('sha256').update(rawToken).digest('hex')`).
+- `sessions` Table Schema:
+  ```sql
+  CREATE TABLE IF NOT EXISTS sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    token_hash TEXT NOT NULL UNIQUE,
+    user_id INTEGER NOT NULL,
+    tenant_id INTEGER NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    last_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP NOT NULL,
+    revoked_at TIMESTAMP NULL,
+    FOREIGN KEY(user_id) REFERENCES users(id)
+  );
+  ```
+
+### A4. Scrypt Password Hashing & Timing-Safe Verification
+- Scrypt Parameters: `N = 16384` (cost), `r = 8` (blockSize), `p = 1` (parallelization), `keyLen = 64`, `saltLen = 16`.
+- Storage Format: `scrypt$v1$N=16384,r=8,p=1$<salt_hex>$<hash_hex>`.
+- Password verification uses `crypto.timingSafeEqual` to prevent timing attacks.
+- Failed logins execute a dummy scrypt computation for unknown emails to eliminate user enumeration.
+
+### A5. Tenant & Marketplace Isolation (IDOR Protection)
+- All SQL queries strictly enforce:
+  ```sql
+  SELECT * FROM listings 
+  WHERE id = :id AND tenant_id = :tenant_id AND marketplace = :marketplace;
+  ```
+- Unauthorized or cross-tenant resource access attempts return `404 Not Found` (fail closed, zero resource enumeration).
+
+### A6. Canonical Payload Serialization & SHA-256 Test Vector
+- Canonical String Rules:
+  1. Recursively sort all object keys lexicographically.
+  2. Normalize all strings using `Unicode NFC` (`String.prototype.normalize('NFC')`).
+  3. Exclude volatile metadata keys (`id`, `created_at`, `updated_at`, `status`).
+  4. Serialize using `JSON.stringify()`.
+- SHA-256 Hash Vector Example:
+  ```javascript
+  // Input Object:
+  const rawPayload = { etsyTitle: "Custom Necklace", amazonTitle: "Custom Gold Necklace" };
+  // Canonical Serialized Output:
+  // '{"amazonTitle":"Custom Gold Necklace","etsyTitle":"Custom Necklace"}'
+  // Expected SHA-256 Hash:
+  // "a64f89d31d99d146200234a66a7b6e92750e32ef7a2249e0b19688d227f4d2f8"
+  ```
+
+### A7. Optimistic Concurrency & Immutable Approval Snapshot
+- `listings` Table Schema Addition: `listing_version INTEGER DEFAULT 1`.
+- Transactional Approval:
+  ```sql
+  UPDATE listings 
+  SET status = 'PUBLISH_READY', 
+      approved_by = :userId, 
+      approved_at = CURRENT_TIMESTAMP, 
+      approved_hash = :payloadHash, 
+      listing_version = listing_version + 1 
+  WHERE id = :id AND listing_version = :expectedVersion;
+  ```
+- Stale version or hash mismatch on export returns `412 Precondition Failed` or `409 Conflict`.
+
+### A8. API Key Encryption-at-Rest
+- Stored keys use **AES-256-GCM**: `encrypted_key`, `iv` (12 bytes), `auth_tag` (16 bytes).
+- Master encryption key passed via `ENCRYPTION_SECRET` environment variable (never stored in SQLite).
+- `GET /api/settings` returns masked metadata (`sk-***1234`) and provider name only. Plaintext key is write-only (`POST /api/settings`).
+
+### A9. Admin Reset Protection Protocol
+- Disabled by default (`ENABLE_ADMIN_RESET === 'true'`).
+- Requires:
+  1. Authenticated `OWNER` session with recent re-auth ($\le 15$ mins old).
+  2. Short-lived one-time confirmation token (`reset_nonce`).
+  3. Explicit typed payload string `"DELETE_DATABASE_PERMANENTLY"`.
+
+### A10. Append-Only Audit Log Schema
+- `audit_events` Table Schema:
+  ```sql
+  CREATE TABLE IF NOT EXISTS audit_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id INTEGER NOT NULL,
+    actor_id INTEGER NOT NULL,
+    action TEXT NOT NULL,
+    resource_type TEXT NOT NULL,
+    resource_id TEXT NULL,
+    outcome TEXT NOT NULL,
+    ip_address TEXT NULL,
+    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    metadata TEXT NULL
+  );
+  ```
+- Application code contains zero `UPDATE` or `DELETE` queries targeting `audit_events`.
 
 ---
 
-## 2. ROLE & PERMISSION MATRIX (`SEC-05`)
+## 2. EXECUTABLE ACCEPTANCE TEST MATRIX
 
-| Permission Action | OWNER | MANAGER | SELLER | Public |
-| :--- | :---: | :---: | :---: | :---: |
-| `auth:login` | ✅ | ✅ | ✅ | ✅ |
-| `auth:me` | ✅ | ✅ | ✅ | ❌ |
-| `listing:read` | ✅ | ✅ | ✅ (Own Tenant) | ❌ |
-| `listing:draft` | ✅ | ✅ | ✅ | ❌ |
-| `listing:approve` | ✅ | ✅ | ❌ | ❌ |
-| `listing:export` | ✅ | ✅ | ❌ | ❌ |
-| `settings:read` | ✅ | ❌ | ❌ | ❌ |
-| `settings:write` | ✅ | ❌ | ❌ | ❌ |
-| `admin:reset` | ✅ (Re-auth) | ❌ | ❌ | ❌ |
-
----
-
-## 3. MANDATORY ACCEPTANCE TEST SUITE MATRIX
-
-```javascript
-// Test 1: Unauthenticated request to sensitive route -> 401 Unauthorized
-// Test 2: Forged userRole in request body -> Ignored, 403 Forbidden if unprivileged
-// Test 3: Expired or revoked session -> 401 Unauthorized
-// Test 4: Missing CSRF Origin header on mutation -> 403 Forbidden
-// Test 5: Seller role attempting listing:approve -> 403 Forbidden
-// Test 6: IDOR cross-tenant access attempt -> 404 / 403 Forbidden
-// Test 7: Approval hash mismatch on payload edit -> 400 Approval Invalidated
-// Test 8: Settings GET endpoint -> Returns masked key only, no plaintext
-```
+| Test File Name | Target Security Scenario | Expected Status / Outcome |
+| :--- | :--- | :--- |
+| `tests/sec_auth_session.test.js` | Missing or revoked session cookie | `401 Unauthorized` |
+| `tests/sec_csrf_origin.test.js` | Mutation POST without valid Origin | `403 Forbidden` |
+| `tests/sec_rbac_roles.test.js` | SELLER role calling `listing:approve` | `403 Forbidden` |
+| `tests/sec_tenant_idor.test.js` | Tenant A requesting Tenant B listing ID | `404 Not Found` |
+| `tests/sec_payload_tamper.test.js` | Export listing modified after approval | `412 Precondition Failed` |
+| `tests/sec_secret_masking.test.js` | GET `/api/settings` secret key check | Masked key only (`sk-***1234`) |

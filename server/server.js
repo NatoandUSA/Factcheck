@@ -1223,14 +1223,40 @@ const handleReportUpload = (req, res) => {
       return res.status(400).json({ error: 'Uploaded file contains no data rows.' });
     }
 
-    // Detect all multi-dimensional Helium 10 & Data Dive columns
+    // Auto-detect if file is an Xray Report vs Cerebro Keyword Report
     const firstRow = rawRows[0];
+    const columnNames = Object.keys(firstRow).map(k => k.toLowerCase());
+    
+    const isXrayReport = columnNames.some(k => 
+      /asin|bsr|monthly sales|monthly revenue|product details|brand/i.test(k)
+    ) && !columnNames.some(k => /search volume|title density|cpr/i.test(k));
+
+    if (isXrayReport) {
+      console.log(`Detected Helium 10 Xray Report (${rawRows.length} rows)! Running ASIN Batcher Engine...`);
+      const seedKeyword = req.body.seedPhrase || req.body.seedKeyword || targetCategory || 'Custom Product';
+      const batchResult = asinBatcher.filterAndBatchXrayAsins(rawRows, seedKeyword);
+
+      return res.json({
+        success: true,
+        isXray: true,
+        reportType: 'HELIUM10_XRAY',
+        seedKeyword: batchResult.seedKeyword,
+        totalInputAsins: batchResult.totalInputAsins,
+        totalCleanAsins: batchResult.totalCleanAsins,
+        rejectedCount: batchResult.rejectedCount,
+        batchCount: batchResult.batchCount,
+        batches: batchResult.batches
+      });
+    }
+
+    // Detect all multi-dimensional Helium 10 & Data Dive Cerebro columns
     const kwKey = Object.keys(firstRow).find(k => /keyword|phrase|query|search query|search term/i.test(k)) || Object.keys(firstRow)[0];
     const volKey = Object.keys(firstRow).find(k => /^(search\s*volume|volume|searches)$/i.test(k.trim())) || Object.keys(firstRow).find(k => /volume/i.test(k));
     const compKey = Object.keys(firstRow).find(k => /competing|competition|competitors/i.test(k));
     const titleDensityKey = Object.keys(firstRow).find(k => /title\s*density|density/i.test(k));
     const cprKey = Object.keys(firstRow).find(k => /cpr/i.test(k));
     const iqKey = Object.keys(firstRow).find(k => /iq\s*score/i.test(k));
+
 
     // Common IP / Trademark / Copyright Blacklist & Competitor Brand patterns
     const IP_TRADEMARK_BLACKLIST = [

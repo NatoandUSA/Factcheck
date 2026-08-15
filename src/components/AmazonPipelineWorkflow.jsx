@@ -84,35 +84,18 @@ export default function AmazonPipelineWorkflow({ seedPhrase, selectedCategory, o
         { asin: 'B0F2788CZN', title: 'Collar Corazon Amor Eterno Regalo Para Suegra Y Esposa', price: '$33.99', revenue: 44000, bsr: '#150' }
       ];
 
-      setXraySellers(realChildAsinPool);
-      
-      // Automatically create 3 DISTINCT BATCHES (10 Real Child ASINs per Batch)
-      const b1 = realChildAsinPool.slice(0, 10);
-      const b2 = realChildAsinPool.slice(10, 20);
-      const b3 = realChildAsinPool.slice(20, 30);
+      if (data.isXray && Array.isArray(data.batches) && data.batches.length > 0) {
+        setBatches(data.batches.map(b => ({
+          name: b.batchName,
+          rationale: b.rationale,
+          asins: b.asins,
+          items: b.asins.map(asin => ({ asin, title: `Active Child ASIN ${asin} (${seedPhrase})` }))
+        })));
+        setXraySellers(data.batches.flatMap(b => b.asins.map(asin => ({ asin, title: `Real Child ASIN ${asin}` }))));
+        if (onShowToast) onShowToast(`✓ [B1] Đã nạp & bóc tách thành công file Xray "${file.name}"! Tự động tạo ${data.batchCount} Batch 10 Child ASINs ở B2.`);
+        return;
+      }
 
-      setBatches([
-        {
-          name: 'Batch 1: Top 10 Revenue & BSR Market Leaders (High AOV)',
-          rationale: 'Top 10 Active Child ASINs with highest store revenue and organic search rank.',
-          asins: b1.map(s => s.asin),
-          items: b1
-        },
-        {
-          name: 'Batch 2: Top 10 High 24h Sales & Conversion Velocity Leaders (Fast Movers)',
-          rationale: 'Top 10 High-velocity Child ASINs driving fast 24h sales and active add-to-carts.',
-          asins: b2.map(s => s.asin),
-          items: b2
-        },
-        {
-          name: 'Batch 3: Top 10 Niche Aesthetic & Spanish Sentiment Competitors',
-          rationale: 'Top 10 Specialized Child ASINs targeting Spanish sentiment (Regalos para Suegra/Esposa).',
-          asins: b3.map(s => s.asin),
-          items: b3
-        }
-      ]);
-
-      if (onShowToast) onShowToast(`✓ [B1] Đã nạp thành công 30 Real Child ASINs! Tự động tạo 3 Batch (10 Child ASINs/Batch) ở B2.`);
     } catch (err) {
       if (onShowToast) onShowToast(`Lỗi nạp Xray: ${err.message}`);
     } finally {

@@ -369,8 +369,9 @@ export default function AmazonPipelineWorkflow({ seedPhrase, selectedCategory, o
                   </tr>
                 </thead>
                 <tbody>
-                  {activeBatch.items.map((item, i) => (
+                  {(activeBatch?.items && Array.isArray(activeBatch.items) ? activeBatch.items : (activeBatch?.asins || []).map(asin => ({ asin, title: `Active Child ASIN ${asin}` }))).map((item, i) => (
                     <tr key={i} style={{ borderBottom: '1px solid #fef3c7', background: i % 2 === 0 ? '#fff' : '#fffdf5' }}>
+
                       <td style={{ padding: '8px 12px', fontWeight: 700, color: '#92400e' }}>#{i + 1}</td>
                       <td style={{ padding: '8px 12px', fontFamily: 'monospace', fontWeight: 800, color: '#0369a1' }}>
                         {item.asin}

@@ -16,6 +16,8 @@ const keywordRanker = require('./keywordRanker');
 const h10Mcp = require('./h10McpClient');
 const asinBatcher = require('./asinBatcher');
 const { fetchGoogleTrends } = require('./googleTrendsService');
+const { callLLM } = require('./llmService');
+const { learnFromListing } = require('./learningService');
 
 
 
@@ -118,6 +120,21 @@ db.serialize(() => {
     CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY,
       value TEXT
+    )
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS learned_templates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      url TEXT,
+      marketplace TEXT,
+      category TEXT,
+      title TEXT,
+      bullets TEXT,
+      tags TEXT,
+      description TEXT,
+      styleDna TEXT,
+      createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `);
 
@@ -459,6 +476,98 @@ app.post('/api/ip-guard/custom-term', (req, res) => {
   }
 });
 
+// API: Multi-LLM Settings (Gemini, OpenAI GPT, Anthropic Claude)
+app.get('/api/settings/llm', (req, res) => {
+  db.all("SELECT key, value FROM settings WHERE key IN ('gemini_api_key', 'openai_api_key', 'claude_api_key', 'active_llm_provider')", [], (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    const keys = {};
+    rows.forEach(r => {
+      keys[r.key] = r.value;
+    });
+    res.json({
+      activeProvider: keys.active_llm_provider || 'GEMINI',
+      hasGemini: Boolean(keys.gemini_api_key || process.env.GEMINI_API_KEY),
+      hasOpenAI: Boolean(keys.openai_api_key || process.env.OPENAI_API_KEY),
+      hasClaude: Boolean(keys.claude_api_key || process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY),
+      geminiKeyMasked: keys.gemini_api_key ? `••••••••${keys.gemini_api_key.slice(-4)}` : '',
+      openaiKeyMasked: keys.openai_api_key ? `••••••••${keys.openai_api_key.slice(-4)}` : '',
+      claudeKeyMasked: keys.claude_api_key ? `••••••••${keys.claude_api_key.slice(-4)}` : ''
+    });
+  });
+});
+
+app.post('/api/settings/llm', (req, res) => {
+  const { geminiApiKey, openaiApiKey, claudeApiKey, activeProvider = 'GEMINI' } = req.body;
+  
+  db.serialize(() => {
+    if (geminiApiKey !== undefined) {
+      db.run("INSERT OR REPLACE INTO settings (key, value) VALUES ('gemini_api_key', ?)", [geminiApiKey]);
+    }
+    if (openaiApiKey !== undefined) {
+      db.run("INSERT OR REPLACE INTO settings (key, value) VALUES ('openai_api_key', ?)", [openaiApiKey]);
+    }
+    if (claudeApiKey !== undefined) {
+      db.run("INSERT OR REPLACE INTO settings (key, value) VALUES ('claude_api_key', ?)", [claudeApiKey]);
+    }
+    db.run("INSERT OR REPLACE INTO settings (key, value) VALUES ('active_llm_provider', ?)", [activeProvider]);
+    res.json({ success: true, message: `Cập nhật cấu hình LLM thành công! Nhà cung cấp chính: ${activeProvider}` });
+  });
+});
+
+// API: Learning Box — Analyze Amazon/Etsy URL or Competitor text & Extract Structural DNA
+app.post('/api/learning/analyze', async (req, res) => {
+  const { url = '', rawText = '', category = 'Custom Gift', marketplace = 'AMAZON' } = req.body;
+
+  try {
+    const analysis = await learnFromListing({ url, rawText, category, marketplace });
+
+    // Store in DB
+    db.run(
+      "INSERT INTO learned_templates (url, marketplace, category, title, bullets, tags, description, styleDna) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      [
+        analysis.url,
+        analysis.marketplace,
+        analysis.category,
+        analysis.title,
+        JSON.stringify(analysis.bullets),
+        JSON.stringify(analysis.tags),
+        analysis.description,
+        JSON.stringify(analysis.styleDna)
+      ],
+      function(dbErr) {
+        if (dbErr) return res.status(500).json({ error: dbErr.message });
+        res.json({ success: true, templateId: this.lastID, ...analysis });
+      }
+    );
+  } catch (err) {
+    console.error('Learning parse error:', err);
+    res.status(500).json({ error: `Lỗi phân tích listing mẫu: ${err.message}` });
+  }
+});
+
+// API: Get all learned templates
+app.get('/api/learning/templates', (req, res) => {
+  db.all("SELECT * FROM learned_templates ORDER BY createdAt DESC LIMIT 20", [], (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    const parsed = rows.map(r => ({
+      ...r,
+      bullets: JSON.parse(r.bullets || '[]'),
+      tags: JSON.parse(r.tags || '[]'),
+      styleDna: JSON.parse(r.styleDna || '{}')
+    }));
+    res.json({ success: true, templates: parsed });
+  });
+});
+
+// API: Delete learned template
+app.delete('/api/learning/templates/:id', (req, res) => {
+  const { id } = req.params;
+  db.run("DELETE FROM learned_templates WHERE id = ?", [id], function(err) {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json({ success: true, deletedId: id });
+  });
+});
+
 // API: Get Master Keyword List Across Processed Files
 app.get('/api/master-keywords', (req, res) => {
   db.all("SELECT * FROM market_trends ORDER BY discoveredAt DESC", [], (err, rows) => {
@@ -734,22 +843,50 @@ app.get('/api/trends', (req, res) => {
   });
 });
 
-// API: Instantly Draft listing for a specific trend using Gemini 3.6 Flash
+// API: Instantly Draft listing for a specific trend using Multi-LLM Gateway (Gemini / GPT-4o / Claude) + Few-Shot Learning
 app.post('/api/trends/:id/draft', (req, res) => {
   const { id } = req.params;
   
   db.get("SELECT * FROM market_trends WHERE id = ?", [id], (err, trend) => {
     if (err || !trend) return res.status(404).json({ error: 'Trend cluster not found' });
 
-    db.get("SELECT value FROM settings WHERE key = 'gemini_api_key'", async (sErr, setting) => {
-      if (sErr || !setting || !setting.value) {
-        return res.status(400).json({ error: 'Gemini API Key missing. Please set it in .env or Settings modal.' });
+    // 1. Get LLM Settings
+    db.all("SELECT key, value FROM settings WHERE key IN ('gemini_api_key', 'openai_api_key', 'claude_api_key', 'active_llm_provider')", [], (sErr, rows) => {
+      const keys = {};
+      (rows || []).forEach(r => { keys[r.key] = r.value; });
+      
+      const provider = keys.active_llm_provider || 'GEMINI';
+      const geminiKey = keys.gemini_api_key || process.env.GEMINI_API_KEY;
+      const openaiKey = keys.openai_api_key || process.env.OPENAI_API_KEY;
+      const claudeKey = keys.claude_api_key || process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY;
+
+      if (provider === 'GEMINI' && !geminiKey) {
+        return res.status(400).json({ error: 'Chưa có Google Gemini API Key. Vui lòng cấu hình trong Settings.' });
+      }
+      if (provider === 'OPENAI' && !openaiKey) {
+        return res.status(400).json({ error: 'Chưa có OpenAI API Key (GPT-4o). Vui lòng cấu hình trong Settings.' });
+      }
+      if (provider === 'CLAUDE' && !claudeKey) {
+        return res.status(400).json({ error: 'Chưa có Anthropic Claude API Key. Vui lòng cấu hình trong Settings.' });
       }
 
-      try {
-        const client = new GoogleGenAI({ apiKey: setting.value });
-        const prompt = `You are a world-class E-Commerce Copywriting & SEO Specialist with deep mastery of Amazon A10, Data Dive MKL, and Etsy Search Algorithm.
+      // 2. Fetch Latest Learned Template for Few-Shot Injection
+      db.get("SELECT * FROM learned_templates ORDER BY createdAt DESC LIMIT 1", [], async (tErr, learnedTpl) => {
+        let fewShotSection = '';
+        if (learnedTpl) {
+          fewShotSection = `
+FEW-SHOT GOLD STANDARD WINNING TEMPLATE (LEARNED FROM BEST SELLER ${learnedTpl.marketplace}):
+- Sample Title Pattern: "${learnedTpl.title}"
+- Sample Bullets Style: ${learnedTpl.bullets}
+- Sample Tags Style: ${learnedTpl.tags}
+- Sample Description / Story: "${(learnedTpl.description || '').slice(0, 350)}..."
+CRITICAL: Replicate the high conversion, bullet hook style, and emotional craftsmanship of this template!`;
+        }
+
+        try {
+          const prompt = `You are an elite E-Commerce Copywriting & SEO Specialist with deep mastery of Amazon A10, Data Dive MKL, and Etsy Search Algorithm.
 Write a highly converting, dual-platform e-commerce listing package for a ${trend.category} product targeting these curated keywords: ${trend.trending_keywords}.
+${fewShotSection}
 
 CRITICAL SEED PHRASE & RECIPIENT MANDATE:
 - You MUST strictly preserve and prominently feature the core SEED PHRASE and TARGET RECIPIENT from the keywords (e.g., if keywords contain "suegra", "para el amor de mi vida", "nurse", "mom", "grandma", this EXACT seed phrase / recipient MUST be in the Amazon Title, Etsy Title, Bullets, and Tags). NEVER strip or omit the specific recipient or Spanish/English emotional hook!
@@ -800,19 +937,24 @@ Return ONLY a valid raw JSON object without markdown code fences:
   "etsyDescription": "..."
 }`;
 
-        const interaction = await client.interactions.create({
-          model: "gemini-3.6-flash",
-          input: prompt,
-          system_instruction: "You are an elite E-Commerce Listing & SEO Specialist for Amazon A10 & Etsy. Return ONLY raw JSON without markdown code fences."
-        });
+          const llmOutput = await callLLM({
+            provider,
+            keys: {
+              gemini: geminiKey,
+              openai: openaiKey,
+              claude: claudeKey
+            },
+            prompt,
+            systemInstruction: "You are an elite E-Commerce Listing & SEO Specialist for Amazon A10 & Etsy. Return ONLY raw JSON without markdown code fences."
+          });
 
-        let text = interaction.output_text;
-        if (text.includes('```json')) {
-          text = text.split('```json')[1].split('```')[0].trim();
-        } else if (text.includes('```')) {
-          text = text.split('```')[1].split('```')[0].trim();
-        }
-        const aiData = JSON.parse(text);
+          let text = llmOutput;
+          if (text.includes('```json')) {
+            text = text.split('```json')[1].split('```')[0].trim();
+          } else if (text.includes('```')) {
+            text = text.split('```')[1].split('```')[0].trim();
+          }
+          const aiData = JSON.parse(text);
 
         const payload = {
           amazonTitle: aiData.amazonTitle || `Personalized ${trend.category}`,
@@ -854,6 +996,7 @@ Return ONLY a valid raw JSON object without markdown code fences:
       }
     });
   });
+});
 });
 // API: Save API Key
 app.post('/api/settings/apikey', (req, res) => {

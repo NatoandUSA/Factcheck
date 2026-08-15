@@ -4,6 +4,7 @@ import {
   AlertCircle, ShieldCheck, Tag, ShoppingBag, Eye, DollarSign, ArrowRight
 } from 'lucide-react';
 import GoogleTrendsWidget from './GoogleTrendsWidget';
+import LearningBoxWidget from './LearningBoxWidget';
 import MasterKeywordTable from './MasterKeywordTable';
 import UnifiedIpGateModal from './UnifiedIpGateModal';
 
@@ -186,6 +187,9 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
 
       {/* Google Trends Cross-Check (Anchored on Etsy Seed Phrase) */}
       <GoogleTrendsWidget seedPhrase={seedPhrase} onShowToast={onShowToast} />
+
+      {/* Learning Box: Learn Best Seller DNA from Competitor Link / Text */}
+      <LearningBoxWidget onShowToast={onShowToast} />
 
       {/* Etsy Live MCP Engine + Category Selector */}
       <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: '24px' }}>

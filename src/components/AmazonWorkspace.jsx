@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import GoogleTrendsWidget from './GoogleTrendsWidget';
 import AsinBatcherWidget from './AsinBatcherWidget';
+import LearningBoxWidget from './LearningBoxWidget';
 import MasterKeywordTable from './MasterKeywordTable';
 import UnifiedIpGateModal from './UnifiedIpGateModal';
 
@@ -170,6 +171,9 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
 
       {/* Google Trends Cross-Check (Anchored on Amazon Seed Phrase) */}
       <GoogleTrendsWidget seedPhrase={seedPhrase} onShowToast={onShowToast} />
+
+      {/* Learning Box: Learn Best Seller DNA from Competitor Link / Text */}
+      <LearningBoxWidget onShowToast={onShowToast} />
 
       {/* Amazon A10 Ingestion Engine Grid */}
       <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: '24px' }}>

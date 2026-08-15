@@ -4,6 +4,7 @@ import {
   AlertCircle, ShieldCheck, Tag, ShoppingBag, Eye, DollarSign, ArrowRight
 } from 'lucide-react';
 import GoogleTrendsWidget from './GoogleTrendsWidget';
+import MasterKeywordTable from './MasterKeywordTable';
 import UnifiedIpGateModal from './UnifiedIpGateModal';
 
 export default function EtsyWorkspace({ onSelectListing, onApproveListing, onShowToast }) {
@@ -334,6 +335,9 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
           </div>
         </div>
       </div>
+
+      {/* Step 3: Master Keyword List Table */}
+      <MasterKeywordTable marketplace="ETSY" onShowToast={onShowToast} />
 
       {/* Etsy Batches Queue */}
       {trends.length > 0 && (

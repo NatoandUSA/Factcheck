@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import GoogleTrendsWidget from './GoogleTrendsWidget';
 import AsinBatcherWidget from './AsinBatcherWidget';
+import MasterKeywordTable from './MasterKeywordTable';
 import UnifiedIpGateModal from './UnifiedIpGateModal';
 
 export default function AmazonWorkspace({ onSelectListing, onApproveListing, onShowToast }) {
@@ -307,6 +308,9 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
 
       {/* Step 2: Helium 10 Xray ASIN Batching Assistant */}
       <AsinBatcherWidget onShowToast={onShowToast} />
+
+      {/* Step 3: Master Keyword List Table */}
+      <MasterKeywordTable marketplace="AMAZON" onShowToast={onShowToast} />
 
       {/* Amazon Batches Queue */}
       {trends.length > 0 && (

@@ -751,10 +751,13 @@ app.post('/api/trends/:id/draft', (req, res) => {
         const prompt = `You are a world-class E-Commerce Copywriting & SEO Specialist with deep mastery of Amazon A10, Data Dive MKL, and Etsy Search Algorithm.
 Write a highly converting, dual-platform e-commerce listing package for a ${trend.category} product targeting these curated keywords: ${trend.trending_keywords}.
 
+CRITICAL SEED PHRASE & RECIPIENT MANDATE:
+- You MUST strictly preserve and prominently feature the core SEED PHRASE and TARGET RECIPIENT from the keywords (e.g., if keywords contain "suegra", "para el amor de mi vida", "nurse", "mom", "grandma", this EXACT seed phrase / recipient MUST be in the Amazon Title, Etsy Title, Bullets, and Tags). NEVER strip or omit the specific recipient or Spanish/English emotional hook!
+
 STRICT PLATFORM RULES:
 1. AMAZON FBM (A10 Algorithm & Modern Concise Title Policy):
-   - "amazonTitle": Concise (75-80 chars max), Title Case, strictly front-load top 1-2 root Golden commercial keywords + Brand/Material. Must fit within 75 characters for zero mobile truncation and Amazon algorithm compliance. Zero prohibited claims (no "best seller", "free shipping", "guarantee", "perfect gift").
-   - "amazonBullets": EXACTLY 5 bullet points (150-250 chars each). Each MUST start with a [CAPITALIZED HOOK].
+   - "amazonTitle": Concise (75-80 chars max), Title Case, strictly front-load top 1-2 root Golden commercial keywords (including the core Seed Phrase/Recipient) + Brand/Material. Must fit within 75 characters for zero mobile truncation. Zero prohibited claims (no "best seller", "free shipping", "guarantee", "perfect gift").
+   - "amazonBullets": EXACTLY 5 bullet points (150-200 chars each). Each MUST start with a [CAPITALIZED HOOK].
    - "amazonSearchTerms": Space-separated generic terms strictly under 240 UTF-8 bytes. NO COMMAS.
    - "amazonDescription": High-converting HTML formatted product description (<p>, <ul>, <strong>).
    - "amazonAPlusContent": Structured A+ package:
@@ -768,12 +771,12 @@ STRICT PLATFORM RULES:
        ]
      }
 
-2. ETSY (Gift-Giver & Handmade Search):
-   - "etsyTitle": Max 140 chars. Front-load top gift occasion / recipient in first 40 chars for mobile.
-   - "etsyTags": EXACTLY 13 multi-word long-tail tags (<=20 chars each, letters/numbers/spaces only). Focus on recipient and occasion.
-   - "etsyMaterials": Array of 3-5 authentic materials.
-   - "etsyPersonalizationInstructions": Step-by-step buyer guide.
-   - "etsyDescription": Warm, story-driven description with details, sizing, and care instructions.
+2. ETSY (Contextual Search Algorithm & Handmade Guidelines):
+   - "etsyTitle": Under 140 characters. The first 40 characters MUST contain the exact Seed Phrase / Recipient (e.g. "Regalo Para Suegra Collar...").
+   - "etsyTags": EXACTLY 13 tags, each strictly <= 20 characters, containing recipient, occasion, and aesthetics.
+   - "etsyMaterials": 3-5 authentic handmade materials.
+   - "etsyPersonalizationInstructions": Clear buyer instructions.
+   - "etsyDescription": Story-driven description structured into: ✨ ITEM DETAILS, ✦ SPECIFICATIONS, ✦ HOW TO ORDER, ✦ CARE INSTRUCTIONS, and ✦ US WORKSHOP PROMISE.
 
 Return ONLY a valid raw JSON object without markdown code fences:
 {

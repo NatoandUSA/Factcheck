@@ -8,18 +8,18 @@ const Anthropic = require('@anthropic-ai/sdk');
 async function callLLM({ provider = 'GEMINI', keys = {}, prompt, systemInstruction = '' }) {
   const activeProvider = String(provider || 'GEMINI').toUpperCase();
 
-  // 1. Google Gemini
+  // 1. Google Gemini (Interactions API gemini-3.6-flash)
   if (activeProvider === 'GEMINI') {
     const apiKey = keys.gemini || process.env.GEMINI_API_KEY;
     if (!apiKey) throw new Error('Google Gemini API Key is missing. Please enter it in Settings.');
     
     const client = new GoogleGenAI({ apiKey });
-    const fullPrompt = systemInstruction ? `${systemInstruction}\n\n${prompt}` : prompt;
-    const response = await client.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: fullPrompt
+    const interaction = await client.interactions.create({
+      model: 'gemini-3.6-flash',
+      input: prompt,
+      system_instruction: systemInstruction || 'You are an elite E-Commerce Listing & SEO Specialist.'
     });
-    return response.text;
+    return interaction.output_text;
   }
 
   // 2. OpenAI GPT-4o

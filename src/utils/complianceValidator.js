@@ -15,12 +15,12 @@ export function validateAmazonListing(listing) {
   const issues = [];
   const warnings = [];
 
-  // Title validation
+  // Title validation (Modern Amazon Mobile-First Policy: 75-80 chars)
   const titleLen = (listing?.amazonTitle || '').length;
-  if (titleLen > 200) {
-    issues.push(`Amazon Title is ${titleLen} characters (Max recommended: 200)`);
-  } else if (titleLen < 60) {
-    warnings.push(`Amazon Title is quite short (${titleLen} chars). Aim for 120-180 for maximum keyword reach.`);
+  if (titleLen > 80) {
+    warnings.push(`Amazon Title (${titleLen} ký tự) vượt quá 75-80 ký tự. Ứng dụng Amazon Mobile sẽ cắt cụt tiêu đề trên kết quả tìm kiếm. Khuyên dùng: 70-80 ký tự.`);
+  } else if (titleLen < 40) {
+    warnings.push(`Amazon Title khá ngắn (${titleLen} ký tự). Nên tối ưu khoảng 70-80 ký tự chứa Top 1-2 từ khóa Golden.`);
   }
 
   // Bullet points validation

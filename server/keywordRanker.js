@@ -186,7 +186,7 @@ function buildEtsyTags(keywordList, categoryName = 'Gift') {
   const defaultTags = [
     `custom ${categoryName.toLowerCase()}`,
     `personalized gift`,
-    `best gift 2026`,
+    `milestone keepsake`,
     `gift for her`,
     `gift for mom`,
     `unique keepsake`,

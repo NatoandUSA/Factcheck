@@ -899,7 +899,16 @@ app.post('/api/etsy/scan-search', async (req, res) => {
       }
     ];
 
-    res.json({ success: true, seedPhrase, count: sellers.length, batches, sellers });
+    res.json({
+      success: true,
+      seedPhrase,
+      count: sellers.length,
+      isSynthetic: true,
+      dataBadge: 'DEMO_SYNTHETIC',
+      batches,
+      sellers
+    });
+
 
 
   } catch (err) {

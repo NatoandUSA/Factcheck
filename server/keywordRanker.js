@@ -24,9 +24,7 @@ const BANNED_DELIVERY_TERMS = [
 
 const BANNED_IRRELEVANT_TERMS = [
   'abused', 'abuse', 'girlfriend abused', 'chucky', 'chucky doll', 'horror', 
-  'dog toy', 'cat toy', 'phone case', 'keychain', 'sticker', 'plastic', 'cheap',
-  'housewarming', 'house warming', 'new home', 'bridal shower', 'baby shower',
-  '50th birthday', '60th birthday', '70th birthday', '80th birthday', 'retirement'
+  'dog toy', 'cat toy', 'phone case', 'keychain', 'sticker', 'plastic', 'cheap'
 ];
 
 function sanitizeKeyword(rawKw) {
@@ -58,11 +56,47 @@ function sanitizeKeyword(rawKw) {
   return kw;
 }
 
+/**
+ * Dynamic Seed Relevance & Concept Intent Matcher (Zero Hardcoded Niche Blacklists)
+ * If seedPhrase is "housewarming gift", "housewarming" is boosted 3.0x!
+ * If seedPhrase is "para el amor de mi vida", Spanish romantic terms are boosted 3.5x!
+ */
+function computeDynamicSeedRelevance(keyword, seedPhrase) {
+  if (!seedPhrase || typeof seedPhrase !== 'string') return 1.0;
+  
+  const seedLower = seedPhrase.toLowerCase().trim();
+  const kwLower = keyword.toLowerCase().trim();
+  
+  const seedTokens = seedLower.split(/\s+/).filter(t => t.length > 2);
+  const kwTokens = kwLower.split(/\s+/).filter(t => t.length > 2);
+
+  if (seedTokens.length === 0 || kwTokens.length === 0) return 1.0;
+
+  // Language Detection: Spanish vs English
+  const isSpanishSeed = /para|el|la|amor|vida|esposa|novia|regalo|suegra|mama|madre|aniversario|con|de|mi/i.test(seedLower);
+  const isSpanishKw = /regalo|regalos|amor|vida|esposa|novia|esposo|para|suegra|collar|corazon|aniversario|san valentin|detalles|pareja|cumpleaños/i.test(kwLower);
+
+  let langMultiplier = 1.0;
+  if (isSpanishSeed) {
+    langMultiplier = isSpanishKw ? 3.0 : 0.3; // High boost for Spanish terms matching Spanish seed, penalty for English mismatch
+  }
+
+  // Dynamic Token Overlap & Concept Matching
+  let matchingTokensCount = 0;
+  seedTokens.forEach(st => {
+    if (kwTokens.some(kt => kt.includes(st) || st.includes(kt))) {
+      matchingTokensCount++;
+    }
+  });
+
+  const overlapRatio = matchingTokensCount / seedTokens.length;
+  const tokenMatchMultiplier = 1.0 + (overlapRatio * 2.5); // Dynamic boost up to 3.5x based on active seed concept match
+
+  return langMultiplier * tokenMatchMultiplier;
+}
+
 function rankKeywords(keywordList, contextCategory = 'Jewelry', seedPhrase = '') {
   if (!Array.isArray(keywordList)) return [];
-
-  const cleanSeed = String(seedPhrase || '').toLowerCase().trim();
-  const isSpanishSeed = /para|el|la|amor|vida|esposa|novia|regalo|suegra|mama|madre|aniversario|con|de|mi/i.test(cleanSeed);
 
   const scoredList = keywordList.map(item => {
     let rawKw = typeof item === 'string' ? item : item.keyword || item.phrase || item.searchQuery || '';
@@ -87,30 +121,17 @@ function rankKeywords(keywordList, contextCategory = 'Jewelry', seedPhrase = '')
       longTailMultiplier *= 1.4; // Low competition boost
     }
 
-    // Seed Phrase Specific Intent Matcher
-    let intentMultiplier = 1.0;
-    if (isSpanishSeed) {
-      const isSpanishKw = /regalo|regalos|amor|vida|esposa|novia|esposo|para|suegra|collar|corazon|aniversario|san valentin|detalles|pareja|cumpleaños/i.test(kw);
-      if (isSpanishKw) {
-        intentMultiplier *= 3.5; // Massive boost for Spanish romantic terms matching seed phrase intent!
-      } else {
-        intentMultiplier *= 0.4; // Penalty for broad English terms like "gifts for women" when target seed is Spanish!
-      }
-    } else {
-      const isNicheRelevant = /regalo|amor|vida|esposa|suegra|mama|madre|novia|collar|heart|pendant|necklace|sweatshirt|shirt|apparel|gift|personalized|custom|anniversary|birthday|family|mom|daughter|husband|wife/i.test(kw);
-      if (!isNicheRelevant) {
-        intentMultiplier *= 0.2;
-      }
-    }
+    // Dynamic Concept Intent Matcher (Adapts to ANY active seed phrase dynamically!)
+    const dynamicIntentMultiplier = computeDynamicSeedRelevance(kw, seedPhrase);
 
     // Broad generic penalty ("gift for women", "gifts for her")
     if (/^(gift for women|gifts for women|gifts for her|gift for her|gifts for wife|husband birthday gift)$/i.test(kw)) {
-      intentMultiplier *= 0.3;
+      longTailMultiplier *= 0.3;
     }
 
-    // Base Ranking Score Formula with Long-tail Priority & Seed Intent
+    // Base Ranking Score Formula with Long-tail Priority & Dynamic Intent
     const baseScore = (vol * Math.max(1, 100 - density)) / (cpr + 1);
-    const score = baseScore * longTailMultiplier * intentMultiplier;
+    const score = baseScore * longTailMultiplier * dynamicIntentMultiplier;
 
     return {
       keyword: kw,
@@ -122,13 +143,14 @@ function rankKeywords(keywordList, contextCategory = 'Jewelry', seedPhrase = '')
       score,
       opportunityScore: Math.round(score),
       isLongTail: wordsCount >= 3,
-      isNicheRelevant: intentMultiplier > 0.5
+      isNicheRelevant: dynamicIntentMultiplier > 0.5
     };
   }).filter(Boolean);
 
   // Sort descending by opportunity score
   return scoredList.sort((a, b) => b.score - a.score);
 }
+
 
 
 

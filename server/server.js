@@ -19,6 +19,7 @@ const { fetchGoogleTrends } = require('./googleTrendsService');
 const { callLLM } = require('./llmService');
 const { learnFromListing } = require('./learningService');
 const { parseEtsySearchResults, synthesizeEtsyBatchLearnings } = require('./competitorBatchLearner');
+const benchmarkService = require('./benchmarkService');
 
 
 
@@ -994,6 +995,17 @@ app.get('/api/master-keywords', (req, res) => {
 
     res.json({ success: true, count: masterKeywords.length, keywords: masterKeywords });
   });
+});
+
+// API: Multi-Source Market Benchmark & Go/No-Go Decision Engine
+app.get('/api/benchmark/validate', async (req, res) => {
+  const { seed = 'mom sweatshirt', category = 'Apparel: Sweatshirt' } = req.query;
+  try {
+    const data = await benchmarkService.getMarketBenchmark({ seed, category });
+    res.json(data);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // API: Reset / Wipe Database Endpoint

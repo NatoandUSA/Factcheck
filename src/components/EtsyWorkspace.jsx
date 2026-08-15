@@ -7,6 +7,7 @@ import LearningBoxWidget from './LearningBoxWidget';
 import EtsyMultiSellerScanner from './EtsyMultiSellerScanner';
 import MasterKeywordTable from './MasterKeywordTable';
 import UnifiedIpGateModal from './UnifiedIpGateModal';
+import MarketBenchmarkWidget from './MarketBenchmarkWidget';
 
 export default function EtsyWorkspace({ onSelectListing, onApproveListing, onShowToast }) {
   const [seedPhrase, setSeedPhrase] = useState('para el amor de mi vida');
@@ -234,6 +235,17 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
           </button>
         </div>
       </div>
+
+      {/* 0. Market Benchmark & Go/No-Go Decision Gate (Pre-Listing Validation) */}
+      <MarketBenchmarkWidget 
+        seedPhrase={seedPhrase} 
+        category={selectedCategory} 
+        onSelectNicheKeyword={(kw) => {
+          setSeedPhrase(kw);
+          if (onShowToast) onShowToast(`Đã chọn từ khóa ngách: "${kw}"`);
+        }} 
+        onShowToast={onShowToast} 
+      />
 
       {/* ======================================================== */}
       {/* 2. 3-STAGE PROMAX COMMAND SWITCHER                       */}

@@ -4,7 +4,6 @@ import AmazonWorkspace from './components/AmazonWorkspace';
 import EtsyWorkspace from './components/EtsyWorkspace';
 import ProductListingPageSimulator from './components/ProductListingPageSimulator';
 import ListingHistory from './components/ListingHistory';
-import AgentHub from './components/AgentHub';
 import ApiKeyModal from './components/ApiKeyModal';
 import LoginModal from './components/LoginModal';
 import { useAuth } from './context/AuthContext';
@@ -238,13 +237,6 @@ export default function App() {
               onRefresh={fetchListings}
               onApproveListing={handleApproveListing}
             />
-          </div>
-        )}
-
-        {/* TAB 4: Agent Hub */}
-        {activeTab === 'agents' && (
-          <div style={{ marginTop: '24px' }}>
-            <AgentHub onShowToast={showToast} />
           </div>
         )}
       </main>

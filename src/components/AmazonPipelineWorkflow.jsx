@@ -125,18 +125,32 @@ export default function AmazonPipelineWorkflow({ seedPhrase, selectedCategory, o
     }
   };
 
-  // B4: Generate Amazon A10 Listing from MKL
+  // B4: Generate Amazon A10 Listing from MKL or Direct Seed
   const handleGenerateListing = async () => {
-    if (!cerebroSummary?.trendId) {
-      if (onShowToast) onShowToast('Vui lòng nạp file Cerebro ở Bước 3 trước khi tạo listing.');
+    if (!seedPhrase.trim()) {
+      if (onShowToast) onShowToast('Vui lòng nhập Từ khóa Hạt nhân (Seed Phrase) ở đầu trang.');
       return;
     }
 
     setDrafting(true);
     try {
-      const res = await fetch(`http://localhost:3001/api/trends/${cerebroSummary.trendId}/draft`, {
-        method: 'POST'
-      });
+      let res;
+      if (cerebroSummary?.trendId) {
+        res = await fetch(`http://localhost:3001/api/trends/${cerebroSummary.trendId}/draft`, {
+          method: 'POST'
+        });
+      } else {
+        res = await fetch(`http://localhost:3001/api/amazon/quick-draft`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            seedPhrase,
+            category: selectedCategory,
+            asins: activeBatch?.asins || []
+          })
+        });
+      }
+
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Drafting failed');
 
@@ -433,7 +447,7 @@ export default function AmazonPipelineWorkflow({ seedPhrase, selectedCategory, o
 
           <button
             onClick={handleGenerateListing}
-            disabled={drafting || !cerebroSummary}
+            disabled={drafting || !seedPhrase.trim()}
             className="btn btn-primary"
             style={{
               background: '#7e22ce',
@@ -442,7 +456,8 @@ export default function AmazonPipelineWorkflow({ seedPhrase, selectedCategory, o
               display: 'flex',
               alignItems: 'center',
               gap: '8px',
-              boxShadow: '0 4px 14px rgba(126, 34, 206, 0.25)'
+              boxShadow: '0 4px 14px rgba(126, 34, 206, 0.25)',
+              cursor: (drafting || !seedPhrase.trim()) ? 'not-allowed' : 'pointer'
             }}
           >
             <Zap size={16} className={drafting ? 'spinner' : ''} />

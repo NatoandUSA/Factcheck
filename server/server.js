@@ -842,6 +842,130 @@ app.post('/api/etsy/batch-learn', async (req, res) => {
   }
 });
 
+// API: Amazon Quick Draft (Works directly from Seed Phrase, 10 ASINs, or Cerebro)
+app.post('/api/amazon/quick-draft', async (req, res) => {
+  const { seedPhrase = 'mom sweatshirt', category = 'Apparel: Sweatshirt', asins = [] } = req.body;
+
+  try {
+    const cleanSeed = seedPhrase.trim();
+    const asinNote = asins.length > 0 ? `Targeting Top 10 ASINs: ${asins.join(', ')}` : '';
+    const trendingKeywordsStr = `${cleanSeed}, personalized ${cleanSeed}, custom ${cleanSeed}, ${cleanSeed} gift, keepsake`;
+
+    // 1. Create or retrieve market trend entry
+    db.run(
+      "INSERT INTO market_trends (category, trending_keywords) VALUES (?, ?)",
+      [category, `${cleanSeed} (Amazon A10 Quick Batch)`],
+      function(trendErr) {
+        if (trendErr) return res.status(500).json({ error: trendErr.message });
+        const trendId = this.lastID;
+
+        // 2. Fetch API Keys
+        db.all("SELECT key, value FROM settings WHERE key IN ('gemini_api_key', 'openai_api_key', 'claude_api_key', 'active_llm_provider')", [], async (sErr, rows) => {
+          const keys = {};
+          (rows || []).forEach(r => { keys[r.key] = r.value; });
+
+          const provider = keys.active_llm_provider || 'GEMINI';
+          const geminiKey = keys.gemini_api_key || process.env.GEMINI_API_KEY;
+          const openaiKey = keys.openai_api_key || process.env.OPENAI_API_KEY;
+          const claudeKey = keys.claude_api_key || process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY;
+
+          const prompt = `You are a world-class Amazon FBM/FBA Copywriting Specialist with deep mastery of Amazon A10 Algorithm and Data Dive MKL.
+Write a highly converting, policy-compliant Amazon listing for a ${category} product anchored on this Seed Phrase: "${cleanSeed}".
+${asinNote}
+
+CRITICAL RULES:
+1. "amazonTitle": Strictly 75-80 characters max. Title Case. Front-load the exact seed phrase "${cleanSeed}" in the first 75 characters. Zero prohibited claims (no "best seller", "free shipping", "guarantee", "perfect gift").
+2. "amazonBullets": EXACTLY 5 bullet points (150-200 chars each). Each MUST start with a [CAPITALIZED HOOK].
+3. "amazonSearchTerms": Space-separated generic terms strictly under 240 UTF-8 bytes. NO COMMAS.
+4. "amazonDescription": High-converting HTML formatted product description (<p>, <ul>, <strong>).
+5. "amazonAPlusContent": Structured 10-module A+ package with Hero Banner, 3 Feature Cards, and Specifications.
+6. "etsyTitle": Under 140 chars, first 40 chars hook.
+7. "etsyTags": EXACTLY 13 tags, each <= 20 chars.
+8. "etsyMaterials": 3-5 authentic materials.
+9. "etsyPersonalizationInstructions": Step-by-step guide.
+10. "etsyDescription": Storytelling description with Item Details, Specs, Care, Sizing.
+
+Return ONLY raw JSON without markdown code fences:
+{
+  "amazonTitle": "...",
+  "amazonBullets": ["...", "...", "...", "...", "..."],
+  "amazonSearchTerms": "...",
+  "amazonDescription": "...",
+  "amazonAPlusContent": {
+    "brandStoryHeadline": "...",
+    "brandStoryBody": "...",
+    "modules": [
+      { "moduleType": "Hero Banner Story", "heading": "...", "body": "..." },
+      { "moduleType": "Three Feature Highlights", "features": [{ "title": "...", "desc": "..." }, { "title": "...", "desc": "..." }, { "title": "...", "desc": "..." }] },
+      { "moduleType": "Specifications & Unboxing", "heading": "...", "body": "..." }
+    ]
+  },
+  "etsyTitle": "...",
+  "etsyTags": ["...", ... (13 items <=20 chars each)],
+  "etsyMaterials": ["...", "..."],
+  "etsyPersonalizationInstructions": "...",
+  "etsyDescription": "..."
+}`;
+
+          try {
+            const llmOutput = await callLLM({
+              provider,
+              keys: { gemini: geminiKey, openai: openaiKey, claude: claudeKey },
+              prompt,
+              systemInstruction: "You are an elite Amazon A10 Listing Specialist. Return ONLY raw JSON without markdown code fences."
+            });
+
+            let text = llmOutput;
+            if (text.includes('```json')) {
+              text = text.split('```json')[1].split('```')[0].trim();
+            } else if (text.includes('```')) {
+              text = text.split('```')[1].split('```')[0].trim();
+            }
+            const aiData = JSON.parse(text);
+
+            const payload = {
+              amazonTitle: aiData.amazonTitle || `Personalized ${category} - ${cleanSeed}`,
+              amazonBullets: aiData.amazonBullets || [],
+              amazonSearchTerms: aiData.amazonSearchTerms || '',
+              amazonDescription: aiData.amazonDescription || '',
+              amazonAPlusContent: aiData.amazonAPlusContent || null,
+              amazonAPlusPoints: aiData.amazonAPlusPoints || [],
+              etsyTitle: aiData.etsyTitle || `Custom ${cleanSeed}`,
+              etsyDescription: aiData.etsyDescription || '',
+              etsyTags: (aiData.etsyTags || []).slice(0, 13).map(t => String(t).substring(0, 20)),
+              etsyMaterials: aiData.etsyMaterials || [],
+              etsyPersonalizationInstructions: aiData.etsyPersonalizationInstructions || '',
+              categoryName: category,
+              generatedAt: new Date().toISOString(),
+              status: 'NEEDS_QA'
+            };
+
+            db.run(
+              "INSERT INTO listings (amazonTitle, etsyTitle, categoryName, status, authorId, payload) VALUES (?, ?, ?, ?, ?, ?)",
+              [payload.amazonTitle, payload.etsyTitle, payload.categoryName, 'NEEDS_QA', 0, JSON.stringify(payload)],
+              function(insertErr) {
+                if (insertErr) return res.status(500).json({ error: insertErr.message });
+
+                res.json({
+                  success: true,
+                  listingId: this.lastID,
+                  listing: { ...payload, dbId: this.lastID }
+                });
+              }
+            );
+          } catch (llmErr) {
+            console.error('Quick draft LLM error:', llmErr);
+            res.status(500).json({ error: `AI Listing Generation Failed: ${llmErr.message}` });
+          }
+        });
+      }
+    );
+  } catch (err) {
+    console.error('Quick draft error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // API: Get Master Keyword List Across Processed Files
 app.get('/api/master-keywords', (req, res) => {
   db.all("SELECT * FROM market_trends ORDER BY discoveredAt DESC", [], (err, rows) => {

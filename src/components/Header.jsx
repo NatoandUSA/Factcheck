@@ -60,15 +60,6 @@ export default function Header({ activeTab, setActiveTab, onOpenApiKeyModal, onO
             <History size={16} />
             <span>Saved Catalog ({historyCount})</span>
           </button>
-
-          <button
-            className={`nav-tab-btn ${activeTab === 'agents' ? 'active' : ''}`}
-            onClick={() => setActiveTab('agents')}
-            style={{ color: 'var(--primary)' }}
-          >
-            <Server size={16} />
-            <span>Agent Hub</span>
-          </button>
         </nav>
 
         <div className="header-actions">

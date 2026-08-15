@@ -162,12 +162,13 @@ export default function ListingOutputViewer({ listing, onSaveListing, onShowToas
             <ShieldAlert size={18} />
             <span>IP Safety Guard: {(listing.ipVerdict === 'BLOCK' || listing.status === 'IP_RISK_BLOCKED') ? '🔴 BLOCKED (Trademark Risk)' : listing.ipVerdict === 'REVIEW' ? '🟡 REVIEW REQUIRED' : '🟢 PASSED (0 Trademark Hits)'}</span>
           </div>
-          {listing.ipHits && listing.ipHits.length > 0 && (
+          {Array.isArray(listing.ipHits) && listing.ipHits.length > 0 && (
             <div style={{ marginTop: '6px', fontSize: '0.75rem' }}>
               <strong>Hits: </strong>
-              {listing.ipHits.map(h => `${h.term} (${h.category})`).join(', ')}
+              {listing.ipHits.map(h => typeof h === 'string' ? h : `${h.term} (${h.category})`).join(', ')}
             </div>
           )}
+
         </div>
 
         {/* Opportunity Score Card */}

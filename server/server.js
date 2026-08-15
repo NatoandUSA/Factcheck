@@ -701,19 +701,28 @@ app.post('/api/learning/analyze', async (req, res) => {
   }
 });
 
+function safeJsonParse(str, fallback = {}) {
+  try {
+    return JSON.parse(str);
+  } catch (e) {
+    return fallback;
+  }
+}
+
 // API: Get all learned templates
 app.get('/api/learning/templates', (req, res) => {
   db.all("SELECT * FROM learned_templates ORDER BY createdAt DESC LIMIT 20", [], (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
     const parsed = rows.map(r => ({
       ...r,
-      bullets: JSON.parse(r.bullets || '[]'),
-      tags: JSON.parse(r.tags || '[]'),
-      styleDna: JSON.parse(r.styleDna || '{}')
+      bullets: safeJsonParse(r.bullets, []),
+      tags: safeJsonParse(r.tags, []),
+      styleDna: safeJsonParse(r.styleDna, {})
     }));
     res.json({ success: true, templates: parsed });
   });
 });
+
 
 // API: Delete learned template
 app.delete('/api/learning/templates/:id', (req, res) => {
@@ -922,7 +931,8 @@ Return ONLY raw JSON without markdown code fences:
             } else if (text.includes('```')) {
               text = text.split('```')[1].split('```')[0].trim();
             }
-            const aiData = JSON.parse(text);
+            const aiData = safeJsonParse(text, {});
+
 
             const payload = {
               amazonTitle: aiData.amazonTitle || `Personalized ${category} - ${cleanSeed}`,
@@ -1364,7 +1374,8 @@ Return ONLY a valid raw JSON object without markdown code fences:
           } else if (text.includes('```')) {
             text = text.split('```')[1].split('```')[0].trim();
           }
-          const aiData = JSON.parse(text);
+          const aiData = safeJsonParse(text, {});
+
 
         const payload = {
           amazonTitle: aiData.amazonTitle || `Personalized ${trend.category}`,
@@ -1713,7 +1724,8 @@ setInterval(() => {
                   } else if (text.includes('```')) {
                     text = text.split('```')[1].split('```')[0].trim();
                   }
-                  const aiData = JSON.parse(text);
+                  const aiData = safeJsonParse(text, {});
+
                   
                   // Rank & Deduplicate Keywords
                   const rawKws = (trend.trending_keywords || '').split(/[,|]/);

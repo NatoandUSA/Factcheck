@@ -166,6 +166,8 @@ export default function AmazonPipelineWorkflow({ seedPhrase, selectedCategory, o
     const formData = new FormData();
     formData.append('reportFile', file);
     formData.append('category', selectedCategory);
+    formData.append('seedPhrase', seedPhrase || 'para el amor de mi vida');
+
 
     try {
       const res = await fetch('http://localhost:3001/api/upload-h10', {

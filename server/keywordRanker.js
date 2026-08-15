@@ -24,7 +24,9 @@ const BANNED_DELIVERY_TERMS = [
 
 const BANNED_IRRELEVANT_TERMS = [
   'abused', 'abuse', 'girlfriend abused', 'chucky', 'chucky doll', 'horror', 
-  'dog toy', 'cat toy', 'phone case', 'keychain', 'sticker', 'plastic', 'cheap'
+  'dog toy', 'cat toy', 'phone case', 'keychain', 'sticker', 'plastic', 'cheap',
+  'housewarming', 'house warming', 'new home', 'bridal shower', 'baby shower',
+  '50th birthday', '60th birthday', '70th birthday', '80th birthday', 'retirement'
 ];
 
 function sanitizeKeyword(rawKw) {
@@ -56,8 +58,11 @@ function sanitizeKeyword(rawKw) {
   return kw;
 }
 
-function rankKeywords(keywordList, contextCategory = 'Jewelry') {
+function rankKeywords(keywordList, contextCategory = 'Jewelry', seedPhrase = '') {
   if (!Array.isArray(keywordList)) return [];
+
+  const cleanSeed = String(seedPhrase || '').toLowerCase().trim();
+  const isSpanishSeed = /para|el|la|amor|vida|esposa|novia|regalo|suegra|mama|madre|aniversario|con|de|mi/i.test(cleanSeed);
 
   const scoredList = keywordList.map(item => {
     let rawKw = typeof item === 'string' ? item : item.keyword || item.phrase || item.searchQuery || '';
@@ -73,39 +78,58 @@ function rankKeywords(keywordList, contextCategory = 'Jewelry') {
     const wordsCount = kw.split(/\s+/).length;
     let longTailMultiplier = 1.0;
     if (wordsCount >= 3) {
-      longTailMultiplier = 2.2; // Strong boost for long-tail buyer intent
+      longTailMultiplier = 2.5; // Strong boost for long-tail buyer intent
     } else if (wordsCount === 1) {
-      longTailMultiplier = 0.2; // Severe penalty for 1-word generic noise
+      longTailMultiplier = 0.1; // Severe penalty for 1-word generic noise ("gift", "gifts")
     }
 
     if (density < 5) {
       longTailMultiplier *= 1.4; // Low competition boost
     }
 
-    // Niche Semantic Relevance Check
-    const isNicheRelevant = /regalo|amor|vida|esposa|suegra|mama|madre|novia|collar|heart|pendant|necklace|sweatshirt|shirt|apparel|gift|personalized|custom|anniversary|birthday|family|mom|daughter|husband|wife/i.test(kw);
-    if (!isNicheRelevant) {
-      longTailMultiplier *= 0.3; // Penalty for off-niche terms
+    // Seed Phrase Specific Intent Matcher
+    let intentMultiplier = 1.0;
+    if (isSpanishSeed) {
+      const isSpanishKw = /regalo|regalos|amor|vida|esposa|novia|esposo|para|suegra|collar|corazon|aniversario|san valentin|detalles|pareja|cumpleaños/i.test(kw);
+      if (isSpanishKw) {
+        intentMultiplier *= 3.5; // Massive boost for Spanish romantic terms matching seed phrase intent!
+      } else {
+        intentMultiplier *= 0.4; // Penalty for broad English terms like "gifts for women" when target seed is Spanish!
+      }
+    } else {
+      const isNicheRelevant = /regalo|amor|vida|esposa|suegra|mama|madre|novia|collar|heart|pendant|necklace|sweatshirt|shirt|apparel|gift|personalized|custom|anniversary|birthday|family|mom|daughter|husband|wife/i.test(kw);
+      if (!isNicheRelevant) {
+        intentMultiplier *= 0.2;
+      }
     }
 
-    // Base Ranking Score Formula with Long-tail Priority
+    // Broad generic penalty ("gift for women", "gifts for her")
+    if (/^(gift for women|gifts for women|gifts for her|gift for her|gifts for wife|husband birthday gift)$/i.test(kw)) {
+      intentMultiplier *= 0.3;
+    }
+
+    // Base Ranking Score Formula with Long-tail Priority & Seed Intent
     const baseScore = (vol * Math.max(1, 100 - density)) / (cpr + 1);
-    const score = baseScore * longTailMultiplier;
+    const score = baseScore * longTailMultiplier * intentMultiplier;
 
     return {
       keyword: kw,
       volume: vol,
+      searchVolume: vol,
       density,
+      titleDensity: density,
       cpr,
       score,
+      opportunityScore: Math.round(score),
       isLongTail: wordsCount >= 3,
-      isNicheRelevant
+      isNicheRelevant: intentMultiplier > 0.5
     };
   }).filter(Boolean);
 
   // Sort descending by opportunity score
   return scoredList.sort((a, b) => b.score - a.score);
 }
+
 
 
 

@@ -1335,22 +1335,20 @@ const handleReportUpload = (req, res) => {
       });
     }
 
-    // Rank & Sort using Master Keyword Ranker Engine with Long-tail Priority & Niche Relevance
-    const rankedKeywords = keywordRanker.rankKeywords(evaluatedKeywords, targetCategory);
+    // Rank & Sort using Master Keyword Ranker Engine with Seed Phrase Specific Intent Matcher & Long-tail Priority
+    const seedPhrase = req.body.seedPhrase || req.body.seedKeyword || targetCategory;
+    const rankedKeywords = keywordRanker.rankKeywords(evaluatedKeywords, targetCategory, seedPhrase);
 
-
-
-    // Assign Strategic Tiers (Data Dive MKL Methodology)
-    const topKeywordsDetailed = rankedKeywords.slice(0, 30).map((item, idx) => {
-
-      let tier = 'Tier 3 (Backend Fuel)';
-      let tierBadge = '📦 Backend Terms';
-      if (idx < 3) {
+    // Assign Strategic Tiers (Data Dive MKL Methodology) for 100 Keywords
+    const topKeywordsDetailed = rankedKeywords.slice(0, 100).map((item, idx) => {
+      let tier = 'Tier 3 (Backend Fuel 249 Bytes)';
+      let tierBadge = '📦 Tier 3 (Backend Fuel)';
+      if (idx < 10) {
         tier = 'Tier 1 (Golden Launch - Title Hook)';
-        tierBadge = '👑 Amazon/Etsy Title';
-      } else if (idx < 8) {
-        tier = 'Tier 2 (Core Feature - Bullets/Tags)';
-        tierBadge = '💎 Bullets & 13 Tags';
+        tierBadge = '👑 Tier 1 (Title Hook)';
+      } else if (idx < 35) {
+        tier = 'Tier 2 (Core Feature - Bullets & Tags)';
+        tierBadge = '💎 Tier 2 (5 Bullets)';
       }
       return {
         ...item,
@@ -1361,7 +1359,8 @@ const handleReportUpload = (req, res) => {
     });
 
     const keywords = topKeywordsDetailed.map(k => k.keyword);
-    const trendingKeywordsStr = keywords.slice(0, 10).join(', ');
+    const trendingKeywordsStr = keywords.slice(0, 30).join(', ');
+
 
     // Insert into market_trends for AI Drafter
     db.run(

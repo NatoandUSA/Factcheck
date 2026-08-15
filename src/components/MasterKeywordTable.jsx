@@ -131,7 +131,9 @@ export default function MasterKeywordTable({ marketplace = 'AMAZON', onShowToast
                   }
                 }
 
-                const isClean = item.ipVerdict === 'CLEAN';
+                const isBlocked = item.ipVerdict === 'BLOCK' || (item.ipHits && item.ipHits.length > 0 && item.ipVerdict !== 'OK');
+                const isReview = item.ipVerdict === 'REVIEW';
+                const isClean = !isBlocked && !isReview;
 
                 return (
                   <tr key={idx} style={{ borderBottom: '1px solid var(--border-subtle, #f1f5f9)', background: idx % 2 === 0 ? 'transparent' : 'var(--bg-subtle)' }}>
@@ -148,13 +150,19 @@ export default function MasterKeywordTable({ marketplace = 'AMAZON', onShowToast
                       </span>
                     </td>
                     <td style={{ padding: '10px 14px' }}>
-                      {isClean ? (
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: '#16a34a', fontWeight: 600, fontSize: '0.75rem' }}>
-                          <ShieldCheck size={14} /> Clean (No IP)
+                      {isClean && (
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: '#16a34a', fontWeight: 700, fontSize: '0.75rem' }}>
+                          <ShieldCheck size={14} /> ✓ Clean (An Toàn)
                         </span>
-                      ) : (
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: '#dc2626', fontWeight: 600, fontSize: '0.75rem' }}>
-                          <ShieldAlert size={14} /> Blocked: {item.ipHits?.join(', ')}
+                      )}
+                      {isReview && (
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: '#d97706', fontWeight: 700, fontSize: '0.75rem' }}>
+                          <ShieldAlert size={14} /> ⚠️ Xem xét: {item.ipHits?.join(', ')}
+                        </span>
+                      )}
+                      {isBlocked && (
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: '#dc2626', fontWeight: 700, fontSize: '0.75rem' }}>
+                          <ShieldAlert size={14} /> 🚫 Blocked: {item.ipHits?.join(', ')}
                         </span>
                       )}
                     </td>

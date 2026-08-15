@@ -533,7 +533,8 @@ export default function AmazonPipelineWorkflow({ seedPhrase, selectedCategory, o
         </div>
 
         {/* Master Keyword Table */}
-        <MasterKeywordTable marketplace="AMAZON" onShowToast={onShowToast} />
+        <MasterKeywordTable marketplace="AMAZON" keywords={cerebroKeywords} onShowToast={onShowToast} />
+
       </div>
 
     </div>

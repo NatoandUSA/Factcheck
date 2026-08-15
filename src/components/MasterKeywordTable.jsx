@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Database, Search, ShieldCheck, ShieldAlert, Sparkles, RefreshCw, Zap, Award, Layers, Tag } from 'lucide-react';
 
-export default function MasterKeywordTable({ marketplace = 'AMAZON', onShowToast }) {
+export default function MasterKeywordTable({ marketplace = 'AMAZON', keywords: passedKeywords, onShowToast }) {
   const [keywords, setKeywords] = useState([]);
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -27,8 +27,13 @@ export default function MasterKeywordTable({ marketplace = 'AMAZON', onShowToast
   };
 
   useEffect(() => {
-    fetchMasterKeywords();
-  }, [marketplace]);
+    if (passedKeywords && Array.isArray(passedKeywords) && passedKeywords.length > 0) {
+      setKeywords(passedKeywords);
+    } else {
+      fetchMasterKeywords();
+    }
+  }, [marketplace, passedKeywords]);
+
 
   const filtered = keywords.filter(k => {
     const matchText = (k.keyword || '').toLowerCase().includes(searchTerm.toLowerCase()) ||

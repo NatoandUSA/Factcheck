@@ -1269,6 +1269,7 @@ const handleReportUpload = (req, res) => {
     // Compute Multi-Dimensional Opportunity Score for each row (Data Dive & H10 A10 Model)
     const evaluatedKeywords = [];
     const flaggedIpKeywords = [];
+    const seenKeywordsSet = new Set();
 
     for (const r of rawRows) {
       let rawVal = String(r[kwKey] || '').trim();
@@ -1293,11 +1294,12 @@ const handleReportUpload = (req, res) => {
         continue; // Skip trademarked terms
       }
 
-
-      // Avoid duplicates
-      if (evaluatedKeywords.some(item => item.keyword.toLowerCase() === sanitizedKw.toLowerCase())) {
+      // Fast O(1) deduplication check
+      if (seenKeywordsSet.has(lower)) {
         continue;
       }
+      seenKeywordsSet.add(lower);
+
 
       const searchVolume = volKey && Number(r[volKey]) ? Number(r[volKey]) : 0;
       const competingProducts = compKey && Number(r[compKey]) ? Number(r[compKey]) : 0;
@@ -1334,7 +1336,8 @@ const handleReportUpload = (req, res) => {
     }
 
     // Rank & Sort using Master Keyword Ranker Engine with Long-tail Priority & Niche Relevance
-    const rankedKeywords = keywordRanker.rankKeywords(evaluatedKeywords, category);
+    const rankedKeywords = keywordRanker.rankKeywords(evaluatedKeywords, targetCategory);
+
 
 
     // Assign Strategic Tiers (Data Dive MKL Methodology)

@@ -1,21 +1,18 @@
 import React, { useState, useEffect } from 'react';
 import Header from './components/Header';
-import SingleListingGenerator from './components/SingleListingGenerator';
-import ListingOutputViewer from './components/ListingOutputViewer';
-import Dashboard from './components/Dashboard';
-import BatchCsvGenerator from './components/BatchCsvGenerator';
+import AmazonWorkspace from './components/AmazonWorkspace';
+import EtsyWorkspace from './components/EtsyWorkspace';
+import ProductListingPageSimulator from './components/ProductListingPageSimulator';
 import ListingHistory from './components/ListingHistory';
 import AgentHub from './components/AgentHub';
 import ApiKeyModal from './components/ApiKeyModal';
 import LoginModal from './components/LoginModal';
-import { generateListingAI } from './services/geminiService';
 import { useAuth } from './context/AuthContext';
-import { CATEGORIES, OCCASIONS, TONES } from './data/categoryPresets';
 
 const HISTORY_STORAGE_KEY = 'omni_listing_history_v1';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState('dashboard');
+  const [activeTab, setActiveTab] = useState('amazon-workspace');
   const [currentListing, setCurrentListing] = useState(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [history, setHistory] = useState([]);
@@ -188,55 +185,53 @@ export default function App() {
       />
 
       <main className="app-container">
-        {/* TAB 0: Analytics Dashboard */}
-        {activeTab === 'dashboard' && (
+        {/* TAB 1: 🔵 Amazon A10 Workspace */}
+        {activeTab === 'amazon-workspace' && (
           <div style={{ marginTop: '24px' }}>
-            <Dashboard 
-              onSelectListing={handleSelectFromHistory}
-              onApproveListing={handleApproveListing}
-              onShowToast={showToast}
-            />
-          </div>
-        )}
-
-        {/* TAB 1: Single Listing Studio */}
-        {activeTab === 'single' && (
-          <div className="studio-grid">
-            <SingleListingGenerator
-              onGenerate={handleGenerateListing}
-              isGenerating={isGenerating}
-            />
-            <ListingOutputViewer
-              listing={currentListing}
-              onSaveListing={handleSaveToHistory}
-              onShowToast={showToast}
-              onApproveListing={handleApproveListing}
-              onListingGenerated={(newListing) => {
-                const enriched = { ...newListing, categoryName: 'AI Co-Pilot Draft', generatedAt: new Date().toISOString() };
-                setCurrentListing(enriched);
-                handleSaveToHistory(enriched, false);
-                showToast('✅ AI Co-Pilot listing loaded into draft!');
+            <AmazonWorkspace 
+              onSelectListing={(item) => {
+                handleSelectFromHistory(item);
+                setActiveTab('product-page');
               }}
-            />
-          </div>
-        )}
-
-        {/* TAB 2: Batch CSV Engine */}
-        {activeTab === 'batch' && (
-          <div style={{ marginTop: '24px' }}>
-            <BatchCsvGenerator
+              onApproveListing={handleApproveListing}
               onShowToast={showToast}
-              onSaveListing={handleSaveToHistory}
             />
           </div>
         )}
 
-        {/* TAB 3: Saved Catalog History */}
+        {/* TAB 2: 🟠 Etsy Contextual Workspace */}
+        {activeTab === 'etsy-workspace' && (
+          <div style={{ marginTop: '24px' }}>
+            <EtsyWorkspace 
+              onSelectListing={(item) => {
+                handleSelectFromHistory(item);
+                setActiveTab('product-page');
+              }}
+              onApproveListing={handleApproveListing}
+              onShowToast={showToast}
+            />
+          </div>
+        )}
+
+        {/* TAB 3: 🛍️ 100% Real Amazon & Etsy Product Page Simulator */}
+        {activeTab === 'product-page' && (
+          <ProductListingPageSimulator
+            currentListing={currentListing}
+            history={history}
+            onSelectListing={handleSelectFromHistory}
+            onShowToast={showToast}
+          />
+        )}
+
+        {/* TAB 4: Saved Catalog History */}
         {activeTab === 'history' && (
           <div style={{ marginTop: '24px' }}>
             <ListingHistory
               history={history}
-              onSelectListing={handleSelectFromHistory}
+              onSelectListing={(item) => {
+                handleSelectFromHistory(item);
+                setActiveTab('product-page');
+              }}
               onDeleteListing={handleDeleteHistoryItem}
               onClearHistory={handleClearHistory}
               onShowToast={showToast}

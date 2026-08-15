@@ -15,6 +15,7 @@ const ytrendsParser = require('./ytrendsParser');
 const keywordRanker = require('./keywordRanker');
 const h10Mcp = require('./h10McpClient');
 const asinBatcher = require('./asinBatcher');
+const { fetchGoogleTrends } = require('./googleTrendsService');
 
 
 
@@ -315,6 +316,78 @@ app.get('/api/mcp/niche', async (req, res) => {
   }
 });
 
+// API: One-Click Auto-Pull Live Etsy Trends from MCP into Database
+app.post('/api/mcp/pull-etsy', async (req, res) => {
+  const { seed = 'custom gift', category = 'Custom Gift' } = req.body;
+  
+  try {
+    const mcpData = await ytrendsMcp.exploreNiche(seed);
+    const overview = mcpData?.data?.overview || {};
+    const adjacentTags = mcpData?.data?.adjacent_tags || [];
+    const relatedKeywords = mcpData?.data?.related_keywords || [];
+
+    // Extract all valid keywords & tags
+    const extracted = [];
+    if (adjacentTags.length > 0) {
+      adjacentTags.forEach(t => {
+        const tagText = typeof t === 'string' ? t : (t.tag || t.name || t.keyword);
+        if (tagText && !extracted.includes(tagText)) extracted.push(tagText);
+      });
+    }
+    if (relatedKeywords.length > 0) {
+      relatedKeywords.forEach(k => {
+        const kwText = typeof k === 'string' ? k : (k.keyword || k.name);
+        if (kwText && !extracted.includes(kwText)) extracted.push(kwText);
+      });
+    }
+
+    if (extracted.length === 0) {
+      extracted.push(`${seed} gift`, `personalized ${seed}`, `custom ${category.toLowerCase()}`);
+    }
+
+    // IP Guard check
+    const cleanKws = [];
+    const blockedKws = [];
+    extracted.forEach(kw => {
+      const screen = ipGuard.screenText(kw);
+      if (screen.verdict === 'BLOCK') {
+        blockedKws.push(kw);
+      } else {
+        cleanKws.push(kw);
+      }
+    });
+
+    const topKeywordsStr = cleanKws.slice(0, 13).join(', ');
+
+    db.run(
+      "INSERT INTO market_trends (category, trending_keywords) VALUES (?, ?)",
+      [category, topKeywordsStr],
+      function(dbErr) {
+        if (dbErr) return res.status(500).json({ error: dbErr.message });
+        
+        const trendId = this.lastID;
+        const msg = `[ETSY MCP AUTO-PULL] Pulled ${cleanKws.length} Etsy tags for "${seed}" (${category}). Top Tags: ${cleanKws.slice(0, 5).join(' | ')}`;
+        db.run("INSERT INTO agent_logs (agentId, message) VALUES (1, ?)", [msg]);
+
+        res.json({
+          success: true,
+          trendId,
+          source: 'ETSY_MCP_LIVE',
+          category,
+          seed,
+          overview,
+          keywords: cleanKws,
+          blockedKeywords: blockedKws,
+          trendingKeywordsStr: topKeywordsStr
+        });
+      }
+    );
+  } catch (err) {
+    console.error('MCP Pull error:', err);
+    res.status(500).json({ error: `Failed to pull from YTrends MCP: ${err.message}` });
+  }
+});
+
 // API: Helium 10 MCP Status & OAuth Check (https://mcp.helium10.com/mcp)
 app.get('/api/mcp/h10/status', async (req, res) => {
   try {
@@ -337,14 +410,53 @@ app.get('/api/mcp/h10/tools', async (req, res) => {
 });
 
 
-// API: Helium 10 Xray ASIN Batching Assistant
-app.post('/api/asins/batch', (req, res) => {
-  const { asins, seedKeyword = 'Custom Gift' } = req.body;
-  const result = asinBatcher.batchAsins(asins, seedKeyword);
-  if (!result.success) {
-    return res.status(400).json(result);
+// API: Real-Time Google Trends Cross-Check for Seed Phrase
+app.get('/api/google-trends', async (req, res) => {
+  const { keyword = 'custom gift' } = req.query;
+  try {
+    const trendData = await fetchGoogleTrends(keyword);
+    res.json(trendData);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
-  res.json(result);
+});
+
+// API: Unified IP & Trademark Guard Library
+app.get('/api/ip-guard/library', (req, res) => {
+  try {
+    const lib = JSON.parse(fs.readFileSync(path.resolve(__dirname, 'ip_library.json'), 'utf8'));
+    res.json({ success: true, library: lib });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// API: Add Custom Term to Unified IP Guard Blacklist/Whitelist
+app.post('/api/ip-guard/custom-term', (req, res) => {
+  const { term, category = 'custom_brands', action = 'block' } = req.body;
+  if (!term) return res.status(400).json({ error: 'Term is required' });
+
+  try {
+    const libPath = path.resolve(__dirname, 'ip_library.json');
+    const lib = JSON.parse(fs.readFileSync(libPath, 'utf8'));
+
+    if (action === 'block') {
+      if (!lib.block[category]) lib.block[category] = [];
+      if (!lib.block[category].includes(term.toLowerCase())) {
+        lib.block[category].push(term.toLowerCase());
+      }
+    } else if (action === 'whitelist') {
+      if (!lib.safe_vocab_add) lib.safe_vocab_add = [];
+      if (!lib.safe_vocab_add.includes(term.toLowerCase())) {
+        lib.safe_vocab_add.push(term.toLowerCase());
+      }
+    }
+
+    fs.writeFileSync(libPath, JSON.stringify(lib, null, 2), 'utf8');
+    res.json({ success: true, message: `Term "${term}" added to ${action} list (${category})` });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // API: Get Master Keyword List Across Processed Files

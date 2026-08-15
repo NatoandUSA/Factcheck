@@ -11,6 +11,8 @@ import {
 import { useAuth } from '../context/AuthContext';
 import AsinBatcherWidget from './AsinBatcherWidget';
 import MasterKeywordTable from './MasterKeywordTable';
+import GoogleTrendsWidget from './GoogleTrendsWidget';
+import UnifiedIpGateModal from './UnifiedIpGateModal';
 
 
 const CATEGORY_COLORS = {
@@ -25,7 +27,7 @@ const CATEGORY_COLORS = {
   'AI Co-Pilot Draft': '#10b981'
 };
 
-export default function Dashboard({ onSelectListing, onApproveListing, onShowToast }) {
+export default function Dashboard({ onSelectListing, onApproveListing, onShowToast, forcedLane = 'AMAZON' }) {
   const { user } = useAuth();
   const [data, setData] = useState(null);
   const [trends, setTrends] = useState([]);
@@ -36,8 +38,20 @@ export default function Dashboard({ onSelectListing, onApproveListing, onShowToa
   const [uploadStatus, setUploadStatus] = useState(null);
   const [selectedCategory, setSelectedCategory] = useState('Jewelry');
   const [activeChannel, setActiveChannel] = useState('ALL'); // 'ALL', 'AMAZON', 'ETSY'
+  const [activeLane, setActiveLane] = useState(forcedLane); // 'AMAZON' | 'ETSY'
+  const [seedPhrase, setSeedPhrase] = useState('mom sweatshirt');
+  const [etsySeed, setEtsySeed] = useState('nurse sweatshirt');
+  const [isIpModalOpen, setIsIpModalOpen] = useState(false);
+  const [mcpPulling, setMcpPulling] = useState(false);
+  const [mcpResult, setMcpResult] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef(null);
+
+  useEffect(() => {
+    if (forcedLane) {
+      setActiveLane(forcedLane);
+    }
+  }, [forcedLane]);
 
 
   const fetchDashboardData = async () => {
@@ -143,6 +157,29 @@ export default function Dashboard({ onSelectListing, onApproveListing, onShowToa
       if (onShowToast) onShowToast(`Lỗi tạo listing: ${err.message}`);
     } finally {
       setDraftingTrendId(null);
+    }
+  };
+
+  const handleMcpPull = async () => {
+    if (!etsySeed.trim()) return;
+    setMcpPulling(true);
+    setMcpResult(null);
+    try {
+      const res = await fetch('http://localhost:3001/api/mcp/pull-etsy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ seed: etsySeed, category: selectedCategory })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to pull from MCP');
+      
+      setMcpResult(data);
+      if (onShowToast) onShowToast(`⚡ Đã tự động kéo ${data.keywords.length} từ khóa Etsy từ MCP!`);
+      fetchDashboardData();
+    } catch (err) {
+      if (onShowToast) onShowToast(`Lỗi kéo MCP: ${err.message}`);
+    } finally {
+      setMcpPulling(false);
     }
   };
 
@@ -527,198 +564,315 @@ export default function Dashboard({ onSelectListing, onApproveListing, onShowToa
         )}
       </div>
 
-      {/* Section 2: Helium 10 Ingestion Engine + Category Breakdown */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: '24px' }}>
-        
-        {/* Helium 10 Upload Dropzone */}
-        <div className="studio-panel" style={{ padding: '28px', display: 'flex', flexDirection: 'column', gap: '18px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
-            <div>
-              <h2 style={{ fontSize: '1.25rem', display: 'flex', alignItems: 'center', gap: '8px', margin: 0 }}>
-                <FileSpreadsheet size={22} style={{ color: 'var(--primary)' }} />
-                Helium 10 & CSV Keyword Ingestion Engine
-              </h2>
-              <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', margin: '4px 0 0 0' }}>
-                Thả file báo cáo Cerebro, Magnet, hoặc Black Box (.xlsx / .csv) để tự động bóc tách từ khóa.
-              </p>
-            </div>
-
-            {/* Category Selector */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Danh mục:</span>
-              <select 
-                value={selectedCategory} 
-                onChange={(e) => setSelectedCategory(e.target.value)}
-                style={{ 
-                  padding: '6px 12px', 
-                  borderRadius: '8px', 
-                  border: '1px solid var(--border-subtle)',
-                  background: 'var(--bg-primary)',
-                  fontWeight: 600,
-                  fontSize: '0.85rem'
-                }}
-              >
-                <option value="Mug">☕ Mug (Cốc/Ly)</option>
-                <option value="Apparel: Shirt">👕 Apparel: Shirt</option>
-                <option value="Apparel: Sweatshirt">🧥 Apparel: Sweatshirt</option>
-                <option value="Apparel: Hoodie">🧥 Apparel: Hoodie</option>
-                <option value="Blanket">🛋️ Blanket (Chăn/Mền)</option>
-                <option value="Hat/Cap">🧢 Hat / Cap (Nón/Mũ)</option>
-                <option value="Ornament">🎄 Ornament (Giáng sinh/Lưu niệm)</option>
-                <option value="Jewelry">✨ Custom Jewelry</option>
-                <option value="Embroidery">🧵 Custom Embroidery</option>
-                <option value="Acrylic">💡 Custom Acrylic</option>
-              </select>
-
-            </div>
+      {/* Section 2: Global Seed Phrase Anchor Bar + Unified IP Gate Control */}
+      <div style={{
+        background: 'var(--bg-surface)',
+        borderRadius: '16px',
+        padding: '18px 24px',
+        border: '1px solid var(--border-subtle)',
+        marginBottom: '20px',
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        flexWrap: 'wrap',
+        gap: '16px',
+        boxShadow: 'var(--shadow-sm)'
+      }}>
+        {/* Seed Phrase Anchor Input */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: '300px' }}>
+          <div style={{ background: '#f59e0b', color: '#fff', padding: '8px', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <Zap size={20} />
           </div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: '0.75rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '1px', color: '#d97706' }}>
+              📍 0. Master Seed Phrase Keyword (Neo Trọng Tâm Niche):
+            </div>
+            <input
+              type="text"
+              className="form-input"
+              style={{
+                fontSize: '1rem',
+                fontWeight: 700,
+                color: 'var(--text-primary)',
+                background: 'var(--bg-subtle)',
+                marginTop: '4px',
+                border: '1px solid var(--border-subtle)'
+              }}
+              value={seedPhrase}
+              onChange={(e) => {
+                setSeedPhrase(e.target.value);
+                setEtsySeed(e.target.value);
+              }}
+              placeholder="Nhập từ khóa hạt nhân (e.g. mom sweatshirt, nurse hoodie, acrylic lamp)..."
+            />
+          </div>
+        </div>
 
-          {/* Drag & Drop Area */}
-          <div 
-            onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
-            onDragLeave={() => setIsDragging(false)}
-            onDrop={handleDrop}
-            onClick={() => fileInputRef.current?.click()}
+        {/* 2-in-1 Unified IP Gate Button */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <button
+            onClick={() => setIsIpModalOpen(true)}
             style={{
-              border: `2px dashed ${isDragging ? 'var(--primary)' : 'var(--border-strong)'}`,
-              background: isDragging ? 'var(--primary-light)' : 'var(--bg-subtle)',
-              borderRadius: '14px',
-              padding: '32px 20px',
-              textAlign: 'center',
-              cursor: 'pointer',
-              transition: 'all 0.2s ease',
+              background: '#fee2e2',
+              border: '1px solid #fca5a5',
+              color: '#991b1b',
+              padding: '10px 18px',
+              borderRadius: '10px',
+              fontWeight: 700,
+              fontSize: '0.85rem',
               display: 'flex',
-              flexDirection: 'column',
               alignItems: 'center',
-              justifyContent: 'center',
-              gap: '12px'
+              gap: '8px',
+              cursor: 'pointer',
+              boxShadow: '0 2px 6px rgba(220, 38, 38, 0.15)'
             }}
           >
-            <input 
-              type="file" 
-              ref={fileInputRef} 
-              style={{ display: 'none' }} 
-              accept=".xlsx,.xls,.csv,.html,.htm"
-              onChange={(e) => {
-                if (e.target.files && e.target.files[0]) {
-                  handleFileUpload(e.target.files[0]);
-                }
-              }}
-            />
-            <div style={{ background: 'var(--bg-surface)', padding: '16px', borderRadius: '50%', color: 'var(--primary)', boxShadow: 'var(--shadow-md)' }}>
-              <UploadCloud size={32} />
-            </div>
-            <div>
-              <div style={{ fontWeight: 700, fontSize: '1rem', color: 'var(--text-primary)' }}>
-                {uploading ? 'Đang đọc và phân tích dữ liệu thị trường...' : 'Kéo thả file H10 (Excel/CSV) hoặc YTrends (HTML/CSV) vào đây'}
-              </div>
-              <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '4px' }}>
-                Hỗ trợ Helium 10 Cerebro/Magnet (.xlsx, .csv) & YTrends Export (.html, .csv).
+            <ShieldCheck size={18} color="#dc2626" />
+            <span>🛡️ Cổng Bảo Vệ IP Gate (2-in-1)</span>
+          </button>
+        </div>
+      </div>
 
+      {/* Dual Workspace Selector Tabs */}
+      <div style={{ display: 'flex', gap: '12px', marginBottom: '20px' }}>
+        <button
+          onClick={() => setActiveLane('AMAZON')}
+          style={{
+            flex: 1,
+            padding: '16px 20px',
+            borderRadius: '12px',
+            border: activeLane === 'AMAZON' ? '2px solid #0284c7' : '1px solid var(--border-subtle)',
+            background: activeLane === 'AMAZON' ? '#f0f9ff' : 'var(--bg-surface)',
+            color: activeLane === 'AMAZON' ? '#0369a1' : 'var(--text-secondary)',
+            fontWeight: 800,
+            fontSize: '1rem',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '12px',
+            cursor: 'pointer',
+            boxShadow: activeLane === 'AMAZON' ? '0 4px 14px rgba(2,132,199,0.2)' : 'none',
+            transition: 'all 0.2s ease'
+          }}
+        >
+          <span style={{ fontSize: '1.4rem' }}>🔵</span>
+          <div style={{ textAlign: 'left' }}>
+            <div>Workspace 1: Amazon A10 Engine</div>
+            <div style={{ fontSize: '0.75rem', fontWeight: 400, opacity: 0.85 }}>Helium 10 Cerebro, Xray 10 ASINs, A+ Content</div>
+          </div>
+        </button>
+
+        <button
+          onClick={() => setActiveLane('ETSY')}
+          style={{
+            flex: 1,
+            padding: '16px 20px',
+            borderRadius: '12px',
+            border: activeLane === 'ETSY' ? '2px solid #ea580c' : '1px solid var(--border-subtle)',
+            background: activeLane === 'ETSY' ? '#fff7ed' : 'var(--bg-surface)',
+            color: activeLane === 'ETSY' ? '#c2410c' : 'var(--text-secondary)',
+            fontWeight: 800,
+            fontSize: '1rem',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '12px',
+            cursor: 'pointer',
+            boxShadow: activeLane === 'ETSY' ? '0 4px 14px rgba(234,88,12,0.2)' : 'none',
+            transition: 'all 0.2s ease'
+          }}
+        >
+          <span style={{ fontSize: '1.4rem' }}>🟠</span>
+          <div style={{ textAlign: 'left' }}>
+            <div>Workspace 2: Etsy Contextual Engine</div>
+            <div style={{ fontSize: '0.75rem', fontWeight: 400, opacity: 0.85 }}>YTrends MCP Live Pull, eRank, 13 Tags Pool</div>
+          </div>
+        </button>
+      </div>
+
+      {/* Google Trends Cross-Check Widget (Anchored on Seed Phrase) */}
+      <GoogleTrendsWidget seedPhrase={activeLane === 'AMAZON' ? seedPhrase : (etsySeed || seedPhrase)} onShowToast={onShowToast} />
+
+      {/* Grid: Selected Workspace Pipeline + Category Distribution */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: '24px' }}>
+        
+        {/* Left Column: Lane Specific Controller */}
+        {activeLane === 'AMAZON' ? (
+          /* AMAZON LANE: Helium 10 Ingestion */
+          <div className="studio-panel" style={{ padding: '28px', display: 'flex', flexDirection: 'column', gap: '18px', borderLeft: '4px solid #0284c7' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+              <div>
+                <h2 style={{ fontSize: '1.25rem', display: 'flex', alignItems: 'center', gap: '8px', margin: 0, color: '#0369a1' }}>
+                  <FileSpreadsheet size={22} style={{ color: '#0284c7' }} />
+                  Amazon A10 Keyword Ingestion (Helium 10 / CSV)
+                </h2>
+                <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', margin: '4px 0 0 0' }}>
+                  Nạp báo cáo Cerebro Multi-ASIN hoặc Magnet (.xlsx / .csv) để tính điểm <strong>A10 Opportunity Score</strong>.
+                </p>
+              </div>
+
+              {/* Category Selector */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Danh mục:</span>
+                <select 
+                  value={selectedCategory} 
+                  onChange={(e) => setSelectedCategory(e.target.value)}
+                  style={{ 
+                    padding: '6px 12px', 
+                    borderRadius: '8px', 
+                    border: '1px solid var(--border-subtle)',
+                    background: 'var(--bg-primary)',
+                    fontWeight: 600,
+                    fontSize: '0.85rem'
+                  }}
+                >
+                  <option value="Mug">☕ Mug (Cốc/Ly)</option>
+                  <option value="Apparel: Shirt">👕 Apparel: Shirt</option>
+                  <option value="Apparel: Sweatshirt">🧥 Apparel: Sweatshirt</option>
+                  <option value="Apparel: Hoodie">🧥 Apparel: Hoodie</option>
+                  <option value="Blanket">🛋️ Blanket (Chăn/Mền)</option>
+                  <option value="Hat/Cap">🧢 Hat / Cap (Nón/Mũ)</option>
+                  <option value="Ornament">🎄 Ornament (Giáng sinh/Lưu niệm)</option>
+                  <option value="Jewelry">✨ Custom Jewelry</option>
+                  <option value="Embroidery">🧵 Custom Embroidery</option>
+                  <option value="Acrylic">💡 Custom Acrylic</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Drag & Drop Area */}
+            <div 
+              onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+              onDragLeave={() => setIsDragging(false)}
+              onDrop={handleDrop}
+              onClick={() => fileInputRef.current?.click()}
+              style={{
+                border: `2px dashed ${isDragging ? '#0284c7' : 'var(--border-strong)'}`,
+                background: isDragging ? '#e0f2fe' : 'var(--bg-subtle)',
+                borderRadius: '14px',
+                padding: '32px 20px',
+                textAlign: 'center',
+                cursor: 'pointer',
+                transition: 'all 0.2s ease',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '12px'
+              }}
+            >
+              <input 
+                type="file" 
+                ref={fileInputRef} 
+                style={{ display: 'none' }} 
+                accept=".xlsx,.xls,.csv"
+                onChange={(e) => {
+                  if (e.target.files && e.target.files[0]) {
+                    handleFileUpload(e.target.files[0]);
+                  }
+                }}
+              />
+              <div style={{ background: '#fff', padding: '16px', borderRadius: '50%', color: '#0284c7', boxShadow: 'var(--shadow-md)' }}>
+                <UploadCloud size={32} />
+              </div>
+              <div>
+                <div style={{ fontWeight: 700, fontSize: '1rem', color: 'var(--text-primary)' }}>
+                  {uploading ? 'Đang phân tích Search Volume & Title Density...' : 'Kéo thả file Helium 10 (.xlsx / .csv) vào đây'}
+                </div>
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '4px' }}>
+                  Tự động tính tỷ lệ Vàng A10 & loại trừ 100% rủi ro Trademark IP.
+                </div>
               </div>
             </div>
           </div>
-
-          {/* Status Message & Live Keyword Breakdown */}
-          {uploadStatus && (
-            <div style={{ 
-              padding: '20px', 
-              borderRadius: '12px', 
-              fontSize: '0.875rem',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '14px',
-              background: uploadStatus.type === 'success' ? '#ecfdf5' : '#fef2f2',
-              color: uploadStatus.type === 'success' ? '#065f46' : '#991b1b',
-              border: `1px solid ${uploadStatus.type === 'success' ? '#a7f3d0' : '#fecaca'}`
-            }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 700 }}>
-                  {uploadStatus.type === 'success' ? <CheckCircle2 size={18} /> : <AlertCircle size={18} />}
-                  <span>{uploadStatus.message}</span>
-                </div>
-                {uploadStatus.trendId && (
-                  <button
-                    className="btn btn-primary btn-sm"
-                    disabled={draftingTrendId === uploadStatus.trendId}
-                    onClick={() => handleManualDraft(uploadStatus.trendId)}
-                    style={{ background: '#0f766e', display: 'flex', alignItems: 'center', gap: '6px' }}
-                  >
-                    <Zap size={14} className={draftingTrendId === uploadStatus.trendId ? 'spinner' : ''} />
-                    <span>{draftingTrendId === uploadStatus.trendId ? 'Đang gọi Gemini 3.6...' : '⚡ Tạo Listing Ngay Bằng AI'}</span>
-                  </button>
-                )}
+        ) : (
+          /* ETSY LANE: Live MCP Pull + eRank/YTrends */
+          <div className="studio-panel" style={{ padding: '28px', display: 'flex', flexDirection: 'column', gap: '18px', borderLeft: '4px solid #ea580c' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+              <div>
+                <h2 style={{ fontSize: '1.25rem', display: 'flex', alignItems: 'center', gap: '8px', margin: 0, color: '#c2410c' }}>
+                  <Sparkles size={22} style={{ color: '#ea580c' }} />
+                  Etsy Live MCP Auto-Pull Engine (mcp.trends.ytuong.ai)
+                </h2>
+                <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', margin: '4px 0 0 0' }}>
+                  Tự động cào từ khóa xu hướng, 13 Tags và điểm Momentum trực tiếp từ Etsy.
+                </p>
               </div>
 
-              {/* IP / Trademark Flagged Keywords Alert */}
-              {uploadStatus.flaggedIpKeywords && uploadStatus.flaggedIpKeywords.length > 0 && (
-                <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: '8px', padding: '10px 14px', color: '#92400e', fontSize: '0.8rem' }}>
-                  <strong>🛡️ Đã tự động chặn {uploadStatus.flaggedIpKeywords.length} từ khóa dính Trademark / Bản quyền:</strong>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '4px' }}>
-                    {uploadStatus.flaggedIpKeywords.map((ipKw, i) => (
-                      <span key={i} style={{ background: '#fee2e2', color: '#991b1b', padding: '2px 6px', borderRadius: '4px', textDecoration: 'line-through' }}>
-                        {ipKw}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
+              {/* Category Selector */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Danh mục:</span>
+                <select 
+                  value={selectedCategory} 
+                  onChange={(e) => setSelectedCategory(e.target.value)}
+                  style={{ 
+                    padding: '6px 12px', 
+                    borderRadius: '8px', 
+                    border: '1px solid var(--border-subtle)',
+                    background: 'var(--bg-primary)',
+                    fontWeight: 600,
+                    fontSize: '0.85rem'
+                  }}
+                >
+                  <option value="Apparel: Sweatshirt">🧥 Apparel: Sweatshirt</option>
+                  <option value="Mug">☕ Mug (Cốc/Ly)</option>
+                  <option value="Apparel: Shirt">👕 Apparel: Shirt</option>
+                  <option value="Apparel: Hoodie">🧥 Apparel: Hoodie</option>
+                  <option value="Blanket">🛋️ Blanket (Chăn/Mền)</option>
+                  <option value="Jewelry">✨ Custom Jewelry</option>
+                  <option value="Embroidery">🧵 Custom Embroidery</option>
+                  <option value="Acrylic">💡 Custom Acrylic</option>
+                </select>
+              </div>
+            </div>
 
-              {/* Master Keyword List (MKL) Table with Opportunity Scores */}
-              {uploadStatus.topKeywordsDetailed && uploadStatus.topKeywordsDetailed.length > 0 ? (
-                <div style={{ overflowX: 'auto', background: '#ffffff', borderRadius: '8px', border: '1px solid #d1fae5', padding: '8px' }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem', textAlign: 'left' }}>
-                    <thead>
-                      <tr style={{ borderBottom: '2px solid #e2e8f0', color: '#475569' }}>
-                        <th style={{ padding: '6px 8px' }}>Rank</th>
-                        <th style={{ padding: '6px 8px' }}>Cụm Từ Khóa (Keyword Phrase)</th>
-                        <th style={{ padding: '6px 8px' }}>Search Volume</th>
-                        <th style={{ padding: '6px 8px' }}>Competing</th>
-                        <th style={{ padding: '6px 8px' }}>Title Density</th>
-                        <th style={{ padding: '6px 8px' }}>A10 Opportunity Score</th>
-                        <th style={{ padding: '6px 8px' }}>Chiến Lược Đặt Từ Khóa</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {uploadStatus.topKeywordsDetailed.map((k) => (
-                        <tr key={k.rank} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                          <td style={{ padding: '6px 8px', fontWeight: 700, color: '#0f766e' }}>#{k.rank}</td>
-                          <td style={{ padding: '6px 8px', fontWeight: 600, color: '#0f172a' }}>{k.keyword}</td>
-                          <td style={{ padding: '6px 8px', color: '#0369a1', fontWeight: 600 }}>{k.searchVolume ? k.searchVolume.toLocaleString() : 'N/A'}</td>
-                          <td style={{ padding: '6px 8px', color: '#64748b' }}>{k.competingProducts ? k.competingProducts.toLocaleString() : 'N/A'}</td>
-                          <td style={{ padding: '6px 8px', color: k.titleDensity <= 5 ? '#16a34a' : '#d97706', fontWeight: 600 }}>
-                            {k.titleDensity !== null ? k.titleDensity : 'N/A'}
-                          </td>
-                          <td style={{ padding: '6px 8px', fontWeight: 700, color: '#0f766e' }}>
-                            <span style={{ background: '#ecfdf5', padding: '2px 6px', borderRadius: '4px', border: '1px solid #a7f3d0' }}>
-                              ⚡ {k.opportunityScore}
-                            </span>
-                          </td>
-                          <td style={{ padding: '6px 8px' }}>
-                            <span style={{ 
-                              fontSize: '0.75rem', 
-                              fontWeight: 600, 
-                              padding: '2px 8px', 
-                              borderRadius: '4px',
-                              background: k.rank <= 3 ? '#fef3c7' : k.rank <= 8 ? '#e0f2fe' : '#f1f5f9',
-                              color: k.rank <= 3 ? '#92400e' : k.rank <= 8 ? '#0369a1' : '#475569'
-                            }}>
-                              {k.tierBadge}
-                            </span>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : uploadStatus.keywords && uploadStatus.keywords.length > 0 && (
-                <div>
-                  <div style={{ fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', marginBottom: '6px', opacity: 0.8 }}>
-                    Các từ khóa H10 hàng đầu đã được nạp:
+            {/* MCP Seed Input & 1-Click Pull Button */}
+            <div style={{ background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: '12px', padding: '18px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+              <div style={{ fontWeight: 700, fontSize: '0.9rem', color: '#9a3412', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <Zap size={16} /> Nhập Seed Keyword Etsy hoặc Ngách Quà Tặng:
+              </div>
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                <input
+                  type="text"
+                  className="form-input"
+                  style={{ flex: 1, minWidth: '220px', background: '#fff' }}
+                  placeholder="Ví dụ: nurse sweatshirt, mom gift, anniversary plaque..."
+                  value={etsySeed}
+                  onChange={(e) => setEtsySeed(e.target.value)}
+                />
+                <button
+                  className="btn btn-primary"
+                  onClick={handleMcpPull}
+                  disabled={mcpPulling}
+                  style={{ background: '#ea580c', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700 }}
+                >
+                  <RefreshCw size={16} className={mcpPulling ? 'spinner' : ''} />
+                  <span>{mcpPulling ? 'Đang gọi MCP Server...' : '⚡ Auto-Pull Live Trends'}</span>
+                </button>
+              </div>
+
+              {/* MCP Live Result Display */}
+              {mcpResult && (
+                <div style={{ background: '#ffffff', borderRadius: '8px', padding: '12px 16px', border: '1px solid #fdba74', marginTop: '6px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                    <div style={{ fontWeight: 700, fontSize: '0.85rem', color: '#c2410c' }}>
+                      ✓ Đã bóc tách {mcpResult.keywords.length} Etsy Tags cho "{mcpResult.seed}"
+                    </div>
+                    {mcpResult.trendId && (
+                      <button
+                        className="btn btn-primary btn-sm"
+                        disabled={draftingTrendId === mcpResult.trendId}
+                        onClick={() => handleManualDraft(mcpResult.trendId)}
+                        style={{ background: '#c2410c', fontSize: '0.8rem' }}
+                      >
+                        <Zap size={14} />
+                        <span>Tạo Etsy Listing</span>
+                      </button>
+                    )}
                   </div>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                    {uploadStatus.keywords.map((kw, i) => (
-                      <span key={i} style={{ background: '#ffffff', padding: '3px 8px', borderRadius: '6px', fontSize: '0.75rem', border: '1px solid #a7f3d0', color: '#047857', fontWeight: 500 }}>
+                    {mcpResult.keywords.map((kw, i) => (
+                      <span key={i} style={{ background: '#ffedd5', color: '#9a3412', padding: '2px 8px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: 600 }}>
                         #{i + 1} {kw}
                       </span>
                     ))}
@@ -726,25 +880,68 @@ export default function Dashboard({ onSelectListing, onApproveListing, onShowToa
                 </div>
               )}
             </div>
-          )}
 
-          {/* Folder Tip */}
-          <div style={{ background: 'var(--bg-subtle)', padding: '12px 16px', borderRadius: '8px', fontSize: '0.8rem', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Sparkles size={16} style={{ color: 'var(--primary)', flexShrink: 0 }} />
-            <span>
-              <strong>Thư mục tự động:</strong> Bạn cũng có thể copy file trực tiếp vào thư mục <code>data/imports/</code> trên máy tính, Agent 1 sẽ tự động nhận diện và nạp dữ liệu.
-            </span>
+            {/* Drag & Drop Area for eRank/EverBee CSV/HTML */}
+            <div 
+              onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+              onDragLeave={() => setIsDragging(false)}
+              onDrop={handleDrop}
+              onClick={() => fileInputRef.current?.click()}
+              style={{
+                border: `2px dashed ${isDragging ? '#ea580c' : 'var(--border-strong)'}`,
+                background: isDragging ? '#fff7ed' : 'var(--bg-subtle)',
+                borderRadius: '14px',
+                padding: '24px 20px',
+                textAlign: 'center',
+                cursor: 'pointer',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: '8px'
+              }}
+            >
+              <div style={{ color: '#ea580c' }}><FileSpreadsheet size={26} /></div>
+              <div style={{ fontSize: '0.9rem', fontWeight: 600 }}>
+                Hoặc nạp file xuất từ eRank, EverBee, YTrends (.html / .csv)
+              </div>
+            </div>
+
+            {/* Status Message & Live Keyword Breakdown */}
+            {uploadStatus && (
+              <div style={{ 
+                padding: '16px', 
+                borderRadius: '12px', 
+                fontSize: '0.85rem',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '10px',
+                background: uploadStatus.type === 'success' ? '#ecfdf5' : '#fef2f2',
+                color: uploadStatus.type === 'success' ? '#065f46' : '#991b1b',
+                border: `1px solid ${uploadStatus.type === 'success' ? '#a7f3d0' : '#fecaca'}`
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 700 }}>
+                    {uploadStatus.type === 'success' ? <CheckCircle2 size={16} /> : <AlertCircle size={16} />}
+                    <span>{uploadStatus.message}</span>
+                  </div>
+                  {uploadStatus.trendId && (
+                    <button
+                      className="btn btn-primary btn-sm"
+                      disabled={draftingTrendId === uploadStatus.trendId}
+                      onClick={() => handleManualDraft(uploadStatus.trendId)}
+                      style={{ background: '#0f766e', fontSize: '0.75rem' }}
+                    >
+                      <Zap size={12} />
+                      <span>{draftingTrendId === uploadStatus.trendId ? 'Đang gọi AI...' : 'Tạo Listing'}</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
-        </div>
-      </div>
+        )}
 
-      {/* Step 2: Helium 10 Xray ASIN Batching Assistant */}
-      <AsinBatcherWidget onShowToast={onShowToast} />
-
-      {/* Step 4: Master Keyword List Table */}
-      <MasterKeywordTable />
-
-      {/* Category Breakdown & Distribution */}
+        {/* Category Breakdown & Distribution */}
         <div className="studio-panel" style={{ padding: '28px', display: 'flex', flexDirection: 'column' }}>
           <h2 style={{ fontSize: '1.25rem', marginBottom: '6px' }}>Phân Bố Listing Theo Danh Mục</h2>
           <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '16px' }}>
@@ -800,6 +997,12 @@ export default function Dashboard({ onSelectListing, onApproveListing, onShowToa
         </div>
 
       </div>
+
+      {/* Step 2: Helium 10 Xray ASIN Batching Assistant */}
+      <AsinBatcherWidget onShowToast={onShowToast} />
+
+      {/* Step 4: Master Keyword List Table */}
+      <MasterKeywordTable />
 
       {/* Section 3: Helium 10 Keyword Batches Queue (Xem chi tiết từng đợt import) */}
       <div className="studio-panel" style={{ padding: '28px' }}>
@@ -883,6 +1086,13 @@ export default function Dashboard({ onSelectListing, onApproveListing, onShowToa
           </div>
         )}
       </div>
+
+      {/* 2-in-1 Unified IP & Trademark Gate Modal */}
+      <UnifiedIpGateModal
+        isOpen={isIpModalOpen}
+        onClose={() => setIsIpModalOpen(false)}
+        onShowToast={onShowToast}
+      />
 
     </div>
   );

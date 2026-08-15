@@ -77,12 +77,12 @@ export default function MasterKeywordTable() {
       <div style={{ overflowX: 'auto', borderRadius: '8px', border: '1px solid var(--border-color, #e2e8f0)' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem', textAlign: 'left' }}>
           <thead>
-            <tr style={{ background: 'var(--panel-header-bg, #f8fafc)', borderBottom: '1px solid var(--border-color, #e2e8f0)' }}>
-              <th style={{ padding: '10px 14px', fontWeight: 700 }}>STT</th>
-              <th style={{ padding: '10px 14px', fontWeight: 700 }}>Cụm Từ Khóa (Keyword Phrase)</th>
-              <th style={{ padding: '10px 14px', fontWeight: 700 }}>Danh Mục (Category)</th>
-              <th style={{ padding: '10px 14px', fontWeight: 700 }}>Kiểm Duyệt IP Guard</th>
-              <th style={{ padding: '10px 14px', fontWeight 700 }}>Thời Gian Nạp</th>
+            <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
+              <th style={{ padding: '10px 14px', fontWeight: 'bold' }}>STT</th>
+              <th style={{ padding: '10px 14px', fontWeight: 'bold' }}>Cụm Từ Khóa (Keyword Phrase)</th>
+              <th style={{ padding: '10px 14px', fontWeight: 'bold' }}>Danh Mục (Category)</th>
+              <th style={{ padding: '10px 14px', fontWeight: 'bold' }}>Kiểm Duyệt IP Guard</th>
+              <th style={{ padding: '10px 14px', fontWeight: 'bold' }}>Thời Gian Nạp</th>
             </tr>
           </thead>
           <tbody>

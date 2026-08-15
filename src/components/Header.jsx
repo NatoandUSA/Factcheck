@@ -22,27 +22,35 @@ export default function Header({ activeTab, setActiveTab, onOpenApiKeyModal, onO
 
         <nav className="nav-tabs">
           <button
-            className={`nav-tab-btn ${activeTab === 'dashboard' ? 'active' : ''}`}
-            onClick={() => setActiveTab('dashboard')}
+            className={`nav-tab-btn ${activeTab === 'amazon-workspace' ? 'active' : ''}`}
+            onClick={() => setActiveTab('amazon-workspace')}
+            style={{
+              color: activeTab === 'amazon-workspace' ? '#0284c7' : 'inherit',
+              borderBottom: activeTab === 'amazon-workspace' ? '2px solid #0284c7' : 'none'
+            }}
           >
-            <Activity size={16} />
-            <span>Dashboard</span>
+            <span style={{ fontSize: '1rem' }}>🔵</span>
+            <span>Amazon A10 Workspace</span>
           </button>
 
           <button
-            className={`nav-tab-btn ${activeTab === 'single' ? 'active' : ''}`}
-            onClick={() => setActiveTab('single')}
+            className={`nav-tab-btn ${activeTab === 'etsy-workspace' ? 'active' : ''}`}
+            onClick={() => setActiveTab('etsy-workspace')}
+            style={{
+              color: activeTab === 'etsy-workspace' ? '#ea580c' : 'inherit',
+              borderBottom: activeTab === 'etsy-workspace' ? '2px solid #ea580c' : 'none'
+            }}
+          >
+            <span style={{ fontSize: '1rem' }}>🟠</span>
+            <span>Etsy Contextual Workspace</span>
+          </button>
+
+          <button
+            className={`nav-tab-btn ${activeTab === 'product-page' ? 'active' : ''}`}
+            onClick={() => setActiveTab('product-page')}
           >
             <Sparkles size={16} />
-            <span>Listing Studio</span>
-          </button>
-
-          <button
-            className={`nav-tab-btn ${activeTab === 'batch' ? 'active' : ''}`}
-            onClick={() => setActiveTab('batch')}
-          >
-            <FileSpreadsheet size={16} />
-            <span>Batch CSV Engine</span>
+            <span>Product Page (100% Real Clone)</span>
           </button>
 
           <button

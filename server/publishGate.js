@@ -61,25 +61,37 @@ function evaluatePublishGate(listing) {
     }
   }
 
-  // 3. Status Determination
-  let final_status = 'PUBLISH_READY';
-  let canExport = true;
+  // 3. Fail-Closed Status Determination (Ported from 22etsy-agent Truth Discipline)
+  let final_status = 'INSUFFICIENT_DATA';
+  let canExport = false;
 
-  if (listing.status === 'MANAGER_APPROVED') {
-    final_status = 'PUBLISH_READY';
+  const hasApprovedStatus = listing.status === 'MANAGER_APPROVED' || listing.status === 'PUBLISH_READY';
+  
+  if (blockingHits.length > 0) {
+    final_status = 'BLOCKED';
+    canExport = false;
+  } else if (!title || title.trim().length === 0) {
+    final_status = 'INSUFFICIENT_DATA';
+    issues.push('Missing title content');
+    canExport = false;
+  } else if (!hasApprovedStatus) {
+    final_status = 'NEEDS_REVIEW';
+    issues.push('Awaiting explicit Manager Approval');
+    canExport = false;
   } else if (issues.length > 0) {
     final_status = 'NEEDS_REVIEW';
     canExport = false;
-  } else if (listing.status === 'NEEDS_QA' || listing.status === 'DRAFT') {
-    final_status = 'NEEDS_REVIEW';
-    canExport = false;
+  } else {
+    final_status = 'PUBLISH_READY';
+    canExport = true;
   }
 
   return {
     final_status,
-    reasons: issues.length > 0 ? issues : ['Passed all compliance gates'],
+    reasons: issues.length > 0 ? issues : ['Passed all canonical compliance gates'],
     canExport
   };
+
 }
 
 module.exports = {

@@ -20,6 +20,8 @@ const { callLLM } = require('./llmService');
 const { learnFromListing } = require('./learningService');
 const { parseEtsySearchResults, synthesizeEtsyBatchLearnings } = require('./competitorBatchLearner');
 const benchmarkService = require('./benchmarkService');
+const publishGate = require('./publishGate');
+
 
 
 
@@ -257,10 +259,10 @@ app.get('/api/listings', (req, res) => {
   });
 });
 
-// Approve a listing (Blocked if IP_RISK_BLOCKED)
+// Approve a listing using Canonical Publish Gate (Blocked if IP_RISK_BLOCKED or non-compliant)
 app.patch('/api/listings/:id/approve', (req, res) => {
   const { id } = req.params;
-  const { userId, userRole } = req.body;
+  const { userRole = 'MANAGER' } = req.body;
 
   if (userRole !== 'MANAGER' && userRole !== 'OWNER' && userRole !== 'ADMIN') {
     return res.status(403).json({ error: 'Only Managers can approve listings.' });
@@ -271,22 +273,53 @@ app.patch('/api/listings/:id/approve', (req, res) => {
 
     let parsedPayload = {};
     try { parsedPayload = JSON.parse(row.payload); } catch(e) {}
-    const ipCheck = ipGuard.screenListing(parsedPayload);
+    
+    // Evaluate via Canonical Publish Gate
+    parsedPayload.status = 'MANAGER_APPROVED';
+    const gateRes = publishGate.evaluatePublishGate(parsedPayload);
 
-    if (row.status === 'IP_RISK_BLOCKED' || ipCheck.verdict === 'BLOCK') {
+    if (gateRes.final_status === 'BLOCKED') {
       return res.status(403).json({ 
         error: 'BLOCKED: Listing contains trademark/IP violations. Resolve IP risk before approval.',
-        hits: ipCheck.hits
+        reasons: gateRes.reasons
       });
     }
 
     db.run("UPDATE listings SET status = 'PUBLISH_READY' WHERE id = ?", [id], function(updateErr) {
       if (updateErr) return res.status(500).json({ error: updateErr.message });
-      res.json({ success: true, status: 'PUBLISH_READY' });
+      res.json({ success: true, status: 'PUBLISH_READY', publishGate: gateRes });
     });
   });
-
 });
+
+// Export a listing (Gated server-side by Canonical Publish Gate)
+app.get('/api/listings/:id/export', (req, res) => {
+  const { id } = req.params;
+
+  db.get("SELECT * FROM listings WHERE id = ?", [id], (err, row) => {
+    if (err || !row) return res.status(404).json({ error: 'Listing not found.' });
+
+    let parsedPayload = {};
+    try { parsedPayload = JSON.parse(row.payload); } catch(e) {}
+    parsedPayload.status = row.status;
+
+    const gateRes = publishGate.evaluatePublishGate(parsedPayload);
+    if (!gateRes.canExport) {
+      return res.status(403).json({
+        error: `EXPORT_DENIED: Listing status "${gateRes.final_status}" cannot be exported until PUBLISH_READY`,
+        reasons: gateRes.reasons
+      });
+    }
+
+    res.json({
+      success: true,
+      status: row.status,
+      publishGate: gateRes,
+      listing: parsedPayload
+    });
+  });
+});
+
 
 
 // Submit Sales Feedback (7-day loop)

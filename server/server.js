@@ -259,13 +259,14 @@ app.get('/api/listings', (req, res) => {
   });
 });
 
-// Approve a listing using Canonical Publish Gate (Blocked if IP_RISK_BLOCKED or non-compliant)
+// Approve a listing using Canonical Publish Gate (Fail-Closed Gate Authority)
 app.patch('/api/listings/:id/approve', (req, res) => {
   const { id } = req.params;
-  const { userRole = 'MANAGER' } = req.body;
+  const { userRole } = req.body || {};
 
-  if (userRole !== 'MANAGER' && userRole !== 'OWNER' && userRole !== 'ADMIN') {
-    return res.status(403).json({ error: 'Only Managers can approve listings.' });
+  // C5A Fix: Require explicit authenticated role (No default MANAGER role bypass)
+  if (!userRole || (userRole !== 'MANAGER' && userRole !== 'OWNER' && userRole !== 'ADMIN')) {
+    return res.status(401).json({ error: 'UNAUTHORIZED: Explicit Manager identity required for approval.' });
   }
 
   db.get("SELECT * FROM listings WHERE id = ?", [id], (err, row) => {
@@ -274,14 +275,16 @@ app.patch('/api/listings/:id/approve', (req, res) => {
     let parsedPayload = {};
     try { parsedPayload = JSON.parse(row.payload); } catch(e) {}
     
-    // Evaluate via Canonical Publish Gate
+    // C5B Fix: Evaluate via Canonical Publish Gate (Fail-Closed)
     parsedPayload.status = 'MANAGER_APPROVED';
     const gateRes = publishGate.evaluatePublishGate(parsedPayload);
 
-    if (gateRes.final_status === 'BLOCKED') {
-      return res.status(403).json({ 
-        error: 'BLOCKED: Listing contains trademark/IP violations. Resolve IP risk before approval.',
-        reasons: gateRes.reasons
+    // Strictly reject any status other than PUBLISH_READY
+    if (gateRes.final_status !== 'PUBLISH_READY' || !gateRes.canExport) {
+      return res.status(400).json({ 
+        error: `APPROVAL_DENIED: Cannot publish listing with status "${gateRes.final_status}".`,
+        reasons: gateRes.reasons,
+        publishGate: gateRes
       });
     }
 
@@ -291,6 +294,7 @@ app.patch('/api/listings/:id/approve', (req, res) => {
     });
   });
 });
+
 
 // Export a listing (Gated server-side by Canonical Publish Gate)
 app.get('/api/listings/:id/export', (req, res) => {

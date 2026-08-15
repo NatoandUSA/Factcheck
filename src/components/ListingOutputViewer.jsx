@@ -52,34 +52,55 @@ export default function ListingOutputViewer({ listing, onSaveListing, onShowToas
     setTimeout(() => setCopiedKey(null), 1800);
   };
 
-  const exportSingleCsv = () => {
-    const headers = ['Marketplace', 'Field', 'Content'];
-    const rows = [
-      ['Amazon', 'Title', `"${(listing.amazonTitle || '').replace(/"/g, '""')}"`],
-      ['Amazon', 'Bullet 1', `"${(listing.amazonBullets?.[0] || '').replace(/"/g, '""')}"`],
-      ['Amazon', 'Bullet 2', `"${(listing.amazonBullets?.[1] || '').replace(/"/g, '""')}"`],
-      ['Amazon', 'Bullet 3', `"${(listing.amazonBullets?.[2] || '').replace(/"/g, '""')}"`],
-      ['Amazon', 'Bullet 4', `"${(listing.amazonBullets?.[3] || '').replace(/"/g, '""')}"`],
-      ['Amazon', 'Bullet 5', `"${(listing.amazonBullets?.[4] || '').replace(/"/g, '""')}"`],
-      ['Amazon', 'Search Terms (249 bytes)', `"${(listing.amazonSearchTerms || '').replace(/"/g, '""')}"`],
-      ['Amazon', 'Description', `"${(listing.amazonDescription || '').replace(/"/g, '""')}"`],
-      ['Etsy', 'Title (140 max)', `"${(listing.etsyTitle || '').replace(/"/g, '""')}"`],
-      ['Etsy', '13 Tags', `"${(listing.etsyTags?.join(', ') || '').replace(/"/g, '""')}"`],
-      ['Etsy', 'Materials', `"${(listing.etsyMaterials?.join(', ') || '').replace(/"/g, '""')}"`],
-      ['Etsy', 'Personalization Instructions', `"${(listing.etsyPersonalizationInstructions || '').replace(/"/g, '""')}"`],
-      ['Etsy', 'Description', `"${(listing.etsyDescription || '').replace(/"/g, '""')}"`]
-    ];
+  const exportSingleCsv = async () => {
+    if (isBlocked) {
+      onShowToast('🔴 BLOCKED: Cannot export IP-flagged listing!');
+      return;
+    }
 
-    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map(e => e.join(','))].join('\n');
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `listing_${Date.now()}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    onShowToast('Listing exported to CSV!');
+    try {
+      // H7 Fix: Verify Server-Side Authorization & Canonical Publish Gate
+      const listingId = listing.dbId || listing.id || 1;
+      const res = await fetch(`http://localhost:3001/api/listings/${listingId}/export`);
+      const gateData = await res.json();
+
+      if (!res.ok || !gateData.success) {
+        onShowToast(`🛑 EXPORT DENIED: ${gateData.error || 'Server Gate Rejected Export'}`);
+        return;
+      }
+
+      const serverListing = gateData.listing || listing;
+      const headers = ['Marketplace', 'Field', 'Content'];
+      const rows = [
+        ['Amazon', 'Title', `"${(serverListing.amazonTitle || '').replace(/"/g, '""')}"`],
+        ['Amazon', 'Bullet 1', `"${(serverListing.amazonBullets?.[0] || '').replace(/"/g, '""')}"`],
+        ['Amazon', 'Bullet 2', `"${(serverListing.amazonBullets?.[1] || '').replace(/"/g, '""')}"`],
+        ['Amazon', 'Bullet 3', `"${(serverListing.amazonBullets?.[2] || '').replace(/"/g, '""')}"`],
+        ['Amazon', 'Bullet 4', `"${(serverListing.amazonBullets?.[3] || '').replace(/"/g, '""')}"`],
+        ['Amazon', 'Bullet 5', `"${(serverListing.amazonBullets?.[4] || '').replace(/"/g, '""')}"`],
+        ['Amazon', 'Search Terms (249 bytes)', `"${(serverListing.amazonSearchTerms || '').replace(/"/g, '""')}"`],
+        ['Amazon', 'Description', `"${(serverListing.amazonDescription || '').replace(/"/g, '""')}"`],
+        ['Etsy', 'Title (140 max)', `"${(serverListing.etsyTitle || '').replace(/"/g, '""')}"`],
+        ['Etsy', '13 Tags', `"${(serverListing.etsyTags?.join(', ') || '').replace(/"/g, '""')}"`],
+        ['Etsy', 'Materials', `"${(serverListing.etsyMaterials?.join(', ') || '').replace(/"/g, '""')}"`],
+        ['Etsy', 'Personalization Instructions', `"${(serverListing.etsyPersonalizationInstructions || '').replace(/"/g, '""')}"`],
+        ['Etsy', 'Description', `"${(serverListing.etsyDescription || '').replace(/"/g, '""')}"`]
+      ];
+
+      const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map(e => e.join(','))].join('\n');
+      const encodedUri = encodeURI(csvContent);
+      const link = document.createElement('a');
+      link.setAttribute('href', encodedUri);
+      link.setAttribute('download', `listing_${Date.now()}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      onShowToast('🚀 Server-Authorized Listing exported to CSV!');
+    } catch (err) {
+      onShowToast(`⚠️ Server Export Error: ${err.message}`);
+    }
   };
+
 
   return (
     <div style={{ display: 'flex', gap: '16px', alignItems: 'flex-start', width: '100%' }}>
@@ -192,8 +213,8 @@ export default function ListingOutputViewer({ listing, onSaveListing, onShowToas
               Opportunity Score (L0-L4)
             </div>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', marginTop: '2px' }}>
-              <span style={{ fontSize: '1.4rem', fontWeight: 700, color: listing.opportunityScore ? (listing.opportunityScore >= 80 ? '#16a34a' : listing.opportunityScore >= 65 ? '#d97706' : '#dc2626') : '#64748b' }}>
-                {listing.opportunityScore ? `${listing.opportunityScore}/100` : 'N/A'}
+              <span style={{ fontSize: '1.4rem', fontWeight: 700, color: typeof listing.opportunityScore === 'number' ? (listing.opportunityScore >= 80 ? '#16a34a' : listing.opportunityScore >= 65 ? '#d97706' : '#dc2626') : '#64748b' }}>
+                {typeof listing.opportunityScore === 'number' ? `${listing.opportunityScore}/100` : 'N/A'}
               </span>
               <span style={{
                 padding: '2px 8px', borderRadius: '12px', fontSize: '0.7rem', fontWeight: 700,
@@ -205,10 +226,11 @@ export default function ListingOutputViewer({ listing, onSaveListing, onShowToas
             </div>
           </div>
           <div style={{ fontSize: '0.7rem', color: '#475569', textAlign: 'right', display: 'flex', flexDirection: 'column', gap: '2px' }}>
-            <div>📈 Demand: <strong>{listing.metrics?.demandScore ? `${listing.metrics.demandScore}%` : 'N/A'}</strong></div>
-            <div>🥊 Comp Index: <strong>{listing.metrics?.competitionIndex ? `${listing.metrics.competitionIndex}%` : 'N/A'}</strong></div>
-            <div>🎯 SEO Score: <strong>{listing.metrics?.seoScore ? `${listing.metrics.seoScore}%` : 'N/A'}</strong></div>
+            <div>📈 Demand: <strong>{typeof listing.metrics?.demandScore === 'number' ? `${listing.metrics.demandScore}%` : 'N/A'}</strong></div>
+            <div>🥊 Comp Index: <strong>{typeof listing.metrics?.competitionIndex === 'number' ? `${listing.metrics.competitionIndex}%` : 'N/A'}</strong></div>
+            <div>🎯 SEO Score: <strong>{typeof listing.metrics?.seoScore === 'number' ? `${listing.metrics.seoScore}%` : 'N/A'}</strong></div>
           </div>
+
         </div>
       </div>
 

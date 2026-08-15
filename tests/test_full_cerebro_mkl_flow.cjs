@@ -64,11 +64,13 @@ async function testFullCerebroMklFlow() {
   console.log('  TESTING REAL CEREBRO FILE UPLOAD & MASTER KEYWORD TABLE INTEGRATION');
   console.log('================================================================\n');
 
-  const filePath = 'C:\\Users\\Admin\\Downloads\\US_AMAZON_cerebro_B0DV4DSJ63_2026-08-15.xlsx';
-  if (!fs.existsSync(filePath)) {
-    console.log(`⚠️ Skip upload test: File ${filePath} not available on this runner environment.`);
-    return;
-  }
+  const trackedFixture = path.resolve(__dirname, 'fixtures/sample_cerebro.xlsx');
+  const localDownload = 'C:\\Users\\Admin\\Downloads\\US_AMAZON_cerebro_B0DV4DSJ63_2026-08-15.xlsx';
+  
+  let filePath = fs.existsSync(trackedFixture) ? trackedFixture : localDownload;
+  
+  assert.ok(fs.existsSync(filePath), `CRITICAL TEST FAILURE: Tracked fixture file not found at ${trackedFixture}`);
+
 
   console.log(`Step 1: Uploading Real Cerebro File (${filePath})...`);
 

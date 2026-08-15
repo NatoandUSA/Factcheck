@@ -394,8 +394,42 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
 
       {/* STAGE 3: MASTER KEYWORD INTELLIGENCE */}
       {activeStage === 'mkl' && (
-        <MasterKeywordTable marketplace="ETSY" onShowToast={onShowToast} />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#fff7ed', border: '1px solid #fed7aa', padding: '16px 20px', borderRadius: '12px', flexWrap: 'wrap', gap: '12px' }}>
+            <div>
+              <h3 style={{ margin: 0, color: '#ea580c', fontWeight: 800, fontSize: '1.1rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Sparkles size={20} />
+                BƯỚC 3: Master Tag Matrix (Etsy 13 Tags Model) & Sinh Listing Etsy SEO
+              </h3>
+              <p style={{ margin: '4px 0 0 0', color: '#9a3412', fontSize: '0.85rem' }}>
+                Tự động bóc tách và tạo Bộ Listing Etsy SEO chuẩn 13 Tags (mỗi tag &le; 20 chars) & Title thân thiện người mua (&le; 140 chars).
+              </p>
+            </div>
+
+            <button
+              onClick={() => handleManualDraft(trends[0]?.id || 1)}
+              disabled={draftingTrendId !== null}
+              className="btn btn-primary"
+              style={{
+                background: '#ea580c',
+                fontWeight: 800,
+                padding: '10px 22px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                boxShadow: '0 4px 14px rgba(234, 88, 12, 0.25)',
+                cursor: draftingTrendId !== null ? 'not-allowed' : 'pointer'
+              }}
+            >
+              <Zap size={16} className={draftingTrendId !== null ? 'spinner' : ''} />
+              <span>{draftingTrendId !== null ? 'Đang tạo Etsy Listing...' : '🚀 TẠO ETSY LISTING (13 TAGS + BUYER FRIENDLY TITLE)'}</span>
+            </button>
+          </div>
+
+          <MasterKeywordTable marketplace="ETSY" onShowToast={onShowToast} />
+        </div>
       )}
+
 
       {/* Unified IP Gate Modal */}
       <UnifiedIpGateModal

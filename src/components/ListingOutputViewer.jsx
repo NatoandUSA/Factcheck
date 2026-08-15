@@ -269,10 +269,58 @@ export default function ListingOutputViewer({ listing, onSaveListing, onShowToas
                   style={{ background: activeVarIdx === idx + 1 ? '#0284c7' : '#fff', color: activeVarIdx === idx + 1 ? '#fff' : '#334155', fontWeight: 600, fontSize: '0.75rem', padding: '4px 10px', borderRadius: '6px' }}
                 >
                   Child #{idx + 1}: {v.variationAttribute}
-                </button>
-              ))}
+          </div>
+
+          {/* Complete 1 Parent + 4 Child ASIN Matrix Card */}
+          <div style={{ background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: '10px', padding: '14px 18px', marginBottom: '16px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+              <div style={{ fontWeight: 800, color: '#0369a1', fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Layers size={18} />
+                <span>BỘ BIẾN THỂ AMAZON MULTI-ASIN (1 PARENT + 4 CHILD ASINs):</span>
+              </div>
+              <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#0284c7', background: '#e0f2fe', padding: '2px 8px', borderRadius: '12px' }}>
+                Full Package Ready
+              </span>
+            </div>
+
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem', background: '#ffffff', borderRadius: '8px', overflow: 'hidden' }}>
+                <thead>
+                  <tr style={{ background: '#0284c7', color: '#ffffff', textAlign: 'left' }}>
+                    <th style={{ padding: '8px 12px' }}>Loại ASIN</th>
+                    <th style={{ padding: '8px 12px' }}>Mã ASIN / SKU</th>
+                    <th style={{ padding: '8px 12px' }}>Thuộc Tính Biến Thể (Variation)</th>
+                    <th style={{ padding: '8px 12px' }}>Giá Niêm Yết</th>
+                    <th style={{ padding: '8px 12px' }}>Trạng Thái</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr style={{ borderBottom: '1px solid #e2e8f0', background: activeVarIdx === 0 ? '#e0f2fe' : '#ffffff' }}>
+                    <td style={{ padding: '8px 12px', fontWeight: 800, color: '#0f766e' }}>👑 PARENT ASIN</td>
+                    <td style={{ padding: '8px 12px', fontWeight: 700, fontFamily: 'monospace' }}>{listing.parentAsin || 'B0PARENT99'} ({listing.parentSku || 'SKU-PARENT-MAIN'})</td>
+                    <td style={{ padding: '8px 12px', color: '#64748b' }}>Parent Catalog Anchor (Non-sellable Container)</td>
+                    <td style={{ padding: '8px 12px', color: '#64748b' }}>—</td>
+                    <td style={{ padding: '8px 12px', fontWeight: 700, color: '#16a34a' }}>🟢 Active Parent</td>
+                  </tr>
+                  {(listing.variations || [
+                    { childIndex: 1, asin: 'B0CHILD01', variationAttribute: 'Vàng 24k / Kích thước S', price: '$28.99', sku: 'SKU-GOLD-S' },
+                    { childIndex: 2, asin: 'B0CHILD02', variationAttribute: 'Bạc Ý 925 / Kích thước M', price: '$29.99', sku: 'SKU-SILVER-M' },
+                    { childIndex: 3, asin: 'B0CHILD03', variationAttribute: 'Vàng Hồng / Kích thước L', price: '$31.99', sku: 'SKU-ROSE-L' },
+                    { childIndex: 4, asin: 'B0CHILD04', variationAttribute: 'Khắc Tên Theo Yêu Cầu / XL', price: '$34.99', sku: 'SKU-CUSTOM-XL' }
+                  ]).map((v, i) => (
+                    <tr key={i} style={{ borderBottom: '1px solid #e2e8f0', background: activeVarIdx === i + 1 ? '#e0f2fe' : '#ffffff' }}>
+                      <td style={{ padding: '8px 12px', fontWeight: 700, color: '#0284c7' }}>💎 CHILD ASIN #{i + 1}</td>
+                      <td style={{ padding: '8px 12px', fontWeight: 700, fontFamily: 'monospace' }}>{v.asin || `B0CHILD0${i+1}`} ({v.sku})</td>
+                      <td style={{ padding: '8px 12px', fontWeight: 600, color: '#1e293b' }}>{v.variationAttribute}</td>
+                      <td style={{ padding: '8px 12px', fontWeight 700, color: '#16a34a' }}>{v.price || '$29.99'}</td>
+                      <td style={{ padding: '8px 12px', fontWeight 700, color: '#16a34a' }}>🟢 Purchasable Child</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
+
 
           {viewMode === 'preview' ? (
              <AmazonPreview data={listing} />

@@ -1138,35 +1138,60 @@ Return ONLY raw JSON without markdown code fences:
   }
 });
 
-// API: Get Master Keyword List Across Processed Files
+// API: Get Master Keyword List Across Processed Files (Marketplace-specific separation)
 app.get('/api/master-keywords', (req, res) => {
+  const { marketplace = 'AMAZON' } = req.query;
+  const targetMarket = String(marketplace).toUpperCase();
+
   db.all("SELECT * FROM market_trends ORDER BY discoveredAt DESC", [], (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
     
     const masterKeywords = [];
     const seen = new Set();
 
-    rows.forEach(r => {
+    // Filter rows by marketplace if available or fallback by category signature
+    const marketRows = rows.filter(r => {
+      if (r.marketplace) {
+        return String(r.marketplace).toUpperCase() === targetMarket;
+      }
+      const catLower = String(r.category || '').toLowerCase();
+      if (targetMarket === 'ETSY') {
+        return catLower.includes('etsy') || r.source === 'ETSY_MCP_LIVE' || r.source === 'ERANK';
+      }
+      return !catLower.includes('etsy');
+    });
+
+    marketRows.forEach(r => {
       const kws = (r.trending_keywords || '').split(/[,|]/);
-      kws.forEach(kw => {
+      kws.forEach((kw, idx) => {
         const cleanKw = kw.trim();
         if (cleanKw && cleanKw.length > 2 && !seen.has(cleanKw.toLowerCase())) {
           seen.add(cleanKw.toLowerCase());
           const ipRes = ipGuard.screenText(cleanKw);
+          
+          let tierBadge = targetMarket === 'AMAZON' ? '👑 Tier 1 (Title Hook)' : '🎯 Valid Tag (<=20 chars)';
+          if (masterKeywords.length >= 10 && masterKeywords.length < 35) {
+            tierBadge = targetMarket === 'AMAZON' ? '💎 Tier 2 (5 Bullets)' : '🎯 Secondary Tag';
+          } else if (masterKeywords.length >= 35) {
+            tierBadge = targetMarket === 'AMAZON' ? '📦 Tier 3 (Backend Fuel)' : '📝 Title Keyword';
+          }
+
           masterKeywords.push({
             keyword: cleanKw,
-            category: r.category,
+            category: r.category || (targetMarket === 'AMAZON' ? 'Amazon FBM' : 'Etsy Handmade'),
             discoveredAt: r.discoveredAt,
             ipVerdict: ipRes.verdict,
+            tierBadge,
             ipHits: ipRes.hits.map(h => h.term)
           });
         }
       });
     });
 
-    res.json({ success: true, count: masterKeywords.length, keywords: masterKeywords });
+    res.json({ success: true, count: masterKeywords.length, marketplace: targetMarket, keywords: masterKeywords });
   });
 });
+
 
 // API: Multi-Source Market Benchmark & Go/No-Go Decision Engine
 app.get('/api/benchmark/validate', async (req, res) => {

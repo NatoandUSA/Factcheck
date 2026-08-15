@@ -119,4 +119,8 @@ async function testFullCerebroMklFlow() {
   }
 }
 
-testFullCerebroMklFlow();
+testFullCerebroMklFlow().catch(err => {
+  console.error('🔴 UNHANDLED REJECTION IN CEREBRO TEST:', err);
+  process.exitCode = 1;
+});
+

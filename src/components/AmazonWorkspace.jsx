@@ -101,7 +101,7 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
       <GoogleTrendsWidget seedPhrase={seedPhrase} onShowToast={onShowToast} />
 
       {/* Learning Box: Learn Best Seller DNA from Competitor Link / Text */}
-      <LearningBoxWidget onShowToast={onShowToast} />
+      <LearningBoxWidget platform="AMAZON" onShowToast={onShowToast} />
 
       {/* ======================================================== */}
       {/* 4-STEP AMAZON WORKFLOW: B1 Xray -> B2 Batch 10 ASINs -> B3 Cerebro -> B4 MKL & A10 */}

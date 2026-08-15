@@ -4,24 +4,29 @@ import {
   ArrowRight, ShieldCheck, Tag, ExternalLink, Zap
 } from 'lucide-react';
 
-export default function LearningBoxWidget({ onShowToast }) {
+export default function LearningBoxWidget({ platform = 'AMAZON', onShowToast }) {
   const [url, setUrl] = useState('');
   const [rawText, setRawText] = useState('');
   const [inputMode, setInputMode] = useState('url'); // 'url' | 'text'
   const [category, setCategory] = useState('Apparel: Sweatshirt');
-  const [marketplace, setMarketplace] = useState('AMAZON');
   const [learning, setLearning] = useState(false);
   const [templates, setTemplates] = useState([]);
   const [activeTemplate, setActiveTemplate] = useState(null);
 
+  const isAmazon = platform === 'AMAZON';
+  const themeColor = isAmazon ? '#0284c7' : '#ea580c';
+  const badgeBg = isAmazon ? '#e0f2fe' : '#ffedd5';
+  const badgeText = isAmazon ? '#0369a1' : '#c2410c';
+
   const fetchTemplates = async () => {
     try {
-      const res = await fetch('http://localhost:3001/api/learning/templates');
+      const res = await fetch(`http://localhost:3001/api/learning/templates?marketplace=${platform}`);
       if (res.ok) {
         const data = await res.json();
-        setTemplates(data.templates || []);
-        if (data.templates?.length > 0 && !activeTemplate) {
-          setActiveTemplate(data.templates[0]);
+        const filtered = (data.templates || []).filter(t => (t.marketplace || 'AMAZON').toUpperCase() === platform.toUpperCase());
+        setTemplates(filtered);
+        if (filtered.length > 0 && !activeTemplate) {
+          setActiveTemplate(filtered[0]);
         }
       }
     } catch (e) {
@@ -31,7 +36,7 @@ export default function LearningBoxWidget({ onShowToast }) {
 
   useEffect(() => {
     fetchTemplates();
-  }, []);
+  }, [platform]);
 
   const handleLearn = async (e) => {
     e.preventDefault();
@@ -46,14 +51,14 @@ export default function LearningBoxWidget({ onShowToast }) {
           url: inputMode === 'url' ? url.trim() : '',
           rawText: inputMode === 'text' ? rawText.trim() : '',
           category,
-          marketplace
+          marketplace: platform
         })
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Failed to analyze listing');
 
       setActiveTemplate(data);
-      if (onShowToast) onShowToast(`🧠 Đã học thành công cấu trúc DNA từ listing mẫu!`);
+      if (onShowToast) onShowToast(`🧠 Đã học thành công cấu trúc DNA cho ${platform}!`);
       setUrl('');
       setRawText('');
       fetchTemplates();
@@ -76,206 +81,166 @@ export default function LearningBoxWidget({ onShowToast }) {
   };
 
   return (
-    <div className="studio-panel" style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '18px', borderLeft: '4px solid #8b5cf6' }}>
+    <div className="studio-panel" style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '18px', borderLeft: `4px solid ${themeColor}` }}>
       
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <div style={{ background: '#8b5cf6', color: '#fff', padding: '8px', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ background: themeColor, color: '#fff', padding: '8px', borderRadius: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <Brain size={22} />
           </div>
           <div>
             <div style={{ fontWeight: 800, fontSize: '1.15rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <span>Learning Box — Hộp Học Tập Listing Mẫu (Few-Shot DNA)</span>
-              <span style={{ fontSize: '0.75rem', background: '#f3e8ff', color: '#7e22ce', padding: '2px 8px', borderRadius: '6px', fontWeight: 700 }}>
-                AI Mirror Engine
+              <span>{isAmazon ? '🔵 Amazon Learning Box (Few-Shot A10 DNA)' : '🟠 Etsy Learning Box (Few-Shot Contextual DNA)'}</span>
+              <span style={{ fontSize: '0.75rem', background: badgeBg, color: badgeText, padding: '2px 8px', borderRadius: '6px', fontWeight: 700 }}>
+                {isAmazon ? 'Amazon DNA Mirror' : 'Etsy DNA Mirror'}
               </span>
             </div>
             <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
-              Dán link Amazon / Etsy của đối thủ bán chạy (hoặc dán văn bản mẫu) để Omni tự động học văn phong, cấu trúc Bullets, và chính sách shipping.
+              {isAmazon 
+                ? 'Dán link Amazon / ASIN hoặc văn bản đối thủ để Omni học Title Hook 75 chars, 5 Bullets [HOOKS], Search Terms 240 bytes và A+ Content.' 
+                : 'Dán link Etsy / Shop text đối thủ để Omni học Title <140 chars, đúng 13 Tags <=20 chars, và Storytelling Description.'}
             </div>
           </div>
         </div>
 
         {/* Input Mode Toggle */}
-        <div style={{ display: 'flex', gap: '6px', background: 'var(--bg-subtle)', padding: '4px', borderRadius: '8px' }}>
+        <div style={{ display: 'flex', background: 'var(--bg-subtle)', borderRadius: '8px', padding: '3px', border: '1px solid var(--border-subtle)' }}>
           <button
+            type="button"
             onClick={() => setInputMode('url')}
             style={{
-              background: inputMode === 'url' ? '#8b5cf6' : 'transparent',
-              color: inputMode === 'url' ? '#fff' : 'var(--text-secondary)',
+              background: inputMode === 'url' ? 'var(--bg-surface)' : 'transparent',
               border: 'none',
-              padding: '6px 12px',
               borderRadius: '6px',
-              fontWeight: 600,
+              padding: '6px 12px',
               fontSize: '0.8rem',
-              cursor: 'pointer',
+              fontWeight: 700,
+              color: inputMode === 'url' ? themeColor : 'var(--text-secondary)',
               display: 'flex',
               alignItems: 'center',
-              gap: '6px'
+              gap: '6px',
+              cursor: 'pointer'
             }}
           >
-            <Link2 size={13} />
-            <span>Dán Link URL</span>
+            <Link2 size={14} />
+            <span>Dán Link {isAmazon ? 'Amazon/ASIN' : 'Etsy Listing'}</span>
           </button>
 
           <button
+            type="button"
             onClick={() => setInputMode('text')}
             style={{
-              background: inputMode === 'text' ? '#8b5cf6' : 'transparent',
-              color: inputMode === 'text' ? '#fff' : 'var(--text-secondary)',
+              background: inputMode === 'text' ? 'var(--bg-surface)' : 'transparent',
               border: 'none',
-              padding: '6px 12px',
               borderRadius: '6px',
-              fontWeight: 600,
+              padding: '6px 12px',
               fontSize: '0.8rem',
-              cursor: 'pointer',
+              fontWeight: 700,
+              color: inputMode === 'text' ? themeColor : 'var(--text-secondary)',
               display: 'flex',
               alignItems: 'center',
-              gap: '6px'
+              gap: '6px',
+              cursor: 'pointer'
             }}
           >
-            <FileText size={13} />
+            <FileText size={14} />
             <span>Dán Văn Bản Mẫu</span>
           </button>
         </div>
       </div>
 
       {/* Input Form */}
-      <form onSubmit={handleLearn} style={{ display: 'flex', flexDirection: 'column', gap: '12px', background: '#faf5ff', padding: '16px 20px', borderRadius: '12px', border: '1px solid #e9d5ff' }}>
-        <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-          <div style={{ flex: 1, minWidth: '260px' }}>
-            {inputMode === 'url' ? (
-              <input
-                type="text"
-                className="form-input"
-                style={{ background: '#fff' }}
-                placeholder="Dán link Amazon (e.g. https://amazon.com/dp/...) hoặc Etsy listing link..."
-                value={url}
-                onChange={(e) => setUrl(e.target.value)}
-              />
-            ) : (
-              <textarea
-                rows={3}
-                className="form-input"
-                style={{ background: '#fff' }}
-                placeholder="Dán tiêu đề, 5 bullets, mô tả chi tiết sản phẩm mẫu của bạn vào đây..."
-                value={rawText}
-                onChange={(e) => setRawText(e.target.value)}
-              />
-            )}
-          </div>
-
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-            <select
+      <form onSubmit={handleLearn} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+        {inputMode === 'url' ? (
+          <div style={{ display: 'flex', gap: '10px' }}>
+            <input
+              type="url"
               className="form-input"
-              style={{ background: '#fff', minWidth: '140px' }}
-              value={marketplace}
-              onChange={(e) => setMarketplace(e.target.value)}
-            >
-              <option value="AMAZON">🔵 Amazon FBM</option>
-              <option value="ETSY">🟠 Etsy Shop</option>
-            </select>
-
-            <select
-              className="form-input"
-              style={{ background: '#fff', minWidth: '160px' }}
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-            >
-              <option value="Apparel: Sweatshirt">🧥 Apparel: Sweatshirt</option>
-              <option value="Jewelry">✨ Custom Jewelry</option>
-              <option value="Acrylic">💡 Custom Acrylic</option>
-              <option value="Blanket">🛋️ Blanket</option>
-              <option value="Mug">☕ Mug</option>
-              <option value="Embroidery">🧵 Embroidery</option>
-            </select>
-
+              style={{ flex: 1, fontSize: '0.85rem' }}
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder={isAmazon ? 'https://www.amazon.com/dp/B0... hoặc https://amazon.com/gp/product/...' : 'https://www.etsy.com/listing/123456789/...'}
+            />
             <button
               type="submit"
-              disabled={learning || (!url.trim() && !rawText.trim())}
+              disabled={learning || !url.trim()}
               className="btn btn-primary"
-              style={{ background: '#8b5cf6', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px' }}
+              style={{ background: themeColor, fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px', minWidth: '140px', justifyContent: 'center' }}
             >
-              <Zap size={16} className={learning ? 'spinner' : ''} />
-              <span>{learning ? 'Đang phân tích DNA...' : '🧠 Học Listing Mẫu Này'}</span>
+              {learning ? <RefreshCw size={15} className="spinner" /> : <Sparkles size={15} />}
+              <span>{learning ? 'Đang phân tích...' : '🧠 Học DNA'}</span>
             </button>
           </div>
-        </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            <textarea
+              className="form-input"
+              rows={4}
+              style={{ fontSize: '0.85rem', fontFamily: 'monospace' }}
+              value={rawText}
+              onChange={(e) => setRawText(e.target.value)}
+              placeholder={isAmazon 
+                ? 'Dán Tiêu đề, 5 Bullet Points, và Mô tả của listing Amazon mẫu...' 
+                : 'Dán Tiêu đề, 13 Tags, Mô tả Story, và Hướng dẫn cá nhân hóa của listing Etsy mẫu...'}
+            />
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button
+                type="submit"
+                disabled={learning || !rawText.trim()}
+                className="btn btn-primary"
+                style={{ background: themeColor, fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px', minWidth: '140px', justifyContent: 'center' }}
+              >
+                {learning ? <RefreshCw size={15} className="spinner" /> : <Sparkles size={15} />}
+                <span>{learning ? 'Đang phân tích...' : '🧠 Học DNA'}</span>
+              </button>
+            </div>
+          </div>
+        )}
       </form>
 
-      {/* Active Learned DNA Display */}
-      {activeTemplate && (
-        <div style={{ background: '#ffffff', borderRadius: '12px', border: '1px solid #ddd6fe', padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #f3e8ff', paddingBottom: '10px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <span style={{ background: '#8b5cf6', color: '#fff', fontSize: '0.75rem', fontWeight: 800, padding: '3px 8px', borderRadius: '4px' }}>
-                ĐANG KÍCH HOẠT (ACTIVE FEW-SHOT)
-              </span>
-              <span style={{ fontWeight: 700, fontSize: '0.9rem', color: '#1e293b' }}>
-                {activeTemplate.title}
-              </span>
-            </div>
-            <span style={{ fontSize: '0.75rem', color: '#7e22ce', fontWeight: 600 }}>
-              Sàn: {activeTemplate.marketplace} | Danh mục: {activeTemplate.category}
-            </span>
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '12px' }}>
-            <div style={{ background: '#faf5ff', padding: '10px 14px', borderRadius: '8px', border: '1px solid #f3e8ff' }}>
-              <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#7e22ce' }}>Mẫu Cấu Trúc Bullet Hooks Học Được:</div>
-              <div style={{ fontSize: '0.8rem', color: '#334155', marginTop: '4px' }}>
-                {(activeTemplate.styleDna?.bulletHookPatterns || ['[HOOK 1]', '[HOOK 2]']).join(' → ')}
-              </div>
-            </div>
-
-            <div style={{ background: '#faf5ff', padding: '10px 14px', borderRadius: '8px', border: '1px solid #f3e8ff' }}>
-              <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#7e22ce' }}>Tone Văn Phong:</div>
-              <div style={{ fontSize: '0.8rem', color: '#334155', marginTop: '4px' }}>
-                {activeTemplate.styleDna?.recommendedTone || 'Emotional Craftsmanship'}
-              </div>
-            </div>
-
-            <div style={{ background: '#faf5ff', padding: '10px 14px', borderRadius: '8px', border: '1px solid #f3e8ff' }}>
-              <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#7e22ce' }}>Chính Sách Vận Chuyển Học Được:</div>
-              <div style={{ fontSize: '0.8rem', color: '#334155', marginTop: '4px' }}>
-                {activeTemplate.styleDna?.shippingPolicyPattern || 'Handmade & Shipped in 24h.'}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Previously Learned Templates List */}
+      {/* Learned Templates Library */}
       {templates.length > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '4px' }}>
-          <div style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>
-            Kho Listing Mẫu Đã Lưu ({templates.length}):
+        <div style={{ marginTop: '6px', borderTop: '1px solid var(--border-subtle)', paddingTop: '14px' }}>
+          <div style={{ fontSize: '0.8rem', fontWeight: 800, color: 'var(--text-secondary)', marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>KHO LISTING MẪU ĐÃ HỌC ({templates.length} MẪU CHO {platform}):</span>
+            <span style={{ fontSize: '0.75rem', color: themeColor }}>✓ Tự động áp dụng vào AI khi tạo listing mới</span>
           </div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-            {templates.map((tpl) => (
+
+          <div style={{ display: 'flex', gap: '8px', overflowX: 'auto', paddingBottom: '6px' }}>
+            {templates.map((t) => (
               <div
-                key={tpl.id}
-                onClick={() => setActiveTemplate(tpl)}
+                key={t.id}
+                onClick={() => setActiveTemplate(t)}
                 style={{
-                  background: activeTemplate?.id === tpl.id ? '#f3e8ff' : 'var(--bg-subtle)',
-                  border: activeTemplate?.id === tpl.id ? '2px solid #8b5cf6' : '1px solid var(--border-subtle)',
                   padding: '8px 12px',
                   borderRadius: '8px',
+                  background: activeTemplate?.id === t.id ? (isAmazon ? '#f0f9ff' : '#fff7ed') : 'var(--bg-subtle)',
+                  border: activeTemplate?.id === t.id ? `1px solid ${themeColor}` : '1px solid var(--border-subtle)',
                   cursor: 'pointer',
+                  fontSize: '0.8rem',
+                  minWidth: '220px',
+                  maxWidth: '280px',
                   display: 'flex',
+                  justifyContent: 'space-between',
                   alignItems: 'center',
-                  gap: '8px',
-                  fontSize: '0.8rem'
+                  gap: '8px'
                 }}
               >
-                <span style={{ fontWeight: 600 }}>{tpl.marketplace === 'AMAZON' ? '🔵' : '🟠'} {tpl.title.slice(0, 30)}...</span>
+                <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <div style={{ fontWeight: 700, color: activeTemplate?.id === t.id ? themeColor : 'var(--text-primary)' }}>
+                    {t.title.slice(0, 32)}...
+                  </div>
+                  <div style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+                    {t.category} • {t.bullets?.length || 0} Bullets • {t.tags?.length || 0} Tags
+                  </div>
+                </div>
+
                 <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleDeleteTemplate(tpl.id);
-                  }}
-                  style={{ background: 'transparent', border: 'none', color: '#ef4444', cursor: 'pointer', padding: '2px' }}
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); handleDeleteTemplate(t.id); }}
+                  style={{ background: 'transparent', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: '2px' }}
+                  title="Xóa mẫu"
                 >
                   <Trash2 size={13} />
                 </button>
@@ -284,6 +249,43 @@ export default function LearningBoxWidget({ onShowToast }) {
           </div>
         </div>
       )}
+
+      {/* Active Template DNA Preview */}
+      {activeTemplate && (
+        <div style={{ background: isAmazon ? '#f8fafc' : '#fffaf5', borderRadius: '10px', padding: '14px 18px', border: `1px solid ${isAmazon ? '#bae6fd' : '#fed7aa'}`, fontSize: '0.85rem' }}>
+          <div style={{ fontWeight: 800, color: themeColor, marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <CheckCircle2 size={16} />
+            <span>DNA Đang Áp Dụng: "{activeTemplate.title}"</span>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginTop: '8px' }}>
+            <div>
+              <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-secondary)' }}>
+                {isAmazon ? 'CẤU TRÚC 5 BULLET HOOKS MẪU:' : '13 TAGS MẪU:'}
+              </div>
+              <ul style={{ margin: '4px 0 0 16px', padding: 0, fontSize: '0.8rem', color: 'var(--text-primary)' }}>
+                {isAmazon ? (
+                  (activeTemplate.bullets || []).slice(0, 4).map((b, i) => (
+                    <li key={i}>{b.slice(0, 75)}...</li>
+                  ))
+                ) : (
+                  (activeTemplate.tags || []).slice(0, 6).map((t, i) => (
+                    <li key={i}>#{t}</li>
+                  ))
+                )}
+              </ul>
+            </div>
+
+            <div>
+              <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-secondary)' }}>QUY TẮC THUẬT TOÁN ĐÃ HỌC:</div>
+              <div style={{ fontSize: '0.8rem', color: '#475569', marginTop: '4px', lineHeight: 1.4 }}>
+                {activeTemplate.learnedRulesSummary || activeTemplate.styleDna?.recommendedTone || 'Áp dụng phong cách cảm xúc kết hợp thông số kỹ thuật rõ ràng.'}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

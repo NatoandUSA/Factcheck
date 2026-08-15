@@ -1,7 +1,8 @@
 const cheerio = require('cheerio');
 
 /**
- * Parses and learns structural DNA from an Amazon / Etsy URL or raw text
+ * Parses and learns structural DNA from an Amazon or Etsy listing URL / text
+ * Enforces 100% marketplace separation between Amazon A10 DNA and Etsy DNA
  */
 async function learnFromListing({ url = '', rawText = '', category = 'Custom Gift', marketplace = 'AMAZON' }) {
   let title = '';
@@ -10,6 +11,9 @@ async function learnFromListing({ url = '', rawText = '', category = 'Custom Gif
   let description = '';
   let materials = [];
   let extractedUrl = url.trim();
+
+  const isEtsy = marketplace === 'ETSY' || extractedUrl.includes('etsy.');
+  const resolvedMarketplace = isEtsy ? 'ETSY' : 'AMAZON';
 
   // 1. If URL provided, try fetching & scraping
   if (extractedUrl.startsWith('http')) {
@@ -22,7 +26,7 @@ async function learnFromListing({ url = '', rawText = '', category = 'Custom Gif
       const html = await response.text();
       const $ = cheerio.load(html);
 
-      if (extractedUrl.includes('amazon.')) {
+      if (resolvedMarketplace === 'AMAZON') {
         title = $('#productTitle').text().trim() || $('h1').first().text().trim();
         $('#feature-bullets ul li span').each((i, el) => {
           const b = $(el).text().trim();
@@ -31,12 +35,14 @@ async function learnFromListing({ url = '', rawText = '', category = 'Custom Gif
           }
         });
         description = $('#productDescription').text().trim() || $('#aplus').text().trim();
-      } else if (extractedUrl.includes('etsy.')) {
+      } else {
         title = $('h1[data-buy-box-listing-title="true"]').text().trim() || $('h1').first().text().trim();
         description = $('div[data-id="description-text"]').text().trim() || $('p[data-id="description-text"]').text().trim();
-        $('ul.wt-action-group li a').each((i, el) => {
+        $('ul.wt-action-group li a, a[href*="/search?q="]').each((i, el) => {
           const t = $(el).text().trim();
-          if (t && t.length <= 20) tags.push(t);
+          if (t && t.length >= 3 && t.length <= 20 && !tags.includes(t)) {
+            tags.push(t);
+          }
         });
       }
     } catch (fetchErr) {
@@ -53,7 +59,7 @@ async function learnFromListing({ url = '', rawText = '', category = 'Custom Gif
     
     // Extract bullets from lines with bullet symbols or dashes
     lines.forEach(l => {
-      if (/^[-•*\[]/.test(l) && l.length > 20) {
+      if (/^[-•*\[]/.test(l) && l.length > 15) {
         bullets.push(l);
       }
     });
@@ -68,32 +74,58 @@ async function learnFromListing({ url = '', rawText = '', category = 'Custom Gif
     title = `Top Selling ${category} Best Seller Sample`;
   }
 
-  // 3. Extract Structural DNA & Few-Shot Guide
-  const bulletHooks = bullets.map(b => {
-    const match = b.match(/^\[(.*?)\]/);
-    return match ? `[${match[1]}]` : '[FEATURE HOOK]';
-  });
+  // 3. Extract Marketplace Specific Structural DNA
+  let styleDna = {};
+  if (resolvedMarketplace === 'AMAZON') {
+    const bulletHooks = bullets.map(b => {
+      const match = b.match(/^\[(.*?)\]/);
+      return match ? `[${match[1]}]` : '[FEATURE HOOK]';
+    });
 
-  const styleDna = {
-    titleWordCount: title.split(/\s+/).length,
-    titleCharLength: title.length,
-    bulletHookPatterns: bulletHooks.length > 0 ? bulletHooks : ['[EMOTIONAL HOOK]', '[PREMIUM MATERIALS]', '[PERFECT FIT/SIZE]', '[GIFT READY BOX]', '[CARE INSTRUCTIONS]'],
-    hasSpanishNiche: /para|suerte|mama|regalo|esposa/i.test(title + ' ' + description),
-    recommendedTone: 'High-Converting Emotional Storytelling with Clear Specifications',
-    shippingPolicyPattern: '⚡ Handcrafted & Dispatched in 24-48 Hours from USA Workshop.'
-  };
+    styleDna = {
+      marketplace: 'AMAZON',
+      titleFrontLoadedHook: title.slice(0, 75),
+      titleCharLength: title.length,
+      bulletHookPatterns: bulletHooks.length > 0 ? bulletHooks : ['[EMOTIONAL HOOK]', '[PREMIUM MATERIALS]', '[PERFECT FIT/SIZE]', '[GIFT READY BOX]', '[CARE INSTRUCTIONS]'],
+      searchTermsRule: '240 Bytes, Space-separated generic terms, No commas, No duplicate title keywords',
+      aPlusModulesRequired: ['Hero Banner Story', 'Three Feature Highlights', 'Specifications & Unboxing'],
+      recommendedTone: 'Direct, Feature-Rich, Hook-Driven Amazon A10 Format'
+    };
+  } else {
+    // Etsy DNA
+    if (tags.length < 5) {
+      // Extract from title
+      title.split(/[,|-]/).forEach(chunk => {
+        const cleanChunk = chunk.trim().toLowerCase();
+        if (cleanChunk.length >= 3 && cleanChunk.length <= 20 && !tags.includes(cleanChunk)) {
+          tags.push(cleanChunk);
+        }
+      });
+    }
+
+    styleDna = {
+      marketplace: 'ETSY',
+      titleFormat: 'Under 140 Chars, Multi-phrase Long-tail Keywords',
+      exact13Tags: tags.slice(0, 13),
+      descriptionSections: ['✨ ITEM DETAILS', '✦ SPECIFICATIONS & SIZING', '✦ HOW TO ORDER & PERSONALIZATION', '✦ CARE INSTRUCTIONS', '✦ US WORKSHOP PROMISE'],
+      personalizationGuidance: 'Clear Buyer Instructions (Names, Dates, Custom Options)',
+      recommendedTone: 'Handmade, Artisan, Emotional Storytelling'
+    };
+  }
 
   return {
     success: true,
     url: extractedUrl || 'Raw Text Input',
-    marketplace: extractedUrl.includes('etsy.') ? 'ETSY' : marketplace,
+    marketplace: resolvedMarketplace,
     category,
     title,
     bullets: bullets.slice(0, 5),
     tags: tags.slice(0, 13),
     description: description.slice(0, 1000),
     styleDna,
-    learnedRulesSummary: `Đã học cấu trúc: Tiêu đề (${title.length} chars), ${bullets.length || 5} Bullet Hooks, và Tone văn phong thực chiến.`
+    learnedRulesSummary: resolvedMarketplace === 'AMAZON'
+      ? `Đã học DNA Amazon: Title Hook (${title.slice(0, 75)}), 5 Bullet Hooks, và A+ Content Model.`
+      : `Đã học DNA Etsy: Title (<140 chars), ${tags.length || 13} Tags chuẩn <=20 chars, và Story Structure.`
   };
 }
 

@@ -193,7 +193,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
       <EtsyMultiSellerScanner seedPhrase={seedPhrase} category={selectedCategory} onShowToast={onShowToast} />
 
       {/* Learning Box: Learn Best Seller DNA from Competitor Link / Text */}
-      <LearningBoxWidget onShowToast={onShowToast} />
+      <LearningBoxWidget platform="ETSY" onShowToast={onShowToast} />
 
       {/* Etsy Live MCP Engine + Category Selector */}
       <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: '24px' }}>

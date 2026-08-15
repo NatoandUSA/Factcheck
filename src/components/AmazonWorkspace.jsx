@@ -282,7 +282,7 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
           </h3>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
             <div style={{ background: '#f0f9ff', padding: '10px 14px', borderRadius: '8px', border: '1px solid #bae6fd' }}>
-              <strong style={{ color: '#0369a1' }}>👑 Tier 1 (Title 130-180 chars):</strong> Chứa Top 1-3 từ khóa có Search Volume cao nhất và Title Density $\le 5$.
+              <strong style={{ color: '#0369a1' }}>👑 Tier 1 (Title Tối Đa 75-80 Ký Tự - Mobile First):</strong> Front-load Top 1-2 từ khóa Golden + Brand/USP vào <strong>75 ký tự đầu tiên</strong> để không bị cắt trên App Amazon Mobile và tuân thủ thuật toán chống spam mới của Amazon.
             </div>
             <div style={{ background: '#f0f9ff', padding: '10px 14px', borderRadius: '8px', border: '1px solid #bae6fd' }}>
               <strong style={{ color: '#0369a1' }}>💎 Tier 2 (5 Bullets):</strong> Bắt đầu bằng `[IN HOA HOOK]`, phân bổ 15 từ khóa Tier 2 vào tính năng & độ bền.

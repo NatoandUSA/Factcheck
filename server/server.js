@@ -733,8 +733,8 @@ app.post('/api/trends/:id/draft', (req, res) => {
 Write a highly converting, dual-platform e-commerce listing package for a ${trend.category} product targeting these curated keywords: ${trend.trending_keywords}.
 
 STRICT PLATFORM RULES:
-1. AMAZON FBM (A10 Algorithm):
-   - "amazonTitle": 130-180 chars, Title Case, front-load top commercial phrases. Zero prohibited claims (no "best seller", "free shipping", "guarantee").
+1. AMAZON FBM (A10 Algorithm & Modern Concise Title Policy):
+   - "amazonTitle": Concise (75-80 chars max), Title Case, strictly front-load top 1-2 root Golden commercial keywords + Brand/Material. Must fit within 75 characters for zero mobile truncation and Amazon algorithm compliance. Zero prohibited claims (no "best seller", "free shipping", "guarantee", "perfect gift").
    - "amazonBullets": EXACTLY 5 bullet points (150-250 chars each). Each MUST start with a [CAPITALIZED HOOK].
    - "amazonSearchTerms": Space-separated generic terms strictly under 240 UTF-8 bytes. NO COMMAS.
    - "amazonDescription": High-converting HTML formatted product description (<p>, <ul>, <strong>).
@@ -870,7 +870,7 @@ CRITICAL RULES:
 
 The JSON block MUST contain ALL of these fields:
 {
-  "amazonTitle": "130-180 chars, keyword-dense, title case",
+  "amazonTitle": "Concise (75-80 chars max), Title Case, mobile-first front-loaded",
   "amazonBullets": ["5 bullets, each starting with [CAPITALIZED HOOK]"],
   "amazonSearchTerms": "space-separated backend keywords under 240 bytes",
   "amazonDescription": "<p>HTML formatted product description</p>",

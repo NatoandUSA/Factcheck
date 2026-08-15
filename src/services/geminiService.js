@@ -61,8 +61,8 @@ PRODUCT INPUTS:
 
 PLATFORM-SPECIFIC KEYWORD & COPYWRITING STRATEGY:
 
-1. AMAZON FBM & A10 ALGORITHM STRATEGY:
-   - "amazonTitle": 130-180 characters, Title Case. Front-load top 2-3 Golden Launch commercial keywords. Zero banned words (no "best seller", "free shipping", "guarantee", "perfect gift").
+1. AMAZON FBM & A10 ALGORITHM STRATEGY (Modern Concise Title Policy):
+   - "amazonTitle": Concise (75-80 characters max), Title Case. Strictly front-load top 1-2 Golden root keywords and core USP within the first 75 characters for zero mobile truncation and Amazon algorithm compliance. Zero banned words (no "best seller", "free shipping", "guarantee", "perfect gift").
    - "amazonBullets": EXACTLY 5 bullet points (150-250 chars each). Each MUST start with a [CAPITALIZED HOOK] focusing on: [EMOTIONAL BENEFIT], [PREMIUM MATERIALS], [EASY USAGE/FIT], [GIFT PRESENTATION BOX], [ARTISAN QUALITY CARE].
    - "amazonSearchTerms": Space-separated generic keywords strictly under 240 UTF-8 bytes total. NO COMMAS. Include relevant long-tail synonyms, use cases, and alternative search queries not in the title.
    - "amazonDescription": High-converting HTML formatted product description (<p>, <ul>, <strong>).

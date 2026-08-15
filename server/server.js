@@ -280,11 +280,12 @@ app.patch('/api/listings/:id/approve', (req, res) => {
       });
     }
 
-    db.run("UPDATE listings SET status = 'MANAGER_APPROVED' WHERE id = ?", [id], function(updateErr) {
+    db.run("UPDATE listings SET status = 'PUBLISH_READY' WHERE id = ?", [id], function(updateErr) {
       if (updateErr) return res.status(500).json({ error: updateErr.message });
-      res.json({ success: true, status: 'MANAGER_APPROVED' });
+      res.json({ success: true, status: 'PUBLISH_READY' });
     });
   });
+
 });
 
 

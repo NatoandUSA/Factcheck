@@ -32,17 +32,20 @@ export default function ListingOutputViewer({ listing, onSaveListing, onShowToas
     );
   }
 
-  const amazonValidation = validateAmazonListing(listing);
-  const etsyValidation = validateEtsyListing(listing);
-
-  const isApproved = listing.status !== 'NEEDS_QA';
+  const isBlocked = listing.status === 'IP_RISK_BLOCKED' || listing.ipVerdict === 'BLOCK';
+  const isApproved = (listing.status === 'PUBLISH_READY' || listing.status === 'MANAGER_APPROVED') && !isBlocked;
   const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER' || user?.role === 'ADMIN';
 
   const copyToClipboard = (text, keyName, label = 'Copied to clipboard!') => {
-    if (!isApproved) {
-      onShowToast('Cannot copy unapproved draft!');
+    if (isBlocked) {
+      onShowToast('🔴 BLOCKED: Cannot copy IP-flagged listing!');
       return;
     }
+    if (!isApproved) {
+      onShowToast('⚠️ Cannot copy unapproved or incomplete draft!');
+      return;
+    }
+
     navigator.clipboard.writeText(text);
     setCopiedKey(keyName);
     onShowToast(label);
@@ -189,25 +192,26 @@ export default function ListingOutputViewer({ listing, onSaveListing, onShowToas
               Opportunity Score (L0-L4)
             </div>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px', marginTop: '2px' }}>
-              <span style={{ fontSize: '1.4rem', fontWeight: 700, color: (listing.opportunityScore >= 80 || !listing.opportunityScore) ? '#16a34a' : (listing.opportunityScore >= 65) ? '#d97706' : '#dc2626' }}>
-                {listing.opportunityScore || 82}/100
+              <span style={{ fontSize: '1.4rem', fontWeight: 700, color: listing.opportunityScore ? (listing.opportunityScore >= 80 ? '#16a34a' : listing.opportunityScore >= 65 ? '#d97706' : '#dc2626') : '#64748b' }}>
+                {listing.opportunityScore ? `${listing.opportunityScore}/100` : 'N/A'}
               </span>
               <span style={{
                 padding: '2px 8px', borderRadius: '12px', fontSize: '0.7rem', fontWeight: 700,
-                background: (listing.verdict === 'GO' || !listing.verdict) ? '#dcfce7' : '#fef3c7',
-                color: (listing.verdict === 'GO' || !listing.verdict) ? '#15803d' : '#b45309'
+                background: listing.verdict === 'GO' ? '#dcfce7' : listing.verdict === 'NO_GO' ? '#fee2e2' : '#f1f5f9',
+                color: listing.verdict === 'GO' ? '#15803d' : listing.verdict === 'NO_GO' ? '#991b1b' : '#475569'
               }}>
-                {listing.verdict || 'GO'}
+                {listing.verdict || 'UNEVALUATED'}
               </span>
             </div>
           </div>
           <div style={{ fontSize: '0.7rem', color: '#475569', textAlign: 'right', display: 'flex', flexDirection: 'column', gap: '2px' }}>
-            <div>📈 Demand: <strong>{listing.metrics?.demandScore || 85}%</strong></div>
-            <div>🥊 Comp Index: <strong>{listing.metrics?.competitionIndex || 68}%</strong></div>
-            <div>🎯 SEO Score: <strong>{listing.metrics?.seoScore || 90}%</strong></div>
+            <div>📈 Demand: <strong>{listing.metrics?.demandScore ? `${listing.metrics.demandScore}%` : 'N/A'}</strong></div>
+            <div>🥊 Comp Index: <strong>{listing.metrics?.competitionIndex ? `${listing.metrics.competitionIndex}%` : 'N/A'}</strong></div>
+            <div>🎯 SEO Score: <strong>{listing.metrics?.seoScore ? `${listing.metrics.seoScore}%` : 'N/A'}</strong></div>
           </div>
         </div>
       </div>
+
 
       {!isApproved && (
         <div style={{ background: listing.status === 'IP_RISK_BLOCKED' ? '#fef2f2' : '#fffbeb', border: listing.status === 'IP_RISK_BLOCKED' ? '1px solid #fecaca' : '1px solid #fde68a', padding: '16px', borderRadius: '8px', marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>

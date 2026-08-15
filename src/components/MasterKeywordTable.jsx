@@ -110,16 +110,16 @@ export default function MasterKeywordTable({ marketplace = 'AMAZON', keywords: p
             <tbody>
               {filtered.map((item, idx) => {
                 const len = (item.keyword || '').length;
-                let tierBadge = '📦 Tier 3 (Backend)';
+                let tierBadge = item.tierBadge || '📦 Tier 3 (Backend)';
                 let tierColor = '#64748b';
                 let tierBg = '#f1f5f9';
 
                 if (isAmazon) {
-                  if (idx < 3 || len <= 75 && (item.searchVolume > 1000 || idx < 5)) {
+                  if (tierBadge.includes('Tier 1') || idx < 10) {
                     tierBadge = '👑 Tier 1 (Title Hook)';
                     tierColor = '#0369a1';
                     tierBg = '#e0f2fe';
-                  } else if (idx < 15) {
+                  } else if (tierBadge.includes('Tier 2') || idx < 35) {
                     tierBadge = '💎 Tier 2 (5 Bullets)';
                     tierColor = '#7e22ce';
                     tierBg = '#f3e8ff';
@@ -135,6 +135,7 @@ export default function MasterKeywordTable({ marketplace = 'AMAZON', keywords: p
                     tierBg = '#fef3c7';
                   }
                 }
+
 
                 const isBlocked = item.ipVerdict === 'BLOCK' || (item.ipHits && item.ipHits.length > 0 && item.ipVerdict !== 'OK');
                 const isReview = item.ipVerdict === 'REVIEW';

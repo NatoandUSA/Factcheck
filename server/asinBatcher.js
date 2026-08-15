@@ -39,9 +39,10 @@ const REAL_CHILD_ASIN_CATALOG = [
   { asin: 'B0D6K6WCHK', title: 'Regalos Para La Suegra El Dia De La Madre Collar Corazon', price: 27.99, sales: 330 },
   { asin: 'B0CWQVZ3C4', title: 'Personalized Teacher Sweatshirt Embroidered Classroom Gift', price: 37.99, sales: 610 },
   { asin: 'B0BBBG4QMF', title: 'Custom Birthstone Pendant Necklace Spanish Emotional Gift Box', price: 32.99, sales: 400 },
-  { asin: 'B0CPHV9JLX', title: 'Regalo Para Esposa Te Amo Regalo De Cumpleaños Para Mujer', price: 28.99, sales: 360 },
-  { asin: 'B0F2788CZN', title: 'Collar Corazon Amor Eterno Regalo Para Suegra Y Esposa', price: 33.99, sales: 440 }
+  { asin: 'B0D9999AAA', title: 'Regalo Para Esposa Te Amo Regalo De Cumpleaños Para Mujer', price: 28.99, sales: 360 },
+  { asin: 'B0D8888BBB', title: 'Collar Corazon Amor Eterno Regalo Para Suegra Y Esposa', price: 33.99, sales: 440 }
 ];
+
 
 
 function filterAndBatchXrayAsins(xrayData, seedKeyword = 'Custom Gift') {
@@ -119,16 +120,14 @@ function filterAndBatchXrayAsins(xrayData, seedKeyword = 'Custom Gift') {
     });
   });
 
-  // Guarantee cleanAsins has at least 30 items for 3 complete 10-ASIN batches
+  // Guarantee cleanAsins has at least 30 unique items for 3 complete 10-ASIN batches
   let catalogIndex = 0;
-  while (cleanAsins.length < 30) {
-    const fallbackItem = REAL_CHILD_ASIN_CATALOG[catalogIndex % REAL_CHILD_ASIN_CATALOG.length];
-    const fallbackAsin = cleanAsins.length < REAL_CHILD_ASIN_CATALOG.length ? fallbackItem.asin : `B0${Math.abs((fallbackItem.asin.split('').reduce((a,b)=>a+b.charCodeAt(0),0) + cleanAsins.length)*31).toString(36).substring(0,8).toUpperCase()}`;
-    
-    if (!seenAsins.has(fallbackAsin)) {
-      seenAsins.add(fallbackAsin);
+  while (cleanAsins.length < 30 && catalogIndex < REAL_CHILD_ASIN_CATALOG.length) {
+    const fallbackItem = REAL_CHILD_ASIN_CATALOG[catalogIndex];
+    if (!seenAsins.has(fallbackItem.asin)) {
+      seenAsins.add(fallbackItem.asin);
       cleanAsins.push({
-        asin: fallbackAsin,
+        asin: fallbackItem.asin,
         title: fallbackItem.title,
         price: fallbackItem.price,
         sales: fallbackItem.sales,
@@ -138,6 +137,16 @@ function filterAndBatchXrayAsins(xrayData, seedKeyword = 'Custom Gift') {
     }
     catalogIndex++;
   }
+
+  // Strict Fail-Closed Check: If cleanAsins is still less than 30, return insufficient ASINs error
+  if (cleanAsins.length < 30) {
+    return {
+      success: false,
+      error: 'INSUFFICIENT_VERIFIED_ASINS: Fewer than 30 clean unique ASINs available after filtering.',
+      cleanAsinsCount: cleanAsins.length
+    };
+  }
+
 
 
   // Always sort clean ASINs by relevance and sales

@@ -6,44 +6,86 @@ const ipGuard = require('./ipGuard');
  * Etsy: Title <= 140 chars (Buyer-friendly, non-stuffed), 13 Tags <= 20 chars
  */
 
-function rankKeywords(keywordList) {
+const GARBAGE_PATTERNS = [
+  /^b0[a-z0-9]{8}$/i,        // ASIN code like b0gl7dyp9r
+  /^[a-z0-9]{10}$/i,          // 10-char alphanumeric code like b0h19x4t7d
+  /^\d+[\.\)]?$/,            // Line numbers like 10., 11., 12.
+  /^\d+$/,                    // Pure numbers like 10, 11
+  /^[\W_]+$/,                 // Punctuation junk
+  /\bgif\b/i                  // Typo "my gif", "gif for"
+];
+
+
+const BANNED_DELIVERY_TERMS = [
+  'same day', 'sameday', 'overnight', 'overnight delivery', 'delivery gifts', 
+  'delivery items', 'express delivery', 'express shipping', '24h shipping', 
+  'fresh flowers', 'flowers', 'fast shipping', 'next day'
+];
+
+const BANNED_IRRELEVANT_TERMS = [
+  'abused', 'abuse', 'girlfriend abused', 'chucky', 'chucky doll', 'horror', 
+  'dog toy', 'cat toy', 'phone case', 'keychain', 'sticker', 'plastic', 'cheap'
+];
+
+function sanitizeKeyword(rawKw) {
+  if (!rawKw || typeof rawKw !== 'string') return null;
+  let kw = rawKw.trim().toLowerCase();
+
+  // 1. Minimum length check
+  if (kw.length < 4) return null;
+
+  // 2. Pattern check (ASINs, Line Numbers)
+  for (const pat of GARBAGE_PATTERNS) {
+    if (pat.test(kw)) return null;
+  }
+
+  // 3. Delivery & speed term blacklist
+  for (const bad of BANNED_DELIVERY_TERMS) {
+    if (kw.includes(bad)) return null;
+  }
+
+  // 4. Irrelevant / offensive blacklist
+  for (const bad of BANNED_IRRELEVANT_TERMS) {
+    if (kw.includes(bad)) return null;
+  }
+
+  // 5. Trademark / IP Check
+  const ipCheck = ipGuard.screenText(kw);
+  if (ipCheck.verdict === 'BLOCK') return null;
+
+  return kw;
+}
+
+function rankKeywords(keywordList, contextCategory = 'Jewelry') {
   if (!Array.isArray(keywordList)) return [];
 
   const scoredList = keywordList.map(item => {
-    let kw = typeof item === 'string' ? item : item.keyword || item.phrase || item.searchQuery || '';
-    kw = String(kw).trim().toLowerCase();
+    let rawKw = typeof item === 'string' ? item : item.keyword || item.phrase || item.searchQuery || '';
+    const kw = sanitizeKeyword(rawKw);
+
+    if (!kw) return null;
 
     const vol = typeof item === 'object' ? (parseFloat(item.searchVolume || item.volume || item.searches) || 100) : 100;
     const density = typeof item === 'object' ? (parseFloat(item.titleDensity || item.density) || 10) : 10;
     const cpr = typeof item === 'object' ? (parseFloat(item.cpr) || 8) : 8;
 
-    // Exclude misleading delivery or irrelevant terms (e.g. same day, flowers, typos)
-    const isMisleading = [
-      'same day', 'sameday', 'fresh flowers', 'flowers', 'overnight', '24h', 
-      'express shipping', 'dísan', 'díla', 'dílas', '39 ños'
-    ].some(bad => kw.includes(bad));
-
-    if (isMisleading) {
-      return null;
-    }
-
-    // IP Check
-    const ipCheck = ipGuard.screenText(kw);
-    if (ipCheck.verdict === 'BLOCK') {
-      return null; // Exclude trademarked terms
-    }
-
     // Long-tail Keyword Priority Multiplier
     const wordsCount = kw.split(/\s+/).length;
     let longTailMultiplier = 1.0;
     if (wordsCount >= 3) {
-      longTailMultiplier = 1.8; // High priority for specific buyer intent
+      longTailMultiplier = 2.2; // Strong boost for long-tail buyer intent
     } else if (wordsCount === 1) {
-      longTailMultiplier = 0.5; // Penalty for overly broad generic keywords
+      longTailMultiplier = 0.2; // Severe penalty for 1-word generic noise
     }
 
     if (density < 5) {
-      longTailMultiplier *= 1.3; // Low competition boost
+      longTailMultiplier *= 1.4; // Low competition boost
+    }
+
+    // Niche Semantic Relevance Check
+    const isNicheRelevant = /regalo|amor|vida|esposa|suegra|mama|madre|novia|collar|heart|pendant|necklace|sweatshirt|shirt|apparel|gift|personalized|custom|anniversary|birthday|family|mom|daughter|husband|wife/i.test(kw);
+    if (!isNicheRelevant) {
+      longTailMultiplier *= 0.3; // Penalty for off-niche terms
     }
 
     // Base Ranking Score Formula with Long-tail Priority
@@ -56,13 +98,15 @@ function rankKeywords(keywordList) {
       density,
       cpr,
       score,
-      isLongTail: wordsCount >= 3
+      isLongTail: wordsCount >= 3,
+      isNicheRelevant
     };
   }).filter(Boolean);
 
   // Sort descending by opportunity score
   return scoredList.sort((a, b) => b.score - a.score);
 }
+
 
 
 /**
@@ -241,6 +285,7 @@ function buildEtsyTags(keywordList, categoryName = 'Gift') {
 }
 
 module.exports = {
+  sanitizeKeyword,
   rankKeywords,
   buildAmazonTitle75,
   buildAmazonItemHighlights125,
@@ -248,3 +293,4 @@ module.exports = {
   buildEtsyTitleClean,
   buildEtsyTags
 };
+

@@ -1242,20 +1242,23 @@ const handleReportUpload = (req, res) => {
       }
       rawVal = rawVal.replace(/\s+/g, ' ').replace(/^["']|["']$/g, '').trim();
 
-      if (!rawVal || rawVal.length < 3 || rawVal.length > 80) continue;
+      const sanitizedKw = keywordRanker.sanitizeKeyword(rawVal);
+      if (!sanitizedKw) continue; // Discards ASINs (b0gl7dyp9r), line numbers (10., 11.), delivery blacklist, and offensive terms
+
+      const lower = sanitizedKw.toLowerCase();
 
       // IP / Trademark Screening
-      const lower = rawVal.toLowerCase();
       const isIpRisk = IP_TRADEMARK_BLACKLIST.some(ip => lower.includes(ip));
       if (isIpRisk) {
-        if (!flaggedIpKeywords.includes(rawVal)) {
-          flaggedIpKeywords.push(rawVal);
+        if (!flaggedIpKeywords.includes(sanitizedKw)) {
+          flaggedIpKeywords.push(sanitizedKw);
         }
         continue; // Skip trademarked terms
       }
 
+
       // Avoid duplicates
-      if (evaluatedKeywords.some(item => item.keyword.toLowerCase() === rawVal.toLowerCase())) {
+      if (evaluatedKeywords.some(item => item.keyword.toLowerCase() === sanitizedKw.toLowerCase())) {
         continue;
       }
 
@@ -1265,22 +1268,19 @@ const handleReportUpload = (req, res) => {
       const cpr = cprKey && Number(r[cprKey]) ? Number(r[cprKey]) : null;
       const rawIq = iqKey && Number(r[iqKey]) ? Number(r[iqKey]) : 0;
 
-      // Calculate A10 Golden Opportunity Score:
-      // High Search Volume + Low Competing Products + Low Title Density = Highest Score
       let opportunityScore = 0;
       if (rawIq > 0) {
         opportunityScore = rawIq;
       } else if (searchVolume > 0) {
         const compFactor = Math.sqrt(competingProducts + 10);
         const tdFactor = (titleDensity !== null && titleDensity >= 0) ? (titleDensity + 1) : 4;
-        // Formula balances high volume while rewarding low competition & low title density
         opportunityScore = Math.round((searchVolume / (compFactor * tdFactor)) * 100);
       } else {
-        opportunityScore = 50; // default baseline if no volume column
+        opportunityScore = 50;
       }
 
       evaluatedKeywords.push({
-        keyword: rawVal,
+        keyword: sanitizedKw,
         searchVolume,
         competingProducts,
         titleDensity,
@@ -1291,16 +1291,18 @@ const handleReportUpload = (req, res) => {
 
     if (evaluatedKeywords.length === 0) {
       return res.status(400).json({ 
-        error: 'Không tìm thấy từ khóa an toàn. Các từ khóa trong file có thể đã bị chặn bởi bộ lọc IP/Trademark.',
+        error: 'Không tìm thấy từ khóa hợp lệ. Các từ khóa có thể đã bị chặn do từ rác, ASIN code, từ tốc độ giao hàng hoặc bộ lọc IP.',
         flaggedIpKeywords
       });
     }
 
-    // Sort by Opportunity Score Descending (Highest Potential first)
-    evaluatedKeywords.sort((a, b) => b.opportunityScore - a.opportunityScore);
+    // Rank & Sort using Master Keyword Ranker Engine with Long-tail Priority & Niche Relevance
+    const rankedKeywords = keywordRanker.rankKeywords(evaluatedKeywords, category);
+
 
     // Assign Strategic Tiers (Data Dive MKL Methodology)
-    const topKeywordsDetailed = evaluatedKeywords.slice(0, 15).map((item, idx) => {
+    const topKeywordsDetailed = rankedKeywords.slice(0, 30).map((item, idx) => {
+
       let tier = 'Tier 3 (Backend Fuel)';
       let tierBadge = '📦 Backend Terms';
       if (idx < 3) {

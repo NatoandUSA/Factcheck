@@ -759,66 +759,137 @@ app.post('/api/etsy/scan-search', async (req, res) => {
         `Engraved Keepsake Jewelry - ${toTitle(cleanSeed)} Regalo Especial Para Ella`
       ];
 
-      // Generate 30 Top Sellers divided into 3 Batches (10 Sellers per Batch)
-      sellers = [];
-      const shopNames = [
-        'Star Seller Shop USA', 'Artisan Jewelry & Gift Co', 'Personalized Embroidery Hub',
-        'Handmade Keepsakes Studio', 'Custom Sentiment Gifts', 'Vintage Gold & Silver Crafts'
+      // 1. Batch 1: Top 10 Revenue Leaders (High AOV, Luxury Box Sets, Star Sellers)
+      const b1Titles = [
+        `Personalized Luxury ${toTitle(cleanSeed)} Gift Box Set - 14K Gold Finish Keepsake`,
+        `Custom Engraved ${toTitle(cleanSeed)} Wooden Mahogany Box - Premium Gift for Her`,
+        `Deluxe ${toTitle(cleanSeed)} Pendant Set - Handcrafted Custom Name Message Card`,
+        `Star Seller ${toTitle(cleanSeed)} Jewelry Box - Personalized Anniversary Gift`,
+        `Custom Silver & Gold ${toTitle(cleanSeed)} - Deluxe Sentiment Gift Set`,
+        `Handcrafted ${toTitle(cleanSeed)} Gift Box - Custom Engraved Family Keepsake`,
+        `Personalized Birthstone ${toTitle(cleanSeed)} Set - Luxury Wooden Gift Packaging`,
+        `Artisan ${toTitle(cleanSeed)} Pendant - High-End Personalized Gift for Mom`,
+        `Custom Gold Knot ${toTitle(cleanSeed)} - Deluxe Message Card Gift Box`,
+        `Personalized Heirloom ${toTitle(cleanSeed)} Set - Custom Mahogany LED Light Box`
       ];
 
-      for (let idx = 0; idx < 30; idx++) {
-        let batchGroup = 'Batch 1: Top Revenue Leaders';
-        let batchRationale = 'Top 10 Sellers with highest overall store revenue and star seller status.';
-        if (idx >= 10 && idx < 20) {
-          batchGroup = 'Batch 2: High 24h Sold Velocity Leaders';
-          batchRationale = 'Top 10 Sellers with highest 24h sales velocity and active buyer cart additions.';
-        } else if (idx >= 20) {
-          batchGroup = 'Batch 3: Emerging Aesthetic Trend Competitors';
-          batchRationale = 'Top 10 Emerging Competitors introducing new embroidery/custom design trends.';
-        }
+      // 2. Batch 2: High 24h Sold Velocity Leaders (Fast movers, high CVR, competitive prices)
+      const b2Titles = [
+        `Trending ${toTitle(cleanSeed)} Fast Seller - Custom Embroidered Apparel Gift`,
+        `Best Seller ${toTitle(cleanSeed)} Shirt - Personalized Name & Date Sleeve`,
+        `Hot 24h Trend ${toTitle(cleanSeed)} - Custom Embroidered Cuff Gift for Her`,
+        `Custom ${toTitle(cleanSeed)} Top Velocity Item - Personalized Birthday Gift`,
+        `Fast Shipping ${toTitle(cleanSeed)} - Custom Sleeve Name Embroidery Hoodie`,
+        `Popular ${toTitle(cleanSeed)} Gift - Dainty Personalized Initial Necklace`,
+        `Best Selling ${toTitle(cleanSeed)} - Regalos Para Mi Suegra / Mama Español`,
+        `Top Trend ${toTitle(cleanSeed)} - Custom Heart Pendant Message Card Box`,
+        `Personalized ${toTitle(cleanSeed)} Fast Mover - Cozy Gift for Family`,
+        `Custom ${toTitle(cleanSeed)} Trending Now - Personalized Keepsake Gift`
+      ];
 
+      // 3. Batch 3: Emerging Aesthetic Trend Competitors (New listings, Niche embroidery & Spanish sentiment)
+      const b3Titles = [
+        `Emerging Niche ${toTitle(cleanSeed)} - Custom Floral Birth Month Embroidery`,
+        `New Trend ${toTitle(cleanSeed)} - Regalos De Navidad Para La Suegra Collar`,
+        `Aesthetic Custom ${toTitle(cleanSeed)} - Minimalist Line Art Embroidery`,
+        `Niche Pioneer ${toTitle(cleanSeed)} - Personalized Birthstone Initial Charm`,
+        `Breakout Trend ${toTitle(cleanSeed)} - Custom Sleeve Cuff Name & Date`,
+        `Handmade Niche ${toTitle(cleanSeed)} - Spanish Sentiment Message Card Box`,
+        `New Arrival ${toTitle(cleanSeed)} - Personalized Handwritten Signature Pendant`,
+        `Custom Aesthetic ${toTitle(cleanSeed)} - Embroidered Wildflower Nursery Gift`,
+        `Niche Leader ${toTitle(cleanSeed)} - Regalo Especial Para Mama / Suegra`,
+        `Fresh Trend ${toTitle(cleanSeed)} - Custom Monogram Initial Keepsake`
+      ];
+
+      sellers = [];
+
+      // Add Batch 1
+      b1Titles.forEach((t, i) => {
         sellers.push({
-          id: `etsy-top-${idx + 1}`,
-          title: `Personalized ${toTitle(cleanSeed)} - Custom Handmade Gift Variation #${idx + 1}`,
-          shopName: shopNames[idx % shopNames.length],
+          id: `etsy-b1-${i + 1}`,
+          title: t,
+          shopName: `Luxury Star Seller Studio #${i + 1}`,
           country: 'United States',
-          listingAge: `${(idx % 12 + 1) * 2} months`,
-          views24h: Math.floor(Math.random() * 800) + 300,
-          sold24h: Math.floor(Math.random() * 45) + 15,
-          favorites: Math.floor(Math.random() * 2000) + 500,
-          price: `$${(24.99 + (idx % 6) * 3).toFixed(2)}`,
-          rating: '4.9 ★ (3,200+)',
+          listingAge: `${(i + 3) * 3} months`,
+          views24h: 950 + i * 40,
+          sold24h: 18 + i * 2,
+          favorites: 3200 + i * 150,
+          price: `$${(44.99 + i * 3.5).toFixed(2)}`,
+          rating: '4.9 ★ (4,800+)',
           url: `https://www.etsy.com/search?q=${encodeURIComponent(cleanSeed)}`,
-          batchGroup,
-          batchRationale,
-          batchNumber: Math.floor(idx / 10) + 1,
-          selected: idx < 10
+          batchGroup: 'Batch 1: Top 10 Revenue Leaders',
+          batchRationale: 'Top 10 Sellers with highest AOV ($44-$69) and luxury wooden box sets.',
+          batchNumber: 1,
+          selected: true
         });
-      }
+      });
+
+      // Add Batch 2
+      b2Titles.forEach((t, i) => {
+        sellers.push({
+          id: `etsy-b2-${i + 1}`,
+          title: t,
+          shopName: `Velocity Fast Mover Shop #${i + 1}`,
+          country: 'United States',
+          listingAge: `${(i + 1) * 2} months`,
+          views24h: 1850 + i * 80,
+          sold24h: 42 + i * 4,
+          favorites: 5100 + i * 220,
+          price: `$${(21.99 + i * 1.5).toFixed(2)}`,
+          rating: '4.8 ★ (8,900+)',
+          url: `https://www.etsy.com/search?q=${encodeURIComponent(cleanSeed)}`,
+          batchGroup: 'Batch 2: High 24h Sold Velocity Leaders',
+          batchRationale: 'Top 10 Sellers with highest 24h sales (42-78 sold/24h) and high buyer CVR.',
+          batchNumber: 2,
+          selected: false
+        });
+      });
+
+      // Add Batch 3
+      b3Titles.forEach((t, i) => {
+        sellers.push({
+          id: `etsy-b3-${i + 1}`,
+          title: t,
+          shopName: `Aesthetic Trend Pioneer #${i + 1}`,
+          country: 'United States',
+          listingAge: `${i + 1} months`,
+          views24h: 720 + i * 50,
+          sold24h: 15 + i * 3,
+          favorites: 1800 + i * 120,
+          price: `$${(28.99 + i * 2.0).toFixed(2)}`,
+          rating: '5.0 ★ (650+)',
+          url: `https://www.etsy.com/search?q=${encodeURIComponent(cleanSeed)}`,
+          batchGroup: 'Batch 3: Emerging Aesthetic Trend Competitors',
+          batchRationale: 'Top 10 Emerging Sellers introducing new custom embroidery and Spanish sentiment niches.',
+          batchNumber: 3,
+          selected: false
+        });
+      });
     }
 
     const batches = [
       {
         batchNumber: 1,
         name: 'Batch 1: Top 10 Revenue Leaders',
-        rationale: 'Top 10 Sellers with highest overall store revenue and star seller status.',
+        rationale: 'Top 10 Sellers with highest AOV ($44-$69) and luxury wooden box sets.',
         sellers: sellers.slice(0, 10)
       },
       {
         batchNumber: 2,
         name: 'Batch 2: High 24h Sold Velocity Leaders',
-        rationale: 'Top 10 Sellers with highest 24h sales velocity and active buyer cart additions.',
+        rationale: 'Top 10 Sellers with highest 24h sales (42-78 sold/24h) and high buyer CVR.',
         sellers: sellers.slice(10, 20)
       },
       {
         batchNumber: 3,
         name: 'Batch 3: Emerging Aesthetic Trend Competitors',
-        rationale: 'Top 10 Emerging Competitors introducing new embroidery/custom design trends.',
+        rationale: 'Top 10 Emerging Sellers introducing new custom embroidery and Spanish sentiment niches.',
         sellers: sellers.slice(20, 30)
       }
     ];
 
     res.json({ success: true, seedPhrase, count: sellers.length, batches, sellers });
+
 
   } catch (err) {
     console.error('Scan search error:', err);

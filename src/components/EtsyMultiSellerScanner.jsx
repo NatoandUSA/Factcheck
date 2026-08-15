@@ -11,6 +11,8 @@ export default function EtsyMultiSellerScanner({ seedPhrase, category, onShowToa
   const [learning, setLearning] = useState(false);
   const [synthesizedResult, setSynthesizedResult] = useState(null);
   const [searchUrl, setSearchUrl] = useState('');
+  const [activeBatchTab, setActiveBatchTab] = useState(1);
+
 
   const scanSellers = async () => {
     setLoading(true);
@@ -106,45 +108,58 @@ export default function EtsyMultiSellerScanner({ seedPhrase, category, onShowToa
             <RefreshCw size={14} className={loading ? 'spinner' : ''} />
             <span>{loading ? 'Đang quét...' : 'Quét Lại Search Page'}</span>
           </button>
-
-          <button 
-            onClick={selectAllTop10}
-            className="btn btn-secondary btn-sm"
-            style={{ fontWeight: 600 }}
-          >
-            Chọn Top 10 Batch 1
-          </button>
         </div>
       </div>
 
       {/* 30 Sellers 3-Batch Filter Header */}
-      <div style={{ background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: '10px', padding: '10px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
-        <div style={{ fontSize: '0.85rem', fontWeight: 700, color: '#c2410c', display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <Award size={16} />
-          <span>Quét 30 Top Sellers (Chia 3 Batch x 10 Sellers):</span>
+      <div style={{ background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: '10px', padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+          <div style={{ fontSize: '0.875rem', fontWeight: 700, color: '#c2410c', display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <Award size={16} />
+            <span>Quét 30 Top Sellers (Chia 3 Batch x 10 Sellers với Tiêu chí Độc bản):</span>
+          </div>
+          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+            <button
+              onClick={() => {
+                setActiveBatchTab(1);
+                setSellers(prev => prev.map(s => ({ ...s, selected: (s.batchNumber || 1) === 1 })));
+              }}
+              style={{ padding: '6px 12px', borderRadius: '8px', fontSize: '0.75rem', fontWeight: 700, border: '1px solid', borderColor: activeBatchTab === 1 ? '#ea580c' : '#fdba74', background: activeBatchTab === 1 ? '#ea580c' : '#ffedd5', color: activeBatchTab === 1 ? '#fff' : '#9a3412', cursor: 'pointer' }}
+            >
+              👑 Batch 1: Revenue Leaders (Top 10 AOV $44-$69)
+            </button>
+            <button
+              onClick={() => {
+                setActiveBatchTab(2);
+                setSellers(prev => prev.map(s => ({ ...s, selected: (s.batchNumber || 1) === 2 })));
+              }}
+              style={{ padding: '6px 12px', borderRadius: '8px', fontSize: '0.75rem', fontWeight: 700, border: '1px solid', borderColor: activeBatchTab === 2 ? '#ea580c' : '#fdba74', background: activeBatchTab === 2 ? '#ea580c' : '#ffedd5', color: activeBatchTab === 2 ? '#fff' : '#9a3412', cursor: 'pointer' }}
+            >
+              🚀 Batch 2: Sold Velocity (Top 10 Sellers 42-78 sold/24h)
+            </button>
+            <button
+              onClick={() => {
+                setActiveBatchTab(3);
+                setSellers(prev => prev.map(s => ({ ...s, selected: (s.batchNumber || 1) === 3 })));
+              }}
+              style={{ padding: '6px 12px', borderRadius: '8px', fontSize: '0.75rem', fontWeight: 700, border: '1px solid', borderColor: activeBatchTab === 3 ? '#ea580c' : '#fdba74', background: activeBatchTab === 3 ? '#ea580c' : '#ffedd5', color: activeBatchTab === 3 ? '#fff' : '#9a3412', cursor: 'pointer' }}
+            >
+              ✨ Batch 3: Emerging Trends (Top 10 Thêu & Spanish Niche)
+            </button>
+          </div>
         </div>
-        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-          <button
-            onClick={() => setSellers(prev => prev.map((s, i) => ({ ...s, selected: i < 10 })))}
-            style={{ padding: '4px 10px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: 600, border: '1px solid #fdba74', background: '#ffedd5', color: '#9a3412', cursor: 'pointer' }}
-          >
-            Batch 1: Revenue Leaders (10 Sellers)
-          </button>
-          <button
-            onClick={() => setSellers(prev => prev.map((s, i) => ({ ...s, selected: i >= 10 && i < 20 })))}
-            style={{ padding: '4px 10px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: 600, border: '1px solid #fdba74', background: '#ffedd5', color: '#9a3412', cursor: 'pointer' }}
-          >
-            Batch 2: Sold Velocity (10 Sellers)
-          </button>
-          <button
-            onClick={() => setSellers(prev => prev.map((s, i) => ({ ...s, selected: i >= 20 })))}
-            style={{ padding: '4px 10px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: 600, border: '1px solid #fdba74', background: '#ffedd5', color: '#9a3412', cursor: 'pointer' }}
-          >
-            Batch 3: Emerging Trends (10 Sellers)
-          </button>
+
+        {/* Batch Rationale & Strategy Banner */}
+        <div style={{ background: '#ffffff', border: '1px solid #ffedd5', padding: '10px 14px', borderRadius: '8px', fontSize: '0.8rem', color: '#7c2d12' }}>
+          💡 <strong>Chiến lược {activeBatchTab === 1 ? 'Batch 1: Revenue Leaders' : activeBatchTab === 2 ? 'Batch 2: High 24h Sold Velocity Leaders' : 'Batch 3: Emerging Aesthetic Trend Competitors'}:</strong>{' '}
+          {activeBatchTab === 1 
+            ? 'Top 10 Sellers có doanh thu và giá bán trung bình (AOV $44 - $69) cao nhất ngách. Học cách viết Title & Tags thu hút khách chịu chi.'
+            : activeBatchTab === 2
+            ? 'Top 10 Sellers có tốc độ chốt đơn nhanh nhất (42 - 78 sold/24h). Học cách giật Title & Tags tạo cảm giác khẩn cấp (FOMO).'
+            : 'Top 10 Sellers mới bùng nổ xu hướng thêu cổ tay / cá nhân hóa / tiếng Tây Ban Nha. Học từ khóa ngách mới chớm bùng nổ.'
+          }
         </div>
       </div>
-
 
       {/* Sellers Table */}
       <div style={{ overflowX: 'auto', borderRadius: '10px', border: '1px solid var(--border-color, #fed7aa)' }}>
@@ -162,7 +177,7 @@ export default function EtsyMultiSellerScanner({ seedPhrase, category, onShowToa
             </tr>
           </thead>
           <tbody>
-            {sellers.map((s, idx) => (
+            {sellers.filter(s => (s.batchNumber || 1) === activeBatchTab).map((s, idx) => (
               <tr 
                 key={s.id} 
                 onClick={() => toggleSeller(s.id)}

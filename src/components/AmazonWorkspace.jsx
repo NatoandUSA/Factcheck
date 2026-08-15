@@ -1,110 +1,16 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
-  FileSpreadsheet, UploadCloud, CheckCircle2, AlertCircle, Zap, 
-  Sparkles, Layers, ShieldCheck, Database, RefreshCw, ArrowRight
+  FileSpreadsheet, Zap, ShieldCheck, Database, RefreshCw
 } from 'lucide-react';
 import GoogleTrendsWidget from './GoogleTrendsWidget';
-import AsinBatcherWidget from './AsinBatcherWidget';
 import LearningBoxWidget from './LearningBoxWidget';
-import MasterKeywordTable from './MasterKeywordTable';
+import AmazonPipelineWorkflow from './AmazonPipelineWorkflow';
 import UnifiedIpGateModal from './UnifiedIpGateModal';
 
 export default function AmazonWorkspace({ onSelectListing, onApproveListing, onShowToast }) {
   const [seedPhrase, setSeedPhrase] = useState('mom sweatshirt');
   const [selectedCategory, setSelectedCategory] = useState('Apparel: Sweatshirt');
-  const [uploading, setUploading] = useState(false);
-  const [uploadStatus, setUploadStatus] = useState(null);
-  const [draftingTrendId, setDraftingTrendId] = useState(null);
   const [isIpModalOpen, setIsIpModalOpen] = useState(false);
-  const [isDragging, setIsDragging] = useState(false);
-  const [trends, setTrends] = useState([]);
-  const [summaryStats, setSummaryStats] = useState(null);
-  const fileInputRef = useRef(null);
-
-  const fetchData = async () => {
-    try {
-      const summaryRes = await fetch('http://localhost:3001/api/analytics-summary');
-      if (summaryRes.ok) {
-        const sum = await summaryRes.json();
-        setSummaryStats(sum);
-      }
-      const trendsRes = await fetch('http://localhost:3001/api/trends');
-      if (trendsRes.ok) {
-        const tr = await trendsRes.json();
-        setTrends(tr.filter(t => t.source !== 'ETSY_MCP_LIVE'));
-      }
-    } catch (e) {
-      console.warn('Failed to fetch Amazon workspace data', e);
-    }
-  };
-
-  useEffect(() => {
-    fetchData();
-  }, []);
-
-  const handleFileUpload = async (file) => {
-    if (!file) return;
-    setUploading(true);
-    setUploadStatus(null);
-    const formData = new FormData();
-    formData.append('reportFile', file);
-    formData.append('file', file);
-    formData.append('category', selectedCategory);
-
-    try {
-      const res = await fetch('http://localhost:3001/api/upload-h10', {
-        method: 'POST',
-        body: formData
-      });
-      const text = await res.text();
-      let result;
-      try {
-        result = JSON.parse(text);
-      } catch (parseErr) {
-        throw new Error(`Lỗi kết nối máy chủ (${res.status}): Vui lòng kiểm tra backend server.`);
-      }
-
-      if (!res.ok) throw new Error(result.error || 'Upload failed');
-
-      setUploadStatus({
-        type: 'success',
-        trendId: result.trendId,
-        message: `Đã nạp thành công ${result.totalRows} dòng từ "${result.fileName}"! Đã tính điểm A10 Opportunity Score.`,
-        topKeywordsDetailed: result.topKeywordsDetailed || [],
-        flaggedIpKeywords: result.flaggedIpKeywords || [],
-        category: result.category
-      });
-      if (onShowToast) onShowToast(`✓ Đã nạp thành công dữ liệu Amazon H10!`);
-      fetchData();
-    } catch (err) {
-      setUploadStatus({ type: 'error', message: err.message });
-      if (onShowToast) onShowToast(`Lỗi nạp file: ${err.message}`);
-    } finally {
-      setUploading(false);
-    }
-  };
-
-  const handleManualDraft = async (trendId) => {
-    setDraftingTrendId(trendId);
-    try {
-      const res = await fetch(`http://localhost:3001/api/trends/${trendId}/draft`, {
-        method: 'POST'
-      });
-      const result = await res.json();
-      if (!res.ok) throw new Error(result.error || 'Drafting failed');
-
-      if (onShowToast) onShowToast('✅ Đã tạo Amazon Listing & A+ Content thành công!');
-      fetchData();
-
-      if (onSelectListing && result.listing) {
-        onSelectListing(result.listing);
-      }
-    } catch (err) {
-      if (onShowToast) onShowToast(`Lỗi tạo listing: ${err.message}`);
-    } finally {
-      setDraftingTrendId(null);
-    }
-  };
 
   return (
     <div style={{ maxWidth: '1440px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '24px' }}>
@@ -148,25 +54,47 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
           </div>
         </div>
 
-        <button
-          onClick={() => setIsIpModalOpen(true)}
-          style={{
-            background: '#fee2e2',
-            border: '1px solid #fca5a5',
-            color: '#991b1b',
-            padding: '10px 18px',
-            borderRadius: '10px',
-            fontWeight: 700,
-            fontSize: '0.85rem',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            cursor: 'pointer'
-          }}
-        >
-          <ShieldCheck size={18} color="#dc2626" />
-          <span>🛡️ Cổng Bảo Vệ IP Gate (2-in-1)</span>
-        </button>
+        {/* Category Selector & IP Gate Button */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-secondary)' }}>Danh Mục Sản Phẩm:</span>
+            <select 
+              value={selectedCategory} 
+              onChange={(e) => setSelectedCategory(e.target.value)}
+              style={{ padding: '8px 14px', borderRadius: '8px', border: '1px solid #bae6fd', background: 'var(--bg-primary)', fontWeight: 700, fontSize: '0.85rem' }}
+            >
+              <option value="Apparel: Sweatshirt">🧥 Apparel: Sweatshirt</option>
+              <option value="Apparel: Shirt">👕 Apparel: Shirt</option>
+              <option value="Apparel: Hoodie">🧥 Apparel: Hoodie</option>
+              <option value="Mug">☕ Mug (Cốc/Ly)</option>
+              <option value="Blanket">🛋️ Blanket (Chăn/Mền)</option>
+              <option value="Jewelry">✨ Custom Jewelry</option>
+              <option value="Embroidery">🧵 Custom Embroidery</option>
+              <option value="Acrylic">💡 Custom Acrylic</option>
+            </select>
+          </div>
+
+          <button
+            onClick={() => setIsIpModalOpen(true)}
+            style={{
+              background: '#fee2e2',
+              border: '1px solid #fca5a5',
+              color: '#991b1b',
+              padding: '10px 18px',
+              borderRadius: '10px',
+              fontWeight: 700,
+              fontSize: '0.85rem',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              cursor: 'pointer',
+              marginTop: '16px'
+            }}
+          >
+            <ShieldCheck size={18} color="#dc2626" />
+            <span>🛡️ Cổng Bảo Vệ IP Gate (2-in-1)</span>
+          </button>
+        </div>
       </div>
 
       {/* Google Trends Cross-Check (Anchored on Amazon Seed Phrase) */}
@@ -175,176 +103,15 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
       {/* Learning Box: Learn Best Seller DNA from Competitor Link / Text */}
       <LearningBoxWidget onShowToast={onShowToast} />
 
-      {/* Amazon A10 Ingestion Engine Grid */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: '24px' }}>
-        
-        {/* Helium 10 Cerebro/Magnet Dropzone */}
-        <div className="studio-panel" style={{ padding: '28px', display: 'flex', flexDirection: 'column', gap: '18px', borderLeft: '4px solid #0284c7' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
-            <div>
-              <h2 style={{ fontSize: '1.25rem', display: 'flex', alignItems: 'center', gap: '8px', margin: 0, color: '#0369a1' }}>
-                <FileSpreadsheet size={22} style={{ color: '#0284c7' }} />
-                Bước 1: Nạp Báo Cáo Helium 10 Cerebro / Magnet
-              </h2>
-              <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', margin: '4px 0 0 0' }}>
-                Thả file `.xlsx` / `.csv` xuất từ Helium 10 để bóc tách từ khóa và tính điểm A10.
-              </p>
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Danh mục:</span>
-              <select 
-                value={selectedCategory} 
-                onChange={(e) => setSelectedCategory(e.target.value)}
-                style={{ padding: '6px 12px', borderRadius: '8px', border: '1px solid var(--border-subtle)', background: 'var(--bg-primary)', fontWeight: 600, fontSize: '0.85rem' }}
-              >
-                <option value="Apparel: Sweatshirt">🧥 Apparel: Sweatshirt</option>
-                <option value="Apparel: Shirt">👕 Apparel: Shirt</option>
-                <option value="Apparel: Hoodie">🧥 Apparel: Hoodie</option>
-                <option value="Mug">☕ Mug (Cốc/Ly)</option>
-                <option value="Blanket">🛋️ Blanket (Chăn/Mền)</option>
-                <option value="Jewelry">✨ Custom Jewelry</option>
-                <option value="Embroidery">🧵 Custom Embroidery</option>
-                <option value="Acrylic">💡 Custom Acrylic</option>
-              </select>
-            </div>
-          </div>
-
-          <div 
-            onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
-            onDragLeave={() => setIsDragging(false)}
-            onDrop={(e) => {
-              e.preventDefault();
-              setIsDragging(false);
-              if (e.dataTransfer.files && e.dataTransfer.files[0]) handleFileUpload(e.dataTransfer.files[0]);
-            }}
-            onClick={() => fileInputRef.current?.click()}
-            style={{
-              border: `2px dashed ${isDragging ? '#0284c7' : 'var(--border-strong)'}`,
-              background: isDragging ? '#e0f2fe' : 'var(--bg-subtle)',
-              borderRadius: '14px',
-              padding: '36px 20px',
-              textAlign: 'center',
-              cursor: 'pointer',
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              gap: '12px'
-            }}
-          >
-            <input 
-              type="file" 
-              ref={fileInputRef} 
-              style={{ display: 'none' }} 
-              accept=".xlsx,.xls,.csv"
-              onChange={(e) => {
-                if (e.target.files && e.target.files[0]) handleFileUpload(e.target.files[0]);
-              }}
-            />
-            <div style={{ background: '#fff', padding: '16px', borderRadius: '50%', color: '#0284c7', boxShadow: 'var(--shadow-md)' }}>
-              <UploadCloud size={32} />
-            </div>
-            <div>
-              <div style={{ fontWeight: 700, fontSize: '1rem', color: 'var(--text-primary)' }}>
-                {uploading ? 'Đang phân tích Search Volume & Title Density...' : 'Kéo thả file Helium 10 (.xlsx / .csv) vào đây'}
-              </div>
-              <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '4px' }}>
-                Tự động tính tỷ lệ Vàng A10 & loại trừ 100% rủi ro Trademark IP.
-              </div>
-            </div>
-          </div>
-
-          {/* Upload Status Card */}
-          {uploadStatus && (
-            <div style={{ 
-              padding: '16px 20px', 
-              borderRadius: '12px', 
-              fontSize: '0.85rem',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '12px',
-              background: uploadStatus.type === 'success' ? '#ecfdf5' : '#fef2f2',
-              color: uploadStatus.type === 'success' ? '#065f46' : '#991b1b',
-              border: `1px solid ${uploadStatus.type === 'success' ? '#a7f3d0' : '#fecaca'}`
-            }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 700 }}>
-                  {uploadStatus.type === 'success' ? <CheckCircle2 size={18} /> : <AlertCircle size={18} />}
-                  <span>{uploadStatus.message}</span>
-                </div>
-                {uploadStatus.trendId && (
-                  <button
-                    className="btn btn-primary btn-sm"
-                    disabled={draftingTrendId === uploadStatus.trendId}
-                    onClick={() => handleManualDraft(uploadStatus.trendId)}
-                    style={{ background: '#0284c7', display: 'flex', alignItems: 'center', gap: '6px' }}
-                  >
-                    <Zap size={14} className={draftingTrendId === uploadStatus.trendId ? 'spinner' : ''} />
-                    <span>{draftingTrendId === uploadStatus.trendId ? 'Đang gọi Gemini...' : '⚡ Tạo Amazon Listing'}</span>
-                  </button>
-                )}
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Amazon A10 Algorithm Rules Info Panel */}
-        <div className="studio-panel" style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          <h3 style={{ fontSize: '1.1rem', fontWeight: 700, margin: 0, color: '#0369a1' }}>
-            📐 Quy Tắc Thuật Toán Amazon A10 (Best Practices)
-          </h3>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
-            <div style={{ background: '#f0f9ff', padding: '10px 14px', borderRadius: '8px', border: '1px solid #bae6fd' }}>
-              <strong style={{ color: '#0369a1' }}>👑 Tier 1 (Title Tối Đa 75-80 Ký Tự - Mobile First):</strong> Front-load Top 1-2 từ khóa Golden + Brand/USP vào <strong>75 ký tự đầu tiên</strong> để không bị cắt trên App Amazon Mobile và tuân thủ thuật toán chống spam mới của Amazon.
-            </div>
-            <div style={{ background: '#f0f9ff', padding: '10px 14px', borderRadius: '8px', border: '1px solid #bae6fd' }}>
-              <strong style={{ color: '#0369a1' }}>💎 Tier 2 (5 Bullets):</strong> Bắt đầu bằng `[IN HOA HOOK]`, phân bổ 15 từ khóa Tier 2 vào tính năng & độ bền.
-            </div>
-            <div style={{ background: '#f0f9ff', padding: '10px 14px', borderRadius: '8px', border: '1px solid #bae6fd' }}>
-              <strong style={{ color: '#0369a1' }}>📦 Tier 3 (249 Bytes Search Terms):</strong> Phân cách bằng dấu cách (space-only), không dấu phẩy, không lặp lại từ khóa đã có ở Title.
-            </div>
-            <div style={{ background: '#f0f9ff', padding: '10px 14px', borderRadius: '8px', border: '1px solid #bae6fd' }}>
-              <strong style={{ color: '#0369a1' }}>✨ Amazon A+ Content:</strong> 10 Modules hình ảnh & câu chuyện thương hiệu nâng tỷ lệ chuyển đổi lên +25%.
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Step 2: Helium 10 Xray ASIN Batching Assistant */}
-      <AsinBatcherWidget onShowToast={onShowToast} />
-
-      {/* Step 3: Master Keyword List Table */}
-      <MasterKeywordTable marketplace="AMAZON" onShowToast={onShowToast} />
-
-      {/* Amazon Batches Queue */}
-      {trends.length > 0 && (
-        <div className="studio-panel" style={{ padding: '24px' }}>
-          <h3 style={{ fontSize: '1.15rem', fontWeight: 700, marginBottom: '14px', color: '#0369a1' }}>
-            Hàng Đợi Từ Khóa Amazon Helium 10 ({trends.length})
-          </h3>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            {trends.map((t) => (
-              <div key={t.id} style={{ padding: '14px 18px', background: 'var(--bg-subtle)', borderRadius: '10px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', border: '1px solid var(--border-subtle)' }}>
-                <div>
-                  <div style={{ fontWeight: 700, fontSize: '0.85rem', color: '#0f172a' }}>{t.category}</div>
-                  <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '2px' }}>{t.trending_keywords}</div>
-                </div>
-                {!t.processed && (
-                  <button
-                    className="btn btn-primary btn-sm"
-                    disabled={draftingTrendId === t.id}
-                    onClick={() => handleManualDraft(t.id)}
-                    style={{ background: '#0284c7' }}
-                  >
-                    <Zap size={14} />
-                    <span>Tạo Listing</span>
-                  </button>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      {/* ======================================================== */}
+      {/* 4-STEP AMAZON WORKFLOW: B1 Xray -> B2 Batch 10 ASINs -> B3 Cerebro -> B4 MKL & A10 */}
+      {/* ======================================================== */}
+      <AmazonPipelineWorkflow
+        seedPhrase={seedPhrase}
+        selectedCategory={selectedCategory}
+        onShowToast={onShowToast}
+        onSelectListing={onSelectListing}
+      />
 
       {/* Unified IP Gate Modal */}
       <UnifiedIpGateModal

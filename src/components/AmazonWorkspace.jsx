@@ -45,15 +45,23 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
     setUploading(true);
     setUploadStatus(null);
     const formData = new FormData();
+    formData.append('reportFile', file);
     formData.append('file', file);
     formData.append('category', selectedCategory);
 
     try {
-      const res = await fetch('http://localhost:3001/api/upload-trends', {
+      const res = await fetch('http://localhost:3001/api/upload-h10', {
         method: 'POST',
         body: formData
       });
-      const result = await res.json();
+      const text = await res.text();
+      let result;
+      try {
+        result = JSON.parse(text);
+      } catch (parseErr) {
+        throw new Error(`Lỗi kết nối máy chủ (${res.status}): Vui lòng kiểm tra backend server.`);
+      }
+
       if (!res.ok) throw new Error(result.error || 'Upload failed');
 
       setUploadStatus({
@@ -68,7 +76,7 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
       fetchData();
     } catch (err) {
       setUploadStatus({ type: 'error', message: err.message });
-      if (onShowToast) onShowToast(`Lỗi: ${err.message}`);
+      if (onShowToast) onShowToast(`Lỗi nạp file: ${err.message}`);
     } finally {
       setUploading(false);
     }

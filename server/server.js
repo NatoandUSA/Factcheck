@@ -507,20 +507,36 @@ app.delete('/api/reset-database', (req, res) => {
 
 
 
-// API: Upload and process Helium 10 / CSV reports
-app.post('/api/upload-h10', upload.single('reportFile'), (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ error: 'No file uploaded' });
+// API: Upload and process Helium 10 / CSV / HTML reports (Universal handler with aliases)
+const handleReportUpload = (req, res) => {
+  const file = req.file || (req.files && req.files[0]);
+  if (!file) {
+    return res.status(400).json({ error: 'No file uploaded. Please select a .xlsx, .csv, or .html file.' });
   }
 
-  const filePath = req.file.path;
-  const fileName = req.file.originalname;
-  const targetCategory = req.body.category || 'Jewelry';
+  const filePath = file.path;
+  const fileName = file.originalname;
+  const targetCategory = req.body.category || 'Apparel: Sweatshirt';
 
   try {
-    const workbook = XLSX.readFile(filePath);
-    const sheetName = workbook.SheetNames[0];
-    const rawRows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName]);
+    let rawRows = [];
+
+    // 1. Handle HTML/HTM (YTrends / Etsy Spy exports)
+    if (/\.html?$/i.test(fileName)) {
+      const htmlContent = fs.readFileSync(filePath, 'utf8');
+      const parsedKeywords = ytrendsParser.parseYTrendsHtml(htmlContent);
+      rawRows = (parsedKeywords || []).map(kw => ({
+        Keyword: kw.keyword || kw,
+        'Search Volume': kw.views24h ? kw.views24h * 30 : 1200,
+        'Competing Products': kw.listings || 350,
+        'Title Density': 2
+      }));
+    } else {
+      // 2. Handle Excel & CSV files via XLSX
+      const workbook = XLSX.readFile(filePath);
+      const sheetName = workbook.SheetNames[0];
+      rawRows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName]);
+    }
 
     if (!rawRows || rawRows.length === 0) {
       return res.status(400).json({ error: 'Uploaded file contains no data rows.' });
@@ -665,7 +681,10 @@ app.post('/api/upload-h10', upload.single('reportFile'), (req, res) => {
     console.error('H10 File Parse Error:', err);
     res.status(500).json({ error: `Failed to parse file: ${err.message}` });
   }
-});
+};
+
+app.post('/api/upload-h10', upload.any(), handleReportUpload);
+app.post('/api/upload-trends', upload.any(), handleReportUpload);
 
 // Real Analytics Summary Endpoint (Driven by real listings & feedback)
 app.get('/api/analytics-summary', (req, res) => {

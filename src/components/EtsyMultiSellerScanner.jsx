@@ -112,10 +112,39 @@ export default function EtsyMultiSellerScanner({ seedPhrase, category, onShowToa
             className="btn btn-secondary btn-sm"
             style={{ fontWeight: 600 }}
           >
-            Chọn Top 10 Sellers
+            Chọn Top 10 Batch 1
           </button>
         </div>
       </div>
+
+      {/* 30 Sellers 3-Batch Filter Header */}
+      <div style={{ background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: '10px', padding: '10px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+        <div style={{ fontSize: '0.85rem', fontWeight: 700, color: '#c2410c', display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <Award size={16} />
+          <span>Quét 30 Top Sellers (Chia 3 Batch x 10 Sellers):</span>
+        </div>
+        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+          <button
+            onClick={() => setSellers(prev => prev.map((s, i) => ({ ...s, selected: i < 10 })))}
+            style={{ padding: '4px 10px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: 600, border: '1px solid #fdba74', background: '#ffedd5', color: '#9a3412', cursor: 'pointer' }}
+          >
+            Batch 1: Revenue Leaders (10 Sellers)
+          </button>
+          <button
+            onClick={() => setSellers(prev => prev.map((s, i) => ({ ...s, selected: i >= 10 && i < 20 })))}
+            style={{ padding: '4px 10px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: 600, border: '1px solid #fdba74', background: '#ffedd5', color: '#9a3412', cursor: 'pointer' }}
+          >
+            Batch 2: Sold Velocity (10 Sellers)
+          </button>
+          <button
+            onClick={() => setSellers(prev => prev.map((s, i) => ({ ...s, selected: i >= 20 })))}
+            style={{ padding: '4px 10px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: 600, border: '1px solid #fdba74', background: '#ffedd5', color: '#9a3412', cursor: 'pointer' }}
+          >
+            Batch 3: Emerging Trends (10 Sellers)
+          </button>
+        </div>
+      </div>
+
 
       {/* Sellers Table */}
       <div style={{ overflowX: 'auto', borderRadius: '10px', border: '1px solid var(--border-color, #fed7aa)' }}>

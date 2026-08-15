@@ -14,7 +14,9 @@ export default function ListingOutputViewer({ listing, onSaveListing, onShowToas
   const [viewMode, setViewMode] = useState('raw'); // 'raw' | 'preview'
   const [showChat, setShowChat] = useState(false);
   const [copiedKey, setCopiedKey] = useState(null);
+  const [activeVarIdx, setActiveVarIdx] = useState(0);
   const { user } = useAuth();
+
 
   if (!listing) {
     return (
@@ -240,10 +242,43 @@ export default function ListingOutputViewer({ listing, onSaveListing, onShowToas
       {/* AMAZON FBM TAB */}
       {activeMarketTab === 'amazon' && (
         <div>
+          {/* Parent & 4 Child ASIN Variations Switcher Bar */}
+          <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px', padding: '10px 14px', marginBottom: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem', fontWeight: 700, color: '#334155' }}>
+              <Layers size={16} style={{ color: '#d97706' }} />
+              <span>Multi-ASIN Variations (1 Parent + 4 Child ASINs):</span>
+            </div>
+            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+              <button
+                className={`btn btn-sm ${activeVarIdx === 0 ? 'btn-primary' : 'btn-secondary'}`}
+                onClick={() => setActiveVarIdx(0)}
+                style={{ background: activeVarIdx === 0 ? '#0f766e' : '#fff', color: activeVarIdx === 0 ? '#fff' : '#334155', fontWeight: 600, fontSize: '0.75rem', padding: '4px 10px', borderRadius: '6px' }}
+              >
+                👑 Parent ASIN ({listing.parentSku || 'PARENT'})
+              </button>
+              {(listing.variations || [
+                { childIndex: 1, variationAttribute: 'Gold / S', sku: 'SKU-GOLD-S' },
+                { childIndex: 2, variationAttribute: 'Silver / M', sku: 'SKU-SILVER-M' },
+                { childIndex: 3, variationAttribute: 'Rose Gold / L', sku: 'SKU-ROSE-L' },
+                { childIndex: 4, variationAttribute: 'Custom / XL', sku: 'SKU-CUSTOM-XL' }
+              ]).map((v, idx) => (
+                <button
+                  key={idx}
+                  className={`btn btn-sm ${activeVarIdx === idx + 1 ? 'btn-primary' : 'btn-secondary'}`}
+                  onClick={() => setActiveVarIdx(idx + 1)}
+                  style={{ background: activeVarIdx === idx + 1 ? '#0284c7' : '#fff', color: activeVarIdx === idx + 1 ? '#fff' : '#334155', fontWeight: 600, fontSize: '0.75rem', padding: '4px 10px', borderRadius: '6px' }}
+                >
+                  Child #{idx + 1}: {v.variationAttribute}
+                </button>
+              ))}
+            </div>
+          </div>
+
           {viewMode === 'preview' ? (
              <AmazonPreview data={listing} />
           ) : (
             <>
+
               {/* Amazon Validation Banner */}
               {!amazonValidation.isValid && (
             <div style={{ background: '#fee2e2', border: '1px solid #fecaca', padding: '10px 14px', borderRadius: '8px', marginBottom: '16px', fontSize: '0.8rem', color: '#991b1b' }}>

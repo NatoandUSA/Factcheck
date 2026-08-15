@@ -33,21 +33,37 @@ function rankKeywords(keywordList) {
       return null; // Exclude trademarked terms
     }
 
-    // Ranking Score Formula
-    const score = (vol * Math.max(1, 100 - density)) / (cpr + 1);
+    // Long-tail Keyword Priority Multiplier
+    const wordsCount = kw.split(/\s+/).length;
+    let longTailMultiplier = 1.0;
+    if (wordsCount >= 3) {
+      longTailMultiplier = 1.8; // High priority for specific buyer intent
+    } else if (wordsCount === 1) {
+      longTailMultiplier = 0.5; // Penalty for overly broad generic keywords
+    }
+
+    if (density < 5) {
+      longTailMultiplier *= 1.3; // Low competition boost
+    }
+
+    // Base Ranking Score Formula with Long-tail Priority
+    const baseScore = (vol * Math.max(1, 100 - density)) / (cpr + 1);
+    const score = baseScore * longTailMultiplier;
 
     return {
       keyword: kw,
       volume: vol,
       density,
       cpr,
-      score
+      score,
+      isLongTail: wordsCount >= 3
     };
   }).filter(Boolean);
 
   // Sort descending by opportunity score
   return scoredList.sort((a, b) => b.score - a.score);
 }
+
 
 /**
  * Build Amazon Title (Strictly <= 75 characters per July 27, 2026 Amazon Policy)

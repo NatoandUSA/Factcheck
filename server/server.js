@@ -24,6 +24,7 @@ const publishGate = require('./publishGate');
 const { hashPassword, verifyPassword } = require('./security/scrypt');
 const { COOKIE_NAME, SESSION_TTL_MS, createSessionRecord, verifySessionRecord, revokeSessionRecord } = require('./security/session');
 const { parseCookies, extractRawToken, requireAuth, requireRole, requireCsrfOrigin, corsOptionsDelegate } = require('./middleware/auth');
+const { runMigrations } = require('./database/migrations');
 
 const app = express();
 app.use(cors(corsOptionsDelegate));
@@ -142,6 +143,9 @@ db.serialize(() => {
   db.run(`
     CREATE TABLE IF NOT EXISTS listings (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id TEXT,
+      workspace_id INTEGER,
+      marketplace TEXT CHECK(marketplace IN ('AMAZON', 'ETSY')),
       amazonTitle TEXT,
       etsyTitle TEXT,
       categoryName TEXT,
@@ -287,6 +291,17 @@ db.serialize(() => {
     db.run("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", ['gemini_api_key', process.env.GEMINI_API_KEY]);
     console.log('Gemini API key configured from .env environment.');
   }
+});
+
+// Migrations are queued after base schema creation. Every API request waits for
+// completion, so an existing app.db cannot be served through a partially
+// upgraded schema.
+const databaseReady = runMigrations(db);
+app.use((req, res, next) => {
+  databaseReady.then(() => next()).catch(error => {
+    console.error('Database migration failed:', error);
+    res.status(503).json({ success: false, error: 'DATABASE_MIGRATION_FAILED' });
+  });
 });
 
 // ==========================================
@@ -454,19 +469,22 @@ app.get('/api/auth/me', requireAuth(db), (req, res) => {
 // API: Full Database Reset (Wipe all old listings, trends, and templates - Protected OWNER Only)
 app.delete('/api/reset-database', requireAuth(db), requireRole(['OWNER']), (req, res) => {
   db.serialize(() => {
-    db.run("DELETE FROM listings");
-    db.run("DELETE FROM market_trends");
-    db.run("DELETE FROM learned_templates", [], (err) => {
+    db.run(
+      `DELETE FROM listings
+       WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
+      [req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+      (err) => {
       if (err) return res.status(500).json({ success: false, error: 'RESET_FAILED' });
       db.run(
         "INSERT INTO audit_events (tenant_id, actor_id, action, resource_type, outcome) VALUES (?, ?, ?, ?, ?)",
         [req.user.tenantId, req.user.userId, 'admin:reset', 'database', 'SUCCESS'],
         auditErr => {
           if (auditErr) return res.status(500).json({ success: false, error: 'AUDIT_WRITE_FAILED' });
-          res.json({ success: true, message: 'Đã xóa dữ liệu listing, trend và template trong hệ thống.' });
+          res.json({ success: true, message: 'Đã xóa listing trong workspace hiện tại.' });
         }
       );
-    });
+      }
+    );
   });
 });
 
@@ -512,8 +530,20 @@ app.post('/api/listings', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SEL
 
   
   db.run(
-    "INSERT INTO listings (amazonTitle, etsyTitle, categoryName, status, authorId, payload) VALUES (?, ?, ?, ?, ?, ?)",
-    [amazonTitle, etsyTitle, categoryName, status, req.user.userId, JSON.stringify(updatedPayload)],
+    `INSERT INTO listings
+      (tenant_id, workspace_id, marketplace, amazonTitle, etsyTitle, categoryName, status, authorId, payload)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      req.user.tenantId,
+      req.user.workspaceId,
+      req.user.marketplace,
+      amazonTitle,
+      etsyTitle,
+      categoryName,
+      status,
+      req.user.userId,
+      JSON.stringify(updatedPayload)
+    ],
     function(err) {
       if (err) return res.status(500).json({ error: err.message });
       res.json({ id: this.lastID, status, payload: updatedPayload });
@@ -523,7 +553,12 @@ app.post('/api/listings', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SEL
 
 // Get all listings
 app.get('/api/listings', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
-  db.all("SELECT * FROM listings ORDER BY generatedAt DESC", [], (err, rows) => {
+  db.all(
+    `SELECT * FROM listings
+     WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ?
+     ORDER BY generatedAt DESC`,
+    [req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+    (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
     const safeRows = rows.map(r => {
       let parsedPayload = {};
@@ -542,8 +577,9 @@ app.get('/api/listings', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELL
 
       return { ...r, payload: parsedPayload };
     });
-    res.json(safeRows);
-  });
+      res.json(safeRows);
+    }
+  );
 });
 
 // Approve a listing using Canonical Publish Gate (Fail-Closed Gate Authority - Protected)
@@ -551,7 +587,11 @@ app.patch('/api/listings/:id/approve', requireAuth(db), requireRole(['OWNER', 'M
   const { id } = req.params;
 
 
-  db.get("SELECT * FROM listings WHERE id = ?", [id], (err, row) => {
+  db.get(
+    `SELECT * FROM listings
+     WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
+    [id, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+    (err, row) => {
     if (err || !row) return res.status(404).json({ error: 'Listing not found.' });
 
     let parsedPayload = {};
@@ -570,11 +610,18 @@ app.patch('/api/listings/:id/approve', requireAuth(db), requireRole(['OWNER', 'M
       });
     }
 
-    db.run("UPDATE listings SET status = 'PUBLISH_READY' WHERE id = ?", [id], function(updateErr) {
+    db.run(
+      `UPDATE listings SET status = 'PUBLISH_READY'
+       WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
+      [id, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+      function(updateErr) {
       if (updateErr) return res.status(500).json({ error: updateErr.message });
+      if (this.changes !== 1) return res.status(404).json({ error: 'Listing not found.' });
       res.json({ success: true, status: 'PUBLISH_READY', publishGate: gateRes });
-    });
-  });
+      }
+    );
+    }
+  );
 });
 
 
@@ -582,7 +629,11 @@ app.patch('/api/listings/:id/approve', requireAuth(db), requireRole(['OWNER', 'M
 app.get('/api/listings/:id/export', requireAuth(db), requireRole(['OWNER', 'MANAGER']), (req, res) => {
   const { id } = req.params;
 
-  db.get("SELECT * FROM listings WHERE id = ?", [id], (err, row) => {
+  db.get(
+    `SELECT * FROM listings
+     WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
+    [id, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+    (err, row) => {
     if (err || !row) return res.status(404).json({ error: 'Listing not found.' });
 
     let parsedPayload = {};
@@ -603,13 +654,14 @@ app.get('/api/listings/:id/export', requireAuth(db), requireRole(['OWNER', 'MANA
       publishGate: gateRes,
       listing: parsedPayload
     });
-  });
+    }
+  );
 });
 
 
 
 // Submit Sales Feedback (7-day loop)
-app.post('/api/listings/:id/feedback', (req, res) => {
+app.post('/api/listings/:id/feedback', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
   const { id } = req.params;
   const { views, orders, revenue } = req.body;
   
@@ -622,12 +674,20 @@ app.post('/api/listings/:id/feedback', (req, res) => {
   else if (views < 10 && orders === 0) action = 'CHANGE_TAGS_OR_TITLE';
   else if (views === 0) action = 'KILL_LISTING';
   
-  db.run(
-    "INSERT INTO sales_feedback (listingId, views, orders, revenue, action) VALUES (?, ?, ?, ?, ?)",
-    [id, views, orders, revenue, action],
-    function(err) {
-      if (err) return res.status(500).json({ error: err.message });
-      res.json({ id: this.lastID, action, conversionRate });
+  db.get(
+    `SELECT id FROM listings
+     WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
+    [id, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+    (scopeErr, listing) => {
+      if (scopeErr || !listing) return res.status(404).json({ error: 'Listing not found.' });
+      db.run(
+        "INSERT INTO sales_feedback (listingId, views, orders, revenue, action) VALUES (?, ?, ?, ?, ?)",
+        [id, views, orders, revenue, action],
+        function(err) {
+          if (err) return res.status(500).json({ error: err.message });
+          res.json({ id: this.lastID, action, conversionRate });
+        }
+      );
     }
   );
 });
@@ -1238,7 +1298,7 @@ app.post('/api/etsy/scan-search', async (req, res) => {
 });
 
 // API: ETSY Deep Batch Learn 5-10 Selected Sellers
-app.post('/api/etsy/batch-learn', async (req, res) => {
+app.post('/api/etsy/batch-learn', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
   const { seedPhrase = 'nurse sweatshirt', category = 'Apparel: Sweatshirt', sellers = [] } = req.body;
 
   try {
@@ -1286,8 +1346,10 @@ app.post('/api/etsy/batch-learn', async (req, res) => {
       };
 
       db.run(
-        "INSERT INTO listings (amazonTitle, etsyTitle, categoryName, status, authorId, payload) VALUES (?, ?, ?, ?, ?, ?)",
-        [payload.amazonTitle, payload.etsyTitle, payload.categoryName, 'NEEDS_QA', 0, JSON.stringify(payload)],
+        `INSERT INTO listings
+          (tenant_id, workspace_id, marketplace, amazonTitle, etsyTitle, categoryName, status, authorId, payload)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [req.user.tenantId, req.user.workspaceId, req.user.marketplace, payload.amazonTitle, payload.etsyTitle, payload.categoryName, 'NEEDS_QA', req.user.userId, JSON.stringify(payload)],
         function(insertErr) {
           if (insertErr) return res.status(500).json({ error: insertErr.message });
           
@@ -1308,7 +1370,10 @@ app.post('/api/etsy/batch-learn', async (req, res) => {
 });
 
 // API: Amazon Quick Draft (Works directly from Seed Phrase, 10 ASINs, or Cerebro)
-app.post('/api/amazon/quick-draft', async (req, res) => {
+app.post('/api/amazon/quick-draft', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  if (req.user.marketplace !== 'AMAZON') {
+    return res.status(403).json({ success: false, error: 'MARKETPLACE_MISMATCH' });
+  }
   const { seedPhrase = 'mom sweatshirt', category = 'Apparel: Sweatshirt', asins = [] } = req.body;
 
   try {
@@ -1433,8 +1498,10 @@ Return ONLY raw JSON without markdown code fences:
 
 
             db.run(
-              "INSERT INTO listings (amazonTitle, etsyTitle, categoryName, status, authorId, payload) VALUES (?, ?, ?, ?, ?, ?)",
-              [payload.amazonTitle, payload.etsyTitle, payload.categoryName, 'NEEDS_QA', 0, JSON.stringify(payload)],
+              `INSERT INTO listings
+                (tenant_id, workspace_id, marketplace, amazonTitle, etsyTitle, categoryName, status, authorId, payload)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              [req.user.tenantId, req.user.workspaceId, req.user.marketplace, payload.amazonTitle, payload.etsyTitle, payload.categoryName, 'NEEDS_QA', req.user.userId, JSON.stringify(payload)],
               function(insertErr) {
                 if (insertErr) return res.status(500).json({ error: insertErr.message });
 
@@ -1734,21 +1801,23 @@ app.post('/api/upload-h10', upload.any(), handleReportUpload);
 app.post('/api/upload-trends', upload.any(), handleReportUpload);
 
 // Real Analytics Summary Endpoint (Driven by real listings & feedback)
-app.get('/api/analytics-summary', (req, res) => {
+app.get('/api/analytics-summary', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
   db.get(`
     SELECT 
       COUNT(*) as totalListings,
       SUM(CASE WHEN status = 'MANAGER_APPROVED' THEN 1 ELSE 0 END) as approvedListings,
       SUM(CASE WHEN status = 'NEEDS_QA' THEN 1 ELSE 0 END) as pendingListings
     FROM listings
-  `, [], (err, listingStats) => {
+    WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ?
+  `, [req.user.tenantId, req.user.workspaceId, req.user.marketplace], (err, listingStats) => {
     if (err) return res.status(500).json({ error: err.message });
 
     db.all(`
       SELECT categoryName, COUNT(*) as count 
       FROM listings 
+      WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ?
       GROUP BY categoryName
-    `, [], (catErr, catRows) => {
+    `, [req.user.tenantId, req.user.workspaceId, req.user.marketplace], (catErr, catRows) => {
       if (catErr) return res.status(500).json({ error: catErr.message });
 
       db.get(`
@@ -1759,9 +1828,11 @@ app.get('/api/analytics-summary', (req, res) => {
 
         db.all(`
           SELECT action, COUNT(*) as count, SUM(revenue) as totalRevenue, SUM(orders) as totalOrders, SUM(views) as totalViews
-          FROM sales_feedback
+          FROM sales_feedback sf
+          JOIN listings l ON l.id = sf.listingId
+          WHERE l.tenant_id = ? AND l.workspace_id = ? AND l.marketplace = ?
           GROUP BY action
-        `, [], (feedErr, feedRows) => {
+        `, [req.user.tenantId, req.user.workspaceId, req.user.marketplace], (feedErr, feedRows) => {
           res.json({
             listingStats: listingStats || { totalListings: 0, approvedListings: 0, pendingListings: 0 },
             categoryBreakdown: catRows || [],
@@ -1782,7 +1853,7 @@ app.get('/api/trends', (req, res) => {
 });
 
 // API: Instantly Draft listing for a specific trend using Multi-LLM Gateway (Gemini / GPT-4o / Claude) + Few-Shot Learning
-app.post('/api/trends/:id/draft', (req, res) => {
+app.post('/api/trends/:id/draft', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
   const { id } = req.params;
   
   db.get("SELECT * FROM market_trends WHERE id = ?", [id], (err, trend) => {
@@ -1913,8 +1984,10 @@ Return ONLY a valid raw JSON object without markdown code fences:
         };
 
         db.run(
-          "INSERT INTO listings (amazonTitle, etsyTitle, categoryName, status, authorId, payload) VALUES (?, ?, ?, ?, ?, ?)",
-          [payload.amazonTitle, payload.etsyTitle, payload.categoryName, 'NEEDS_QA', 0, JSON.stringify(payload)],
+          `INSERT INTO listings
+            (tenant_id, workspace_id, marketplace, amazonTitle, etsyTitle, categoryName, status, authorId, payload)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [req.user.tenantId, req.user.workspaceId, req.user.marketplace, payload.amazonTitle, payload.etsyTitle, payload.categoryName, 'NEEDS_QA', req.user.userId, JSON.stringify(payload)],
           function(insertErr) {
             if (insertErr) return res.status(500).json({ error: insertErr.message });
             
@@ -1938,7 +2011,7 @@ Return ONLY a valid raw JSON object without markdown code fences:
 });
 });
 // API: Save API Key
-app.post('/api/settings/apikey', (req, res) => {
+app.post('/api/settings/apikey', requireAuth(db), requireRole(['OWNER']), (req, res) => {
   const { apiKey } = req.body;
   if (!apiKey) return res.status(400).json({ error: 'Missing API key' });
   db.run("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", ['gemini_api_key', apiKey], function(err) {
@@ -2282,16 +2355,12 @@ const backgroundAgentTimer = setInterval(() => {
 
                   const listingStatus = (ipRes.verdict === 'BLOCK') ? 'IP_RISK_BLOCKED' : 'NEEDS_QA';
 
+                  // Fail closed: a background agent has no authenticated
+                  // workspace principal. Persisting this draft under a guessed
+                  // workspace would violate tenant isolation.
                   db.run(
-                    "INSERT INTO listings (amazonTitle, etsyTitle, categoryName, status, authorId, payload) VALUES (?, ?, ?, ?, ?, ?)",
-                    [payload.amazonTitle, payload.etsyTitle, payload.categoryName, listingStatus, 0, JSON.stringify(payload)],
-                    function(insertErr) {
-                      if (!insertErr) {
-                        const statusNote = (listingStatus === 'IP_RISK_BLOCKED') ? 'BLOCKED due to IP Trademark risk' : 'NEEDS_QA queue';
-                        db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, `Saved draft (ID: ${this.lastID}, OppScore: ${oppRes.overallScore}/100, IP: ${ipRes.verdict}) to ${statusNote}.`]);
-                        db.run("UPDATE agents SET lastActive = CURRENT_TIMESTAMP WHERE id = ?", [agent.id]);
-                      }
-                    }
+                    "INSERT INTO agent_logs (agentId, message) VALUES (?, ?)",
+                    [agent.id, `[SCOPE_REQUIRED] Draft not persisted (${listingStatus}). Assign an explicit tenant/workspace service principal before enabling autonomous saves.`]
                   );
                 }
 
@@ -2318,4 +2387,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app, db, serverInstance, backgroundAgentTimer };
+module.exports = { app, db, databaseReady, serverInstance, backgroundAgentTimer };

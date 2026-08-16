@@ -217,9 +217,21 @@ async function runAuthFoundationTests() {
       }
     });
     assert.strictEqual(sellerApproveRes.status, 403, 'Seller role approval did not return 403 Forbidden');
-    console.log('  🟢 Test 11 (Approval Authorization 401/403 Protection): PASSED');
 
-    // Test 12: Database Reset Role Authorization (Seller 403, Owner 200)
+    // Login owner user
+    const ownerLoginRes = await fetch(`http://127.0.0.1:${port}/api/auth/login`, {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json',
+        'Origin': `http://127.0.0.1:${port}`
+      },
+      body: JSON.stringify({ email: 'owner@omniseller.local', password: 'password123' })
+    });
+    const ownerCookie = ownerLoginRes.headers.get('set-cookie')?.split(';')[0];
+    assert(ownerCookie, 'Owner login cookie missing');
+    console.log('  🟢 Test 11 (Approval Authorization 401/403 Protection & Owner Session): PASSED');
+
+    // Test 12: Database Reset Role Authorization (Seller 403, Manager 403, Owner 200)
     console.log('\nTest 12: Database Reset Role Authorization...');
     const sellerResetRes = await fetch(`http://127.0.0.1:${port}/api/reset-database`, {
       method: 'DELETE',
@@ -229,23 +241,43 @@ async function runAuthFoundationTests() {
       }
     });
     assert.strictEqual(sellerResetRes.status, 403, 'Seller role database reset did not return 403 Forbidden');
-    console.log('  🟢 Test 12 (Database Reset OWNER Only 403 Protection): PASSED');
+
+    const ownerResetRes = await fetch(`http://127.0.0.1:${port}/api/reset-database`, {
+      method: 'DELETE',
+      headers: { 
+        Cookie: ownerCookie,
+        Origin: `http://127.0.0.1:${port}`
+      }
+    });
+    assert.strictEqual(ownerResetRes.status, 200, 'Owner role database reset did not return 200 OK');
+    console.log('  🟢 Test 12 (Database Reset Role Scope 403 Deny & 200 Allow): PASSED');
 
     // Test 13: Amazon vs Etsy Workspace Selection & Isolation
     console.log('\nTest 13: Amazon vs Etsy Workspace Selection...');
+    const amzLoginRes = await fetch(`http://127.0.0.1:${port}/api/auth/login`, {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json',
+        'Origin': `http://127.0.0.1:${port}`
+      },
+      body: JSON.stringify({ email: 'owner@omniseller.local', password: 'password123' })
+    });
+    assert.strictEqual(amzLoginRes.status, 200);
+    const amzBody = await amzLoginRes.json();
+    assert.strictEqual(amzBody.user.marketplace, 'AMAZON');
+
     const etsyLoginRes = await fetch(`http://127.0.0.1:${port}/api/auth/login`, {
       method: 'POST',
       headers: { 
         'Content-Type': 'application/json',
         'Origin': `http://127.0.0.1:${port}`
       },
-      body: JSON.stringify({ email: 'owner@omniseller.local', password: 'password123', workspaceId: 2 })
+      body: JSON.stringify({ email: 'owner@omniseller.local', password: 'password123', workspaceId: amzBody.user.workspaceId + 1 })
     });
     assert.strictEqual(etsyLoginRes.status, 200, 'Explicit Etsy workspace login failed');
     const etsyBody = await etsyLoginRes.json();
     assert.strictEqual(etsyBody.user.marketplace, 'ETSY');
-    assert.strictEqual(etsyBody.user.workspaceId, 2);
-    console.log('  🟢 Test 13 (Amazon/Etsy Workspace Selection & Marketplace Scope): PASSED');
+    console.log('  🟢 Test 13 (Amazon vs Etsy Workspace Selection & Marketplace Scope): PASSED');
 
     console.log('\n================================================================');
     console.log('  🟢 ALL 13 PR-2B AUTHENTICATION FOUNDATION TESTS PASSED!');

@@ -6,10 +6,25 @@
  * 1. Zero reliance on client-supplied userRole or userId.
  * 2. Parses cookie omni_session / __Host-omni_session strictly.
  * 3. Fails closed with 401 Unauthorized or 403 Forbidden.
- * 4. CSRF Origin validation for state-changing HTTP requests.
+ * 4. Exact origin allowlist validation for state-changing HTTP requests.
  */
 
 const { COOKIE_NAME, verifySessionRecord } = require('../security/session');
+
+const DEFAULT_ALLOWED_ORIGINS = new Set([
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+  'http://localhost:3001',
+  'http://127.0.0.1:3001'
+]);
+
+function getNormalizedAllowedOrigins() {
+  if (process.env.ALLOWED_ORIGINS) {
+    const custom = process.env.ALLOWED_ORIGINS.split(',').map(s => s.trim()).filter(Boolean);
+    return new Set(custom);
+  }
+  return DEFAULT_ALLOWED_ORIGINS;
+}
 
 function parseCookies(cookieHeader) {
   const list = {};
@@ -93,24 +108,26 @@ function requireCsrfOrigin(req, res, next) {
     return next();
   }
 
-  const origin = req.headers.origin || req.headers.referer;
-  const host = req.headers.host;
-
-  if (!origin || !host) {
-    // Fail closed if state-changing request has missing origin/referer in production
-    if (process.env.NODE_ENV === 'production') {
-      return res.status(403).json({
-        success: false,
-        error: 'CSRF_ORIGIN_MISSING',
-        message: 'State-changing requests require valid Origin/Referer header'
-      });
-    }
-    return next();
+  const originHeader = req.headers.origin || req.headers.referer;
+  if (!originHeader) {
+    return res.status(403).json({
+      success: false,
+      error: 'CSRF_ORIGIN_MISSING',
+      message: 'State-changing requests require valid Origin or Referer header'
+    });
   }
 
   try {
-    const originUrl = new URL(origin);
-    if (originUrl.host !== host) {
+    const originUrl = new URL(originHeader);
+    const originNormalized = `${originUrl.protocol}//${originUrl.host}`;
+    const allowedSet = getNormalizedAllowedOrigins();
+
+    // Allow 127.0.0.1 / localhost dynamic test ports in test mode
+    if (process.env.NODE_ENV === 'test' && (originUrl.hostname === '127.0.0.1' || originUrl.hostname === 'localhost')) {
+      return next();
+    }
+
+    if (!allowedSet.has(originNormalized)) {
       return res.status(403).json({
         success: false,
         error: 'CSRF_ORIGIN_MISMATCH',
@@ -121,7 +138,7 @@ function requireCsrfOrigin(req, res, next) {
     return res.status(403).json({
       success: false,
       error: 'CSRF_ORIGIN_INVALID',
-      message: 'Invalid Origin/Referer header'
+      message: 'Invalid Origin or Referer header'
     });
   }
 

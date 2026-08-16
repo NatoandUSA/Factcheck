@@ -288,13 +288,22 @@ db.serialize(() => {
 
 // POST /api/auth/login
 app.post('/api/auth/login', async (req, res) => {
-  const { email, password } = req.body || {};
+  const { email, password, workspaceId } = req.body || {};
 
   if (!email || !password) {
     return res.status(400).json({
       success: false,
       error: 'MISSING_CREDENTIALS',
       message: 'Email and password are required'
+    });
+  }
+
+  // Bounded input length limits (AUTH-11)
+  if (typeof email !== 'string' || email.length > 255 || typeof password !== 'string' || password.length > 128) {
+    return res.status(400).json({
+      success: false,
+      error: 'INVALID_INPUT_LENGTH',
+      message: 'Email must be <= 255 chars and password <= 128 chars'
     });
   }
 
@@ -317,18 +326,27 @@ app.post('/api/auth/login', async (req, res) => {
       });
     }
 
-    db.get(`
+    // Query active memberships with explicit ordering or specific workspaceId (AUTH-05)
+    let membershipQuery = `
       SELECT wm.workspace_id, wm.role, w.tenant_id, w.marketplace, w.name as workspace_name
       FROM workspace_memberships wm
       JOIN workspaces w ON w.id = wm.workspace_id
       WHERE wm.user_id = ? AND wm.status = 'ACTIVE'
-      LIMIT 1
-    `, [user.id], (err, membership) => {
+    `;
+    const queryParams = [user.id];
+
+    if (workspaceId) {
+      membershipQuery += ` AND wm.workspace_id = ?`;
+      queryParams.push(workspaceId);
+    }
+    membershipQuery += ` ORDER BY w.id ASC LIMIT 1`;
+
+    db.get(membershipQuery, queryParams, (err, membership) => {
       if (err || !membership) {
         return res.status(403).json({
           success: false,
           error: 'NO_ACTIVE_WORKSPACE',
-          message: 'User does not belong to an active workspace'
+          message: 'User does not belong to the specified active workspace'
         });
       }
 
@@ -370,11 +388,30 @@ app.post('/api/auth/login', async (req, res) => {
 app.post('/api/auth/logout', (req, res) => {
   const rawToken = extractRawToken(req);
 
+  res.clearCookie(COOKIE_NAME, { path: '/' });
+
+  if (!rawToken) {
+    return res.json({ success: true, message: 'Logged out successfully' });
+  }
+
   revokeSessionRecord(db, rawToken, (err, revoked) => {
-    res.clearCookie(COOKIE_NAME, { path: '/' });
+    if (err) {
+      db.run("INSERT INTO audit_events (action, resource_type, outcome, metadata) VALUES (?, ?, ?, ?)",
+        ['auth:logout', 'session', 'FAILURE', JSON.stringify({ error: err.message })]);
+      return res.status(500).json({
+        success: false,
+        error: 'LOGOUT_FAILED',
+        message: 'Failed to revoke session on server'
+      });
+    }
+
+    db.run("INSERT INTO audit_events (action, resource_type, outcome) VALUES (?, ?, ?)",
+      ['auth:logout', 'session', 'SUCCESS']);
+
     res.json({ success: true, message: 'Logged out successfully' });
   });
 });
+
 
 // GET /api/auth/me
 app.get('/api/auth/me', requireAuth(db), (req, res) => {

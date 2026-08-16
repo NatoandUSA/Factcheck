@@ -63,7 +63,10 @@ async function runAuthFoundationTests() {
     console.log('\nTest 4: Valid Login POST /api/auth/login...');
     const loginRes = await fetch(`http://127.0.0.1:${port}/api/auth/login`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        'Origin': `http://127.0.0.1:${port}`
+      },
       body: JSON.stringify({
         email: 'owner@omniseller.local',
         password: 'password123'
@@ -103,8 +106,12 @@ async function runAuthFoundationTests() {
     console.log('\nTest 6: POST /api/auth/logout...');
     const logoutRes = await fetch(`http://127.0.0.1:${port}/api/auth/logout`, {
       method: 'POST',
-      headers: { Cookie: cookieValue }
+      headers: { 
+        Cookie: cookieValue,
+        Origin: `http://127.0.0.1:${port}`
+      }
     });
+
 
     assert.strictEqual(logoutRes.status, 200);
     const logoutBody = await logoutRes.json();
@@ -146,9 +153,9 @@ async function runAuthFoundationTests() {
     if (db && typeof db.close === 'function') {
       await new Promise(res => db.close(res));
     }
-    process.exit(0);
   }
 }
+
 
 runAuthFoundationTests().catch(err => {
   console.error('🔴 UNHANDLED REJECTION IN AUTH FOUNDATION TEST:', err);

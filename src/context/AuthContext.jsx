@@ -6,41 +6,45 @@ export const useAuth = () => useContext(AuthContext);
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
 
   useEffect(() => {
-    // Restore session from local storage if available
-    const savedUser = localStorage.getItem('omni_user_session');
-    if (savedUser) {
-      setUser(JSON.parse(savedUser));
-    }
+    fetch('/api/auth/me', { credentials: 'include' })
+      .then(async res => res.ok ? res.json() : null)
+      .then(data => setUser(data?.user || null))
+      .catch(() => setUser(null))
+      .finally(() => setAuthLoading(false));
   }, []);
 
-  const login = async (email) => {
-    try {
-      const res = await fetch('http://localhost:3001/api/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email })
-      });
-      if (!res.ok) {
-        throw new Error('User not found. Try owner@omniseller.local, manager@omniseller.local, or designer@omniseller.local');
-      }
-      const data = await res.json();
-      setUser(data.user);
-      localStorage.setItem('omni_user_session', JSON.stringify(data.user));
-      return data.user;
-    } catch (err) {
-      throw err;
+  const login = async ({ email, password, workspaceId }) => {
+    const res = await fetch('/api/auth/login', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password, ...(workspaceId ? { workspaceId } : {}) })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const error = new Error(data.message || 'Đăng nhập thất bại');
+      error.code = data.error;
+      error.workspaces = data.workspaces || [];
+      throw error;
     }
+    setUser(data.user);
+    return data.user;
   };
 
-  const logout = () => {
+  const logout = async () => {
+    const res = await fetch('/api/auth/logout', {
+      method: 'POST',
+      credentials: 'include'
+    });
+    if (!res.ok) throw new Error('Không thể thu hồi phiên đăng nhập');
     setUser(null);
-    localStorage.removeItem('omni_user_session');
   };
 
   return (
-    <AuthContext.Provider value={{ user, login, logout }}>
+    <AuthContext.Provider value={{ user, authLoading, login, logout }}>
       {children}
     </AuthContext.Provider>
   );

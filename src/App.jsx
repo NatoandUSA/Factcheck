@@ -8,8 +8,6 @@ import ApiKeyModal from './components/ApiKeyModal';
 import LoginModal from './components/LoginModal';
 import { useAuth } from './context/AuthContext';
 
-const HISTORY_STORAGE_KEY = 'omni_listing_history_v1';
-
 export default function App() {
   const [activeTab, setActiveTab] = useState('amazon-workspace');
   const [currentListing, setCurrentListing] = useState(null);
@@ -20,10 +18,15 @@ export default function App() {
   const [toasts, setToasts] = useState([]);
   const { user } = useAuth();
 
-  // Load history from backend (source of truth) and fallback to localStorage
+  // Load history only from the authenticated backend. Listing data must not be
+  // restored from a browser cache that is outside workspace authorization.
   const fetchListings = async () => {
+    if (!user) {
+      setHistory([]);
+      return;
+    }
     try {
-      const res = await fetch('http://localhost:3001/api/listings');
+      const res = await fetch('/api/listings', { credentials: 'include' });
       if (res.ok) {
         const data = await res.json();
         const backendHistory = data.map(item => ({
@@ -33,33 +36,21 @@ export default function App() {
           generatedAt: item.generatedAt
         }));
         setHistory(backendHistory);
-        return; // Success, skip local storage
+        return;
       }
     } catch (e) {
-      console.warn('Backend unavailable, falling back to local history');
+      console.warn('Backend unavailable; authenticated listing history was not loaded');
     }
-    
-    // Fallback to local storage if backend fails
-    try {
-      const raw = localStorage.getItem(HISTORY_STORAGE_KEY);
-      if (raw) setHistory(JSON.parse(raw));
-    } catch (e) {
-      console.warn('Failed to parse local history', e);
-    }
+    setHistory([]);
   };
 
   useEffect(() => {
     fetchListings();
-  }, []);
+  }, [user?.workspaceId]);
 
   // Save history to localStorage
   const saveHistoryToStorage = (updatedList) => {
     setHistory(updatedList);
-    try {
-      localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(updatedList));
-    } catch (e) {
-      console.warn('Failed to save history to localStorage', e);
-    }
   };
 
   const showToast = (message) => {
@@ -85,15 +76,15 @@ export default function App() {
 
       // Post to backend to enforce AMZ-style strict gating
       try {
-        const res = await fetch('http://localhost:3001/api/listings', {
+        const res = await fetch('/api/listings', {
           method: 'POST',
+          credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             amazonTitle: enrichedResult.amazonTitle,
             etsyTitle: enrichedResult.etsyTitle,
             categoryName: enrichedResult.categoryName,
-            payload: enrichedResult,
-            authorId: user?.id || null
+            payload: enrichedResult
           })
         });
         if (res.ok) {
@@ -156,10 +147,9 @@ export default function App() {
       return;
     }
     try {
-      const res = await fetch(`http://localhost:3001/api/listings/${listingToApprove.dbId}/approve`, {
+      const res = await fetch(`/api/listings/${listingToApprove.dbId}/approve`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: user?.id, userRole: user?.role })
+        credentials: 'include'
       });
       if (!res.ok) throw new Error('Not authorized or server error');
       const data = await res.json();

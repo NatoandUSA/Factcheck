@@ -16,7 +16,7 @@ export default function ApiKeyModal({ isOpen, onClose, onKeySaved }) {
       setSavedSuccess(false);
 
       // Fetch saved keys from backend
-      fetch('http://localhost:3001/api/settings/llm')
+      fetch('/api/settings/llm', { credentials: 'include' })
         .then(res => res.json())
         .then(data => {
           if (data.activeProvider) setActiveProvider(data.activeProvider);
@@ -34,8 +34,9 @@ export default function ApiKeyModal({ isOpen, onClose, onKeySaved }) {
     if (geminiKey) setStoredApiKey(geminiKey);
 
     try {
-      await fetch('http://localhost:3001/api/settings/llm', {
+      const res = await fetch('/api/settings/llm', {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           geminiApiKey: geminiKey,
@@ -44,6 +45,7 @@ export default function ApiKeyModal({ isOpen, onClose, onKeySaved }) {
           activeProvider
         })
       });
+      if (!res.ok) throw new Error('Không có quyền cập nhật cấu hình LLM');
       setSavedSuccess(true);
       if (onKeySaved) onKeySaved(geminiKey);
       setTimeout(() => {

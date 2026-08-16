@@ -10,6 +10,27 @@ const { hashPassword, verifyPassword } = require('../server/security/scrypt');
 const { hashToken, generateRawToken } = require('../server/security/session');
 const { app, db } = require('../server/server');
 
+function dbAll(sql, params = []) {
+  return new Promise((resolve, reject) => db.all(sql, params, (err, rows) => err ? reject(err) : resolve(rows)));
+}
+
+async function waitForTestFixtures(timeoutMs = 15000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const rows = await dbAll(`
+      SELECT wm.workspace_id, wm.role, w.marketplace
+      FROM workspace_memberships wm
+      JOIN users u ON u.id = wm.user_id
+      JOIN workspaces w ON w.id = wm.workspace_id
+      WHERE u.email = 'owner@omniseller.local'
+      ORDER BY wm.workspace_id
+    `);
+    if (rows.length === 2) return rows;
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  throw new Error('Timed out waiting for deterministic test fixtures');
+}
+
 async function runAuthFoundationTests() {
   console.log('================================================================');
   console.log('  TESTING PR-2B IDENTITY & SESSION FOUNDATION SECURITY SUITE');
@@ -19,6 +40,11 @@ async function runAuthFoundationTests() {
   let port;
 
   try {
+    const ownerMemberships = await waitForTestFixtures();
+    const amazonWorkspace = ownerMemberships.find(row => row.marketplace === 'AMAZON');
+    const etsyWorkspace = ownerMemberships.find(row => row.marketplace === 'ETSY');
+    assert(amazonWorkspace && etsyWorkspace, 'Amazon and Etsy owner fixtures are required');
+
     // Test 1: Scrypt Password Hashing & Timing-Safe Verification
     console.log('Test 1: Scrypt Password Hashing & Verification...');
     const plainPassword = 'SuperSecretPassword123!';
@@ -70,7 +96,8 @@ async function runAuthFoundationTests() {
       },
       body: JSON.stringify({
         email: 'owner@omniseller.local',
-        password: 'password123'
+        password: 'password123',
+        workspaceId: amazonWorkspace.workspace_id
       })
     });
 
@@ -225,11 +252,43 @@ async function runAuthFoundationTests() {
         'Content-Type': 'application/json',
         'Origin': `http://127.0.0.1:${port}`
       },
-      body: JSON.stringify({ email: 'owner@omniseller.local', password: 'password123' })
+      body: JSON.stringify({
+        email: 'owner@omniseller.local',
+        password: 'password123',
+        workspaceId: amazonWorkspace.workspace_id
+      })
     });
     const ownerCookie = ownerLoginRes.headers.get('set-cookie')?.split(';')[0];
     assert(ownerCookie, 'Owner login cookie missing');
-    console.log('  🟢 Test 11 (Approval Authorization 401/403 Protection & Owner Session): PASSED');
+
+    const createListingRes = await fetch(`http://127.0.0.1:${port}/api/listings`, {
+      method: 'POST',
+      headers: {
+        Cookie: ownerCookie,
+        'Content-Type': 'application/json',
+        Origin: `http://127.0.0.1:${port}`
+      },
+      body: JSON.stringify({
+        amazonTitle: 'Personalized Embroidered Test Sweatshirt',
+        etsyTitle: 'Personalized Embroidered Test Sweatshirt',
+        categoryName: 'Embroidery',
+        payload: {
+          ipVerdict: 'ALLOW',
+          ipHits: [],
+          etsyTags: Array.from({ length: 13 }, (_, index) => `test tag ${index + 1}`)
+        }
+      })
+    });
+    assert.strictEqual(createListingRes.status, 200, 'Owner could not create approval fixture');
+    const createdListing = await createListingRes.json();
+    const ownerApproveRes = await fetch(`http://127.0.0.1:${port}/api/listings/${createdListing.id}/approve`, {
+      method: 'PATCH',
+      headers: { Cookie: ownerCookie, Origin: `http://127.0.0.1:${port}` }
+    });
+    assert.strictEqual(ownerApproveRes.status, 200, 'Owner approval did not return 200 OK');
+    const ownerApproveBody = await ownerApproveRes.json();
+    assert.strictEqual(ownerApproveBody.status, 'PUBLISH_READY');
+    console.log('  🟢 Test 11 (Approval 401/403 & Real Owner 200): PASSED');
 
     // Test 12: Database Reset Role Authorization (Seller 403, Manager 403, Owner 200)
     console.log('\nTest 12: Database Reset Role Authorization...');
@@ -242,6 +301,19 @@ async function runAuthFoundationTests() {
     });
     assert.strictEqual(sellerResetRes.status, 403, 'Seller role database reset did not return 403 Forbidden');
 
+    const managerLoginRes = await fetch(`http://127.0.0.1:${port}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Origin: `http://127.0.0.1:${port}` },
+      body: JSON.stringify({ email: 'manager@omniseller.local', password: 'password123' })
+    });
+    assert.strictEqual(managerLoginRes.status, 200);
+    const managerCookie = managerLoginRes.headers.get('set-cookie')?.split(';')[0];
+    const managerResetRes = await fetch(`http://127.0.0.1:${port}/api/reset-database`, {
+      method: 'DELETE',
+      headers: { Cookie: managerCookie, Origin: `http://127.0.0.1:${port}` }
+    });
+    assert.strictEqual(managerResetRes.status, 403, 'Manager role database reset did not return 403 Forbidden');
+
     const ownerResetRes = await fetch(`http://127.0.0.1:${port}/api/reset-database`, {
       method: 'DELETE',
       headers: { 
@@ -250,17 +322,36 @@ async function runAuthFoundationTests() {
       }
     });
     assert.strictEqual(ownerResetRes.status, 200, 'Owner role database reset did not return 200 OK');
-    console.log('  🟢 Test 12 (Database Reset Role Scope 403 Deny & 200 Allow): PASSED');
+    const resetAudit = await dbAll("SELECT * FROM audit_events WHERE action = 'admin:reset' AND outcome = 'SUCCESS'");
+    assert(resetAudit.length >= 1, 'Successful owner reset was not appended to audit log');
+    console.log('  🟢 Test 12 (Reset Seller/Manager 403, Owner 200 & Audit): PASSED');
 
     // Test 13: Amazon vs Etsy Workspace Selection & Isolation
     console.log('\nTest 13: Amazon vs Etsy Workspace Selection...');
-    const amzLoginRes = await fetch(`http://127.0.0.1:${port}/api/auth/login`, {
+    const ambiguousLoginRes = await fetch(`http://127.0.0.1:${port}/api/auth/login`, {
       method: 'POST',
       headers: { 
         'Content-Type': 'application/json',
         'Origin': `http://127.0.0.1:${port}`
       },
       body: JSON.stringify({ email: 'owner@omniseller.local', password: 'password123' })
+    });
+    assert.strictEqual(ambiguousLoginRes.status, 409, 'Multi-workspace login silently selected a workspace');
+    const ambiguousBody = await ambiguousLoginRes.json();
+    assert.strictEqual(ambiguousBody.error, 'WORKSPACE_SELECTION_REQUIRED');
+    assert.deepStrictEqual(
+      new Set(ambiguousBody.workspaces.map(workspace => workspace.marketplace)),
+      new Set(['AMAZON', 'ETSY'])
+    );
+
+    const amzLoginRes = await fetch(`http://127.0.0.1:${port}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Origin: `http://127.0.0.1:${port}` },
+      body: JSON.stringify({
+        email: 'owner@omniseller.local',
+        password: 'password123',
+        workspaceId: amazonWorkspace.workspace_id
+      })
     });
     assert.strictEqual(amzLoginRes.status, 200);
     const amzBody = await amzLoginRes.json();
@@ -272,7 +363,11 @@ async function runAuthFoundationTests() {
         'Content-Type': 'application/json',
         'Origin': `http://127.0.0.1:${port}`
       },
-      body: JSON.stringify({ email: 'owner@omniseller.local', password: 'password123', workspaceId: amzBody.user.workspaceId + 1 })
+      body: JSON.stringify({
+        email: 'owner@omniseller.local',
+        password: 'password123',
+        workspaceId: etsyWorkspace.workspace_id
+      })
     });
     assert.strictEqual(etsyLoginRes.status, 200, 'Explicit Etsy workspace login failed');
     const etsyBody = await etsyLoginRes.json();

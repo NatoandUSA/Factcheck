@@ -334,7 +334,8 @@ app.post('/api/auth/login', async (req, res) => {
       });
     }
 
-    // Query active memberships with explicit ordering or specific workspaceId (AUTH-05)
+    // Query every active membership. Multi-workspace users must choose explicitly;
+    // silently selecting the first workspace can cross marketplace boundaries.
     let membershipQuery = `
       SELECT wm.workspace_id, wm.role, w.tenant_id, w.marketplace, w.name as workspace_name
       FROM workspace_memberships wm
@@ -347,16 +348,35 @@ app.post('/api/auth/login', async (req, res) => {
       membershipQuery += ` AND wm.workspace_id = ?`;
       queryParams.push(workspaceId);
     }
-    membershipQuery += ` ORDER BY w.id ASC LIMIT 1`;
+    membershipQuery += ` ORDER BY w.id ASC`;
 
-    db.get(membershipQuery, queryParams, (err, membership) => {
-      if (err || !membership) {
+    db.all(membershipQuery, queryParams, (err, memberships) => {
+      if (err) {
+        return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
+      }
+      if (!memberships || memberships.length === 0) {
         return res.status(403).json({
           success: false,
           error: 'NO_ACTIVE_WORKSPACE',
           message: 'User does not belong to the specified active workspace'
         });
       }
+
+      if (!workspaceId && memberships.length > 1) {
+        return res.status(409).json({
+          success: false,
+          error: 'WORKSPACE_SELECTION_REQUIRED',
+          message: 'Choose an explicit workspace before a session can be created',
+          workspaces: memberships.map(membership => ({
+            id: membership.workspace_id,
+            name: membership.workspace_name,
+            marketplace: membership.marketplace,
+            role: membership.role
+          }))
+        });
+      }
+
+      const membership = memberships[0];
 
       createSessionRecord(db, user.id, membership.workspace_id, membership.tenant_id, (err, session) => {
         if (err) {
@@ -433,13 +453,21 @@ app.get('/api/auth/me', requireAuth(db), (req, res) => {
 
 // API: Full Database Reset (Wipe all old listings, trends, and templates - Protected OWNER Only)
 app.delete('/api/reset-database', requireAuth(db), requireRole(['OWNER']), (req, res) => {
-
   db.serialize(() => {
-    db.run("DELETE FROM listings;");
-    db.run("DELETE FROM market_trends;");
-    db.run("DELETE FROM learned_templates;");
+    db.run("DELETE FROM listings");
+    db.run("DELETE FROM market_trends");
+    db.run("DELETE FROM learned_templates", [], (err) => {
+      if (err) return res.status(500).json({ success: false, error: 'RESET_FAILED' });
+      db.run(
+        "INSERT INTO audit_events (tenant_id, actor_id, action, resource_type, outcome) VALUES (?, ?, ?, ?, ?)",
+        [req.user.tenantId, req.user.userId, 'admin:reset', 'database', 'SUCCESS'],
+        auditErr => {
+          if (auditErr) return res.status(500).json({ success: false, error: 'AUDIT_WRITE_FAILED' });
+          res.json({ success: true, message: 'Đã xóa dữ liệu listing, trend và template trong hệ thống.' });
+        }
+      );
+    });
   });
-  res.json({ success: true, message: 'Đã xóa toàn bộ dữ liệu thử nghiệm cũ! Hệ thống đã được đưa về trạng thái trống sạch 100%.' });
 });
 
 
@@ -454,8 +482,8 @@ app.post('/api/login', (req, res) => {
 
 
 // Create a new listing (DRAFT/NEEDS_QA or IP_RISK_BLOCKED)
-app.post('/api/listings', (req, res) => {
-  const { amazonTitle, etsyTitle, categoryName, payload = {}, authorId } = req.body;
+app.post('/api/listings', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
+  const { amazonTitle, etsyTitle, categoryName, payload = {} } = req.body;
   
   const listingData = { amazonTitle, etsyTitle, categoryName, ...payload };
   const ipResult = ipGuard.screenListing(listingData);
@@ -485,7 +513,7 @@ app.post('/api/listings', (req, res) => {
   
   db.run(
     "INSERT INTO listings (amazonTitle, etsyTitle, categoryName, status, authorId, payload) VALUES (?, ?, ?, ?, ?, ?)",
-    [amazonTitle, etsyTitle, categoryName, status, authorId, JSON.stringify(updatedPayload)],
+    [amazonTitle, etsyTitle, categoryName, status, req.user.userId, JSON.stringify(updatedPayload)],
     function(err) {
       if (err) return res.status(500).json({ error: err.message });
       res.json({ id: this.lastID, status, payload: updatedPayload });
@@ -494,7 +522,7 @@ app.post('/api/listings', (req, res) => {
 });
 
 // Get all listings
-app.get('/api/listings', (req, res) => {
+app.get('/api/listings', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
   db.all("SELECT * FROM listings ORDER BY generatedAt DESC", [], (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
     const safeRows = rows.map(r => {
@@ -551,7 +579,7 @@ app.patch('/api/listings/:id/approve', requireAuth(db), requireRole(['OWNER', 'M
 
 
 // Export a listing (Gated server-side by Canonical Publish Gate)
-app.get('/api/listings/:id/export', (req, res) => {
+app.get('/api/listings/:id/export', requireAuth(db), requireRole(['OWNER', 'MANAGER']), (req, res) => {
   const { id } = req.params;
 
   db.get("SELECT * FROM listings WHERE id = ?", [id], (err, row) => {
@@ -908,7 +936,7 @@ app.get('/api/ip-guard/library', (req, res) => {
 });
 
 // API: Add Custom Term to Unified IP Guard Blacklist/Whitelist
-app.post('/api/ip-guard/custom-term', (req, res) => {
+app.post('/api/ip-guard/custom-term', requireAuth(db), requireRole(['OWNER']), (req, res) => {
   const { term, category = 'custom_brands', action = 'block' } = req.body;
   if (!term) return res.status(400).json({ error: 'Term is required' });
 
@@ -936,7 +964,7 @@ app.post('/api/ip-guard/custom-term', (req, res) => {
 });
 
 // API: Multi-LLM Settings (Gemini, OpenAI GPT, Anthropic Claude)
-app.get('/api/settings/llm', (req, res) => {
+app.get('/api/settings/llm', requireAuth(db), requireRole(['OWNER']), (req, res) => {
   db.all("SELECT key, value FROM settings WHERE key IN ('gemini_api_key', 'openai_api_key', 'claude_api_key', 'active_llm_provider')", [], (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
     const keys = {};
@@ -955,7 +983,7 @@ app.get('/api/settings/llm', (req, res) => {
   });
 });
 
-app.post('/api/settings/llm', (req, res) => {
+app.post('/api/settings/llm', requireAuth(db), requireRole(['OWNER']), (req, res) => {
   const { geminiApiKey, openaiApiKey, claudeApiKey, activeProvider = 'GEMINI' } = req.body;
   
   db.serialize(() => {
@@ -1495,24 +1523,6 @@ app.get('/api/benchmark/validate', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-
-// API: Reset / Wipe Database Endpoint
-app.delete('/api/reset-database', (req, res) => {
-
-  db.serialize(() => {
-    db.run("DELETE FROM listings");
-    db.run("DELETE FROM market_trends");
-    db.run("DELETE FROM agent_logs");
-    db.run("DELETE FROM sqlite_sequence WHERE name IN ('listings', 'market_trends', 'agent_logs')", (err) => {
-      if (err) {
-        return res.status(500).json({ error: err.message });
-      }
-      res.json({ success: true, message: 'All database tables wiped and IDs reset successfully.' });
-    });
-  });
-});
-
-
 
 // API: Upload and process Helium 10 / CSV / HTML reports (Universal handler with aliases)
 const handleReportUpload = (req, res) => {
@@ -2080,7 +2090,7 @@ app.post('/api/agents/:id/toggle', (req, res) => {
 });
 
 // Background Interval Engine (Simulates independent agents)
-setInterval(() => {
+const backgroundAgentTimer = setInterval(() => {
   db.all("SELECT * FROM agents WHERE status = 'ONLINE'", [], (err, onlineAgents) => {
     if (err || !onlineAgents) return;
 
@@ -2296,6 +2306,9 @@ setInterval(() => {
   });
 }, 8000); // Agents evaluate their loops every 8 seconds
 
+// Do not keep test runners or short-lived CLI processes alive solely for this timer.
+backgroundAgentTimer.unref();
+
 const PORT = process.env.PORT || 3001;
 let serverInstance = null;
 
@@ -2305,5 +2318,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app, db, serverInstance };
-
+module.exports = { app, db, serverInstance, backgroundAgentTimer };

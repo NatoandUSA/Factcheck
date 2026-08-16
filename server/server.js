@@ -23,11 +23,13 @@ const benchmarkService = require('./benchmarkService');
 const publishGate = require('./publishGate');
 const { hashPassword, verifyPassword } = require('./security/scrypt');
 const { COOKIE_NAME, SESSION_TTL_MS, createSessionRecord, verifySessionRecord, revokeSessionRecord } = require('./security/session');
-const { parseCookies, extractRawToken, requireAuth, requireRole } = require('./middleware/auth');
+const { parseCookies, extractRawToken, requireAuth, requireRole, requireCsrfOrigin } = require('./middleware/auth');
 
 const app = express();
 app.use(cors());
 app.use(express.json());
+app.use(requireCsrfOrigin);
+
 
 // Ensure data/imports directory exists (Isolated in test mode)
 const importsDir = process.env.TEST_IMPORTS_DIR
@@ -61,6 +63,8 @@ const db = new sqlite3.Database(dbPath);
 
 // Initialize DB schema
 db.serialize(() => {
+  db.run("PRAGMA foreign_keys = ON;");
+
   db.run(`
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -70,6 +74,7 @@ db.serialize(() => {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `);
+
 
   db.run(`
     CREATE TABLE IF NOT EXISTS workspaces (
@@ -208,53 +213,56 @@ db.serialize(() => {
     )
   `);
 
-  // Seed default users & workspaces if empty
-  db.get("SELECT COUNT(*) as count FROM users", async (err, row) => {
-    if (row && row.count === 0) {
-      console.log('Seeding initial users and workspaces...');
-      try {
-        const defaultPasswordHash = await hashPassword('password123');
-        
-        db.run("INSERT INTO users (email, password_hash, name) VALUES (?, ?, ?)", 
-          ['owner@omniseller.local', defaultPasswordHash, 'Store Owner'], function(err) {
-            if (err) return;
-            const ownerId = this.lastID;
-            
-            db.run("INSERT INTO workspaces (tenant_id, marketplace, name) VALUES (?, ?, ?)",
-              ['tenant-alpha-uuid', 'AMAZON', 'Amazon Main Store'], function(err) {
-                if (err) return;
-                const amzWorkspaceId = this.lastID;
-                db.run("INSERT INTO workspace_memberships (user_id, workspace_id, role) VALUES (?, ?, ?)",
-                  [ownerId, amzWorkspaceId, 'OWNER']);
-              });
+  // Seed default users & workspaces ONLY in test environment
+  if (process.env.NODE_ENV === 'test') {
+    db.get("SELECT COUNT(*) as count FROM users", async (err, row) => {
+      if (row && row.count === 0) {
+        console.log('Seeding test users and workspaces...');
+        try {
+          const defaultPasswordHash = await hashPassword('password123');
+          
+          db.run("INSERT INTO users (email, password_hash, name) VALUES (?, ?, ?)", 
+            ['owner@omniseller.local', defaultPasswordHash, 'Store Owner'], function(err) {
+              if (err) return;
+              const ownerId = this.lastID;
+              
+              db.run("INSERT INTO workspaces (tenant_id, marketplace, name) VALUES (?, ?, ?)",
+                ['tenant-alpha-uuid', 'AMAZON', 'Amazon Main Store'], function(err) {
+                  if (err) return;
+                  const amzWorkspaceId = this.lastID;
+                  db.run("INSERT INTO workspace_memberships (user_id, workspace_id, role) VALUES (?, ?, ?)",
+                    [ownerId, amzWorkspaceId, 'OWNER']);
+                });
 
-            db.run("INSERT INTO workspaces (tenant_id, marketplace, name) VALUES (?, ?, ?)",
-              ['tenant-alpha-uuid', 'ETSY', 'Etsy Craft Studio'], function(err) {
-                if (err) return;
-                const etsyWorkspaceId = this.lastID;
-                db.run("INSERT INTO workspace_memberships (user_id, workspace_id, role) VALUES (?, ?, ?)",
-                  [ownerId, etsyWorkspaceId, 'OWNER']);
-              });
-          });
+              db.run("INSERT INTO workspaces (tenant_id, marketplace, name) VALUES (?, ?, ?)",
+                ['tenant-alpha-uuid', 'ETSY', 'Etsy Craft Studio'], function(err) {
+                  if (err) return;
+                  const etsyWorkspaceId = this.lastID;
+                  db.run("INSERT INTO workspace_memberships (user_id, workspace_id, role) VALUES (?, ?, ?)",
+                    [ownerId, etsyWorkspaceId, 'OWNER']);
+                });
+            });
 
-        db.run("INSERT INTO users (email, password_hash, name) VALUES (?, ?, ?)",
-          ['manager@omniseller.local', defaultPasswordHash, 'Ops Manager'], function(err) {
-            if (err) return;
-            const managerId = this.lastID;
-            db.run("INSERT INTO workspace_memberships (user_id, workspace_id, role) VALUES (?, 1, ?)", [managerId, 'MANAGER']);
-          });
+          db.run("INSERT INTO users (email, password_hash, name) VALUES (?, ?, ?)",
+            ['manager@omniseller.local', defaultPasswordHash, 'Ops Manager'], function(err) {
+              if (err) return;
+              const managerId = this.lastID;
+              db.run("INSERT INTO workspace_memberships (user_id, workspace_id, role) VALUES (?, 1, ?)", [managerId, 'MANAGER']);
+            });
 
-        db.run("INSERT INTO users (email, password_hash, name) VALUES (?, ?, ?)",
-          ['seller@omniseller.local', defaultPasswordHash, 'Listing Specialist'], function(err) {
-            if (err) return;
-            const sellerId = this.lastID;
-            db.run("INSERT INTO workspace_memberships (user_id, workspace_id, role) VALUES (?, 1, ?)", [sellerId, 'SELLER']);
-          });
-      } catch (e) {
-        console.error('Seeding error:', e);
+          db.run("INSERT INTO users (email, password_hash, name) VALUES (?, ?, ?)",
+            ['seller@omniseller.local', defaultPasswordHash, 'Listing Specialist'], function(err) {
+              if (err) return;
+              const sellerId = this.lastID;
+              db.run("INSERT INTO workspace_memberships (user_id, workspace_id, role) VALUES (?, 1, ?)", [sellerId, 'SELLER']);
+            });
+        } catch (e) {
+          console.error('Seeding error:', e);
+        }
       }
-    }
-  });
+    });
+  }
+
 
   // Seed default agents if empty
   db.get("SELECT COUNT(*) as count FROM agents", (err, row) => {

@@ -82,7 +82,8 @@ async function runAuthFoundationTests() {
     assert(setCookieHeader.includes('HttpOnly'), 'HttpOnly attribute missing from cookie');
 
     const cookieValue = setCookieHeader.split(';')[0];
-    console.log(`  Received Session Cookie: ${cookieValue}`);
+    // Redacted log: Do NOT print raw session token into logs
+    console.log(`  Received Session Cookie: omni_session=***[REDACTED_SESSION_TOKEN]***`);
     console.log('  🟢 Test 4 (Login 200 & HttpOnly Session Cookie): PASSED');
 
     // Test 5: Authenticated GET /api/auth/me with Cookie -> 200 OK
@@ -116,8 +117,26 @@ async function runAuthFoundationTests() {
     assert.strictEqual(meAfterLogout.status, 401, 'Revoked session accessed endpoint successfully');
     console.log('  🟢 Test 6 (Session Revocation & Cookie Teardown): PASSED');
 
+    // Test 7: Malformed Cookie & CSRF Origin Mismatch -> Safe Fail-Closed
+    console.log('\nTest 7: Malformed Cookie & CSRF Origin Mismatch...');
+    const malformedRes = await fetch(`http://127.0.0.1:${port}/api/auth/me`, {
+      headers: { Cookie: 'omni_session=%E0%A4%A' } // Malformed percent encoding
+    });
+    assert.strictEqual(malformedRes.status, 401, 'Malformed cookie did not return 401');
+
+    const csrfRes = await fetch(`http://127.0.0.1:${port}/api/auth/logout`, {
+      method: 'POST',
+      headers: { 
+        Cookie: cookieValue,
+        Origin: 'https://evil-attacker-site.com',
+        Host: `127.0.0.1:${port}`
+      }
+    });
+    assert.strictEqual(csrfRes.status, 403, 'Cross-site CSRF request was not blocked with 403');
+    console.log('  🟢 Test 7 (Malformed Cookie & CSRF Protection): PASSED');
+
     console.log('\n================================================================');
-    console.log('  🟢 ALL 6 PR-2B AUTHENTICATION FOUNDATION TESTS PASSED!');
+    console.log('  🟢 ALL 7 PR-2B AUTHENTICATION FOUNDATION TESTS PASSED!');
     console.log('================================================================\n');
 
   } finally {
@@ -130,7 +149,6 @@ async function runAuthFoundationTests() {
     process.exit(0);
   }
 }
-
 
 runAuthFoundationTests().catch(err => {
   console.error('🔴 UNHANDLED REJECTION IN AUTH FOUNDATION TEST:', err);

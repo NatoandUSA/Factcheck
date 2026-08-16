@@ -10,9 +10,6 @@
  */
 
 const crypto = require('crypto');
-const { promisify } = require('util');
-
-const scryptAsync = promisify(crypto.scrypt);
 
 const SCRYPT_PREFIX = 'scrypt$v1$N=16384,r=8,p=1$';
 const COST_N = 16384;
@@ -21,67 +18,77 @@ const PARALLELIZATION_P = 1;
 const KEY_LEN = 64;
 const SALT_LEN = 16;
 
-// Pre-computed dummy hash to run timing-safe comparison on non-existent users
-const DUMMY_SALT = crypto.randomBytes(SALT_LEN).toString('hex');
-let DUMMY_HASH_HEX = '';
+// Pre-computed dummy salt & hash to run timing-safe comparison on non-existent users
+const DUMMY_SALT = '00112233445566778899aabbccddeeff';
+const DUMMY_HASH_HEX = crypto.scryptSync('dummy_password_protection', DUMMY_SALT, KEY_LEN, {
+  N: COST_N,
+  r: BLOCK_SIZE_R,
+  p: PARALLELIZATION_P
+}).toString('hex');
 
-async function initDummyHash() {
-  const buf = await scryptAsync('dummy_password_protection', DUMMY_SALT, KEY_LEN, {
-    N: COST_N,
-    r: BLOCK_SIZE_R,
-    p: PARALLELIZATION_P
+function hashPassword(plainTextPassword) {
+  return new Promise((resolve, reject) => {
+    if (!plainTextPassword || typeof plainTextPassword !== 'string') {
+      return reject(new Error('Password must be a non-empty string'));
+    }
+    const saltBuf = crypto.randomBytes(SALT_LEN);
+    const saltHex = saltBuf.toString('hex');
+    
+    crypto.scrypt(plainTextPassword, saltHex, KEY_LEN, {
+      N: COST_N,
+      r: BLOCK_SIZE_R,
+      p: PARALLELIZATION_P
+    }, (err, derivedKey) => {
+      if (err) return reject(err);
+      resolve(`${SCRYPT_PREFIX}${saltHex}$${derivedKey.toString('hex')}`);
+    });
   });
-  DUMMY_HASH_HEX = buf.toString('hex');
-}
-initDummyHash().catch(() => {});
-
-async function hashPassword(plainTextPassword) {
-  if (!plainTextPassword || typeof plainTextPassword !== 'string') {
-    throw new Error('Password must be a non-empty string');
-  }
-  const saltBuf = crypto.randomBytes(SALT_LEN);
-  const saltHex = saltBuf.toString('hex');
-  const derivedKey = await scryptAsync(plainTextPassword, saltHex, KEY_LEN, {
-    N: COST_N,
-    r: BLOCK_SIZE_R,
-    p: PARALLELIZATION_P
-  });
-  return `${SCRYPT_PREFIX}${saltHex}$${derivedKey.toString('hex')}`;
 }
 
-async function verifyPassword(plainTextPassword, storedHashString) {
-  if (!storedHashString || !storedHashString.startsWith(SCRYPT_PREFIX)) {
-    // Perform dummy work to equalize execution timing
-    if (DUMMY_HASH_HEX) {
-      const dummyBuf = await scryptAsync(plainTextPassword || 'dummy', DUMMY_SALT, KEY_LEN, {
+function verifyPassword(plainTextPassword, storedHashString) {
+  return new Promise((resolve) => {
+    if (!storedHashString || typeof storedHashString !== 'string' || !storedHashString.startsWith(SCRYPT_PREFIX)) {
+      // Perform dummy work to equalize execution timing
+      crypto.scrypt(plainTextPassword || 'dummy', DUMMY_SALT, KEY_LEN, {
         N: COST_N,
         r: BLOCK_SIZE_R,
         p: PARALLELIZATION_P
+      }, (err, dummyBuf) => {
+        if (!err && dummyBuf) {
+          try {
+            crypto.timingSafeEqual(dummyBuf, Buffer.from(DUMMY_HASH_HEX, 'hex'));
+          } catch (e) {}
+        }
+        resolve(false);
       });
-      crypto.timingSafeEqual(dummyBuf, Buffer.from(DUMMY_HASH_HEX, 'hex'));
+      return;
     }
-    return false;
-  }
 
-  const parts = storedHashString.substring(SCRYPT_PREFIX.length).split('$');
-  if (parts.length !== 2) {
-    return false;
-  }
+    const parts = storedHashString.substring(SCRYPT_PREFIX.length).split('$');
+    if (parts.length !== 2) {
+      return resolve(false);
+    }
 
-  const [saltHex, originalHashHex] = parts;
-  const originalHashBuf = Buffer.from(originalHashHex, 'hex');
+    const [saltHex, originalHashHex] = parts;
+    const originalHashBuf = Buffer.from(originalHashHex, 'hex');
 
-  const derivedBuf = await scryptAsync(plainTextPassword, saltHex, KEY_LEN, {
-    N: COST_N,
-    r: BLOCK_SIZE_R,
-    p: PARALLELIZATION_P
+    crypto.scrypt(plainTextPassword, saltHex, KEY_LEN, {
+      N: COST_N,
+      r: BLOCK_SIZE_R,
+      p: PARALLELIZATION_P
+    }, (err, derivedBuf) => {
+      if (err || !derivedBuf || derivedBuf.length !== originalHashBuf.length) {
+        return resolve(false);
+      }
+
+      try {
+        const match = crypto.timingSafeEqual(derivedBuf, originalHashBuf);
+        resolve(match);
+      } catch (e) {
+        resolve(false);
+      }
+    });
   });
-
-  if (derivedBuf.length !== originalHashBuf.length) {
-    return false;
-  }
-
-  return crypto.timingSafeEqual(derivedBuf, originalHashBuf);
 }
 
 module.exports = {

@@ -4,23 +4,27 @@
  * 
  * Rules:
  * 1. Zero reliance on client-supplied userRole or userId.
- * 2. Parses cookie omni_session / __Host-omni_session or Authorization Bearer header.
- * 3. Sets req.user = { userId, email, workspaceId, tenantId, marketplace, role }.
- * 4. Fails closed with 401 Unauthorized or 403 Forbidden.
+ * 2. Parses cookie omni_session / __Host-omni_session strictly.
+ * 3. Fails closed with 401 Unauthorized or 403 Forbidden.
+ * 4. CSRF Origin validation for state-changing HTTP requests.
  */
 
 const { COOKIE_NAME, verifySessionRecord } = require('../security/session');
 
 function parseCookies(cookieHeader) {
   const list = {};
-  if (!cookieHeader) return list;
+  if (!cookieHeader || typeof cookieHeader !== 'string') return list;
   cookieHeader.split(';').forEach(cookie => {
     let [name, ...rest] = cookie.split('=');
     name = name?.trim();
     if (!name) return;
     const value = rest.join('=').trim();
     if (!value) return;
-    list[name] = decodeURIComponent(value);
+    try {
+      list[name] = decodeURIComponent(value);
+    } catch (e) {
+      // Malformed percent-encoding ignored
+    }
   });
   return list;
 }
@@ -29,11 +33,6 @@ function extractRawToken(req) {
   const cookies = parseCookies(req.headers.cookie);
   if (cookies[COOKIE_NAME]) {
     return cookies[COOKIE_NAME];
-  }
-  // Fallback for dev/Bearer
-  const authHeader = req.headers.authorization;
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    return authHeader.substring(7).trim();
   }
   return null;
 }
@@ -88,9 +87,51 @@ function requireRole(allowedRoles) {
   };
 }
 
+function requireCsrfOrigin(req, res, next) {
+  const method = req.method.toUpperCase();
+  if (['GET', 'HEAD', 'OPTIONS'].includes(method)) {
+    return next();
+  }
+
+  const origin = req.headers.origin || req.headers.referer;
+  const host = req.headers.host;
+
+  if (!origin || !host) {
+    // Fail closed if state-changing request has missing origin/referer in production
+    if (process.env.NODE_ENV === 'production') {
+      return res.status(403).json({
+        success: false,
+        error: 'CSRF_ORIGIN_MISSING',
+        message: 'State-changing requests require valid Origin/Referer header'
+      });
+    }
+    return next();
+  }
+
+  try {
+    const originUrl = new URL(origin);
+    if (originUrl.host !== host) {
+      return res.status(403).json({
+        success: false,
+        error: 'CSRF_ORIGIN_MISMATCH',
+        message: 'Cross-site request blocked by CSRF policy'
+      });
+    }
+  } catch (e) {
+    return res.status(403).json({
+      success: false,
+      error: 'CSRF_ORIGIN_INVALID',
+      message: 'Invalid Origin/Referer header'
+    });
+  }
+
+  next();
+}
+
 module.exports = {
   parseCookies,
   extractRawToken,
   requireAuth,
-  requireRole
+  requireRole,
+  requireCsrfOrigin
 };

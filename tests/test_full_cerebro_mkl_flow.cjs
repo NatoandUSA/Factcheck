@@ -34,6 +34,7 @@ function httpPostMultipart(port, filePath) {
       path: '/api/upload-h10',
       method: 'POST',
       headers: {
+        'Origin': `http://localhost:${port}`,
         'Content-Type': `multipart/form-data; boundary=${boundary}`,
         'Content-Length': postDataHeader.length + fileContent.length + postDataFooter.length
       }
@@ -77,6 +78,7 @@ async function testFullCerebroMklFlow() {
   // PR-1.1 Fix: Bind to OS-assigned ephemeral port (app.listen(0))
   const server = app.listen(0);
   const TEST_PORT = server.address().port;
+  process.env.ALLOWED_ORIGINS = `http://localhost:${TEST_PORT},http://127.0.0.1:${TEST_PORT}`;
   console.log(`Bound in-process server to ephemeral OS port ${TEST_PORT}`);
 
   try {
@@ -123,4 +125,3 @@ testFullCerebroMklFlow().catch(err => {
   console.error('🔴 UNHANDLED REJECTION IN CEREBRO TEST:', err);
   process.exitCode = 1;
 });
-

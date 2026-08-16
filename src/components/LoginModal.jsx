@@ -5,6 +5,9 @@ import { UserCircle, ShieldCheck, X } from 'lucide-react';
 export default function LoginModal({ isOpen, onClose }) {
   const { login } = useAuth();
   const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [workspaceId, setWorkspaceId] = useState('');
+  const [workspaces, setWorkspaces] = useState([]);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -15,9 +18,14 @@ export default function LoginModal({ isOpen, onClose }) {
     setError('');
     setLoading(true);
     try {
-      await login(email);
+      await login({ email, password, workspaceId: workspaceId ? Number(workspaceId) : undefined });
       onClose();
     } catch (err) {
+      if (err.code === 'WORKSPACE_SELECTION_REQUIRED') {
+        setWorkspaces(err.workspaces);
+        setError('Tài khoản có nhiều workspace. Hãy chọn Amazon hoặc Etsy rồi đăng nhập lại.');
+        return;
+      }
       setError(err.message);
     } finally {
       setLoading(false);
@@ -52,6 +60,32 @@ export default function LoginModal({ isOpen, onClose }) {
             />
           </div>
 
+          <div className="form-group">
+            <label className="form-label">Password</label>
+            <input
+              type="password"
+              className="form-input"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete="current-password"
+              required
+            />
+          </div>
+
+          {workspaces.length > 0 && (
+            <div className="form-group">
+              <label className="form-label">Workspace</label>
+              <select className="form-input" value={workspaceId} onChange={e => setWorkspaceId(e.target.value)} required>
+                <option value="">Chọn workspace</option>
+                {workspaces.map(workspace => (
+                  <option key={workspace.id} value={workspace.id}>
+                    {workspace.marketplace} — {workspace.name} ({workspace.role})
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
           {error && <div style={{ color: 'var(--danger)', fontSize: '0.8rem', marginBottom: '16px' }}>{error}</div>}
 
           <div style={{ background: 'var(--bg-subtle)', padding: '12px', borderRadius: '8px', marginBottom: '20px', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
@@ -61,7 +95,7 @@ export default function LoginModal({ isOpen, onClose }) {
               <li>owner@omniseller.local (Owner)</li>
               <li>manager@omniseller.local (Manager)</li>
               <li>seller@omniseller.local (Seller)</li>
-              <li>designer@omniseller.local (Designer)</li>
+              <li>Mật khẩu fixture kiểm thử không được sử dụng trong production</li>
             </ul>
           </div>
 

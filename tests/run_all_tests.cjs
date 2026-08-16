@@ -22,12 +22,18 @@ function runAllTests() {
   testFiles.forEach((file, idx) => {
     console.log(`[Test ${idx + 1}/${testFiles.length}] Executing ${file}...`);
     try {
-      const output = execSync(`node ${file}`, { encoding: 'utf-8', cwd: path.resolve(__dirname, '..') });
+      const output = execSync(`node ${file}`, {
+        encoding: 'utf-8',
+        cwd: path.resolve(__dirname, '..'),
+        timeout: 180000,
+        killSignal: 'SIGTERM'
+      });
       console.log(output);
       console.log(`✅ ${file} PASSED CLEANLY!\n`);
       passedCount++;
     } catch (err) {
-      console.error(`🔴 ${file} FAILED WITH EXIT CODE 1:`, err.message);
+      const reason = err.code === 'ETIMEDOUT' ? 'TIMED OUT AFTER 180 SECONDS' : err.message;
+      console.error(`🔴 ${file} FAILED:`, reason);
       process.exit(1);
     }
   });

@@ -61,7 +61,7 @@ export default function ListingOutputViewer({ listing, onSaveListing, onShowToas
     try {
       // H7 Fix: Verify Server-Side Authorization & Canonical Publish Gate
       const listingId = listing.dbId || listing.id || 1;
-      const res = await fetch(`http://localhost:3001/api/listings/${listingId}/export`);
+      const res = await fetch(`/api/listings/${listingId}/export`, { credentials: 'include' });
       const gateData = await res.json();
 
       if (!res.ok || !gateData.success) {

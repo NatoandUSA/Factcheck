@@ -52,7 +52,6 @@ async function runAuthFoundationTests() {
     process.env.ALLOWED_ORIGINS = `http://127.0.0.1:${port},http://localhost:${port}`;
     console.log(`\nBound test Express server to ephemeral port ${port} and configured ALLOWED_ORIGINS`);
 
-
     // Test 3: Unauthenticated GET /api/auth/me -> 401 Unauthorized
     console.log('\nTest 3: Unauthenticated GET /api/auth/me...');
     const unauthRes = await fetch(`http://127.0.0.1:${port}/api/auth/me`);
@@ -114,7 +113,6 @@ async function runAuthFoundationTests() {
       }
     });
 
-
     assert.strictEqual(logoutRes.status, 200);
     const logoutBody = await logoutRes.json();
     assert.strictEqual(logoutBody.success, true);
@@ -144,8 +142,56 @@ async function runAuthFoundationTests() {
     assert.strictEqual(csrfRes.status, 403, 'Cross-site CSRF request was not blocked with 403');
     console.log('  🟢 Test 7 (Malformed Cookie & CSRF Protection): PASSED');
 
+    // Test 8: Legacy Tombstone POST /api/login -> 410 Gone (Zero User Data)
+    console.log('\nTest 8: Legacy Tombstone POST /api/login...');
+    const legacyRes = await fetch(`http://127.0.0.1:${port}/api/login`, {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json',
+        'Origin': `http://127.0.0.1:${port}`
+      },
+      body: JSON.stringify({ email: 'owner@omniseller.local' })
+    });
+    assert.strictEqual(legacyRes.status, 410, 'Legacy login endpoint did not return 410 Gone');
+    const legacyBody = await legacyRes.json();
+    assert.strictEqual(legacyBody.error, 'ENDPOINT_DEPRECATED');
+    assert(!legacyBody.user, 'Legacy endpoint returned user data');
+    console.log('  🟢 Test 8 (Legacy Tombstone 410 Protection): PASSED');
+
+    // Test 9: Protected DELETE /api/reset-database -> 401 Unauthorized
+    console.log('\nTest 9: Protected DELETE /api/reset-database...');
+    const resetRes = await fetch(`http://127.0.0.1:${port}/api/reset-database`, {
+      method: 'DELETE',
+      headers: { 'Origin': `http://127.0.0.1:${port}` }
+    });
+    assert.strictEqual(resetRes.status, 401, 'Unauthenticated reset database request did not return 401');
+    console.log('  🟢 Test 9 (Protected Reset-Database 401): PASSED');
+
+    // Test 10: Input Bounds & Non-Member Workspace Denial
+    console.log('\nTest 10: Input Bounds & Non-Member Workspace Denial...');
+    const shortPassRes = await fetch(`http://127.0.0.1:${port}/api/auth/login`, {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json',
+        'Origin': `http://127.0.0.1:${port}`
+      },
+      body: JSON.stringify({ email: 'owner@omniseller.local', password: '123' })
+    });
+    assert.strictEqual(shortPassRes.status, 400, 'Short password did not return 400 Bad Request');
+
+    const nonMemberWsRes = await fetch(`http://127.0.0.1:${port}/api/auth/login`, {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json',
+        'Origin': `http://127.0.0.1:${port}`
+      },
+      body: JSON.stringify({ email: 'owner@omniseller.local', password: 'password123', workspaceId: 99999 })
+    });
+    assert.strictEqual(nonMemberWsRes.status, 403, 'Non-member workspaceId login did not return 403 Forbidden');
+    console.log('  🟢 Test 10 (Input Bounds & Workspace Denial 403): PASSED');
+
     console.log('\n================================================================');
-    console.log('  🟢 ALL 7 PR-2B AUTHENTICATION FOUNDATION TESTS PASSED!');
+    console.log('  🟢 ALL 10 PR-2B AUTHENTICATION FOUNDATION TESTS PASSED!');
     console.log('================================================================\n');
 
   } finally {
@@ -157,7 +203,6 @@ async function runAuthFoundationTests() {
     }
   }
 }
-
 
 runAuthFoundationTests().catch(err => {
   console.error('🔴 UNHANDLED REJECTION IN AUTH FOUNDATION TEST:', err);

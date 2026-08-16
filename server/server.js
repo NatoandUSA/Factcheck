@@ -23,13 +23,12 @@ const benchmarkService = require('./benchmarkService');
 const publishGate = require('./publishGate');
 const { hashPassword, verifyPassword } = require('./security/scrypt');
 const { COOKIE_NAME, SESSION_TTL_MS, createSessionRecord, verifySessionRecord, revokeSessionRecord } = require('./security/session');
-const { parseCookies, extractRawToken, requireAuth, requireRole, requireCsrfOrigin } = require('./middleware/auth');
+const { parseCookies, extractRawToken, requireAuth, requireRole, requireCsrfOrigin, corsOptionsDelegate } = require('./middleware/auth');
 
 const app = express();
-app.use(cors());
-app.use(express.json());
+app.use(cors(corsOptionsDelegate));
+app.use(express.json({ limit: '100kb' }));
 app.use(requireCsrfOrigin);
-
 
 // Ensure data/imports directory exists (Isolated in test mode)
 const importsDir = process.env.TEST_IMPORTS_DIR
@@ -75,7 +74,6 @@ db.serialize(() => {
     )
   `);
 
-
   db.run(`
     CREATE TABLE IF NOT EXISTS workspaces (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -95,7 +93,9 @@ db.serialize(() => {
       role TEXT NOT NULL CHECK(role IN ('OWNER', 'MANAGER', 'SELLER')),
       status TEXT DEFAULT 'ACTIVE',
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE(user_id, workspace_id)
+      UNIQUE(user_id, workspace_id),
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY(workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
     )
   `);
 
@@ -108,9 +108,12 @@ db.serialize(() => {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       last_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       expires_at DATETIME NOT NULL,
-      revoked_at DATETIME NULL
+      revoked_at DATETIME NULL,
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY(workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
     )
   `);
+
 
   db.run(`
     CREATE TABLE IF NOT EXISTS audit_events (
@@ -299,13 +302,14 @@ app.post('/api/auth/login', async (req, res) => {
   }
 
   // Bounded input length limits (AUTH-11)
-  if (typeof email !== 'string' || email.length > 255 || typeof password !== 'string' || password.length > 128) {
+  if (typeof email !== 'string' || email.length < 3 || email.length > 255 || typeof password !== 'string' || password.length < 6 || password.length > 128) {
     return res.status(400).json({
       success: false,
       error: 'INVALID_INPUT_LENGTH',
-      message: 'Email must be <= 255 chars and password <= 128 chars'
+      message: 'Email must be 3-255 chars and password 6-128 chars'
     });
   }
+
 
   const normalizedEmail = String(email).trim().toLowerCase();
 
@@ -423,8 +427,8 @@ app.get('/api/auth/me', requireAuth(db), (req, res) => {
 });
 
 
-// API: Full Database Reset (Wipe all old listings, trends, and templates)
-app.delete('/api/reset-database', (req, res) => {
+// API: Full Database Reset (Wipe all old listings, trends, and templates - Protected)
+app.delete('/api/reset-database', requireAuth(db), (req, res) => {
   db.serialize(() => {
     db.run("DELETE FROM listings;");
     db.run("DELETE FROM market_trends;");
@@ -432,6 +436,7 @@ app.delete('/api/reset-database', (req, res) => {
   });
   res.json({ success: true, message: 'Đã xóa toàn bộ dữ liệu thử nghiệm cũ! Hệ thống đã được đưa về trạng thái trống sạch 100%.' });
 });
+
 
 // Legacy Mock Auth endpoint removed for security (Use POST /api/auth/login)
 app.post('/api/login', (req, res) => {

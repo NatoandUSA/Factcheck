@@ -6,24 +6,24 @@
  * 1. Zero reliance on client-supplied userRole or userId.
  * 2. Parses cookie omni_session / __Host-omni_session strictly.
  * 3. Fails closed with 401 Unauthorized or 403 Forbidden.
- * 4. Exact origin allowlist validation for state-changing HTTP requests.
+ * 4. Exact origin allowlist validation for both CORS and CSRF.
  */
 
 const { COOKIE_NAME, verifySessionRecord } = require('../security/session');
 
-const DEFAULT_ALLOWED_ORIGINS = new Set([
+const DEFAULT_ALLOWED_ORIGINS = [
   'http://localhost:5173',
   'http://127.0.0.1:5173',
   'http://localhost:3001',
   'http://127.0.0.1:3001'
-]);
+];
 
 function getNormalizedAllowedOrigins() {
   if (process.env.ALLOWED_ORIGINS) {
     const custom = process.env.ALLOWED_ORIGINS.split(',').map(s => s.trim()).filter(Boolean);
     return new Set(custom);
   }
-  return DEFAULT_ALLOWED_ORIGINS;
+  return new Set(DEFAULT_ALLOWED_ORIGINS);
 }
 
 function parseCookies(cookieHeader) {
@@ -38,7 +38,7 @@ function parseCookies(cookieHeader) {
     try {
       list[name] = decodeURIComponent(value);
     } catch (e) {
-      // Malformed percent-encoding ignored
+      // Malformed percent-encoding ignored safely
     }
   });
   return list;
@@ -122,7 +122,6 @@ function requireCsrfOrigin(req, res, next) {
     const originNormalized = `${originUrl.protocol}//${originUrl.host}`;
     const allowedSet = getNormalizedAllowedOrigins();
 
-    // Strictly validate against allowed origin set in all environments
     if (!allowedSet.has(originNormalized)) {
       return res.status(403).json({
         success: false,
@@ -130,7 +129,6 @@ function requireCsrfOrigin(req, res, next) {
         message: 'Cross-site request blocked by CSRF policy'
       });
     }
-
   } catch (e) {
     return res.status(403).json({
       success: false,
@@ -142,10 +140,25 @@ function requireCsrfOrigin(req, res, next) {
   next();
 }
 
+function corsOptionsDelegate(req, callback) {
+  const allowedSet = getNormalizedAllowedOrigins();
+  const origin = req.headers.origin;
+  const isAllowed = origin && allowedSet.has(origin);
+
+  callback(null, {
+    origin: isAllowed ? origin : false,
+    credentials: true,
+    methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+  });
+}
+
 module.exports = {
+  getNormalizedAllowedOrigins,
   parseCookies,
   extractRawToken,
   requireAuth,
   requireRole,
-  requireCsrfOrigin
+  requireCsrfOrigin,
+  corsOptionsDelegate
 };

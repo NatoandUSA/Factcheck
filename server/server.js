@@ -433,16 +433,15 @@ app.delete('/api/reset-database', (req, res) => {
   res.json({ success: true, message: 'Đã xóa toàn bộ dữ liệu thử nghiệm cũ! Hệ thống đã được đưa về trạng thái trống sạch 100%.' });
 });
 
-// Mock Auth endpoint (just select a user by email for prototyping)
+// Legacy Mock Auth endpoint removed for security (Use POST /api/auth/login)
 app.post('/api/login', (req, res) => {
-
-  const { email } = req.body;
-  db.get("SELECT * FROM users WHERE email = ?", [email], (err, row) => {
-    if (err) return res.status(500).json({ error: err.message });
-    if (!row) return res.status(401).json({ error: 'User not found' });
-    res.json({ user: row });
+  res.status(410).json({
+    success: false,
+    error: 'ENDPOINT_DEPRECATED',
+    message: 'Legacy /api/login endpoint has been permanently removed for security. Use /api/auth/login.'
   });
 });
+
 
 // Create a new listing (DRAFT/NEEDS_QA or IP_RISK_BLOCKED)
 app.post('/api/listings', (req, res) => {

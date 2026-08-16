@@ -122,11 +122,7 @@ function requireCsrfOrigin(req, res, next) {
     const originNormalized = `${originUrl.protocol}//${originUrl.host}`;
     const allowedSet = getNormalizedAllowedOrigins();
 
-    // Allow 127.0.0.1 / localhost dynamic test ports in test mode
-    if (process.env.NODE_ENV === 'test' && (originUrl.hostname === '127.0.0.1' || originUrl.hostname === 'localhost')) {
-      return next();
-    }
-
+    // Strictly validate against allowed origin set in all environments
     if (!allowedSet.has(originNormalized)) {
       return res.status(403).json({
         success: false,
@@ -134,6 +130,7 @@ function requireCsrfOrigin(req, res, next) {
         message: 'Cross-site request blocked by CSRF policy'
       });
     }
+
   } catch (e) {
     return res.status(403).json({
       success: false,

@@ -46,10 +46,12 @@ async function runAuthFoundationTests() {
     assert.notStrictEqual(rawToken, tokenHash, 'Raw token equals token hash');
     console.log('  🟢 Test 2 (32-byte Opaque Token & SHA-256 Hash): PASSED');
 
-    // Bind server to ephemeral OS port
+    // Bind server to ephemeral OS port and inject allowed origin for test suite
     server = app.listen(0);
     port = server.address().port;
-    console.log(`\nBound test Express server to ephemeral port ${port}`);
+    process.env.ALLOWED_ORIGINS = `http://127.0.0.1:${port},http://localhost:${port}`;
+    console.log(`\nBound test Express server to ephemeral port ${port} and configured ALLOWED_ORIGINS`);
+
 
     // Test 3: Unauthenticated GET /api/auth/me -> 401 Unauthorized
     console.log('\nTest 3: Unauthenticated GET /api/auth/me...');

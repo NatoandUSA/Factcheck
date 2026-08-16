@@ -5,7 +5,7 @@ const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
-const XLSX = require('xlsx');
+const crypto = require('crypto');
 require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
 
 const ipGuard = require('./ipGuard');
@@ -24,6 +24,10 @@ const publishGate = require('./publishGate');
 const { hashPassword, verifyPassword } = require('./security/scrypt');
 const { COOKIE_NAME, SESSION_TTL_MS, createSessionRecord, verifySessionRecord, revokeSessionRecord } = require('./security/session');
 const { parseCookies, extractRawToken, requireAuth, requireRole, requireCsrfOrigin, corsOptionsDelegate } = require('./middleware/auth');
+const { runMigrations } = require('./database/migrations');
+const { encryptSecret, decryptSecret, maskSecret } = require('./security/secretBox');
+const { approvalHash } = require('./security/approval');
+const { readFirstWorksheet } = require('./services/spreadsheetReader');
 
 const app = express();
 app.use(cors(corsOptionsDelegate));
@@ -52,7 +56,14 @@ const storage = multer.diskStorage({
     cb(null, uniqueSuffix + '-' + file.originalname);
   }
 });
-const upload = multer({ storage: storage });
+const upload = multer({
+  storage,
+  limits: { fileSize: 60 * 1024 * 1024, files: 1 },
+  fileFilter(req, file, cb) {
+    const allowed = /\.(xlsx|csv|html?)$/i.test(file.originalname || '');
+    cb(allowed ? null : new Error('UNSUPPORTED_UPLOAD_TYPE'), allowed);
+  }
+});
 
 const dbPath = process.env.NODE_ENV === 'test'
   ? ':memory:'
@@ -142,6 +153,9 @@ db.serialize(() => {
   db.run(`
     CREATE TABLE IF NOT EXISTS listings (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id TEXT,
+      workspace_id INTEGER,
+      marketplace TEXT CHECK(marketplace IN ('AMAZON', 'ETSY')),
       amazonTitle TEXT,
       etsyTitle TEXT,
       categoryName TEXT,
@@ -282,11 +296,57 @@ db.serialize(() => {
     }
   });
 
-  // Seed Gemini API key from .env if present
-  if (process.env.GEMINI_API_KEY) {
-    db.run("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", ['gemini_api_key', process.env.GEMINI_API_KEY]);
-    console.log('Gemini API key configured from .env environment.');
-  }
+  // Environment API keys remain process secrets and are never copied into SQLite.
+});
+
+// Migrations are queued after base schema creation. Every API request waits for
+// completion, so an existing app.db cannot be served through a partially
+// upgraded schema.
+const databaseReady = runMigrations(db);
+
+const REAUTH_TTL_MS = 5 * 60 * 1000;
+function secretContext(user, key) {
+  return `${user.tenantId}:${user.workspaceId}:${key}`;
+}
+
+function readWorkspaceLlmSettings(user, callback) {
+  db.all(
+    `SELECT key, encrypted_value FROM llm_settings
+     WHERE tenant_id = ? AND workspace_id = ?`,
+    [user.tenantId, user.workspaceId],
+    (err, rows) => {
+      if (err) return callback(err);
+      try {
+        const values = {};
+        for (const row of rows || []) {
+          values[row.key] = row.key === 'active_llm_provider'
+            ? row.encrypted_value
+            : decryptSecret(row.encrypted_value, secretContext(user, row.key));
+        }
+        callback(null, values);
+      } catch (error) {
+        callback(error);
+      }
+    }
+  );
+}
+
+function consumeReauthNonce(user, rawNonce, callback) {
+  if (!rawNonce || typeof rawNonce !== 'string' || rawNonce.length > 256) return callback(null, false);
+  const nonceHash = crypto.createHash('sha256').update(rawNonce).digest('hex');
+  db.run(
+    `UPDATE reauth_nonces SET consumed_at = CURRENT_TIMESTAMP
+     WHERE nonce_hash = ? AND session_id = ? AND user_id = ? AND workspace_id = ?
+       AND purpose = 'RESET_DATABASE' AND consumed_at IS NULL AND expires_at > ?`,
+    [nonceHash, user.sessionId, user.userId, user.workspaceId, new Date().toISOString()],
+    function onConsume(err) { callback(err, !err && this.changes === 1); }
+  );
+}
+app.use((req, res, next) => {
+  databaseReady.then(() => next()).catch(error => {
+    console.error('Database migration failed:', error);
+    res.status(503).json({ success: false, error: 'DATABASE_MIGRATION_FAILED' });
+  });
 });
 
 // ==========================================
@@ -450,22 +510,58 @@ app.get('/api/auth/me', requireAuth(db), (req, res) => {
   });
 });
 
+app.post('/api/auth/reauth', requireAuth(db), requireRole(['OWNER']), (req, res) => {
+  const { password, purpose } = req.body || {};
+  if (purpose !== 'RESET_DATABASE' || typeof password !== 'string' || password.length > 128) {
+    return res.status(400).json({ success: false, error: 'INVALID_REAUTH_REQUEST' });
+  }
+  db.get('SELECT password_hash FROM users WHERE id = ?', [req.user.userId], async (err, user) => {
+    if (err) return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
+    if (!user || !(await verifyPassword(password, user.password_hash))) {
+      return res.status(401).json({ success: false, error: 'REAUTH_FAILED' });
+    }
+    const rawNonce = crypto.randomBytes(32).toString('hex');
+    const nonceHash = crypto.createHash('sha256').update(rawNonce).digest('hex');
+    const expiresAt = new Date(Date.now() + REAUTH_TTL_MS).toISOString();
+    db.run(
+      `INSERT INTO reauth_nonces
+       (nonce_hash, session_id, user_id, workspace_id, purpose, expires_at)
+       VALUES (?, ?, ?, ?, 'RESET_DATABASE', ?)`,
+      [nonceHash, req.user.sessionId, req.user.userId, req.user.workspaceId, expiresAt],
+      insertErr => insertErr
+        ? res.status(500).json({ success: false, error: 'REAUTH_NONCE_CREATE_FAILED' })
+        : res.json({ success: true, nonce: rawNonce, expiresAt })
+    );
+  });
+});
+
 
 // API: Full Database Reset (Wipe all old listings, trends, and templates - Protected OWNER Only)
 app.delete('/api/reset-database', requireAuth(db), requireRole(['OWNER']), (req, res) => {
-  db.serialize(() => {
-    db.run("DELETE FROM listings");
-    db.run("DELETE FROM market_trends");
-    db.run("DELETE FROM learned_templates", [], (err) => {
+  const expectedConfirmation = `RESET ${req.user.workspaceId}`;
+  if (req.body?.confirmation !== expectedConfirmation) {
+    return res.status(400).json({ success: false, error: 'RESET_CONFIRMATION_MISMATCH', expectedConfirmation });
+  }
+  consumeReauthNonce(req.user, req.headers['x-reset-nonce'], (nonceErr, consumed) => {
+    if (nonceErr) return res.status(500).json({ success: false, error: 'REAUTH_NONCE_CHECK_FAILED' });
+    if (!consumed) return res.status(403).json({ success: false, error: 'RECENT_REAUTH_REQUIRED' });
+    db.serialize(() => {
+    db.run(
+      `DELETE FROM listings
+       WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
+      [req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+      (err) => {
       if (err) return res.status(500).json({ success: false, error: 'RESET_FAILED' });
       db.run(
         "INSERT INTO audit_events (tenant_id, actor_id, action, resource_type, outcome) VALUES (?, ?, ?, ?, ?)",
         [req.user.tenantId, req.user.userId, 'admin:reset', 'database', 'SUCCESS'],
         auditErr => {
           if (auditErr) return res.status(500).json({ success: false, error: 'AUDIT_WRITE_FAILED' });
-          res.json({ success: true, message: 'Đã xóa dữ liệu listing, trend và template trong hệ thống.' });
+          res.json({ success: true, message: 'Đã xóa listing trong workspace hiện tại.' });
         }
       );
+      }
+    );
     });
   });
 });
@@ -512,18 +608,35 @@ app.post('/api/listings', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SEL
 
   
   db.run(
-    "INSERT INTO listings (amazonTitle, etsyTitle, categoryName, status, authorId, payload) VALUES (?, ?, ?, ?, ?, ?)",
-    [amazonTitle, etsyTitle, categoryName, status, req.user.userId, JSON.stringify(updatedPayload)],
+    `INSERT INTO listings
+      (tenant_id, workspace_id, marketplace, amazonTitle, etsyTitle, categoryName, status, authorId, payload)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      req.user.tenantId,
+      req.user.workspaceId,
+      req.user.marketplace,
+      amazonTitle,
+      etsyTitle,
+      categoryName,
+      status,
+      req.user.userId,
+      JSON.stringify(updatedPayload)
+    ],
     function(err) {
       if (err) return res.status(500).json({ error: err.message });
-      res.json({ id: this.lastID, status, payload: updatedPayload });
+      res.json({ id: this.lastID, status, listingVersion: 1, payload: updatedPayload });
     }
   );
 });
 
 // Get all listings
 app.get('/api/listings', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
-  db.all("SELECT * FROM listings ORDER BY generatedAt DESC", [], (err, rows) => {
+  db.all(
+    `SELECT * FROM listings
+     WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ?
+     ORDER BY generatedAt DESC`,
+    [req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+    (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
     const safeRows = rows.map(r => {
       let parsedPayload = {};
@@ -542,20 +655,70 @@ app.get('/api/listings', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELL
 
       return { ...r, payload: parsedPayload };
     });
-    res.json(safeRows);
-  });
+      res.json(safeRows);
+    }
+  );
+});
+
+// Content mutation uses optimistic concurrency and invalidates any prior approval.
+app.patch('/api/listings/:id', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
+  const { expectedVersion, amazonTitle, etsyTitle, categoryName, payload } = req.body || {};
+  if (!Number.isInteger(expectedVersion) || expectedVersion < 1) {
+    return res.status(400).json({ success: false, error: 'EXPECTED_VERSION_REQUIRED' });
+  }
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return res.status(400).json({ success: false, error: 'INVALID_LISTING_PAYLOAD' });
+  }
+  const newPayload = { ...payload, amazonTitle, etsyTitle, categoryName };
+  db.run(
+    `UPDATE listings
+     SET amazonTitle = ?, etsyTitle = ?, categoryName = ?, payload = ?, status = 'NEEDS_QA',
+         listing_version = listing_version + 1, approved_version = NULL,
+         approved_hash = NULL, approved_by = NULL, approved_at = NULL
+     WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?
+       AND listing_version = ?`,
+    [amazonTitle, etsyTitle, categoryName, JSON.stringify(newPayload), req.params.id,
+      req.user.tenantId, req.user.workspaceId, req.user.marketplace, expectedVersion],
+    function onUpdate(err) {
+      if (err) return res.status(500).json({ success: false, error: 'LISTING_UPDATE_FAILED' });
+      if (this.changes !== 1) {
+        return db.get(
+          `SELECT id FROM listings WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
+          [req.params.id, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+          (lookupErr, row) => {
+            if (lookupErr || !row) return res.status(404).json({ success: false, error: 'LISTING_NOT_FOUND' });
+            res.status(412).json({ success: false, error: 'STALE_LISTING_VERSION' });
+          }
+        );
+      }
+      res.json({ success: true, listingVersion: expectedVersion + 1, status: 'NEEDS_QA' });
+    }
+  );
 });
 
 // Approve a listing using Canonical Publish Gate (Fail-Closed Gate Authority - Protected)
 app.patch('/api/listings/:id/approve', requireAuth(db), requireRole(['OWNER', 'MANAGER']), (req, res) => {
   const { id } = req.params;
 
+  const { expectedVersion } = req.body || {};
+  if (!Number.isInteger(expectedVersion) || expectedVersion < 1) {
+    return res.status(400).json({ success: false, error: 'EXPECTED_VERSION_REQUIRED' });
+  }
 
-  db.get("SELECT * FROM listings WHERE id = ?", [id], (err, row) => {
+
+  db.get(
+    `SELECT * FROM listings
+     WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
+    [id, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+    (err, row) => {
     if (err || !row) return res.status(404).json({ error: 'Listing not found.' });
+    if (row.listing_version !== expectedVersion) {
+      return res.status(412).json({ success: false, error: 'STALE_LISTING_VERSION' });
+    }
 
     let parsedPayload = {};
     try { parsedPayload = JSON.parse(row.payload); } catch(e) {}
+    const payloadHash = approvalHash(parsedPayload);
     
     // C5B Fix: Evaluate via Canonical Publish Gate (Fail-Closed)
     parsedPayload.status = 'MANAGER_APPROVED';
@@ -570,11 +733,21 @@ app.patch('/api/listings/:id/approve', requireAuth(db), requireRole(['OWNER', 'M
       });
     }
 
-    db.run("UPDATE listings SET status = 'PUBLISH_READY' WHERE id = ?", [id], function(updateErr) {
+    const approvedHash = payloadHash;
+    db.run(
+      `UPDATE listings SET status = 'PUBLISH_READY', approved_version = listing_version,
+         approved_hash = ?, approved_by = ?, approved_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?
+         AND listing_version = ?`,
+      [approvedHash, req.user.userId, id, req.user.tenantId, req.user.workspaceId, req.user.marketplace, expectedVersion],
+      function(updateErr) {
       if (updateErr) return res.status(500).json({ error: updateErr.message });
-      res.json({ success: true, status: 'PUBLISH_READY', publishGate: gateRes });
-    });
-  });
+      if (this.changes !== 1) return res.status(412).json({ success: false, error: 'STALE_LISTING_VERSION' });
+      res.json({ success: true, status: 'PUBLISH_READY', approvedVersion: row.listing_version, approvedHash, publishGate: gateRes });
+      }
+    );
+    }
+  );
 });
 
 
@@ -582,11 +755,19 @@ app.patch('/api/listings/:id/approve', requireAuth(db), requireRole(['OWNER', 'M
 app.get('/api/listings/:id/export', requireAuth(db), requireRole(['OWNER', 'MANAGER']), (req, res) => {
   const { id } = req.params;
 
-  db.get("SELECT * FROM listings WHERE id = ?", [id], (err, row) => {
+  db.get(
+    `SELECT * FROM listings
+     WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
+    [id, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+    (err, row) => {
     if (err || !row) return res.status(404).json({ error: 'Listing not found.' });
 
     let parsedPayload = {};
     try { parsedPayload = JSON.parse(row.payload); } catch(e) {}
+    if (!row.approved_version || row.approved_version !== row.listing_version ||
+        !row.approved_hash || row.approved_hash !== approvalHash(parsedPayload)) {
+      return res.status(409).json({ success: false, error: 'APPROVAL_INVALIDATED' });
+    }
     parsedPayload.status = row.status;
 
     const gateRes = publishGate.evaluatePublishGate(parsedPayload);
@@ -603,13 +784,14 @@ app.get('/api/listings/:id/export', requireAuth(db), requireRole(['OWNER', 'MANA
       publishGate: gateRes,
       listing: parsedPayload
     });
-  });
+    }
+  );
 });
 
 
 
 // Submit Sales Feedback (7-day loop)
-app.post('/api/listings/:id/feedback', (req, res) => {
+app.post('/api/listings/:id/feedback', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
   const { id } = req.params;
   const { views, orders, revenue } = req.body;
   
@@ -622,12 +804,20 @@ app.post('/api/listings/:id/feedback', (req, res) => {
   else if (views < 10 && orders === 0) action = 'CHANGE_TAGS_OR_TITLE';
   else if (views === 0) action = 'KILL_LISTING';
   
-  db.run(
-    "INSERT INTO sales_feedback (listingId, views, orders, revenue, action) VALUES (?, ?, ?, ?, ?)",
-    [id, views, orders, revenue, action],
-    function(err) {
-      if (err) return res.status(500).json({ error: err.message });
-      res.json({ id: this.lastID, action, conversionRate });
+  db.get(
+    `SELECT id FROM listings
+     WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
+    [id, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+    (scopeErr, listing) => {
+      if (scopeErr || !listing) return res.status(404).json({ error: 'Listing not found.' });
+      db.run(
+        "INSERT INTO sales_feedback (listingId, views, orders, revenue, action) VALUES (?, ?, ?, ?, ?)",
+        [id, views, orders, revenue, action],
+        function(err) {
+          if (err) return res.status(500).json({ error: err.message });
+          res.json({ id: this.lastID, action, conversionRate });
+        }
+      );
     }
   );
 });
@@ -965,39 +1155,53 @@ app.post('/api/ip-guard/custom-term', requireAuth(db), requireRole(['OWNER']), (
 
 // API: Multi-LLM Settings (Gemini, OpenAI GPT, Anthropic Claude)
 app.get('/api/settings/llm', requireAuth(db), requireRole(['OWNER']), (req, res) => {
-  db.all("SELECT key, value FROM settings WHERE key IN ('gemini_api_key', 'openai_api_key', 'claude_api_key', 'active_llm_provider')", [], (err, rows) => {
-    if (err) return res.status(500).json({ error: err.message });
-    const keys = {};
-    rows.forEach(r => {
-      keys[r.key] = r.value;
-    });
+  readWorkspaceLlmSettings(req.user, (err, keys) => {
+    if (err) return res.status(503).json({ success: false, error: 'SECRET_DECRYPTION_FAILED' });
     res.json({
       activeProvider: keys.active_llm_provider || 'GEMINI',
       hasGemini: Boolean(keys.gemini_api_key || process.env.GEMINI_API_KEY),
       hasOpenAI: Boolean(keys.openai_api_key || process.env.OPENAI_API_KEY),
       hasClaude: Boolean(keys.claude_api_key || process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY),
-      geminiKeyMasked: keys.gemini_api_key ? `••••••••${keys.gemini_api_key.slice(-4)}` : '',
-      openaiKeyMasked: keys.openai_api_key ? `••••••••${keys.openai_api_key.slice(-4)}` : '',
-      claudeKeyMasked: keys.claude_api_key ? `••••••••${keys.claude_api_key.slice(-4)}` : ''
+      geminiKeyMasked: maskSecret(keys.gemini_api_key),
+      openaiKeyMasked: maskSecret(keys.openai_api_key),
+      claudeKeyMasked: maskSecret(keys.claude_api_key)
     });
   });
 });
 
 app.post('/api/settings/llm', requireAuth(db), requireRole(['OWNER']), (req, res) => {
   const { geminiApiKey, openaiApiKey, claudeApiKey, activeProvider = 'GEMINI' } = req.body;
-  
+  if (!['GEMINI', 'OPENAI', 'CLAUDE'].includes(activeProvider)) {
+    return res.status(400).json({ success: false, error: 'INVALID_LLM_PROVIDER' });
+  }
+  const supplied = {
+    gemini_api_key: geminiApiKey,
+    openai_api_key: openaiApiKey,
+    claude_api_key: claudeApiKey
+  };
+  let encrypted;
+  try {
+    encrypted = Object.entries(supplied)
+      .filter(([, value]) => typeof value === 'string' && value.trim().length > 0)
+      .map(([key, value]) => [key, encryptSecret(value.trim(), secretContext(req.user, key))]);
+  } catch (error) {
+    return res.status(503).json({ success: false, error: 'SECRET_ENCRYPTION_UNAVAILABLE' });
+  }
   db.serialize(() => {
-    if (geminiApiKey !== undefined) {
-      db.run("INSERT OR REPLACE INTO settings (key, value) VALUES ('gemini_api_key', ?)", [geminiApiKey]);
+    const statement = db.prepare(`
+      INSERT INTO llm_settings (tenant_id, workspace_id, key, encrypted_value, updated_by)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(tenant_id, workspace_id, key) DO UPDATE SET
+        encrypted_value = excluded.encrypted_value, updated_by = excluded.updated_by,
+        updated_at = CURRENT_TIMESTAMP
+    `);
+    for (const [key, value] of encrypted) {
+      statement.run(req.user.tenantId, req.user.workspaceId, key, value, req.user.userId);
     }
-    if (openaiApiKey !== undefined) {
-      db.run("INSERT OR REPLACE INTO settings (key, value) VALUES ('openai_api_key', ?)", [openaiApiKey]);
-    }
-    if (claudeApiKey !== undefined) {
-      db.run("INSERT OR REPLACE INTO settings (key, value) VALUES ('claude_api_key', ?)", [claudeApiKey]);
-    }
-    db.run("INSERT OR REPLACE INTO settings (key, value) VALUES ('active_llm_provider', ?)", [activeProvider]);
-    res.json({ success: true, message: `Cập nhật cấu hình LLM thành công! Nhà cung cấp chính: ${activeProvider}` });
+    statement.run(req.user.tenantId, req.user.workspaceId, 'active_llm_provider', activeProvider, req.user.userId);
+    statement.finalize(err => err
+      ? res.status(500).json({ success: false, error: 'LLM_SETTINGS_WRITE_FAILED' })
+      : res.json({ success: true, activeProvider }));
   });
 });
 
@@ -1238,14 +1442,13 @@ app.post('/api/etsy/scan-search', async (req, res) => {
 });
 
 // API: ETSY Deep Batch Learn 5-10 Selected Sellers
-app.post('/api/etsy/batch-learn', async (req, res) => {
+app.post('/api/etsy/batch-learn', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
   const { seedPhrase = 'nurse sweatshirt', category = 'Apparel: Sweatshirt', sellers = [] } = req.body;
 
   try {
     // Get active LLM config from DB
-    db.all("SELECT key, value FROM settings WHERE key IN ('gemini_api_key', 'openai_api_key', 'claude_api_key', 'active_llm_provider')", [], async (sErr, rows) => {
-      const keys = {};
-      (rows || []).forEach(r => { keys[r.key] = r.value; });
+    readWorkspaceLlmSettings(req.user, async (sErr, keys) => {
+      if (sErr) return res.status(503).json({ success: false, error: 'SECRET_DECRYPTION_FAILED' });
 
       const provider = keys.active_llm_provider || 'GEMINI';
       const geminiKey = keys.gemini_api_key || process.env.GEMINI_API_KEY;
@@ -1286,8 +1489,10 @@ app.post('/api/etsy/batch-learn', async (req, res) => {
       };
 
       db.run(
-        "INSERT INTO listings (amazonTitle, etsyTitle, categoryName, status, authorId, payload) VALUES (?, ?, ?, ?, ?, ?)",
-        [payload.amazonTitle, payload.etsyTitle, payload.categoryName, 'NEEDS_QA', 0, JSON.stringify(payload)],
+        `INSERT INTO listings
+          (tenant_id, workspace_id, marketplace, amazonTitle, etsyTitle, categoryName, status, authorId, payload)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [req.user.tenantId, req.user.workspaceId, req.user.marketplace, payload.amazonTitle, payload.etsyTitle, payload.categoryName, 'NEEDS_QA', req.user.userId, JSON.stringify(payload)],
         function(insertErr) {
           if (insertErr) return res.status(500).json({ error: insertErr.message });
           
@@ -1308,7 +1513,10 @@ app.post('/api/etsy/batch-learn', async (req, res) => {
 });
 
 // API: Amazon Quick Draft (Works directly from Seed Phrase, 10 ASINs, or Cerebro)
-app.post('/api/amazon/quick-draft', async (req, res) => {
+app.post('/api/amazon/quick-draft', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  if (req.user.marketplace !== 'AMAZON') {
+    return res.status(403).json({ success: false, error: 'MARKETPLACE_MISMATCH' });
+  }
   const { seedPhrase = 'mom sweatshirt', category = 'Apparel: Sweatshirt', asins = [] } = req.body;
 
   try {
@@ -1325,9 +1533,8 @@ app.post('/api/amazon/quick-draft', async (req, res) => {
         const trendId = this.lastID;
 
         // 2. Fetch API Keys
-        db.all("SELECT key, value FROM settings WHERE key IN ('gemini_api_key', 'openai_api_key', 'claude_api_key', 'active_llm_provider')", [], async (sErr, rows) => {
-          const keys = {};
-          (rows || []).forEach(r => { keys[r.key] = r.value; });
+        readWorkspaceLlmSettings(req.user, async (sErr, keys) => {
+          if (sErr) return res.status(503).json({ success: false, error: 'SECRET_DECRYPTION_FAILED' });
 
           const provider = keys.active_llm_provider || 'GEMINI';
           const geminiKey = keys.gemini_api_key || process.env.GEMINI_API_KEY;
@@ -1433,8 +1640,10 @@ Return ONLY raw JSON without markdown code fences:
 
 
             db.run(
-              "INSERT INTO listings (amazonTitle, etsyTitle, categoryName, status, authorId, payload) VALUES (?, ?, ?, ?, ?, ?)",
-              [payload.amazonTitle, payload.etsyTitle, payload.categoryName, 'NEEDS_QA', 0, JSON.stringify(payload)],
+              `INSERT INTO listings
+                (tenant_id, workspace_id, marketplace, amazonTitle, etsyTitle, categoryName, status, authorId, payload)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              [req.user.tenantId, req.user.workspaceId, req.user.marketplace, payload.amazonTitle, payload.etsyTitle, payload.categoryName, 'NEEDS_QA', req.user.userId, JSON.stringify(payload)],
               function(insertErr) {
                 if (insertErr) return res.status(500).json({ error: insertErr.message });
 
@@ -1525,7 +1734,7 @@ app.get('/api/benchmark/validate', async (req, res) => {
 });
 
 // API: Upload and process Helium 10 / CSV / HTML reports (Universal handler with aliases)
-const handleReportUpload = (req, res) => {
+const handleReportUpload = async (req, res) => {
   const file = req.file || (req.files && req.files[0]);
   if (!file) {
     return res.status(400).json({ error: 'No file uploaded. Please select a .xlsx, .csv, or .html file.' });
@@ -1549,10 +1758,8 @@ const handleReportUpload = (req, res) => {
         'Title Density': 2
       }));
     } else {
-      // 2. Handle Excel & CSV files via XLSX
-      const workbook = XLSX.readFile(filePath);
-      const sheetName = workbook.SheetNames[0];
-      rawRows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName]);
+      // 2. Handle Excel & CSV through ExcelJS (SheetJS/xlsx removed after security audit).
+      rawRows = await readFirstWorksheet(filePath);
     }
 
     if (!rawRows || rawRows.length === 0) {
@@ -1734,21 +1941,23 @@ app.post('/api/upload-h10', upload.any(), handleReportUpload);
 app.post('/api/upload-trends', upload.any(), handleReportUpload);
 
 // Real Analytics Summary Endpoint (Driven by real listings & feedback)
-app.get('/api/analytics-summary', (req, res) => {
+app.get('/api/analytics-summary', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
   db.get(`
     SELECT 
       COUNT(*) as totalListings,
       SUM(CASE WHEN status = 'MANAGER_APPROVED' THEN 1 ELSE 0 END) as approvedListings,
       SUM(CASE WHEN status = 'NEEDS_QA' THEN 1 ELSE 0 END) as pendingListings
     FROM listings
-  `, [], (err, listingStats) => {
+    WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ?
+  `, [req.user.tenantId, req.user.workspaceId, req.user.marketplace], (err, listingStats) => {
     if (err) return res.status(500).json({ error: err.message });
 
     db.all(`
       SELECT categoryName, COUNT(*) as count 
       FROM listings 
+      WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ?
       GROUP BY categoryName
-    `, [], (catErr, catRows) => {
+    `, [req.user.tenantId, req.user.workspaceId, req.user.marketplace], (catErr, catRows) => {
       if (catErr) return res.status(500).json({ error: catErr.message });
 
       db.get(`
@@ -1759,9 +1968,11 @@ app.get('/api/analytics-summary', (req, res) => {
 
         db.all(`
           SELECT action, COUNT(*) as count, SUM(revenue) as totalRevenue, SUM(orders) as totalOrders, SUM(views) as totalViews
-          FROM sales_feedback
+          FROM sales_feedback sf
+          JOIN listings l ON l.id = sf.listingId
+          WHERE l.tenant_id = ? AND l.workspace_id = ? AND l.marketplace = ?
           GROUP BY action
-        `, [], (feedErr, feedRows) => {
+        `, [req.user.tenantId, req.user.workspaceId, req.user.marketplace], (feedErr, feedRows) => {
           res.json({
             listingStats: listingStats || { totalListings: 0, approvedListings: 0, pendingListings: 0 },
             categoryBreakdown: catRows || [],
@@ -1782,16 +1993,15 @@ app.get('/api/trends', (req, res) => {
 });
 
 // API: Instantly Draft listing for a specific trend using Multi-LLM Gateway (Gemini / GPT-4o / Claude) + Few-Shot Learning
-app.post('/api/trends/:id/draft', (req, res) => {
+app.post('/api/trends/:id/draft', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
   const { id } = req.params;
   
   db.get("SELECT * FROM market_trends WHERE id = ?", [id], (err, trend) => {
     if (err || !trend) return res.status(404).json({ error: 'Trend cluster not found' });
 
     // 1. Get LLM Settings
-    db.all("SELECT key, value FROM settings WHERE key IN ('gemini_api_key', 'openai_api_key', 'claude_api_key', 'active_llm_provider')", [], (sErr, rows) => {
-      const keys = {};
-      (rows || []).forEach(r => { keys[r.key] = r.value; });
+    readWorkspaceLlmSettings(req.user, (sErr, keys) => {
+      if (sErr) return res.status(503).json({ success: false, error: 'SECRET_DECRYPTION_FAILED' });
       
       const provider = keys.active_llm_provider || 'GEMINI';
       const geminiKey = keys.gemini_api_key || process.env.GEMINI_API_KEY;
@@ -1913,8 +2123,10 @@ Return ONLY a valid raw JSON object without markdown code fences:
         };
 
         db.run(
-          "INSERT INTO listings (amazonTitle, etsyTitle, categoryName, status, authorId, payload) VALUES (?, ?, ?, ?, ?, ?)",
-          [payload.amazonTitle, payload.etsyTitle, payload.categoryName, 'NEEDS_QA', 0, JSON.stringify(payload)],
+          `INSERT INTO listings
+            (tenant_id, workspace_id, marketplace, amazonTitle, etsyTitle, categoryName, status, authorId, payload)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [req.user.tenantId, req.user.workspaceId, req.user.marketplace, payload.amazonTitle, payload.etsyTitle, payload.categoryName, 'NEEDS_QA', req.user.userId, JSON.stringify(payload)],
           function(insertErr) {
             if (insertErr) return res.status(500).json({ error: insertErr.message });
             
@@ -1938,27 +2150,24 @@ Return ONLY a valid raw JSON object without markdown code fences:
 });
 });
 // API: Save API Key
-app.post('/api/settings/apikey', (req, res) => {
-  const { apiKey } = req.body;
-  if (!apiKey) return res.status(400).json({ error: 'Missing API key' });
-  db.run("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", ['gemini_api_key', apiKey], function(err) {
-    if (err) return res.status(500).json({ error: err.message });
-    res.json({ success: true });
-  });
+app.post('/api/settings/apikey', requireAuth(db), requireRole(['OWNER']), (req, res) => {
+  res.status(410).json({ success: false, error: 'ENDPOINT_DEPRECATED', replacement: '/api/settings/llm' });
 });
 
 // API: Chat Co-Pilot
-app.post('/api/chat', (req, res) => {
+app.post('/api/chat', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
   const { messages } = req.body;
   if (!messages || !Array.isArray(messages)) return res.status(400).json({ error: 'Messages required' });
 
-  db.get("SELECT value FROM settings WHERE key = 'gemini_api_key'", async (err, row) => {
-    if (err || !row || !row.value) {
+  readWorkspaceLlmSettings(req.user, async (err, keys) => {
+    const geminiKey = keys?.gemini_api_key || process.env.GEMINI_API_KEY;
+    if (err) return res.status(503).json({ success: false, error: 'SECRET_DECRYPTION_FAILED' });
+    if (!geminiKey) {
       return res.status(400).json({ error: 'Gemini API Key missing. Please set it in Settings.' });
     }
 
     try {
-      const client = new GoogleGenAI({ apiKey: row.value });
+      const client = new GoogleGenAI({ apiKey: geminiKey });
       const inputString = messages.map(m => `${m.role.toUpperCase()}: ${m.content}`).join('\n\n');
       
       const interaction = await client.interactions.create({
@@ -2094,7 +2303,7 @@ const backgroundAgentTimer = setInterval(() => {
   db.all("SELECT * FROM agents WHERE status = 'ONLINE'", [], (err, onlineAgents) => {
     if (err || !onlineAgents) return;
 
-    onlineAgents.forEach(agent => {
+    onlineAgents.forEach(async agent => {
       // Agent 1: Trend Scout (Role: RESEARCHER - Real Data Engine)
       if (agent.role === 'RESEARCHER') {
         const fs = require('fs');
@@ -2132,11 +2341,8 @@ const backgroundAgentTimer = setInterval(() => {
                 );
               }
             } else {
-              // Process Helium 10 / Amazon XLSX or CSV
-              const XLSX = require('xlsx');
-              const workbook = XLSX.readFile(fullPath);
-              const sheetName = workbook.SheetNames[0];
-              const rows = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName]);
+              // Process Helium 10 / Amazon XLSX or CSV with the audited parser.
+              const rows = await readFirstWorksheet(fullPath);
               
               if (rows.length > 0) {
                 const sampleRow = rows[0];
@@ -2209,7 +2415,9 @@ const backgroundAgentTimer = setInterval(() => {
           if (!err && trend) {
             db.run("UPDATE market_trends SET processed = 1 WHERE id = ?", [trend.id]);
             
-            db.get("SELECT value FROM settings WHERE key = 'gemini_api_key'", async (settingsErr, setting) => {
+            const setting = process.env.GEMINI_API_KEY ? { value: process.env.GEMINI_API_KEY } : null;
+            const settingsErr = null;
+            (async () => {
               let payload;
               
               if (!settingsErr && setting && setting.value) {
@@ -2282,23 +2490,19 @@ const backgroundAgentTimer = setInterval(() => {
 
                   const listingStatus = (ipRes.verdict === 'BLOCK') ? 'IP_RISK_BLOCKED' : 'NEEDS_QA';
 
+                  // Fail closed: a background agent has no authenticated
+                  // workspace principal. Persisting this draft under a guessed
+                  // workspace would violate tenant isolation.
                   db.run(
-                    "INSERT INTO listings (amazonTitle, etsyTitle, categoryName, status, authorId, payload) VALUES (?, ?, ?, ?, ?, ?)",
-                    [payload.amazonTitle, payload.etsyTitle, payload.categoryName, listingStatus, 0, JSON.stringify(payload)],
-                    function(insertErr) {
-                      if (!insertErr) {
-                        const statusNote = (listingStatus === 'IP_RISK_BLOCKED') ? 'BLOCKED due to IP Trademark risk' : 'NEEDS_QA queue';
-                        db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, `Saved draft (ID: ${this.lastID}, OppScore: ${oppRes.overallScore}/100, IP: ${ipRes.verdict}) to ${statusNote}.`]);
-                        db.run("UPDATE agents SET lastActive = CURRENT_TIMESTAMP WHERE id = ?", [agent.id]);
-                      }
-                    }
+                    "INSERT INTO agent_logs (agentId, message) VALUES (?, ?)",
+                    [agent.id, `[SCOPE_REQUIRED] Draft not persisted (${listingStatus}). Assign an explicit tenant/workspace service principal before enabling autonomous saves.`]
                   );
                 }
 
               } else {
                 db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, `[AI Drafter Standby] Gemini API key is missing in .env or Settings. Waiting for key configuration.`]);
               }
-            });
+            })();
           }
         });
       }
@@ -2318,4 +2522,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app, db, serverInstance, backgroundAgentTimer };
+module.exports = { app, db, databaseReady, serverInstance, backgroundAgentTimer };

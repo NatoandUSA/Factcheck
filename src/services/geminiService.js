@@ -1,19 +1,16 @@
 import { CATEGORIES } from '../data/categoryPresets';
 import { getUtf8Bytes } from '../utils/complianceValidator';
-import { GoogleGenAI } from '@google/genai';
-
 const STORAGE_KEY = 'omni_gemini_api_key';
 
 export function getStoredApiKey() {
-  return localStorage.getItem(STORAGE_KEY) || '';
+  // Remove credentials left by pre-PR-2C builds. Browser storage is not a
+  // secret vault; provider calls now go through the authenticated backend.
+  localStorage.removeItem(STORAGE_KEY);
+  return '';
 }
 
-export function setStoredApiKey(key) {
-  if (key) {
-    localStorage.setItem(STORAGE_KEY, key.trim());
-  } else {
-    localStorage.removeItem(STORAGE_KEY);
-  }
+export function setStoredApiKey() {
+  localStorage.removeItem(STORAGE_KEY);
 }
 
 /**
@@ -28,14 +25,7 @@ export async function generateListingAI({
   imageBase64 = null,
   apiKey = null
 }) {
-  const activeKey = apiKey || getStoredApiKey();
-
-  if (!activeKey) {
-    throw new Error('Vui lòng cấu hình Gemini API Key (trong file .env hoặc nhấn nút Key ở góc phải trên) để sinh listing.');
-  }
-
   return await callGeminiApi({
-    apiKey: activeKey,
     category,
     productBrief,
     occasion,
@@ -48,7 +38,7 @@ export async function generateListingAI({
 /**
  * Direct Gemini API call with structured JSON prompt
  */
-async function callGeminiApi({ apiKey, category, productBrief, occasion, tone, materials, imageBase64, marketData }) {
+async function callGeminiApi({ category, productBrief, occasion, tone, materials, imageBase64, marketData }) {
   const promptText = `
 You are an elite, world-class E-Commerce Listing & SEO Specialist with deep mastery of the Amazon A10 Algorithm, Data Dive MKL methodology, and Etsy Search Algorithm.
 
@@ -105,18 +95,16 @@ Return ONLY a valid raw JSON object (without markdown code fences) with the exac
 }
 `;
 
-  const client = new GoogleGenAI({ apiKey });
-  const interaction = await client.interactions.create({
-    model: 'gemini-3.6-flash',
-    input: promptText,
-    system_instruction: "You are an elite E-Commerce Listing & SEO Specialist for Amazon A10 & Etsy. Return ONLY raw valid JSON without markdown code fences.",
+  const response = await fetch('/api/chat', {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ messages: [{ role: 'user', content: promptText }] })
   });
-
-  const rawText = interaction.output_text;
-  if (!rawText) throw new Error('Empty response received from AI model');
-
-  const parsed = JSON.parse(rawText.replace(/```json/g, '').replace(/```/g, '').trim());
-  return sanitizeListingOutput(parsed, category);
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || 'Backend AI request failed');
+  if (!data.listing) throw new Error('AI response did not contain a valid listing');
+  return sanitizeListingOutput(data.listing, category);
 }
 
 function sanitizeListingOutput(parsed, category) {

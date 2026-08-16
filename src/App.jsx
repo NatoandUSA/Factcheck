@@ -149,12 +149,14 @@ export default function App() {
     try {
       const res = await fetch(`/api/listings/${listingToApprove.dbId}/approve`, {
         method: 'PATCH',
-        credentials: 'include'
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ expectedVersion: listingToApprove.listingVersion || listingToApprove.listing_version || 1 })
       });
       if (!res.ok) throw new Error('Not authorized or server error');
       const data = await res.json();
       
-      const updated = { ...listingToApprove, status: data.status };
+      const updated = { ...listingToApprove, status: data.status, approvedVersion: data.approvedVersion, approvedHash: data.approvedHash };
       setCurrentListing(updated);
       handleSaveToHistory(updated, false);
       showToast('Listing Approved by Manager!');

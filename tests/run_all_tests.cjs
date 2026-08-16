@@ -8,6 +8,7 @@ function runAllTests() {
 
   const testFiles = [
     'tests/spec_hash_vector.test.cjs',
+    'tests/security_controls_unit.test.cjs',
     'tests/listing_scope_migration.test.cjs',
     'tests/sec_auth_foundation.test.cjs',
     'tests/test_real_child_asin_batcher.cjs',

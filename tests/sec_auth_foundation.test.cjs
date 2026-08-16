@@ -5,6 +5,7 @@ const fs = require('fs');
 
 // Set TEST mode environment variables before requiring server modules
 process.env.NODE_ENV = 'test';
+process.env.OMNI_MASTER_KEY = Buffer.alloc(32, 7).toString('base64');
 
 const { hashPassword, verifyPassword } = require('../server/security/scrypt');
 const { hashToken, generateRawToken } = require('../server/security/session');
@@ -284,7 +285,8 @@ async function runAuthFoundationTests() {
     const createdListing = await createListingRes.json();
     const ownerApproveRes = await fetch(`http://127.0.0.1:${port}/api/listings/${createdListing.id}/approve`, {
       method: 'PATCH',
-      headers: { Cookie: ownerCookie, Origin: `http://127.0.0.1:${port}` }
+      headers: { Cookie: ownerCookie, Origin: `http://127.0.0.1:${port}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expectedVersion: 1 })
     });
     assert.strictEqual(ownerApproveRes.status, 200, 'Owner approval did not return 200 OK');
     const ownerApproveBody = await ownerApproveRes.json();
@@ -315,12 +317,22 @@ async function runAuthFoundationTests() {
     });
     assert.strictEqual(managerResetRes.status, 403, 'Manager role database reset did not return 403 Forbidden');
 
+    const reauthRes = await fetch(`http://127.0.0.1:${port}/api/auth/reauth`, {
+      method: 'POST',
+      headers: { Cookie: ownerCookie, Origin: `http://127.0.0.1:${port}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: 'password123', purpose: 'RESET_DATABASE' })
+    });
+    assert.strictEqual(reauthRes.status, 200, 'Owner recent authentication failed');
+    const reauthBody = await reauthRes.json();
     const ownerResetRes = await fetch(`http://127.0.0.1:${port}/api/reset-database`, {
       method: 'DELETE',
       headers: { 
         Cookie: ownerCookie,
-        Origin: `http://127.0.0.1:${port}`
-      }
+        Origin: `http://127.0.0.1:${port}`,
+        'Content-Type': 'application/json',
+        'X-Reset-Nonce': reauthBody.nonce
+      },
+      body: JSON.stringify({ confirmation: `RESET ${amazonWorkspace.workspace_id}` })
     });
     assert.strictEqual(ownerResetRes.status, 200, 'Owner role database reset did not return 200 OK');
     const resetAudit = await dbAll("SELECT * FROM audit_events WHERE action = 'admin:reset' AND outcome = 'SUCCESS'");
@@ -418,7 +430,8 @@ async function runAuthFoundationTests() {
 
     const crossApproveRes = await fetch(`http://127.0.0.1:${port}/api/listings/${scopedListing.id}/approve`, {
       method: 'PATCH',
-      headers: { Cookie: etsyCookie, Origin: `http://127.0.0.1:${port}` }
+      headers: { Cookie: etsyCookie, Origin: `http://127.0.0.1:${port}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expectedVersion: 1 })
     });
     assert.strictEqual(crossApproveRes.status, 404, 'Cross-workspace approval must return non-enumerating 404');
 
@@ -428,8 +441,70 @@ async function runAuthFoundationTests() {
     assert.strictEqual(crossExportRes.status, 404, 'Cross-workspace export must return non-enumerating 404');
     console.log('  🟢 Test 14 (Amazon/Etsy Listing Isolation & IDOR-safe 404): PASSED');
 
+    // Test 15: API keys are encrypted at rest and scoped to the active workspace.
+    console.log('\nTest 15: AES-256-GCM API Key Storage...');
+    const settingsRes = await fetch(`http://127.0.0.1:${port}/api/settings/llm`, {
+      method: 'POST',
+      headers: { Cookie: amzCookie, Origin: `http://127.0.0.1:${port}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ openaiApiKey: 'sk-test-plaintext-must-not-persist', activeProvider: 'OPENAI' })
+    });
+    assert.strictEqual(settingsRes.status, 200);
+    const storedSecrets = await dbAll("SELECT encrypted_value FROM llm_settings WHERE key = 'openai_api_key'");
+    assert.strictEqual(storedSecrets.length, 1);
+    assert(storedSecrets[0].encrypted_value.startsWith('enc:v1:'), 'Encrypted envelope prefix missing');
+    assert(!storedSecrets[0].encrypted_value.includes('sk-test-plaintext'), 'Plaintext API key persisted');
+    const readSettingsRes = await fetch(`http://127.0.0.1:${port}/api/settings/llm`, { headers: { Cookie: amzCookie } });
+    const readSettings = await readSettingsRes.json();
+    assert.strictEqual(readSettings.openaiKeyMasked, '••••••••sist');
+    console.log('  🟢 Test 15 (Encrypted, Scoped, Masked Secrets): PASSED');
+
+    // Test 16: Approval hash/version and optimistic concurrency.
+    console.log('\nTest 16: Approval Hash & Version Concurrency...');
+    const approveRes = await fetch(`http://127.0.0.1:${port}/api/listings/${scopedListing.id}/approve`, {
+      method: 'PATCH',
+      headers: { Cookie: amzCookie, Origin: `http://127.0.0.1:${port}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expectedVersion: 1 })
+    });
+    assert.strictEqual(approveRes.status, 200);
+    const approved = await approveRes.json();
+    assert.strictEqual(approved.approvedVersion, 1);
+    assert.match(approved.approvedHash, /^[a-f0-9]{64}$/);
+    const preMutationExport = await fetch(`http://127.0.0.1:${port}/api/listings/${scopedListing.id}/export`, { headers: { Cookie: amzCookie } });
+    assert.strictEqual(preMutationExport.status, 200);
+    const mutationRes = await fetch(`http://127.0.0.1:${port}/api/listings/${scopedListing.id}`, {
+      method: 'PATCH',
+      headers: { Cookie: amzCookie, Origin: `http://127.0.0.1:${port}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expectedVersion: 1, amazonTitle: 'Updated', etsyTitle: 'Updated', categoryName: 'Embroidery', payload: { ipVerdict: 'ALLOW', ipHits: [], etsyTags: Array.from({ length: 13 }, (_, index) => `updated ${index + 1}`) } })
+    });
+    assert.strictEqual(mutationRes.status, 200);
+    const staleMutation = await fetch(`http://127.0.0.1:${port}/api/listings/${scopedListing.id}`, {
+      method: 'PATCH',
+      headers: { Cookie: amzCookie, Origin: `http://127.0.0.1:${port}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expectedVersion: 1, payload: {} })
+    });
+    assert.strictEqual(staleMutation.status, 412);
+    const invalidatedExport = await fetch(`http://127.0.0.1:${port}/api/listings/${scopedListing.id}/export`, { headers: { Cookie: amzCookie } });
+    assert.strictEqual(invalidatedExport.status, 409);
+    console.log('  🟢 Test 16 (Approval Hash, Invalidation & 412 Concurrency): PASSED');
+
+    // Test 17: reset nonce is one-time and bound to typed workspace confirmation.
+    console.log('\nTest 17: Recent-Auth One-Time Reset Nonce...');
+    const resetReauth = await fetch(`http://127.0.0.1:${port}/api/auth/reauth`, {
+      method: 'POST', headers: { Cookie: amzCookie, Origin: `http://127.0.0.1:${port}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: 'password123', purpose: 'RESET_DATABASE' })
+    });
+    const resetReauthBody = await resetReauth.json();
+    const resetHeaders = { Cookie: amzCookie, Origin: `http://127.0.0.1:${port}`, 'Content-Type': 'application/json', 'X-Reset-Nonce': resetReauthBody.nonce };
+    const badConfirmation = await fetch(`http://127.0.0.1:${port}/api/reset-database`, { method: 'DELETE', headers: resetHeaders, body: JSON.stringify({ confirmation: 'RESET WRONG' }) });
+    assert.strictEqual(badConfirmation.status, 400);
+    const goodReset = await fetch(`http://127.0.0.1:${port}/api/reset-database`, { method: 'DELETE', headers: resetHeaders, body: JSON.stringify({ confirmation: `RESET ${amazonWorkspace.workspace_id}` }) });
+    assert.strictEqual(goodReset.status, 200);
+    const nonceReplay = await fetch(`http://127.0.0.1:${port}/api/reset-database`, { method: 'DELETE', headers: resetHeaders, body: JSON.stringify({ confirmation: `RESET ${amazonWorkspace.workspace_id}` }) });
+    assert.strictEqual(nonceReplay.status, 403);
+    console.log('  🟢 Test 17 (Recent Auth, Typed Confirmation & Nonce Replay Denial): PASSED');
+
     console.log('\n================================================================');
-    console.log('  🟢 ALL 14 PR-2B/PR-2C SECURITY FOUNDATION TESTS PASSED!');
+    console.log('  🟢 ALL 17 PR-2B/PR-2C SECURITY FOUNDATION TESTS PASSED!');
     console.log('================================================================\n');
 
   } finally {

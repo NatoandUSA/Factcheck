@@ -1,4 +1,5 @@
 const LISTING_SCOPE_MIGRATION = '002_listing_workspace_scope';
+const SECURITY_CONTROLS_MIGRATION = '003_security_controls';
 
 function run(db, sql, params = []) {
   return new Promise((resolve, reject) => {
@@ -37,6 +38,51 @@ async function migrateListingWorkspaceScope(db) {
   `);
 }
 
+async function migrateSecurityControls(db) {
+  const columns = new Set((await all(db, 'PRAGMA table_info(listings)')).map(column => column.name));
+  await addColumnIfMissing(db, columns, 'listing_version', 'INTEGER NOT NULL DEFAULT 1');
+  await addColumnIfMissing(db, columns, 'approved_version', 'INTEGER NULL');
+  await addColumnIfMissing(db, columns, 'approved_hash', 'TEXT NULL');
+  await addColumnIfMissing(db, columns, 'approved_by', 'INTEGER NULL REFERENCES users(id)');
+  await addColumnIfMissing(db, columns, 'approved_at', 'DATETIME NULL');
+
+  await run(db, `
+    CREATE TABLE IF NOT EXISTS llm_settings (
+      tenant_id TEXT NOT NULL,
+      workspace_id INTEGER NOT NULL,
+      key TEXT NOT NULL,
+      encrypted_value TEXT NOT NULL,
+      updated_by INTEGER NOT NULL,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (tenant_id, workspace_id, key),
+      FOREIGN KEY(workspace_id) REFERENCES workspaces(id),
+      FOREIGN KEY(updated_by) REFERENCES users(id)
+    )
+  `);
+  await run(db, `
+    CREATE TABLE IF NOT EXISTS reauth_nonces (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      nonce_hash TEXT UNIQUE NOT NULL,
+      session_id INTEGER NOT NULL,
+      user_id INTEGER NOT NULL,
+      workspace_id INTEGER NOT NULL,
+      purpose TEXT NOT NULL,
+      expires_at DATETIME NOT NULL,
+      consumed_at DATETIME NULL,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+    )
+  `);
+
+  // Legacy secrets were global, plaintext, and could not be assigned to a
+  // tenant safely. Purge only credential rows; owners must re-enter them into
+  // the encrypted workspace-scoped store after this migration.
+  await run(db, `
+    DELETE FROM settings
+    WHERE key IN ('gemini_api_key', 'openai_api_key', 'claude_api_key')
+  `);
+}
+
 async function runMigrations(db) {
   await run(db, `
     CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -57,9 +103,24 @@ async function runMigrations(db) {
       throw error;
     }
   }
+
+
+  const securityApplied = await all(db, 'SELECT id FROM schema_migrations WHERE id = ?', [SECURITY_CONTROLS_MIGRATION]);
+  if (securityApplied.length === 0) {
+    await run(db, 'BEGIN IMMEDIATE');
+    try {
+      await migrateSecurityControls(db);
+      await run(db, 'INSERT INTO schema_migrations (id) VALUES (?)', [SECURITY_CONTROLS_MIGRATION]);
+      await run(db, 'COMMIT');
+    } catch (error) {
+      try { await run(db, 'ROLLBACK'); } catch (_) {}
+      throw error;
+    }
+  }
 }
 
 module.exports = {
   LISTING_SCOPE_MIGRATION,
+  SECURITY_CONTROLS_MIGRATION,
   runMigrations
 };

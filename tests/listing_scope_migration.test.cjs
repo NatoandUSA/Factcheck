@@ -20,6 +20,9 @@ async function main() {
 
   try {
     await run(db, `CREATE TABLE workspaces (id INTEGER PRIMARY KEY)`);
+    await run(db, `CREATE TABLE users (id INTEGER PRIMARY KEY)`);
+    await run(db, `CREATE TABLE sessions (id INTEGER PRIMARY KEY)`);
+    await run(db, `CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT)`);
     await run(db, `
       CREATE TABLE listings (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -40,7 +43,7 @@ async function main() {
 
     const columns = await all(db, 'PRAGMA table_info(listings)');
     const names = new Set(columns.map(column => column.name));
-    for (const required of ['tenant_id', 'workspace_id', 'marketplace']) {
+    for (const required of ['tenant_id', 'workspace_id', 'marketplace', 'listing_version', 'approved_version', 'approved_hash', 'approved_by', 'approved_at']) {
       assert(names.has(required), `Migration did not add ${required}`);
     }
 

@@ -260,10 +260,30 @@ export default function Dashboard({ onSelectListing, onApproveListing, onShowToa
             onClick={async () => {
               if (window.confirm('⚠️ Bạn có chắc chắn muốn XÓA TOÀN BỘ dữ liệu cũ để nạp lại dữ liệu mới? Action này sẽ reset toàn bộ Database.')) {
                 try {
-                  const res = await fetch('http://localhost:3001/api/reset-database', { method: 'DELETE' });
+                  const password = window.prompt('Xác thực lại: nhập mật khẩu OWNER');
+                  if (!password) return;
+                  const meRes = await fetch('/api/auth/me', { credentials: 'include' });
+                  const me = await meRes.json();
+                  if (!meRes.ok) throw new Error('Phiên đăng nhập không hợp lệ');
+                  const reauthRes = await fetch('/api/auth/reauth', {
+                    method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ password, purpose: 'RESET_DATABASE' })
+                  });
+                  const reauth = await reauthRes.json();
+                  if (!reauthRes.ok) throw new Error('Xác thực lại thất bại');
+                  const confirmation = window.prompt(`Nhập chính xác: RESET ${me.user.workspaceId}`);
+                  if (confirmation !== `RESET ${me.user.workspaceId}`) throw new Error('Chuỗi xác nhận không khớp');
+                  const res = await fetch('/api/reset-database', {
+                    method: 'DELETE', credentials: 'include',
+                    headers: { 'Content-Type': 'application/json', 'X-Reset-Nonce': reauth.nonce },
+                    body: JSON.stringify({ confirmation })
+                  });
                   if (res.ok) {
                     onShowToast?.('Đã xóa dữ liệu cũ và Reset DB thành công!', 'success');
                     fetchDashboardData();
+                  } else {
+                    const data = await res.json();
+                    throw new Error(data.error || 'Reset bị từ chối');
                   }
                 } catch (e) {
                   onShowToast?.(`Lỗi: ${e.message}`, 'error');
@@ -1097,5 +1117,4 @@ export default function Dashboard({ onSelectListing, onApproveListing, onShowToa
     </div>
   );
 }
-
 

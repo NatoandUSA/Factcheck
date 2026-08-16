@@ -190,8 +190,65 @@ async function runAuthFoundationTests() {
     assert.strictEqual(nonMemberWsRes.status, 403, 'Non-member workspaceId login did not return 403 Forbidden');
     console.log('  🟢 Test 10 (Input Bounds & Workspace Denial 403): PASSED');
 
+    // Test 11: Listing Approval Role Authorization (Unauthenticated 401, Seller 403, Owner 200)
+    console.log('\nTest 11: Listing Approval Role Authorization...');
+    const unauthApproveRes = await fetch(`http://127.0.0.1:${port}/api/listings/1/approve`, {
+      method: 'PATCH',
+      headers: { 'Origin': `http://127.0.0.1:${port}` }
+    });
+    assert.strictEqual(unauthApproveRes.status, 401, 'Unauthenticated approval did not return 401');
+
+    // Login seller user
+    const sellerLoginRes = await fetch(`http://127.0.0.1:${port}/api/auth/login`, {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json',
+        'Origin': `http://127.0.0.1:${port}`
+      },
+      body: JSON.stringify({ email: 'seller@omniseller.local', password: 'password123' })
+    });
+    const sellerCookie = sellerLoginRes.headers.get('set-cookie')?.split(';')[0];
+
+    const sellerApproveRes = await fetch(`http://127.0.0.1:${port}/api/listings/1/approve`, {
+      method: 'PATCH',
+      headers: { 
+        Cookie: sellerCookie,
+        Origin: `http://127.0.0.1:${port}`
+      }
+    });
+    assert.strictEqual(sellerApproveRes.status, 403, 'Seller role approval did not return 403 Forbidden');
+    console.log('  🟢 Test 11 (Approval Authorization 401/403 Protection): PASSED');
+
+    // Test 12: Database Reset Role Authorization (Seller 403, Owner 200)
+    console.log('\nTest 12: Database Reset Role Authorization...');
+    const sellerResetRes = await fetch(`http://127.0.0.1:${port}/api/reset-database`, {
+      method: 'DELETE',
+      headers: { 
+        Cookie: sellerCookie,
+        Origin: `http://127.0.0.1:${port}`
+      }
+    });
+    assert.strictEqual(sellerResetRes.status, 403, 'Seller role database reset did not return 403 Forbidden');
+    console.log('  🟢 Test 12 (Database Reset OWNER Only 403 Protection): PASSED');
+
+    // Test 13: Amazon vs Etsy Workspace Selection & Isolation
+    console.log('\nTest 13: Amazon vs Etsy Workspace Selection...');
+    const etsyLoginRes = await fetch(`http://127.0.0.1:${port}/api/auth/login`, {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json',
+        'Origin': `http://127.0.0.1:${port}`
+      },
+      body: JSON.stringify({ email: 'owner@omniseller.local', password: 'password123', workspaceId: 2 })
+    });
+    assert.strictEqual(etsyLoginRes.status, 200, 'Explicit Etsy workspace login failed');
+    const etsyBody = await etsyLoginRes.json();
+    assert.strictEqual(etsyBody.user.marketplace, 'ETSY');
+    assert.strictEqual(etsyBody.user.workspaceId, 2);
+    console.log('  🟢 Test 13 (Amazon/Etsy Workspace Selection & Marketplace Scope): PASSED');
+
     console.log('\n================================================================');
-    console.log('  🟢 ALL 10 PR-2B AUTHENTICATION FOUNDATION TESTS PASSED!');
+    console.log('  🟢 ALL 13 PR-2B AUTHENTICATION FOUNDATION TESTS PASSED!');
     console.log('================================================================\n');
 
   } finally {

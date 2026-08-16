@@ -21,13 +21,9 @@ const { learnFromListing } = require('./learningService');
 const { parseEtsySearchResults, synthesizeEtsyBatchLearnings } = require('./competitorBatchLearner');
 const benchmarkService = require('./benchmarkService');
 const publishGate = require('./publishGate');
-
-
-
-
-
-
-
+const { hashPassword, verifyPassword } = require('./security/scrypt');
+const { COOKIE_NAME, SESSION_TTL_MS, createSessionRecord, verifySessionRecord, revokeSessionRecord } = require('./security/session');
+const { parseCookies, extractRawToken, requireAuth, requireRole } = require('./middleware/auth');
 
 const app = express();
 app.use(cors());
@@ -65,6 +61,67 @@ const db = new sqlite3.Database(dbPath);
 
 // Initialize DB schema
 db.serialize(() => {
+  db.run(`
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      email TEXT UNIQUE NOT NULL,
+      password_hash TEXT,
+      name TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS workspaces (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id TEXT NOT NULL,
+      marketplace TEXT NOT NULL CHECK(marketplace IN ('AMAZON', 'ETSY')),
+      name TEXT NOT NULL,
+      status TEXT DEFAULT 'ACTIVE',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS workspace_memberships (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      workspace_id INTEGER NOT NULL,
+      role TEXT NOT NULL CHECK(role IN ('OWNER', 'MANAGER', 'SELLER')),
+      status TEXT DEFAULT 'ACTIVE',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(user_id, workspace_id)
+    )
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS sessions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      token_hash TEXT UNIQUE NOT NULL,
+      user_id INTEGER NOT NULL,
+      workspace_id INTEGER NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      last_seen_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      expires_at DATETIME NOT NULL,
+      revoked_at DATETIME NULL
+    )
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS audit_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id TEXT,
+      actor_id INTEGER,
+      action TEXT NOT NULL,
+      resource_type TEXT NOT NULL,
+      resource_id TEXT,
+      outcome TEXT NOT NULL,
+      ip_address TEXT,
+      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+      metadata TEXT
+    )
+  `);
+
   db.run(`
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -151,16 +208,51 @@ db.serialize(() => {
     )
   `);
 
-  // Seed default users if empty
-  db.get("SELECT COUNT(*) as count FROM users", (err, row) => {
+  // Seed default users & workspaces if empty
+  db.get("SELECT COUNT(*) as count FROM users", async (err, row) => {
     if (row && row.count === 0) {
-      console.log('Seeding initial users...');
-      const stmt = db.prepare("INSERT INTO users (email, role, name) VALUES (?, ?, ?)");
-      stmt.run('owner@omniseller.local', 'OWNER', 'Store Owner');
-      stmt.run('manager@omniseller.local', 'MANAGER', 'Ops Manager');
-      stmt.run('designer@omniseller.local', 'DESIGNER', 'Lead Designer');
-      stmt.run('seller@omniseller.local', 'SELLER', 'Listing Specialist');
-      stmt.finalize();
+      console.log('Seeding initial users and workspaces...');
+      try {
+        const defaultPasswordHash = await hashPassword('password123');
+        
+        db.run("INSERT INTO users (email, password_hash, name) VALUES (?, ?, ?)", 
+          ['owner@omniseller.local', defaultPasswordHash, 'Store Owner'], function(err) {
+            if (err) return;
+            const ownerId = this.lastID;
+            
+            db.run("INSERT INTO workspaces (tenant_id, marketplace, name) VALUES (?, ?, ?)",
+              ['tenant-alpha-uuid', 'AMAZON', 'Amazon Main Store'], function(err) {
+                if (err) return;
+                const amzWorkspaceId = this.lastID;
+                db.run("INSERT INTO workspace_memberships (user_id, workspace_id, role) VALUES (?, ?, ?)",
+                  [ownerId, amzWorkspaceId, 'OWNER']);
+              });
+
+            db.run("INSERT INTO workspaces (tenant_id, marketplace, name) VALUES (?, ?, ?)",
+              ['tenant-alpha-uuid', 'ETSY', 'Etsy Craft Studio'], function(err) {
+                if (err) return;
+                const etsyWorkspaceId = this.lastID;
+                db.run("INSERT INTO workspace_memberships (user_id, workspace_id, role) VALUES (?, ?, ?)",
+                  [ownerId, etsyWorkspaceId, 'OWNER']);
+              });
+          });
+
+        db.run("INSERT INTO users (email, password_hash, name) VALUES (?, ?, ?)",
+          ['manager@omniseller.local', defaultPasswordHash, 'Ops Manager'], function(err) {
+            if (err) return;
+            const managerId = this.lastID;
+            db.run("INSERT INTO workspace_memberships (user_id, workspace_id, role) VALUES (?, 1, ?)", [managerId, 'MANAGER']);
+          });
+
+        db.run("INSERT INTO users (email, password_hash, name) VALUES (?, ?, ?)",
+          ['seller@omniseller.local', defaultPasswordHash, 'Listing Specialist'], function(err) {
+            if (err) return;
+            const sellerId = this.lastID;
+            db.run("INSERT INTO workspace_memberships (user_id, workspace_id, role) VALUES (?, 1, ?)", [sellerId, 'SELLER']);
+          });
+      } catch (e) {
+        console.error('Seeding error:', e);
+      }
     }
   });
 
@@ -181,6 +273,110 @@ db.serialize(() => {
     console.log('Gemini API key configured from .env environment.');
   }
 });
+
+// ==========================================
+// PR-2B: AUTHENTICATION API ENDPOINTS
+// ==========================================
+
+// POST /api/auth/login
+app.post('/api/auth/login', async (req, res) => {
+  const { email, password } = req.body || {};
+
+  if (!email || !password) {
+    return res.status(400).json({
+      success: false,
+      error: 'MISSING_CREDENTIALS',
+      message: 'Email and password are required'
+    });
+  }
+
+  const normalizedEmail = String(email).trim().toLowerCase();
+
+  db.get("SELECT id, email, password_hash, name FROM users WHERE LOWER(email) = ?", [normalizedEmail], async (err, user) => {
+    if (err) {
+      return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
+    }
+
+    const isValid = await verifyPassword(password, user ? user.password_hash : null);
+
+    if (!user || !isValid) {
+      db.run("INSERT INTO audit_events (action, resource_type, outcome, metadata) VALUES (?, ?, ?, ?)",
+        ['auth:login', 'user', 'FAILURE', JSON.stringify({ email: normalizedEmail, reason: 'INVALID_CREDENTIALS' })]);
+      return res.status(401).json({
+        success: false,
+        error: 'INVALID_CREDENTIALS',
+        message: 'Invalid email or password'
+      });
+    }
+
+    db.get(`
+      SELECT wm.workspace_id, wm.role, w.tenant_id, w.marketplace, w.name as workspace_name
+      FROM workspace_memberships wm
+      JOIN workspaces w ON w.id = wm.workspace_id
+      WHERE wm.user_id = ? AND wm.status = 'ACTIVE'
+      LIMIT 1
+    `, [user.id], (err, membership) => {
+      if (err || !membership) {
+        return res.status(403).json({
+          success: false,
+          error: 'NO_ACTIVE_WORKSPACE',
+          message: 'User does not belong to an active workspace'
+        });
+      }
+
+      createSessionRecord(db, user.id, membership.workspace_id, membership.tenant_id, (err, session) => {
+        if (err) {
+          return res.status(500).json({ success: false, error: 'SESSION_CREATE_FAILED' });
+        }
+
+        const isProd = process.env.NODE_ENV === 'production';
+        res.cookie(COOKIE_NAME, session.rawToken, {
+          httpOnly: true,
+          secure: isProd,
+          sameSite: 'lax',
+          path: '/',
+          maxAge: SESSION_TTL_MS
+        });
+
+        db.run("INSERT INTO audit_events (tenant_id, actor_id, action, resource_type, outcome) VALUES (?, ?, ?, ?, ?)",
+          [membership.tenant_id, user.id, 'auth:login', 'session', 'SUCCESS']);
+
+        res.json({
+          success: true,
+          user: {
+            id: user.id,
+            email: user.email,
+            name: user.name,
+            role: membership.role,
+            workspaceId: membership.workspace_id,
+            tenantId: membership.tenant_id,
+            marketplace: membership.marketplace
+          }
+        });
+      });
+    });
+  });
+});
+
+// POST /api/auth/logout
+app.post('/api/auth/logout', (req, res) => {
+  const rawToken = extractRawToken(req);
+
+  revokeSessionRecord(db, rawToken, (err, revoked) => {
+    res.clearCookie(COOKIE_NAME, { path: '/' });
+    res.json({ success: true, message: 'Logged out successfully' });
+  });
+});
+
+// GET /api/auth/me
+app.get('/api/auth/me', requireAuth(db), (req, res) => {
+  res.json({
+    success: true,
+    authenticated: true,
+    user: req.user
+  });
+});
+
 
 // API: Full Database Reset (Wipe all old listings, trends, and templates)
 app.delete('/api/reset-database', (req, res) => {

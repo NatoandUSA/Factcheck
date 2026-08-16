@@ -224,40 +224,43 @@ db.serialize(() => {
         try {
           const defaultPasswordHash = await hashPassword('password123');
           
-          db.run("INSERT INTO users (email, password_hash, name) VALUES (?, ?, ?)", 
-            ['owner@omniseller.local', defaultPasswordHash, 'Store Owner'], function(err) {
-              if (err) return;
-              const ownerId = this.lastID;
-              
-              db.run("INSERT INTO workspaces (tenant_id, marketplace, name) VALUES (?, ?, ?)",
-                ['tenant-alpha-uuid', 'AMAZON', 'Amazon Main Store'], function(err) {
-                  if (err) return;
-                  const amzWorkspaceId = this.lastID;
-                  db.run("INSERT INTO workspace_memberships (user_id, workspace_id, role) VALUES (?, ?, ?)",
-                    [ownerId, amzWorkspaceId, 'OWNER']);
-                });
+          // Step 1: Create Amazon Workspace first
+          db.run("INSERT INTO workspaces (tenant_id, marketplace, name) VALUES (?, ?, ?)",
+            ['tenant-alpha-uuid', 'AMAZON', 'Amazon Main Store'], function(err) {
+              if (err) return console.error('Error creating Amazon workspace:', err);
+              const amzWorkspaceId = this.lastID;
 
+              // Step 2: Create Etsy Workspace
               db.run("INSERT INTO workspaces (tenant_id, marketplace, name) VALUES (?, ?, ?)",
                 ['tenant-alpha-uuid', 'ETSY', 'Etsy Craft Studio'], function(err) {
-                  if (err) return;
+                  if (err) return console.error('Error creating Etsy workspace:', err);
                   const etsyWorkspaceId = this.lastID;
-                  db.run("INSERT INTO workspace_memberships (user_id, workspace_id, role) VALUES (?, ?, ?)",
-                    [ownerId, etsyWorkspaceId, 'OWNER']);
+
+                  // Step 3: Create Owner User and Memberships
+                  db.run("INSERT INTO users (email, password_hash, name) VALUES (?, ?, ?)", 
+                    ['owner@omniseller.local', defaultPasswordHash, 'Store Owner'], function(err) {
+                      if (err) return console.error('Error creating owner:', err);
+                      const ownerId = this.lastID;
+                      db.run("INSERT INTO workspace_memberships (user_id, workspace_id, role) VALUES (?, ?, ?)", [ownerId, amzWorkspaceId, 'OWNER']);
+                      db.run("INSERT INTO workspace_memberships (user_id, workspace_id, role) VALUES (?, ?, ?)", [ownerId, etsyWorkspaceId, 'OWNER']);
+                    });
+
+                  // Step 4: Create Manager User and Membership
+                  db.run("INSERT INTO users (email, password_hash, name) VALUES (?, ?, ?)",
+                    ['manager@omniseller.local', defaultPasswordHash, 'Ops Manager'], function(err) {
+                      if (err) return console.error('Error creating manager:', err);
+                      const managerId = this.lastID;
+                      db.run("INSERT INTO workspace_memberships (user_id, workspace_id, role) VALUES (?, ?, ?)", [managerId, amzWorkspaceId, 'MANAGER']);
+                    });
+
+                  // Step 5: Create Seller User and Membership
+                  db.run("INSERT INTO users (email, password_hash, name) VALUES (?, ?, ?)",
+                    ['seller@omniseller.local', defaultPasswordHash, 'Listing Specialist'], function(err) {
+                      if (err) return console.error('Error creating seller:', err);
+                      const sellerId = this.lastID;
+                      db.run("INSERT INTO workspace_memberships (user_id, workspace_id, role) VALUES (?, ?, ?)", [sellerId, amzWorkspaceId, 'SELLER']);
+                    });
                 });
-            });
-
-          db.run("INSERT INTO users (email, password_hash, name) VALUES (?, ?, ?)",
-            ['manager@omniseller.local', defaultPasswordHash, 'Ops Manager'], function(err) {
-              if (err) return;
-              const managerId = this.lastID;
-              db.run("INSERT INTO workspace_memberships (user_id, workspace_id, role) VALUES (?, 1, ?)", [managerId, 'MANAGER']);
-            });
-
-          db.run("INSERT INTO users (email, password_hash, name) VALUES (?, ?, ?)",
-            ['seller@omniseller.local', defaultPasswordHash, 'Listing Specialist'], function(err) {
-              if (err) return;
-              const sellerId = this.lastID;
-              db.run("INSERT INTO workspace_memberships (user_id, workspace_id, role) VALUES (?, 1, ?)", [sellerId, 'SELLER']);
             });
         } catch (e) {
           console.error('Seeding error:', e);
@@ -265,6 +268,7 @@ db.serialize(() => {
       }
     });
   }
+
 
 
   // Seed default agents if empty
@@ -427,8 +431,9 @@ app.get('/api/auth/me', requireAuth(db), (req, res) => {
 });
 
 
-// API: Full Database Reset (Wipe all old listings, trends, and templates - Protected)
-app.delete('/api/reset-database', requireAuth(db), (req, res) => {
+// API: Full Database Reset (Wipe all old listings, trends, and templates - Protected OWNER Only)
+app.delete('/api/reset-database', requireAuth(db), requireRole(['OWNER']), (req, res) => {
+
   db.serialize(() => {
     db.run("DELETE FROM listings;");
     db.run("DELETE FROM market_trends;");
@@ -513,15 +518,10 @@ app.get('/api/listings', (req, res) => {
   });
 });
 
-// Approve a listing using Canonical Publish Gate (Fail-Closed Gate Authority)
-app.patch('/api/listings/:id/approve', (req, res) => {
+// Approve a listing using Canonical Publish Gate (Fail-Closed Gate Authority - Protected)
+app.patch('/api/listings/:id/approve', requireAuth(db), requireRole(['OWNER', 'MANAGER']), (req, res) => {
   const { id } = req.params;
-  const { userRole } = req.body || {};
 
-  // C5A Fix: Require explicit authenticated role (No default MANAGER role bypass)
-  if (!userRole || (userRole !== 'MANAGER' && userRole !== 'OWNER' && userRole !== 'ADMIN')) {
-    return res.status(401).json({ error: 'UNAUTHORIZED: Explicit Manager identity required for approval.' });
-  }
 
   db.get("SELECT * FROM listings WHERE id = ?", [id], (err, row) => {
     if (err || !row) return res.status(404).json({ error: 'Listing not found.' });

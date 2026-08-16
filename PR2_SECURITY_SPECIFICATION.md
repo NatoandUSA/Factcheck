@@ -1,9 +1,10 @@
-# PR-2A.2: CORRECTED SECURITY CONTRACT & EXECUTABLE SPECIFICATION
+# PR-2A.3: PRODUCTION CANONICALIZER ENGINE & WORKSPACE AUTHORITY SPECIFICATION
 
-> **Document Version**: 2.2.0 (PR-2A.2 Corrected Security Specification)  
+> **Document Version**: 2.3.0 (PR-2A.3 Complete Production Specification)  
 > **Repository Tracked File**: `PR2_SECURITY_SPECIFICATION.md`  
-> **Prepared For**: OmniSeller Studio Security Architecture  
-> **Baseline Commit**: `83fe38e`  
+> **Production Module**: `server/security/canonicalize.js`  
+> **Prepared For**: OmniSeller Studio Security Architecture Gating  
+> **Baseline Commit**: `10030bc`  
 
 ---
 
@@ -41,19 +42,39 @@
 - Password verification uses `crypto.timingSafeEqual` to prevent timing attacks.
 - Failed logins execute a dummy scrypt computation for unknown emails to eliminate user enumeration.
 
-### A5. Tenant & Marketplace Isolation (IDOR Protection)
-- All SQL queries strictly enforce:
+### A5. Workspace, Membership & Marketplace Authority (`C5`)
+- `workspaces` Table Schema:
+  ```sql
+  CREATE TABLE IF NOT EXISTS workspaces (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  );
+  ```
+- `workspace_memberships` Table Schema:
+  ```sql
+  CREATE TABLE IF NOT EXISTS workspace_memberships (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    workspace_id INTEGER NOT NULL,
+    role TEXT NOT NULL CHECK(role IN ('OWNER', 'MANAGER', 'SELLER')),
+    status TEXT NOT NULL DEFAULT 'ACTIVE',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, workspace_id)
+  );
+  ```
+- Queries enforce tenant & marketplace boundaries:
   ```sql
   SELECT * FROM listings 
   WHERE id = :id AND tenant_id = :tenant_id AND marketplace = :marketplace;
   ```
 - Unauthorized or cross-tenant resource access attempts return `404 Not Found` (fail closed, zero resource enumeration).
 
-### A6. Canonical Payload Serialization & SHA-256 Test Vector
-- Canonical String Rules:
-  1. Recursively sort all object keys lexicographically.
-  2. Normalize all strings using `Unicode NFC` (`String.prototype.normalize('NFC')`).
-  3. Exclude volatile metadata keys (`id`, `created_at`, `updated_at`, `status`).
+### A6. Production Canonical Serializer Engine (`server/security/canonicalize.js`)
+- Canonical Serialization Rules:
+  1. Omit volatile metadata keys (`id`, `dbId`, `status`, `created_at`, `updated_at`, `approved_by`, `approved_at`, `approved_hash`, `approved_version`, `listing_version`).
+  2. Recursively sort all object keys lexicographically.
+  3. Normalize all strings using `Unicode NFC` (`String.prototype.normalize('NFC')`).
   4. Serialize using `JSON.stringify()`.
 - Verified SHA-256 Hash Test Vector (Executed in `tests/spec_hash_vector.test.cjs`):
   ```javascript
@@ -83,9 +104,10 @@
   - `412 Precondition Failed` for stale `expectedVersion` concurrency mismatch.
   - `409 Conflict` for export attempt on listing modified post-approval.
 
-### A8. AES-256-GCM API Key Encryption-at-Rest
-- Stored keys use **AES-256-GCM**: `encrypted_key`, `iv` (12 bytes), `auth_tag` (16 bytes).
-- Master encryption key passed via 32-byte decoded `ENCRYPTION_SECRET` environment variable.
+### A8. AES-256-GCM API Key Encryption-at-Rest (`C6`)
+- Stored keys use **AES-256-GCM**: `encrypted_key`, `iv` (12 random bytes), `auth_tag` (16 bytes).
+- Master encryption key passed via 32-byte base64/hex decoded `ENCRYPTION_SECRET` environment variable.
+- Additional Authenticated Data (AAD) bound to `tenant_id:provider`.
 - `GET /api/settings` returns masked metadata (`sk-***1234`) and provider name only. Plaintext key is write-only (`POST /api/settings`).
 
 ### A9. Admin Reset Protection Protocol
@@ -95,7 +117,7 @@
   2. Short-lived one-time confirmation token (`reset_nonce`).
   3. Explicit typed payload string `"DELETE_DATABASE_PERMANENTLY"`.
 
-### A10. Append-Only Audit Log Schema
+### A10. Append-Only Audit Log Schema (`C7`)
 - `audit_events` Table Schema:
   ```sql
   CREATE TABLE IF NOT EXISTS audit_events (
@@ -121,7 +143,7 @@
 | :--- | :---: | :---: | :---: | :---: |
 | `auth:login` | ✅ | ✅ | ✅ | ✅ |
 | `auth:me` | ✅ | ✅ | ✅ | ❌ |
-| `listing:read` | ✅ | ✅ | ✅ (Own Tenant) | ❌ |
+| `listing:read` | ✅ | ✅ | ✅ (Own Workspace) | ❌ |
 | `listing:draft` | ✅ | ✅ | ✅ | ❌ |
 | `listing:approve` | ✅ | ✅ | ❌ | ❌ |
 | `listing:export` | ✅ | ✅ | ❌ | ❌ |
@@ -133,10 +155,10 @@
 
 ## 3. EXECUTABLE SPECIFICATION SUITE
 
-| Test File Path | Tested Security Capability | Verification Engine | Expected Result |
+| Test File Path | Tested Security / Functional Invariant | Verification Engine | Expected Result |
 | :--- | :--- | :--- | :--- |
-| `tests/spec_hash_vector.test.cjs` | SHA-256 Canonical Serializer | `assert.strictEqual` | `🟢 SHA-256 VECTOR PASSED` |
+| `tests/spec_hash_vector.test.cjs` | Production `canonicalize.js` SHA-256 Vector, Nested Sort, NFC, Volatiles | `assert.strictEqual` | `🟢 4/4 CANONICAL INVARIANTS PASSED` |
 | `tests/test_real_child_asin_batcher.cjs` | 3x10 ASIN Invariant | Executable Assertion | `🟢 30 ASINs PASSED` |
 | `tests/test_strict_keyword_sanitizer.cjs` | Garbage Keyword Filter | Executable Assertion | `🟢 0 Garbage PASSED` |
-| `tests/test_full_cerebro_mkl_flow.cjs` | In-process Express Upload | Executable Assertion | `🟢 27,018 Rows PASSED` |
-| `tests/test_white_screen_failsafe.cjs` | Render Safeguard | Executable Assertion | `🟢 0 Crashes PASSED` |
+| `tests/test_full_cerebro_mkl_flow.cjs` | Tracked Cerebro Upload & DB | In-process Server + Fixture | `🟢 27,018 Rows PASSED` |
+| `tests/test_white_screen_failsafe.cjs` | Zero-Crash Render Safeguard | Executable Assertion | `🟢 0 Crashes PASSED` |

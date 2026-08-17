@@ -11,9 +11,41 @@ const tempUploadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'omni-test-imports-'
 process.env.TEST_IMPORTS_DIR = tempUploadDir;
 
 // Import Express app & db after setting TEST_IMPORTS_DIR
-const { app, db } = require('../server/server');
+const { app, db, databaseReady } = require('../server/server');
 
-function httpPostMultipart(port, filePath) {
+function dbAll(sql, params = []) {
+  return new Promise((resolve, reject) => db.all(sql, params, (err, rows) => err ? reject(err) : resolve(rows)));
+}
+
+async function waitForOwnerAmazonWorkspace(timeoutMs = 15000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const rows = await dbAll(`
+      SELECT wm.workspace_id
+      FROM workspace_memberships wm
+      JOIN users u ON u.id = wm.user_id
+      JOIN workspaces w ON w.id = wm.workspace_id
+      WHERE u.email = 'owner@omniseller.local' AND w.marketplace = 'AMAZON'
+    `);
+    if (rows.length === 1) return rows[0].workspace_id;
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  throw new Error('Timed out waiting for deterministic test fixtures');
+}
+
+async function loginAndGetCookie(port, workspaceId) {
+  const res = await fetch(`http://127.0.0.1:${port}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Origin': `http://127.0.0.1:${port}` },
+    body: JSON.stringify({ email: 'owner@omniseller.local', password: 'password123', workspaceId })
+  });
+  assert.strictEqual(res.status, 200, `Login failed with status ${res.status}`);
+  const setCookieHeader = res.headers.get('set-cookie');
+  assert(setCookieHeader, 'Set-Cookie header missing from login response');
+  return setCookieHeader.split(';')[0];
+}
+
+function httpPostMultipart(port, filePath, cookie) {
   return new Promise((resolve, reject) => {
     const fileContent = fs.readFileSync(filePath);
     const boundary = '--------------------------' + Date.now().toString(16);
@@ -35,6 +67,7 @@ function httpPostMultipart(port, filePath) {
       method: 'POST',
       headers: {
         'Origin': `http://localhost:${port}`,
+        'Cookie': cookie,
         'Content-Type': `multipart/form-data; boundary=${boundary}`,
         'Content-Length': postDataHeader.length + fileContent.length + postDataFooter.length
       }
@@ -57,9 +90,9 @@ function httpPostMultipart(port, filePath) {
   });
 }
 
-function httpGet(port, pathUrl) {
+function httpGet(port, pathUrl, cookie) {
   return new Promise((resolve, reject) => {
-    http.get(`http://localhost:${port}${pathUrl}`, (res) => {
+    http.get(`http://localhost:${port}${pathUrl}`, { headers: { Cookie: cookie } }, (res) => {
       let body = '';
       res.on('data', chunk => body += chunk);
       res.on('end', () => {
@@ -82,13 +115,18 @@ async function testFullCerebroMklFlow() {
   console.log(`Bound in-process server to ephemeral OS port ${TEST_PORT}`);
 
   try {
+    await databaseReady;
+    const workspaceId = await waitForOwnerAmazonWorkspace();
+    const cookie = await loginAndGetCookie(TEST_PORT, workspaceId);
+    console.log('Authenticated as owner@omniseller.local for Amazon workspace', workspaceId);
+
     const trackedFixture = path.resolve(__dirname, 'fixtures/sample_cerebro.xlsx');
     assert.ok(fs.existsSync(trackedFixture), `CRITICAL TEST FAILURE: Tracked fixture file missing at ${trackedFixture}`);
 
     console.log(`Step 1: Uploading Tracked Cerebro Fixtures File (${trackedFixture})...`);
 
     const startTime = Date.now();
-    const uploadRes = await httpPostMultipart(TEST_PORT, trackedFixture);
+    const uploadRes = await httpPostMultipart(TEST_PORT, trackedFixture, cookie);
     const duration = ((Date.now() - startTime) / 1000).toFixed(2);
 
     assert.strictEqual(uploadRes.status, 200, 'Upload Cerebro file status must be HTTP 200 OK');
@@ -100,7 +138,7 @@ async function testFullCerebroMklFlow() {
     console.log(`Keywords Returned to Frontend State: ${uploadRes.data?.topKeywordsDetailed?.length}`);
 
     console.log('\nStep 2: Testing GET /api/master-keywords DB Persistence...');
-    const dbRes = await httpGet(TEST_PORT, '/api/master-keywords?marketplace=AMAZON');
+    const dbRes = await httpGet(TEST_PORT, '/api/master-keywords?marketplace=AMAZON', cookie);
     assert.strictEqual(dbRes.status, 200, 'GET master-keywords status must be 200');
     assert.ok(dbRes.data?.keywords?.length > 0, 'DB keywords count must be > 0');
 

@@ -53,7 +53,7 @@ function extractRawToken(req) {
 }
 
 function requireAuth(db) {
-  return function(req, res, next) {
+  return function requireAuthMiddleware(req, res, next) {
     const rawToken = extractRawToken(req);
 
     if (!rawToken) {
@@ -81,7 +81,7 @@ function requireAuth(db) {
 
 function requireRole(allowedRoles) {
   const rolesSet = new Set(Array.isArray(allowedRoles) ? allowedRoles : [allowedRoles]);
-  return function(req, res, next) {
+  return function requireRoleMiddleware(req, res, next) {
     if (!req.user || !req.user.role) {
       return res.status(401).json({
         success: false,

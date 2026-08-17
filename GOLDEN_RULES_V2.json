@@ -1,0 +1,508 @@
+{
+  "document": {
+    "title": "AMZ Launch OS — Golden Rules V2",
+    "type": "GPT ↔ Antigravity / Claude Engineering & Operating Contract",
+    "status": "ACTIVE",
+    "applies_to": [
+      "AMZ-FBM Toolkit",
+      "AMZ Launch OS"
+    ],
+    "audience": [
+      "GPT",
+      "Antigravity",
+      "Claude",
+      "engineering agents",
+      "reviewers",
+      "operators"
+    ],
+    "purpose": "Ensure every change is deeply reviewed, evidence-backed, root-cause oriented, operationally useful, and handed off cleanly between agents.",
+    "core_principle": "Do not optimize for completing the ticket. Optimize for solving the correct problem, closing the root cause, preserving architecture, reducing Staff friction, and moving AMZ Launch OS closer to reliable real-world operation.",
+    "required_operating_loop": [
+      "Understand",
+      "Trace",
+      "Verify",
+      "Decide",
+      "Implement",
+      "Test",
+      "Re-audit",
+      "Handoff",
+      "Independent Review"
+    ]
+  },
+  "golden_rules": [
+    {
+      "id": 1,
+      "name": "Mandatory Handoff Rule",
+      "requirements": [
+        "Every substantial unit of work ends with a concise summary.",
+        "Export a structured JSON handoff for the next reviewer/agent.",
+        "Record exact branch and commit SHA where applicable.",
+        "Record files/components changed.",
+        "Record tests actually executed.",
+        "Record CI evidence where applicable.",
+        "Record known risks and items not verified.",
+        "Provide the recommended next step.",
+        "Explicitly state what GPT should review next."
+      ],
+      "applies_to": [
+        "planning",
+        "architecture",
+        "implementation",
+        "debugging",
+        "review",
+        "testing",
+        "deployment",
+        "workflow changes",
+        "UX changes",
+        "data/schema changes",
+        "upgrades",
+        "refactors"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "Provenance Discipline",
+      "requirements": [
+        "Never blur the source of evidence.",
+        "Never convert another party's reported result into a claim of personal verification.",
+        "Confidence is not evidence."
+      ],
+      "recommended_statuses": [
+        "GPT-LIVE-VERIFIED",
+        "ANTIGRAVITY/CLAUDE-VERIFIED",
+        "OWNER-REPORTED",
+        "ANTIGRAVITY/CLAUDE-REPORTED",
+        "NOT VERIFIED",
+        "NOT EXECUTED",
+        "PENDING"
+      ]
+    },
+    {
+      "id": 3,
+      "name": "Exact-SHA Rule",
+      "requirements": [
+        "Tie CI, regression, release, merge-readiness, and engineering acceptance to the exact code state.",
+        "Record exact repository, branch, commit SHA, PR, workflow run ID, attempt, job, and final conclusion where applicable.",
+        "A GREEN result on commit A does not certify commit B."
+      ]
+    },
+    {
+      "id": 4,
+      "name": "Preserve Certified Baselines",
+      "requirements": [
+        "Do not casually modify a certified GREEN baseline in place.",
+        "Use a new branch/commit for new work where appropriate.",
+        "Preserve compare, rollback, ancestry audit, exact-HEAD CI, and known-good checkpoints.",
+        "Prove clean ancestry when it is part of the checkpoint contract."
+      ]
+    },
+    {
+      "id": 5,
+      "name": "Engineering Accepted Is Not Usability Accepted",
+      "requirements": [
+        "CI GREEN proves only the tested engineering/regression scope.",
+        "Do not infer Staff usability or operational acceptance from CI alone."
+      ],
+      "acceptance_dimensions": [
+        "Engineering Accepted",
+        "Usability Accepted",
+        "Operationally Accepted"
+      ]
+    },
+    {
+      "id": 6,
+      "name": "GPT Reviewer / Architect / Best-Next-Move Authority",
+      "owner": "GPT",
+      "requirements": [
+        "Read the full handoff.",
+        "Check claims against available evidence.",
+        "Inspect live repository/CI/state when available and materially useful.",
+        "Separate facts, reports, assumptions, and unverified items.",
+        "Review technical correctness, architecture, regression risk, Staff UX, and business usefulness.",
+        "Identify hidden risks and missing validation.",
+        "Choose and prioritize the Best Next Move."
+      ],
+      "priority_model": [
+        "P0",
+        "P1",
+        "P2"
+      ]
+    },
+    {
+      "id": 7,
+      "name": "GPT Whole-System Review",
+      "owner": "GPT",
+      "review_path": [
+        "UI",
+        "handler/API",
+        "business logic",
+        "filesystem/database",
+        "schema/contracts",
+        "tests",
+        "docs",
+        "operator workflow"
+      ],
+      "look_for": [
+        "duplicate sources of truth",
+        "hidden dependencies",
+        "legacy paths",
+        "inconsistent semantics",
+        "missing regression coverage",
+        "data contract drift",
+        "UX friction",
+        "operational failure modes",
+        "similar bugs elsewhere"
+      ]
+    },
+    {
+      "id": 8,
+      "name": "GPT Must Challenge DONE",
+      "owner": "GPT",
+      "requirements": [
+        "Do not accept DONE, FIXED, GREEN, or READY solely because it appears in a handoff.",
+        "Require appropriate evidence.",
+        "Check exact SHA, root-cause closure, adjacent paths, same bug class, tests, and acceptance scope.",
+        "Downgrade the checkpoint if evidence is insufficient."
+      ]
+    },
+    {
+      "id": 9,
+      "name": "Read Before Editing",
+      "owner": "Antigravity/Claude",
+      "requirements": [
+        "Inspect target files and relevant callers/callees.",
+        "Inspect existing tests and configuration.",
+        "Inspect schemas/contracts and database/data files when relevant.",
+        "Inspect filesystem artifacts, related UI, documentation, legacy entrypoints, and adjacent modules when relevant."
+      ],
+      "required_sequence": [
+        "Understand",
+        "Trace",
+        "Prove root cause",
+        "Patch",
+        "Test",
+        "Re-audit"
+      ],
+      "forbidden_sequence": [
+        "Prompt",
+        "Edit",
+        "DONE"
+      ]
+    },
+    {
+      "id": 10,
+      "name": "No Blind Coding",
+      "owner": "Antigravity/Claude",
+      "pre_code_questions": [
+        "What problem are we actually solving?",
+        "Is the failure a root cause or only a symptom?",
+        "What is the existing source of truth?",
+        "Will this patch create a second source of truth?",
+        "Does it break backward compatibility?",
+        "Does it alter data contracts?",
+        "Does it affect Staff UX?",
+        "Does it create unnecessary maintenance burden?",
+        "Is there a simpler implementation that preserves the intent?"
+      ],
+      "requirements": [
+        "Antigravity/Claude may recommend a better implementation than GPT initially suggested after inspecting the codebase.",
+        "Preserve underlying intent.",
+        "Explain deviations and provide evidence.",
+        "Never silently ignore GPT feedback."
+      ]
+    },
+    {
+      "id": 11,
+      "name": "Full-Stack Review Is Mandatory",
+      "owner": "Antigravity/Claude",
+      "requirements": [
+        "Do not treat a change as isolated to the named file.",
+        "Trace the relevant path through the stack at a depth proportional to risk."
+      ],
+      "examples": {
+        "dashboard_stage_card": [
+          "display",
+          "stage mapping",
+          "data source",
+          "input/output semantics",
+          "path handling",
+          "stale/missing behavior",
+          "tests",
+          "Staff documentation"
+        ],
+        "data_bug": [
+          "source",
+          "ingestion",
+          "normalization",
+          "storage",
+          "transformation",
+          "output",
+          "UI",
+          "downstream consumer"
+        ],
+        "encoding_bug": [
+          "launcher",
+          "shell",
+          "Python runtime",
+          "stdout/stderr",
+          "files/logs",
+          "downstream parsers"
+        ]
+      }
+    },
+    {
+      "id": 12,
+      "name": "Review Every GPT Suggestion",
+      "owner": "Antigravity/Claude",
+      "requirements": [
+        "Read all GPT feedback before implementation.",
+        "Do not cherry-pick easy suggestions.",
+        "Every suggestion must receive an explicit disposition."
+      ],
+      "allowed_statuses": [
+        "DONE",
+        "VERIFIED_NO_CHANGE_REQUIRED",
+        "REJECTED_WITH_REASON",
+        "BLOCKED",
+        "NOT VERIFIED"
+      ]
+    },
+    {
+      "id": 13,
+      "name": "Suggestion Coverage Matrix",
+      "owner": "Antigravity/Claude",
+      "required_columns": [
+        "GPT Suggestion",
+        "Status",
+        "Evidence / Reason"
+      ],
+      "purpose": "Prevent partial execution from being reported as full completion."
+    },
+    {
+      "id": 14,
+      "name": "Root-Cause Closure Rule",
+      "requirements": [
+        "Original symptom fixed.",
+        "Root cause eliminated.",
+        "Same bug class searched elsewhere.",
+        "Adjacent behavior preserved.",
+        "Regression protection added or updated where justified."
+      ],
+      "fallback_status": "PARTIALLY_RESOLVED"
+    },
+    {
+      "id": 15,
+      "name": "No Repeat-Fix Rule",
+      "requirements": [
+        "If the same class of defect appears again, stop patching isolated instances.",
+        "Perform a class-wide audit."
+      ],
+      "examples": [
+        "Second encoding defect → audit all console/output boundaries.",
+        "Second placeholder leak → scan all rendered surfaces.",
+        "Second stale-path defect → audit path source-of-truth and path consumers.",
+        "Second Stage mapping defect → audit the complete Stage map.",
+        "Second schema mismatch → audit producers and consumers of that contract."
+      ]
+    },
+    {
+      "id": 16,
+      "name": "Source-of-Truth Protection",
+      "requirements": [
+        "Before adding mappings, statuses, configuration, metadata, database fields, artifacts, derived values, or workflow state, determine whether an authoritative source already exists.",
+        "Prefer reuse, derivation, and normalization over duplication and manual synchronization.",
+        "Do not create multiple sources of truth without a documented architectural reason."
+      ]
+    },
+    {
+      "id": 17,
+      "name": "Minimal Change, Maximum Closure",
+      "requirements": [
+        "Avoid tiny symptom patches that leave the root cause alive.",
+        "Avoid large rewrites that introduce unnecessary risk.",
+        "Prefer the smallest safe change that closes the root cause comprehensively."
+      ]
+    },
+    {
+      "id": 18,
+      "name": "Evidence Before Confidence",
+      "evidence_mapping": {
+        "code_changed_correctly": "Source/diff inspection",
+        "bug_fixed": "Reproduction + passing targeted test",
+        "regression_safe": "Relevant regression suite",
+        "ci_green": "Exact run/job/conclusion on exact SHA",
+        "clean_ancestry": "Git ancestry/compare evidence",
+        "runtime_works": "Actual runtime execution",
+        "data_correct": "Data/database inspection",
+        "staff_workflow_works": "Staff/usability pilot",
+        "deployment_works": "Live deployment verification"
+      }
+    },
+    {
+      "id": 19,
+      "name": "Test the Change and Its Neighbors",
+      "test_scope_candidates": [
+        "targeted tests",
+        "relevant regression tests",
+        "negative/failure-path tests",
+        "boundary cases",
+        "backward compatibility",
+        "data/schema compatibility",
+        "UI state behavior",
+        "startup/runtime behavior",
+        "canonical CI"
+      ]
+    },
+    {
+      "id": 20,
+      "name": "Search for the Same Bug Class",
+      "requirements": [
+        "After finding a root cause, search the repository/system for structurally similar cases.",
+        "Document whether no additional instances exist, additional instances were fixed, instances were deferred, or areas remain unverified."
+      ]
+    },
+    {
+      "id": 21,
+      "name": "CEO POV Is Mandatory",
+      "questions": [
+        "Does this make Staff faster?",
+        "Does it reduce mistakes?",
+        "Does it reduce cognitive load?",
+        "Does it reduce repeated manual work?",
+        "Does it help produce better listing/PPC outcomes?",
+        "Does it improve evidence quality?",
+        "Does it create unnecessary maintenance?",
+        "Is it solving a real operational bottleneck?",
+        "Is this the best use of engineering time now?"
+      ]
+    },
+    {
+      "id": 22,
+      "name": "Staff Workflow Must Remain Understandable",
+      "staff_questions": [
+        "What input do I need?",
+        "Where does the input come from?",
+        "What action do I take?",
+        "What is the important output?",
+        "Where is that output?",
+        "What does PASS/WARN/BLOCK mean?",
+        "What should I do next?"
+      ]
+    },
+    {
+      "id": 23,
+      "name": "Required Handoff Fields",
+      "fields": [
+        "project",
+        "repository",
+        "branch",
+        "base_sha",
+        "current_sha",
+        "current_state",
+        "objective",
+        "what_changed",
+        "files_changed",
+        "gpt_suggestion_coverage",
+        "root_cause",
+        "impact_surface",
+        "source_of_truth_review",
+        "tests_executed",
+        "tests_not_executed",
+        "ci_evidence",
+        "runtime_evidence",
+        "known_risks",
+        "not_verified",
+        "open_questions",
+        "recommended_next_step",
+        "requested_gpt_review",
+        "provenance"
+      ]
+    },
+    {
+      "id": 24,
+      "name": "What GPT Should Review Next",
+      "requirements": [
+        "Every Antigravity/Claude handoff explicitly identifies what requires independent GPT review."
+      ],
+      "examples": [
+        "Verify exact CI result",
+        "Review architecture choice",
+        "Inspect data migration risk",
+        "Challenge source-of-truth decision",
+        "Review UX from Staff POV",
+        "Decide whether to merge or continue",
+        "Determine the next highest-value task"
+      ]
+    },
+    {
+      "id": 25,
+      "name": "Canonical Agent Loop",
+      "steps": [
+        {
+          "actor": "GPT",
+          "action": "Read previous handoff, independently review evidence, audit risks, choose Best Next Move, send prioritized feedback."
+        },
+        {
+          "actor": "Antigravity/Claude",
+          "action": "Read entire GPT feedback, research code/data/system, trace dependencies, challenge assumptions, implement comprehensively, test, self-review."
+        },
+        {
+          "actor": "Antigravity/Claude",
+          "action": "Produce structured evidence-backed handoff with coverage matrix, unresolved items, exact SHA/state, and requested GPT review."
+        },
+        {
+          "actor": "GPT",
+          "action": "Audit new handoff and live evidence where possible, accept/reject/narrow checkpoint, determine next move."
+        }
+      ]
+    },
+    {
+      "id": 26,
+      "name": "Definition of High-Quality Completion",
+      "dimensions": [
+        "Technical correctness",
+        "Root-cause closure",
+        "Regression safety",
+        "Provenance integrity",
+        "Architecture consistency",
+        "Operator usability where applicable",
+        "Business usefulness"
+      ],
+      "note": "Do not claim a dimension is proven when it has not been verified."
+    },
+    {
+      "id": 27,
+      "name": "Forbidden Anti-Patterns",
+      "forbidden": [
+        "Blind coding from the prompt",
+        "Blind fixing of the first visible symptom",
+        "Editing before reading relevant code",
+        "Claiming tests that were not run",
+        "Treating reported evidence as personally verified evidence",
+        "Ignoring failed or inconvenient GPT suggestions",
+        "Cherry-picking easy feedback",
+        "Creating duplicate sources of truth unnecessarily",
+        "Declaring DONE while important items remain unverified",
+        "Using CI from a different SHA as evidence",
+        "Treating CI GREEN as proof of Staff usability",
+        "Repeating isolated fixes for the same bug class",
+        "Large refactors without evidence that they are necessary",
+        "Optimizing engineering elegance while ignoring operator/business value"
+      ]
+    },
+    {
+      "id": 28,
+      "name": "Best-Next-Move Discipline",
+      "priorities": {
+        "P0": "Correctness / Safety / Provenance — invalid evidence, incorrect output, broken execution, data corruption, or unreliable checkpoints.",
+        "P1": "Operational Usability / High-Value Product Improvement — Staff productivity, launch quality, workflow clarity, or business outcomes.",
+        "P2": "Optimization / Convenience / Architecture Polish — useful improvements that should not delay P0/P1."
+      }
+    },
+    {
+      "id": 29,
+      "name": "Final Golden Rule",
+      "rule": "Every agent must think beyond the immediate ticket. Read the system, trace the data and code, understand the business purpose, close the root cause, test the relevant impact surface, preserve provenance, and leave the next agent a complete evidence-backed handoff. GPT must independently review the handoff and choose the Best Next Move. Antigravity/Claude must then execute the complete feedback carefully from a Full-Stack Developer + CEO perspective — never through blind coding or blind fixing."
+    }
+  ]
+}

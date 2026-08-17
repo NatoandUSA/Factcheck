@@ -28,6 +28,7 @@ const { runMigrations } = require('./database/migrations');
 const { encryptSecret, decryptSecret, maskSecret } = require('./security/secretBox');
 const { approvalHash } = require('./security/approval');
 const { readFirstWorksheet } = require('./services/spreadsheetReader');
+const { UrlGuardError } = require('./security/urlGuard');
 
 // Make crashes visible instead of dying silently with no trace (systemd will
 // still restart the process via Restart=always; this just ensures the cause
@@ -837,7 +838,7 @@ app.post('/api/listings/:id/feedback', requireAuth(db), requireRole(['OWNER', 'M
 });
 
 // API: Get YTrends MCP Tools List from https://mcp.trends.ytuong.ai/mcp
-app.get('/api/mcp/tools', async (req, res) => {
+app.get('/api/mcp/tools', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
   try {
     const tools = await ytrendsMcp.listTools();
     res.json({ success: true, count: tools.length, tools });
@@ -846,8 +847,9 @@ app.get('/api/mcp/tools', async (req, res) => {
   }
 });
 
-// API: Call YTrends MCP Tool (Universal)
-app.post('/api/mcp/call', async (req, res) => {
+// API: Call YTrends MCP Tool (Universal) — restricted beyond SELLER since
+// toolName/args pass through to an external tool invocation
+app.post('/api/mcp/call', requireAuth(db), requireRole(['OWNER', 'MANAGER']), async (req, res) => {
   const { toolName, args = {} } = req.body;
   if (!toolName) return res.status(400).json({ error: 'toolName is required' });
 
@@ -860,7 +862,7 @@ app.post('/api/mcp/call', async (req, res) => {
 });
 
 // API: Explore Etsy Niche via YTrends MCP
-app.get('/api/mcp/niche', async (req, res) => {
+app.get('/api/mcp/niche', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
   const { seed = 'nurse sweatshirt' } = req.query;
   try {
     const data = await ytrendsMcp.exploreNiche(seed);
@@ -871,7 +873,7 @@ app.get('/api/mcp/niche', async (req, res) => {
 });
 
 // API: One-Click Auto-Pull Live Etsy Trends from MCP into Database
-app.post('/api/mcp/pull-etsy', async (req, res) => {
+app.post('/api/mcp/pull-etsy', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
   const { seed = 'custom gift', category = 'Custom Gift' } = req.body;
   
   let mcpData = null;
@@ -1085,8 +1087,8 @@ app.post('/api/mcp/pull-etsy', async (req, res) => {
   })) : null;
 
   db.run(
-    "INSERT INTO market_trends (category, trending_keywords, keywords_detailed, marketplace) VALUES (?, ?, ?, ?)",
-    [category, topKeywordsStr, keywordsDetailed ? JSON.stringify(keywordsDetailed) : null, 'ETSY'],
+    "INSERT INTO market_trends (category, trending_keywords, keywords_detailed, marketplace, tenant_id, workspace_id) VALUES (?, ?, ?, ?, ?, ?)",
+    [category, topKeywordsStr, keywordsDetailed ? JSON.stringify(keywordsDetailed) : null, 'ETSY', req.user.tenantId, req.user.workspaceId],
     function(dbErr) {
       if (dbErr) return res.status(500).json({ error: dbErr.message });
       
@@ -1110,7 +1112,7 @@ app.post('/api/mcp/pull-etsy', async (req, res) => {
 });
 
 // API: Helium 10 MCP Status & OAuth Check (https://mcp.helium10.com/mcp)
-app.get('/api/mcp/h10/status', async (req, res) => {
+app.get('/api/mcp/h10/status', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
   try {
     const statusData = await h10Mcp.checkConnection();
     res.json({ success: true, ...statusData });
@@ -1120,7 +1122,7 @@ app.get('/api/mcp/h10/status', async (req, res) => {
 });
 
 // API: Helium 10 MCP Tools List
-app.get('/api/mcp/h10/tools', async (req, res) => {
+app.get('/api/mcp/h10/tools', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
   const token = req.headers.authorization?.replace('Bearer ', '') || null;
   try {
     const tools = await h10Mcp.listTools(token);
@@ -1132,7 +1134,7 @@ app.get('/api/mcp/h10/tools', async (req, res) => {
 
 
 // API: Real-Time Google Trends Cross-Check for Seed Phrase
-app.get('/api/google-trends', async (req, res) => {
+app.get('/api/google-trends', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
   const { keyword = 'custom gift' } = req.query;
   try {
     const trendData = await fetchGoogleTrends(keyword);
@@ -1143,7 +1145,7 @@ app.get('/api/google-trends', async (req, res) => {
 });
 
 // API: Unified IP & Trademark Guard Library
-app.get('/api/ip-guard/library', (req, res) => {
+app.get('/api/ip-guard/library', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
   try {
     const lib = JSON.parse(fs.readFileSync(path.resolve(__dirname, 'ip_library.json'), 'utf8'));
     res.json({ success: true, library: lib });
@@ -1233,15 +1235,16 @@ app.post('/api/settings/llm', requireAuth(db), requireRole(['OWNER']), (req, res
 });
 
 // API: Learning Box — Analyze Amazon/Etsy URL or Competitor text & Extract Structural DNA
-app.post('/api/learning/analyze', async (req, res) => {
+app.post('/api/learning/analyze', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
   const { url = '', rawText = '', category = 'Custom Gift', marketplace = 'AMAZON' } = req.body;
 
   try {
     const analysis = await learnFromListing({ url, rawText, category, marketplace });
 
-    // Store in DB
+    // Store in DB, scoped to the caller's workspace (see learned_templates
+    // ownership migration — templates are workspace-owned, not global)
     db.run(
-      "INSERT INTO learned_templates (url, marketplace, category, title, bullets, tags, description, styleDna) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO learned_templates (url, marketplace, category, title, bullets, tags, description, styleDna, tenant_id, workspace_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       [
         analysis.url,
         analysis.marketplace,
@@ -1250,16 +1253,21 @@ app.post('/api/learning/analyze', async (req, res) => {
         JSON.stringify(analysis.bullets),
         JSON.stringify(analysis.tags),
         analysis.description,
-        JSON.stringify(analysis.styleDna)
+        JSON.stringify(analysis.styleDna),
+        req.user.tenantId,
+        req.user.workspaceId
       ],
       function(dbErr) {
-        if (dbErr) return res.status(500).json({ error: dbErr.message });
+        if (dbErr) return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
         res.json({ success: true, templateId: this.lastID, ...analysis });
       }
     );
   } catch (err) {
+    if (err instanceof UrlGuardError) {
+      return res.status(400).json({ success: false, error: 'URL_NOT_ALLOWED', message: 'This URL is not an allowed marketplace host, or could not be safely resolved.' });
+    }
     console.error('Learning parse error:', err);
-    res.status(500).json({ error: `Lỗi phân tích listing mẫu: ${err.message}` });
+    res.status(500).json({ success: false, error: 'LEARNING_PARSE_FAILED' });
   }
 });
 
@@ -1272,9 +1280,12 @@ function safeJsonParse(str, fallback = {}) {
 }
 
 // API: Get all learned templates
-app.get('/api/learning/templates', (req, res) => {
-  db.all("SELECT * FROM learned_templates ORDER BY createdAt DESC LIMIT 20", [], (err, rows) => {
-    if (err) return res.status(500).json({ error: err.message });
+app.get('/api/learning/templates', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
+  db.all(
+    "SELECT * FROM learned_templates WHERE tenant_id = ? AND workspace_id = ? ORDER BY createdAt DESC LIMIT 20",
+    [req.user.tenantId, req.user.workspaceId],
+    (err, rows) => {
+    if (err) return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
     const parsed = rows.map(r => ({
       ...r,
       bullets: safeJsonParse(r.bullets, []),
@@ -1286,17 +1297,21 @@ app.get('/api/learning/templates', (req, res) => {
 });
 
 
-// API: Delete learned template
-app.delete('/api/learning/templates/:id', (req, res) => {
+// API: Delete learned template (workspace-scoped — IDOR-safe 404 for out-of-scope IDs)
+app.delete('/api/learning/templates/:id', requireAuth(db), requireRole(['OWNER', 'MANAGER']), (req, res) => {
   const { id } = req.params;
-  db.run("DELETE FROM learned_templates WHERE id = ?", [id], function(err) {
-    if (err) return res.status(500).json({ error: err.message });
+  db.run(
+    "DELETE FROM learned_templates WHERE id = ? AND tenant_id = ? AND workspace_id = ?",
+    [id, req.user.tenantId, req.user.workspaceId],
+    function(err) {
+    if (err) return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
+    if (this.changes === 0) return res.status(404).json({ success: false, error: 'TEMPLATE_NOT_FOUND' });
     res.json({ success: true, deletedId: id });
   });
 });
 
 // API: ETSY Search & Top Sellers Scanner (HeyEtsy / Search Page / Live MCP)
-app.post('/api/etsy/scan-search', async (req, res) => {
+app.post('/api/etsy/scan-search', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
   const { seedPhrase = 'nurse sweatshirt', htmlContent = '', csvRows = [] } = req.body;
 
   try {
@@ -1553,8 +1568,8 @@ app.post('/api/amazon/quick-draft', requireAuth(db), requireRole(['OWNER', 'MANA
 
     // 1. Create or retrieve market trend entry
     db.run(
-      "INSERT INTO market_trends (category, trending_keywords, marketplace) VALUES (?, ?, ?)",
-      [category, `${cleanSeed} (Amazon A10 Quick Batch)`, 'AMAZON'],
+      "INSERT INTO market_trends (category, trending_keywords, marketplace, tenant_id, workspace_id) VALUES (?, ?, ?, ?, ?)",
+      [category, `${cleanSeed} (Amazon A10 Quick Batch)`, 'AMAZON', req.user.tenantId, req.user.workspaceId],
       function(trendErr) {
         if (trendErr) return res.status(500).json({ error: trendErr.message });
         const trendId = this.lastID;
@@ -1695,12 +1710,15 @@ Return ONLY raw JSON without markdown code fences:
 });
 
 // API: Get Master Keyword List Across Processed Files (Marketplace-specific separation)
-app.get('/api/master-keywords', (req, res) => {
+app.get('/api/master-keywords', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
   const { marketplace = 'AMAZON' } = req.query;
   const targetMarket = String(marketplace).toUpperCase();
 
-  db.all("SELECT * FROM market_trends ORDER BY discoveredAt DESC", [], (err, rows) => {
-    if (err) return res.status(500).json({ error: err.message });
+  db.all(
+    "SELECT * FROM market_trends WHERE tenant_id = ? AND workspace_id = ? ORDER BY discoveredAt DESC",
+    [req.user.tenantId, req.user.workspaceId],
+    (err, rows) => {
+    if (err) return res.status(500).json({ error: 'DATABASE_ERROR' });
     
     const masterKeywords = [];
     const seen = new Set();
@@ -1767,7 +1785,7 @@ app.get('/api/master-keywords', (req, res) => {
 
 
 // API: Multi-Source Market Benchmark & Go/No-Go Decision Engine
-app.get('/api/benchmark/validate', async (req, res) => {
+app.get('/api/benchmark/validate', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
   const { seed = 'mom sweatshirt', category = 'Apparel: Sweatshirt' } = req.query;
   try {
     const data = await benchmarkService.getMarketBenchmark({ seed, category });
@@ -1954,8 +1972,8 @@ const handleReportUpload = async (req, res) => {
     // Volume/CPR/Score per keyword so staff can see the underlying data, not
     // just an AI-picked keyword string)
     db.run(
-      "INSERT INTO market_trends (category, trending_keywords, keywords_detailed, marketplace) VALUES (?, ?, ?, ?)",
-      [targetCategory, trendingKeywordsStr, JSON.stringify(topKeywordsDetailed), targetMarketplace],
+      "INSERT INTO market_trends (category, trending_keywords, keywords_detailed, marketplace, tenant_id, workspace_id) VALUES (?, ?, ?, ?, ?, ?)",
+      [targetCategory, trendingKeywordsStr, JSON.stringify(topKeywordsDetailed), targetMarketplace, req.user.tenantId, req.user.workspaceId],
       function(dbErr) {
         if (dbErr) return res.status(500).json({ error: dbErr.message });
         
@@ -1984,8 +2002,8 @@ const handleReportUpload = async (req, res) => {
   }
 };
 
-app.post('/api/upload-h10', upload.any(), handleReportUpload);
-app.post('/api/upload-trends', upload.any(), handleReportUpload);
+app.post('/api/upload-h10', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), upload.any(), handleReportUpload);
+app.post('/api/upload-trends', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), upload.any(), handleReportUpload);
 
 // API: Batch a pasted ASIN list into Cerebro-ready groups of 10 (AsinBatcherWidget's
 // manual-paste flow — separate from /api/upload-h10's file-upload flow)
@@ -2047,9 +2065,12 @@ app.get('/api/analytics-summary', requireAuth(db), requireRole(['OWNER', 'MANAGE
   });
 });
 // API: Get all imported keyword trends
-app.get('/api/trends', (req, res) => {
-  db.all("SELECT * FROM market_trends ORDER BY discoveredAt DESC LIMIT 30", [], (err, rows) => {
-    if (err) return res.status(500).json({ error: err.message });
+app.get('/api/trends', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
+  db.all(
+    "SELECT * FROM market_trends WHERE tenant_id = ? AND workspace_id = ? ORDER BY discoveredAt DESC LIMIT 30",
+    [req.user.tenantId, req.user.workspaceId],
+    (err, rows) => {
+    if (err) return res.status(500).json({ error: 'DATABASE_ERROR' });
     res.json(rows);
   });
 });
@@ -2057,8 +2078,11 @@ app.get('/api/trends', (req, res) => {
 // API: Instantly Draft listing for a specific trend using Multi-LLM Gateway (Gemini / GPT-4o / Claude) + Few-Shot Learning
 app.post('/api/trends/:id/draft', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
   const { id } = req.params;
-  
-  db.get("SELECT * FROM market_trends WHERE id = ?", [id], (err, trend) => {
+
+  db.get(
+    "SELECT * FROM market_trends WHERE id = ? AND tenant_id = ? AND workspace_id = ?",
+    [id, req.user.tenantId, req.user.workspaceId],
+    (err, trend) => {
     if (err || !trend) return res.status(404).json({ error: 'Trend cluster not found' });
 
     // 1. Get LLM Settings
@@ -2331,7 +2355,7 @@ If the user asks a general question (not about drafting/writing), respond conver
 });
 
 // API: Analytics Dashboard Data
-app.get('/api/analytics', (req, res) => {
+app.get('/api/analytics', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
   // Aggregate feedback actions
   db.all(`
     SELECT action, COUNT(*) as count, SUM(revenue) as totalRevenue, SUM(orders) as totalOrders, SUM(views) as totalViews
@@ -2348,7 +2372,7 @@ app.get('/api/analytics', (req, res) => {
 // -----------------------------------------------------
 
 // API: Get Agents
-app.get('/api/agents', (req, res) => {
+app.get('/api/agents', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
   db.all("SELECT * FROM agents", [], (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
     res.json(rows);
@@ -2356,7 +2380,7 @@ app.get('/api/agents', (req, res) => {
 });
 
 // API: Get Agent Logs
-app.get('/api/agents/logs', (req, res) => {
+app.get('/api/agents/logs', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
   db.all(`
     SELECT l.*, a.name as agentName 
     FROM agent_logs l 
@@ -2368,8 +2392,8 @@ app.get('/api/agents/logs', (req, res) => {
   });
 });
 
-// API: Toggle Agent Status
-app.post('/api/agents/:id/toggle', (req, res) => {
+// API: Toggle Agent Status (controls background outbound network agents — OWNER/MANAGER only)
+app.post('/api/agents/:id/toggle', requireAuth(db), requireRole(['OWNER', 'MANAGER']), (req, res) => {
   const { id } = req.params;
   const { status } = req.body; // 'ONLINE' or 'OFFLINE'
   db.run("UPDATE agents SET status = ?, lastActive = CURRENT_TIMESTAMP WHERE id = ?", [status, id], function(err) {

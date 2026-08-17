@@ -1,4 +1,5 @@
 const cheerio = require('cheerio');
+const { safeFetch, UrlGuardError } = require('./security/urlGuard');
 
 /**
  * Parses and learns structural DNA from an Amazon or Etsy listing URL / text
@@ -15,15 +16,11 @@ async function learnFromListing({ url = '', rawText = '', category = 'Custom Gif
   const isEtsy = marketplace === 'ETSY' || extractedUrl.includes('etsy.');
   const resolvedMarketplace = isEtsy ? 'ETSY' : 'AMAZON';
 
-  // 1. If URL provided, try fetching & scraping
+  // 1. If URL provided, try fetching & scraping (allowlisted marketplace
+  // hosts only, SSRF-guarded — see server/security/urlGuard.js)
   if (extractedUrl.startsWith('http')) {
     try {
-      const response = await fetch(extractedUrl, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        }
-      });
-      const html = await response.text();
+      const html = await safeFetch(extractedUrl);
       const $ = cheerio.load(html);
 
       if (resolvedMarketplace === 'AMAZON') {
@@ -46,6 +43,11 @@ async function learnFromListing({ url = '', rawText = '', category = 'Custom Gif
         });
       }
     } catch (fetchErr) {
+      // A blocked URL must be a real, visible failure — not silently
+      // papered over with fallback placeholder text pretending to be
+      // learned data (that's exactly the fabricated-signal pattern
+      // PROJECT_GUIDE forbids).
+      if (fetchErr instanceof UrlGuardError) throw fetchErr;
       console.warn('URL Fetch warning:', fetchErr.message);
     }
   }

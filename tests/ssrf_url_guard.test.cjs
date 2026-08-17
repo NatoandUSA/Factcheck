@@ -4,7 +4,14 @@
  * §7's 11-point SSRF policy and Issue #3 finding #1's regression requirement.
  */
 const assert = require('assert');
-const { assertSafeUrl, isDisallowedIp, isAllowedHost, UrlGuardError } = require('../server/security/urlGuard');
+const { assertSafeUrl, safeFetch, isDisallowedIp, isAllowedHost, UrlGuardError } = require('../server/security/urlGuard');
+
+function makeRedirectResponse(location) {
+  return new Response(null, { status: 302, headers: { location } });
+}
+function makeOkResponse(bodyText) {
+  return new Response(bodyText, { status: 200 });
+}
 
 async function assertRejects(url, label) {
   try {
@@ -78,6 +85,89 @@ async function main() {
     console.log('🟢 Allowlisted HTTPS host (www.amazon.com) passed assertSafeUrl.');
   } catch (e) {
     console.warn('⚠️  Positive-path DNS check skipped (no network in this environment):', e.message);
+  }
+
+  // --- safeFetch: deterministic redirect/cap/timeout behavior via an
+  // injected fetchImpl stub (real DNS/allowlist checks still run through
+  // assertSafeUrl, using real marketplace hostnames already proven
+  // reachable above). ---
+
+  // Redirect to a disallowed host must be rejected at the next hop's
+  // assertSafeUrl call, before any further fetchImpl call is made.
+  {
+    let fetchCalls = 0;
+    const fetchImpl = async () => {
+      fetchCalls++;
+      return makeRedirectResponse('https://evil.com/steal');
+    };
+    try {
+      await safeFetch('https://www.amazon.com/dp/B000TEST', fetchImpl);
+      throw new Error('Expected safeFetch to reject a redirect to a disallowed host');
+    } catch (e) {
+      assert(e instanceof UrlGuardError, `redirect-to-disallowed-host should reject with UrlGuardError, got: ${e.message}`);
+      assert.strictEqual(fetchCalls, 1, 'fetchImpl must not be called again once the redirect target fails assertSafeUrl');
+    }
+    console.log('🟢 safeFetch: redirect to disallowed host rejected before following it.');
+  }
+
+  // Too many redirects (all to an allowlisted host) must be rejected once
+  // the hop budget is exhausted.
+  {
+    let fetchCalls = 0;
+    const fetchImpl = async () => {
+      fetchCalls++;
+      return makeRedirectResponse('https://www.amazon.com/');
+    };
+    try {
+      await safeFetch('https://www.amazon.com/', fetchImpl);
+      throw new Error('Expected safeFetch to reject after exceeding the redirect budget');
+    } catch (e) {
+      assert(e instanceof UrlGuardError, `too-many-redirects should reject with UrlGuardError, got: ${e.message}`);
+      assert.strictEqual(fetchCalls, 4, 'expected exactly MAX_REDIRECTS+1 fetchImpl calls before giving up');
+    }
+    console.log('🟢 safeFetch: exceeding the redirect budget is rejected.');
+  }
+
+  // A redirect to another allowlisted host is followed end-to-end and the
+  // final body is returned.
+  {
+    let hop = 0;
+    const fetchImpl = async () => {
+      hop++;
+      if (hop === 1) return makeRedirectResponse('https://www.etsy.com/');
+      return makeOkResponse('final body content');
+    };
+    const body = await safeFetch('https://www.amazon.com/', fetchImpl);
+    assert.strictEqual(body, 'final body content', 'safeFetch should return the final hop body after following an allowlisted redirect');
+    console.log('🟢 safeFetch: redirect to an allowlisted host is followed and body returned.');
+  }
+
+  // Response bodies larger than MAX_RESPONSE_BYTES must be rejected rather
+  // than buffered in full.
+  {
+    const oversized = 'a'.repeat(2 * 1024 * 1024 + 10);
+    const fetchImpl = async () => makeOkResponse(oversized);
+    try {
+      await safeFetch('https://www.amazon.com/', fetchImpl);
+      throw new Error('Expected safeFetch to reject an oversized response body');
+    } catch (e) {
+      assert(e instanceof UrlGuardError, `oversized-body should reject with UrlGuardError, got: ${e.message}`);
+    }
+    console.log('🟢 safeFetch: response bodies over the size cap are rejected.');
+  }
+
+  // Structural timeout check: every fetchImpl call must receive an
+  // AbortSignal so a hung request is guaranteed to be cut off, without
+  // needing a real 8-second wall-clock wait in this test.
+  {
+    let capturedOpts;
+    const fetchImpl = async (url, opts) => {
+      capturedOpts = opts;
+      return makeOkResponse('ok');
+    };
+    await safeFetch('https://www.amazon.com/', fetchImpl);
+    assert(capturedOpts && capturedOpts.signal instanceof AbortSignal, 'safeFetch must pass an AbortSignal to fetchImpl to enforce the timeout');
+    console.log('🟢 safeFetch: requests are issued with an AbortSignal (timeout enforced).');
   }
 
   console.log('✅ tests/ssrf_url_guard.test.cjs PASSED CLEANLY!');

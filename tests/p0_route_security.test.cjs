@@ -163,6 +163,24 @@ async function main() {
     assert.strictEqual(mklQueryOverrideData.marketplace, 'AMAZON', 'master-keywords must ignore a ?marketplace= query override and use the session marketplace');
     console.log('🟢 T1: marketplace is server-derived — Etsy-only route rejects Amazon session (403), query-param override ignored.');
 
+    // --- GPT PR-5 re-review T5: Etsy-only scan-search/batch-learn also reject non-Etsy sessions ---
+    const scanSearchFromAmazonRes = await fetch(`http://127.0.0.1:${port}/api/etsy/scan-search`, {
+      method: 'POST',
+      headers: { ...origin, 'Content-Type': 'application/json', Cookie: ownerAmzCookie },
+      body: JSON.stringify({ seedPhrase: 'test seed' })
+    });
+    assert.strictEqual(scanSearchFromAmazonRes.status, 403, `Amazon session calling Etsy-only scan-search must return 403, got ${scanSearchFromAmazonRes.status}`);
+    assert.strictEqual((await scanSearchFromAmazonRes.json()).error, 'MARKETPLACE_MISMATCH');
+
+    const batchLearnFromAmazonRes = await fetch(`http://127.0.0.1:${port}/api/etsy/batch-learn`, {
+      method: 'POST',
+      headers: { ...origin, 'Content-Type': 'application/json', Cookie: ownerAmzCookie },
+      body: JSON.stringify({ seedPhrase: 'test seed', sellers: [] })
+    });
+    assert.strictEqual(batchLearnFromAmazonRes.status, 403, `Amazon session calling Etsy-only batch-learn must return 403, got ${batchLearnFromAmazonRes.status}`);
+    assert.strictEqual((await batchLearnFromAmazonRes.json()).error, 'MARKETPLACE_MISMATCH');
+    console.log('🟢 T5: Etsy-only scan-search and batch-learn both reject an Amazon session (403 MARKETPLACE_MISMATCH).');
+
     // --- GPT PR-5 review T4: legacy unscoped + cross-workspace learned_templates are invisible ---
     const legacyTemplateInsert = await dbRun(
       "INSERT INTO learned_templates (url, marketplace, category, title, bullets, tags, description, styleDna) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",

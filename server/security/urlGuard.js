@@ -131,13 +131,16 @@ async function assertSafeUrl(rawUrl) {
  * host resolving to a public IP. Manually follows redirects (re-validating
  * every hop against the same rules), enforces a timeout and a streamed
  * response-size cap, and never leaks internal fetch error detail to callers.
+ *
+ * fetchImpl defaults to the global fetch; tests inject a stub to exercise
+ * redirect/cap behavior deterministically without live network calls.
  */
-async function safeFetch(rawUrl) {
+async function safeFetch(rawUrl, fetchImpl = fetch) {
   let currentUrl = rawUrl;
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     await assertSafeUrl(currentUrl);
 
-    const response = await fetch(currentUrl, {
+    const response = await fetchImpl(currentUrl, {
       redirect: 'manual',
       signal: AbortSignal.timeout(TIMEOUT_MS),
       headers: {

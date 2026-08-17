@@ -1321,6 +1321,10 @@ app.delete('/api/learning/templates/:id', requireAuth(db), requireRole(['OWNER',
 
 // API: ETSY Search & Top Sellers Scanner (HeyEtsy / Search Page / Live MCP)
 app.post('/api/etsy/scan-search', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  // Etsy-only endpoint (GPT PR-5 re-review finding, same class as P0-B1).
+  if (req.user.marketplace !== 'ETSY') {
+    return res.status(403).json({ success: false, error: 'MARKETPLACE_MISMATCH', message: 'This endpoint requires an Etsy workspace session.' });
+  }
   const { seedPhrase = 'nurse sweatshirt', htmlContent = '', csvRows = [] } = req.body;
 
   try {
@@ -1494,6 +1498,10 @@ app.post('/api/etsy/scan-search', requireAuth(db), requireRole(['OWNER', 'MANAGE
 
 // API: ETSY Deep Batch Learn 5-10 Selected Sellers
 app.post('/api/etsy/batch-learn', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  // Etsy-only endpoint (GPT PR-5 re-review finding, same class as P0-B1).
+  if (req.user.marketplace !== 'ETSY') {
+    return res.status(403).json({ success: false, error: 'MARKETPLACE_MISMATCH', message: 'This endpoint requires an Etsy workspace session.' });
+  }
   const { seedPhrase = 'nurse sweatshirt', category = 'Apparel: Sweatshirt', sellers = [] } = req.body;
 
   try {
@@ -2108,8 +2116,13 @@ app.post('/api/trends/:id/draft', requireAuth(db), requireRole(['OWNER', 'MANAGE
         return res.status(400).json({ error: 'Chưa có Anthropic Claude API Key. Vui lòng cấu hình trong Settings.' });
       }
 
-      // 2. Fetch Latest Learned Template for Few-Shot Injection
-      db.get("SELECT * FROM learned_templates ORDER BY createdAt DESC LIMIT 1", [], async (tErr, learnedTpl) => {
+      // 2. Fetch Latest Learned Template for Few-Shot Injection — scoped to
+      // this workspace, otherwise another workspace's competitor research
+      // could shape this workspace's generated listing (GPT PR-5 re-review).
+      db.get(
+        "SELECT * FROM learned_templates WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ? ORDER BY createdAt DESC LIMIT 1",
+        [req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+        async (tErr, learnedTpl) => {
         let fewShotSection = '';
         if (learnedTpl) {
           fewShotSection = `
@@ -2517,104 +2530,16 @@ const backgroundAgentTimer = setInterval(() => {
       // Agent 2: AI Drafter (Role: DRAFTER)
       if (agent.role === 'DRAFTER') {
         db.get("SELECT * FROM market_trends WHERE processed = 0 ORDER BY discoveredAt ASC LIMIT 1", (err, trend) => {
-          if (!err && trend && !trend.tenant_id && !trend.workspace_id) {
-            // Same fail-closed reasoning as the draft-save below: a
-            // background agent has no workspace principal, so it must not
-            // read/mutate another workspace's data or spend a real Gemini
-            // call it can never attribute or save (GPT PR-5 review P0-B3).
-            return;
-          }
+          // Fail-closed unconditionally: this background loop has no
+          // authenticated workspace principal, so even a properly
+          // scoped trend must not be read, marked processed, or sent
+          // to an external LLM. Re-enable only once a real per-workspace
+          // service principal exists for background agents.
           if (!err && trend) {
-            db.run("UPDATE market_trends SET processed = 1 WHERE id = ?", [trend.id]);
-            
-            const setting = process.env.GEMINI_API_KEY ? { value: process.env.GEMINI_API_KEY } : null;
-            const settingsErr = null;
-            (async () => {
-              let payload;
-              
-              if (!settingsErr && setting && setting.value) {
-                // We have a real API key, use Gemini!
-                const msg = `Calling real Gemini AI to draft ${trend.category} listing for keywords: ${trend.trending_keywords}`;
-                db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, msg]);
-                
-                try {
-                  const client = new GoogleGenAI({ apiKey: setting.value });
-                  const prompt = `You are a world-class Amazon FBA and Etsy copywriter adhering to July 27, 2026 Amazon Policy. Write a highly converting, SEO-optimized e-commerce listing for a ${trend.category} product targeting these trending keywords: ${trend.trending_keywords}.
-                  Return ONLY valid JSON with these exact keys (do not include markdown block wrappers):
-                  - "amazonTitle": max 75 characters (strictly <= 75 chars), focusing on main product + personalization + key placement feature.
-                  - "itemHighlights": max 125 characters (strictly <= 125 chars), short feature/benefit snippets separated by bullet dot • (e.g. Custom cuff embroidery • Cozy gift for moms • Multiple colors).
-                  - "amazonBullets": array of exactly 5 strings, each 150-250 chars, focusing on benefits, quality, and gifting.
-                  - "amazonDescription": 1000-2000 chars rich Product Description covering material, care instructions, size guide, personalized details, and gift occasions. Use HTML tags (<p>, <ul>, <li>, <b>) for formatting.
-                  - "amazonSearchTerms": space separated unique backend keywords (no trademark terms, no commas).
-                  - "etsyTitle": max 140 chars, long-tail keyword stuffed for Etsy SEO.
-                  - "etsyDescription": A warm, handmade-feeling description with a hook, product details, and SEO tags at the bottom.
-                  - "etsyTags": array of exactly 13 long-tail keyword strings for Etsy SEO (each <= 20 chars).`;
-                  
-                  const interaction = await client.interactions.create({
-                    model: "gemini-3.6-flash",
-                    input: prompt,
-                    system_instruction: "You are an expert copywriter for Amazon and Etsy. Return ONLY valid JSON."
-                  });
-                  
-                  let text = interaction.output_text;
-                  if (text.includes('```json')) {
-                    text = text.split('```json')[1].split('```')[0].trim();
-                  } else if (text.includes('```')) {
-                    text = text.split('```')[1].split('```')[0].trim();
-                  }
-                  const aiData = safeJsonParse(text, {});
-
-                  
-                  // Rank & Deduplicate Keywords
-                  const rawKws = (trend.trending_keywords || '').split(/[,|]/);
-                  const title75 = aiData.amazonTitle ? aiData.amazonTitle.substring(0, 75) : keywordRanker.buildAmazonTitle75(rawKws, trend.category);
-                  const highlights125 = aiData.itemHighlights ? aiData.itemHighlights.substring(0, 125) : keywordRanker.buildAmazonItemHighlights125(rawKws, trend.category);
-                  const searchTerms = keywordRanker.buildAmazonSearchTerms(rawKws);
-                  const etsyTags = keywordRanker.buildEtsyTags(aiData.etsyTags || rawKws, trend.category);
-
-                  payload = {
-                    amazonTitle: title75,
-                    itemHighlights: highlights125,
-                    amazonBullets: aiData.amazonBullets || [],
-                    amazonDescription: aiData.amazonDescription || `<p><b>High Quality ${trend.category}</b></p><p>Crafted with premium materials and attention to detail. Perfect gift for family and loved ones on birthdays, anniversaries, and holidays.</p><p><b>Features:</b></p><ul><li>Durable & Long-lasting</li><li>Personalized Customization</li><li>Easy Care & Maintenance</li></ul>`,
-                    amazonSearchTerms: searchTerms || aiData.amazonSearchTerms || '',
-                    etsyTitle: aiData.etsyTitle || `New Trend ${trend.category}`,
-                    etsyDescription: aiData.etsyDescription || 'Description coming soon.',
-                    etsyTags: etsyTags,
-                    categoryName: trend.category,
-                    systemNote: `Generated via LIVE Gemini AI Agent using real market data (Aug 15 2026 policy compliant): ${trend.trending_keywords}`
-                  };
-
-
-                } catch (apiError) {
-                  db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, `Gemini API Error: ${apiError.message}. Real listing generation failed.`]);
-                }
-
-                if (payload) {
-                  const ipRes = ipGuard.screenListing(payload);
-                  const oppRes = opportunityScorer.calculateOpportunityScore(payload);
-
-                  payload.ipVerdict = ipRes.verdict;
-                  payload.ipHits = ipRes.hits;
-                  payload.opportunityScore = oppRes.overallScore;
-                  payload.verdict = oppRes.verdict;
-                  payload.metrics = oppRes.metrics;
-
-                  const listingStatus = (ipRes.verdict === 'BLOCK') ? 'IP_RISK_BLOCKED' : 'NEEDS_QA';
-
-                  // Fail closed: a background agent has no authenticated
-                  // workspace principal. Persisting this draft under a guessed
-                  // workspace would violate tenant isolation.
-                  db.run(
-                    "INSERT INTO agent_logs (agentId, message) VALUES (?, ?)",
-                    [agent.id, `[SCOPE_REQUIRED] Draft not persisted (${listingStatus}). Assign an explicit tenant/workspace service principal before enabling autonomous saves.`]
-                  );
-                }
-
-              } else {
-                db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, `[AI Drafter Standby] Gemini API key is missing in .env or Settings. Waiting for key configuration.`]);
-              }
-            })();
+            db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [
+              agent.id,
+              `[SCOPE_REQUIRED] Trend ${trend.id} not processed -- background AI Drafter has no workspace principal.`
+            ]);
           }
         });
       }

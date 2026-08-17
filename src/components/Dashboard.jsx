@@ -112,6 +112,7 @@ export default function Dashboard({ onSelectListing, onApproveListing, onShowToa
     const formData = new FormData();
     formData.append('reportFile', file);
     formData.append('category', selectedCategory);
+    formData.append('marketplace', 'AMAZON');
 
     try {
       const res = await fetch('/api/upload-h10', {

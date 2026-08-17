@@ -10,7 +10,7 @@ import UnifiedIpGateModal from './UnifiedIpGateModal';
 import MarketBenchmarkWidget from './MarketBenchmarkWidget';
 import { parseJsonResponse } from '../utils/apiResponse';
 
-export default function EtsyWorkspace({ onSelectListing, onApproveListing, onShowToast }) {
+export default function EtsyWorkspace({ onSelectListing, onApproveListing, onShowToast, onViewHistory }) {
   const [seedPhrase, setSeedPhrase] = useState('para el amor de mi vida');
   const [selectedCategory, setSelectedCategory] = useState('✨ Custom Jewelry');
   const [activeStage, setActiveStage] = useState('workflow'); // 'workflow' | 'research' | 'mkl'
@@ -22,14 +22,15 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
   const [mcpPulling, setMcpPulling] = useState(false);
   const [mcpResult, setMcpResult] = useState(null);
   const [isIpModalOpen, setIsIpModalOpen] = useState(false);
+  const [scannedSellers, setScannedSellers] = useState([]);
   const fileInputRef = useRef(null);
 
   const fetchData = async () => {
     try {
-      const trendsRes = await fetch('/api/market-trends', { credentials: 'include' });
+      const trendsRes = await fetch('/api/trends', { credentials: 'include' });
       if (trendsRes.ok) {
         const trendsData = await trendsRes.json();
-        const etsyTrends = (trendsData || []).filter(t => t.source === 'ETSY_MCP_LIVE' || t.category?.includes('Etsy') || t.source === 'ERANK' || t.source === 'YTRENDS');
+        const etsyTrends = (trendsData || []).filter(t => t.marketplace === 'ETSY');
         setTrends(etsyTrends);
       }
     } catch (e) {
@@ -49,6 +50,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
     const formData = new FormData();
     formData.append('reportFile', file);
     formData.append('category', selectedCategory);
+    formData.append('marketplace', 'ETSY');
 
     try {
       const res = await fetch('/api/upload-h10', {
@@ -56,7 +58,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
         credentials: 'include',
         body: formData
       });
-      const result = await res.json();
+      const result = await parseJsonResponse(res);
       if (!res.ok) throw new Error(result.error || 'Upload failed');
 
       setUploadStatus({
@@ -289,10 +291,12 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
           
           {/* Top Sellers Deep Reverse-Engineer Scanner */}
-          <EtsyMultiSellerScanner 
-            seedPhrase={seedPhrase} 
-            category={selectedCategory} 
-            onShowToast={onShowToast} 
+          <EtsyMultiSellerScanner
+            seedPhrase={seedPhrase}
+            category={selectedCategory}
+            onShowToast={onShowToast}
+            onViewHistory={onViewHistory}
+            onSellersUpdated={setScannedSellers}
           />
 
           {/* MCP Real-Time Result Action Card & Dropzone */}
@@ -392,7 +396,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
           <GoogleTrendsWidget seedPhrase={seedPhrase} onShowToast={onShowToast} />
           
           {/* Etsy Learning Box */}
-          <LearningBoxWidget platform="ETSY" onShowToast={onShowToast} />
+          <LearningBoxWidget platform="ETSY" onShowToast={onShowToast} scannedSellers={scannedSellers} />
         </div>
       )}
 
@@ -411,9 +415,16 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
             </div>
 
             <button
-              onClick={() => handleManualDraft(trends[0]?.id || 1)}
-              disabled={draftingTrendId !== null}
+              onClick={() => {
+                if (!trends[0]?.id) {
+                  if (onShowToast) onShowToast('Chưa có dữ liệu từ khóa Etsy nào. Hãy "⚡ Auto-Pull 13 Tags" hoặc nạp file trước.');
+                  return;
+                }
+                handleManualDraft(trends[0].id);
+              }}
+              disabled={draftingTrendId !== null || !trends[0]?.id}
               className="btn btn-primary"
+              title={!trends[0]?.id ? 'Auto-Pull 13 Tags hoặc nạp file trước khi tạo listing' : undefined}
               style={{
                 background: '#ea580c',
                 fontWeight: 800,
@@ -422,7 +433,8 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
                 alignItems: 'center',
                 gap: '8px',
                 boxShadow: '0 4px 14px rgba(234, 88, 12, 0.25)',
-                cursor: draftingTrendId !== null ? 'not-allowed' : 'pointer'
+                opacity: (draftingTrendId !== null || !trends[0]?.id) ? 0.6 : 1,
+                cursor: (draftingTrendId !== null || !trends[0]?.id) ? 'not-allowed' : 'pointer'
               }}
             >
               <Zap size={16} className={draftingTrendId !== null ? 'spinner' : ''} />

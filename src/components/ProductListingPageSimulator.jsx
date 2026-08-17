@@ -1,14 +1,42 @@
 import React, { useState } from 'react';
 import AmazonRealProductPage from './AmazonRealProductPage';
 import EtsyRealProductPage from './EtsyRealProductPage';
-import { ShoppingBag, ShoppingCart, Layers, ArrowRight, Sparkles } from 'lucide-react';
+import { ShoppingBag, ShoppingCart, Layers, ArrowRight, Sparkles, Copy, Check } from 'lucide-react';
+
+function CopyField({ label, value, onShowToast }) {
+  const [copied, setCopied] = useState(false);
+  const text = Array.isArray(value) ? value.join('\n') : (value || '');
+  return (
+    <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '10px 12px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+        <span style={{ fontSize: '0.72rem', fontWeight: 800, color: '#64748b', textTransform: 'uppercase' }}>{label}</span>
+        <button
+          type="button"
+          onClick={() => {
+            navigator.clipboard.writeText(text);
+            setCopied(true);
+            if (onShowToast) onShowToast(`Đã copy ${label}!`);
+            setTimeout(() => setCopied(false), 1500);
+          }}
+          style={{ background: copied ? '#dcfce7' : '#e0f2fe', color: copied ? '#166534' : '#0369a1', border: 'none', borderRadius: '6px', padding: '3px 8px', fontSize: '0.7rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' }}
+        >
+          {copied ? <Check size={12} /> : <Copy size={12} />}
+          <span>{copied ? 'Đã copy' : 'Copy'}</span>
+        </button>
+      </div>
+      <div style={{ fontSize: '0.82rem', color: '#1e293b', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{text || '—'}</div>
+    </div>
+  );
+}
 
 export default function ProductListingPageSimulator({ currentListing, history = [], onSelectListing, onShowToast }) {
   const [platformView, setPlatformView] = useState('AMAZON'); // 'AMAZON' | 'ETSY'
   const [activeListingId, setActiveListingId] = useState(currentListing?.dbId || currentListing?.id || (history[0]?.dbId || history[0]?.id));
+  const [activeAsin, setActiveAsin] = useState('parent'); // 'parent' | childIndex
 
   // Determine active listing
   const activeListing = (history.find(h => (h.dbId || h.id) === activeListingId)) || currentListing || history[0] || null;
+  const activeChild = activeAsin !== 'parent' ? (activeListing?.variations || []).find(v => v.childIndex === activeAsin) : null;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', marginTop: '16px' }}>
@@ -107,13 +135,20 @@ export default function ProductListingPageSimulator({ currentListing, history = 
                 </tr>
               </thead>
               <tbody>
-                <tr style={{ borderBottom: '1px solid #e2e8f0' }}>
+                <tr
+                  onClick={() => setActiveAsin('parent')}
+                  style={{ borderBottom: '1px solid #e2e8f0', cursor: 'pointer', background: activeAsin === 'parent' ? '#e0f2fe' : 'transparent' }}
+                >
                   <td style={{ padding: '8px 12px', fontWeight: 800, color: '#0f766e' }}>👑 PARENT</td>
                   <td style={{ padding: '8px 12px', fontWeight: 700, fontFamily: 'monospace' }}>{activeListing.parentSku}</td>
                   <td style={{ padding: '8px 12px', color: '#64748b' }} colSpan={2}>Parent Catalog Anchor (Non-sellable Container)</td>
                 </tr>
                 {(activeListing.variations || []).map((v) => (
-                  <tr key={v.childIndex} style={{ borderBottom: '1px solid #e2e8f0' }}>
+                  <tr
+                    key={v.childIndex}
+                    onClick={() => setActiveAsin(v.childIndex)}
+                    style={{ borderBottom: '1px solid #e2e8f0', cursor: 'pointer', background: activeAsin === v.childIndex ? '#e0f2fe' : 'transparent' }}
+                  >
                     <td style={{ padding: '8px 12px', fontWeight: 700, color: '#0284c7' }}>💎 CHILD #{v.childIndex}</td>
                     <td style={{ padding: '8px 12px', fontWeight: 700, fontFamily: 'monospace' }}>{v.sku}</td>
                     <td style={{ padding: '8px 12px', fontWeight: 600, color: '#1e293b' }}>{v.variationAttribute}</td>
@@ -122,6 +157,35 @@ export default function ProductListingPageSimulator({ currentListing, history = 
                 ))}
               </tbody>
             </table>
+          </div>
+
+          {/* Raw copy-paste panel for the selected ASIN — for pasting directly into Seller Central */}
+          <div style={{ marginTop: '14px', paddingTop: '14px', borderTop: '1px dashed #bae6fd' }}>
+            <div style={{ fontSize: '0.8rem', fontWeight: 800, color: '#0369a1', marginBottom: '8px' }}>
+              📋 Raw Data — {activeAsin === 'parent' ? `PARENT (${activeListing.parentSku})` : `CHILD #${activeAsin} (${activeChild?.sku})`}
+            </div>
+            {activeAsin === 'parent' ? (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                <CopyField label="Title" value={activeListing.amazonTitle} onShowToast={onShowToast} />
+                <CopyField label="Backend Search Terms" value={activeListing.amazonSearchTerms} onShowToast={onShowToast} />
+                <CopyField label="Bullet Points" value={activeListing.amazonBullets} onShowToast={onShowToast} />
+                <CopyField label="Description" value={activeListing.amazonDescription} onShowToast={onShowToast} />
+                <div style={{ gridColumn: '1 / -1' }}>
+                  <CopyField
+                    label="A+ Content (Brand Story)"
+                    value={activeListing.amazonAPlusContent ? `${activeListing.amazonAPlusContent.brandStoryHeadline}\n\n${activeListing.amazonAPlusContent.brandStoryBody}` : ''}
+                    onShowToast={onShowToast}
+                  />
+                </div>
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                <CopyField label="Title" value={activeChild?.childTitle} onShowToast={onShowToast} />
+                <CopyField label="Backend Search Terms" value={activeChild?.childSearchTerms} onShowToast={onShowToast} />
+                <CopyField label="Bullet Points" value={activeChild?.childBullets} onShowToast={onShowToast} />
+                <CopyField label="Description" value={activeChild?.childDescription} onShowToast={onShowToast} />
+              </div>
+            )}
           </div>
         </div>
       )}

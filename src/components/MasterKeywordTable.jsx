@@ -103,6 +103,7 @@ export default function MasterKeywordTable({ marketplace = 'AMAZON', keywords: p
                 <th style={{ padding: '10px 14px', fontWeight: 700 }}>{isAmazon ? 'Cụm Từ Khóa (Keyword Phrase)' : 'Etsy Tag (<= 20 ký tự)'}</th>
                 <th style={{ padding: '10px 14px', fontWeight: 700 }}>Danh Mục</th>
                 <th style={{ padding: '10px 14px', fontWeight: 700 }} title="Search Volume thực tế từ báo cáo nạp vào">Volume</th>
+                <th style={{ padding: '10px 14px', fontWeight: 700 }} title="Số sản phẩm đối thủ đang cạnh tranh từ khóa này">Competitor</th>
                 <th style={{ padding: '10px 14px', fontWeight: 700 }} title="Competing Products Rank thực tế từ báo cáo nạp vào">CPR</th>
                 <th style={{ padding: '10px 14px', fontWeight: 700 }} title="Opportunity Score tính từ dữ liệu thực, không phải AI đoán">Score</th>
                 <th style={{ padding: '10px 14px', fontWeight: 700 }}>{isAmazon ? 'Phân Tầng A10 (MKL Tier)' : 'Loại Tag Etsy'}</th>
@@ -156,6 +157,9 @@ export default function MasterKeywordTable({ marketplace = 'AMAZON', keywords: p
                     </td>
                     <td style={{ padding: '10px 14px', color: 'var(--text-secondary)', fontWeight: 600 }}>
                       {item.volume != null ? item.volume.toLocaleString() : '—'}
+                    </td>
+                    <td style={{ padding: '10px 14px', color: 'var(--text-secondary)', fontWeight: 600 }}>
+                      {item.competingProducts != null ? item.competingProducts.toLocaleString() : '—'}
                     </td>
                     <td style={{ padding: '10px 14px', color: 'var(--text-secondary)', fontWeight: 600 }}>
                       {item.cpr != null ? item.cpr : '—'}

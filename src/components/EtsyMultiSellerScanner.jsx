@@ -1,17 +1,19 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  Users, Search, UploadCloud, FileSpreadsheet, Sparkles, CheckSquare, 
-  Square, ArrowRight, DollarSign, Eye, ShoppingCart, Heart, ShieldCheck, 
-  Zap, ExternalLink, RefreshCw, Award
+import {
+  Users, Search, UploadCloud, FileSpreadsheet, Sparkles, CheckSquare,
+  Square, ArrowRight, DollarSign, Eye, ShoppingCart, Heart, ShieldCheck,
+  Zap, ExternalLink, RefreshCw, Award, Plus, History
 } from 'lucide-react';
 
-export default function EtsyMultiSellerScanner({ seedPhrase, category, onShowToast }) {
+export default function EtsyMultiSellerScanner({ seedPhrase, category, onShowToast, onSellersUpdated, onViewHistory }) {
   const [sellers, setSellers] = useState([]);
   const [loading, setLoading] = useState(false);
   const [learning, setLearning] = useState(false);
   const [synthesizedResult, setSynthesizedResult] = useState(null);
   const [searchUrl, setSearchUrl] = useState('');
   const [activeBatchTab, setActiveBatchTab] = useState(1);
+  const [showManualAdd, setShowManualAdd] = useState(false);
+  const [manualSeller, setManualSeller] = useState({ title: '', shopName: '', country: 'United States', views24h: '', sold24h: '', favorites: '', price: '', url: '' });
 
 
   const scanSellers = async () => {
@@ -42,8 +44,41 @@ export default function EtsyMultiSellerScanner({ seedPhrase, category, onShowToa
     scanSellers();
   }, [seedPhrase]);
 
+  useEffect(() => {
+    if (onSellersUpdated) onSellersUpdated(sellers);
+  }, [sellers]);
+
   const toggleSeller = (id) => {
     setSellers(prev => prev.map(s => s.id === id ? { ...s, selected: !s.selected } : s));
+  };
+
+  const addManualSeller = () => {
+    if (!manualSeller.title.trim() || !manualSeller.shopName.trim()) {
+      if (onShowToast) onShowToast('Vui lòng nhập ít nhất Tiêu đề và Tên Shop.');
+      return;
+    }
+    setSellers(prev => [
+      ...prev,
+      {
+        id: `manual-${Date.now()}`,
+        title: manualSeller.title.trim(),
+        shopName: manualSeller.shopName.trim(),
+        country: manualSeller.country.trim() || 'United States',
+        listingAge: 'Manual Entry',
+        views24h: Number(manualSeller.views24h) || 0,
+        sold24h: Number(manualSeller.sold24h) || 0,
+        favorites: Number(manualSeller.favorites) || 0,
+        price: manualSeller.price.trim() || '$0.00',
+        rating: 'Manual Review',
+        url: manualSeller.url.trim(),
+        batchNumber: activeBatchTab,
+        selected: true,
+        isManual: true
+      }
+    ]);
+    setManualSeller({ title: '', shopName: '', country: 'United States', views24h: '', sold24h: '', favorites: '', price: '', url: '' });
+    setShowManualAdd(false);
+    if (onShowToast) onShowToast('✓ Đã thêm seller thủ công vào Batch hiện tại!');
   };
 
   const selectAllTop10 = () => {
@@ -154,8 +189,39 @@ export default function EtsyMultiSellerScanner({ seedPhrase, category, onShowToa
             >
               🧠 Chọn Cả 30 (3 Batch)
             </button>
+            <button
+              onClick={() => setShowManualAdd(v => !v)}
+              style={{ padding: '6px 12px', borderRadius: '8px', fontSize: '0.75rem', fontWeight: 700, border: '1px solid #0284c7', background: showManualAdd ? '#0284c7' : '#e0f2fe', color: showManualAdd ? '#fff' : '#0369a1', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
+            >
+              <Plus size={13} />
+              <span>Thêm Seller Thủ Công vào Batch {activeBatchTab}</span>
+            </button>
           </div>
         </div>
+
+        {/* Manual Seller Entry Form */}
+        {showManualAdd && (
+          <div style={{ background: '#ffffff', border: '1px solid #bae6fd', borderRadius: '8px', padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#0369a1' }}>
+              Nhập tay 1 seller thực chiến (đã review thủ công) vào Batch {activeBatchTab}:
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '2fr 1.4fr 1fr', gap: '8px' }}>
+              <input className="form-input" placeholder="Tiêu đề listing *" value={manualSeller.title} onChange={e => setManualSeller(p => ({ ...p, title: e.target.value }))} style={{ fontSize: '0.82rem' }} />
+              <input className="form-input" placeholder="Tên Shop *" value={manualSeller.shopName} onChange={e => setManualSeller(p => ({ ...p, shopName: e.target.value }))} style={{ fontSize: '0.82rem' }} />
+              <input className="form-input" placeholder="Quốc gia" value={manualSeller.country} onChange={e => setManualSeller(p => ({ ...p, country: e.target.value }))} style={{ fontSize: '0.82rem' }} />
+              <input className="form-input" type="number" placeholder="Views 24h" value={manualSeller.views24h} onChange={e => setManualSeller(p => ({ ...p, views24h: e.target.value }))} style={{ fontSize: '0.82rem' }} />
+              <input className="form-input" type="number" placeholder="Sold 24h" value={manualSeller.sold24h} onChange={e => setManualSeller(p => ({ ...p, sold24h: e.target.value }))} style={{ fontSize: '0.82rem' }} />
+              <input className="form-input" type="number" placeholder="Favorites" value={manualSeller.favorites} onChange={e => setManualSeller(p => ({ ...p, favorites: e.target.value }))} style={{ fontSize: '0.82rem' }} />
+              <input className="form-input" placeholder="Giá (vd: $29.99)" value={manualSeller.price} onChange={e => setManualSeller(p => ({ ...p, price: e.target.value }))} style={{ fontSize: '0.82rem' }} />
+              <input className="form-input" placeholder="URL listing (tùy chọn)" value={manualSeller.url} onChange={e => setManualSeller(p => ({ ...p, url: e.target.value }))} style={{ fontSize: '0.82rem', gridColumn: 'span 2' }} />
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button onClick={addManualSeller} className="btn btn-primary btn-sm" style={{ background: '#0284c7', fontWeight: 700 }}>
+                Thêm vào Batch {activeBatchTab}
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Batch Rationale & Strategy Banner */}
         <div style={{ background: '#ffffff', border: '1px solid #ffedd5', padding: '10px 14px', borderRadius: '8px', fontSize: '0.8rem', color: '#7c2d12' }}>
@@ -250,11 +316,27 @@ export default function EtsyMultiSellerScanner({ seedPhrase, category, onShowToa
       {/* Synthesized Output Display */}
       {synthesizedResult && (
         <div style={{ background: '#ffffff', border: '2px solid #ea580c', borderRadius: '12px', padding: '22px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', borderBottom: '1px solid #ffedd5', paddingBottom: '12px' }}>
-            <Sparkles size={20} style={{ color: '#ea580c' }} />
-            <h4 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 800, color: '#9a3412' }}>
-              ✨ Kết Quả Học Trực Tiếp Từ {synthesizedResult.sellersLearned} Best Sellers:
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', borderBottom: '1px solid #ffedd5', paddingBottom: '12px', flexWrap: 'wrap' }}>
+            <h4 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 800, color: '#9a3412', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Sparkles size={20} style={{ color: '#ea580c' }} />
+              <span>✨ Kết Quả Học Trực Tiếp Từ {synthesizedResult.sellersLearned} Best Sellers:</span>
             </h4>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#166534', background: '#dcfce7', padding: '4px 10px', borderRadius: '20px' }}>
+                ✓ Đã lưu vào Kho Lưu Trữ Listing (ID: {synthesizedResult.listingId}, trạng thái Chờ QA)
+              </span>
+              {onViewHistory && (
+                <button
+                  type="button"
+                  onClick={onViewHistory}
+                  className="btn btn-secondary btn-sm"
+                  style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '0.78rem' }}
+                >
+                  <History size={13} />
+                  <span>Xem trong Lịch Sử</span>
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Key Insights */}

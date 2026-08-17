@@ -193,13 +193,14 @@ export default function App() {
         {/* TAB 2: 🟠 Etsy Contextual Workspace */}
         {activeTab === 'etsy-workspace' && (
           <div style={{ marginTop: '24px' }}>
-            <EtsyWorkspace 
+            <EtsyWorkspace
               onSelectListing={(item) => {
                 handleSelectFromHistory(item);
                 setActiveTab('product-page');
               }}
               onApproveListing={handleApproveListing}
               onShowToast={showToast}
+              onViewHistory={() => setActiveTab('history')}
             />
           </div>
         )}

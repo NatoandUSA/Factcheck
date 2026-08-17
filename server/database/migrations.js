@@ -1,6 +1,7 @@
 const LISTING_SCOPE_MIGRATION = '002_listing_workspace_scope';
 const SECURITY_CONTROLS_MIGRATION = '003_security_controls';
 const KEYWORD_DETAIL_MIGRATION = '004_keyword_detail_and_authorship';
+const MARKET_TRENDS_MARKETPLACE_MIGRATION = '005_market_trends_marketplace';
 
 function run(db, sql, params = []) {
   return new Promise((resolve, reject) => {
@@ -91,6 +92,14 @@ async function migrateKeywordDetailAndAuthorship(db) {
   await addColumnIfMissing(db, trendColumns, 'keywords_detailed', 'TEXT NULL', 'market_trends');
 }
 
+async function migrateMarketTrendsMarketplace(db) {
+  const tableExists = await all(db, "SELECT name FROM sqlite_master WHERE type='table' AND name='market_trends'");
+  if (tableExists.length === 0) return;
+  const trendColumns = new Set((await all(db, 'PRAGMA table_info(market_trends)')).map(column => column.name));
+  // Real marketplace tag instead of guessing AMAZON vs ETSY from category text.
+  await addColumnIfMissing(db, trendColumns, 'marketplace', "TEXT NULL CHECK(marketplace IN ('AMAZON', 'ETSY'))", 'market_trends');
+}
+
 async function runMigrations(db) {
   await run(db, `
     CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -138,11 +147,25 @@ async function runMigrations(db) {
       throw error;
     }
   }
+
+  const marketTrendsMarketplaceApplied = await all(db, 'SELECT id FROM schema_migrations WHERE id = ?', [MARKET_TRENDS_MARKETPLACE_MIGRATION]);
+  if (marketTrendsMarketplaceApplied.length === 0) {
+    await run(db, 'BEGIN IMMEDIATE');
+    try {
+      await migrateMarketTrendsMarketplace(db);
+      await run(db, 'INSERT INTO schema_migrations (id) VALUES (?)', [MARKET_TRENDS_MARKETPLACE_MIGRATION]);
+      await run(db, 'COMMIT');
+    } catch (error) {
+      try { await run(db, 'ROLLBACK'); } catch (_) {}
+      throw error;
+    }
+  }
 }
 
 module.exports = {
   LISTING_SCOPE_MIGRATION,
   SECURITY_CONTROLS_MIGRATION,
   KEYWORD_DETAIL_MIGRATION,
+  MARKET_TRENDS_MARKETPLACE_MIGRATION,
   runMigrations
 };

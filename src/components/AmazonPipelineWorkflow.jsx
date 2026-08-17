@@ -40,6 +40,7 @@ export default function AmazonPipelineWorkflow({ seedPhrase, selectedCategory, o
     const formData = new FormData();
     formData.append('reportFile', file);
     formData.append('category', selectedCategory);
+    formData.append('marketplace', 'AMAZON');
 
     try {
       const res = await fetch('/api/upload-h10', {
@@ -168,6 +169,7 @@ export default function AmazonPipelineWorkflow({ seedPhrase, selectedCategory, o
     const formData = new FormData();
     formData.append('reportFile', file);
     formData.append('category', selectedCategory);
+    formData.append('marketplace', 'AMAZON');
     formData.append('seedPhrase', seedPhrase || 'para el amor de mi vida');
 
 

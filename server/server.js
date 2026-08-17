@@ -1071,9 +1071,22 @@ app.post('/api/mcp/pull-etsy', async (req, res) => {
 
   const topKeywordsStr = cleanKws.slice(0, 13).join(', ');
 
+  // Etsy MCP gives real niche-level stats (opportunity score, seller count),
+  // not per-tag Volume/CPR like Amazon Cerebro — share that real context
+  // across the tags it applies to rather than inventing per-tag numbers.
+  const isRealMcpData = Boolean(mcpData?.data?.overview);
+  const keywordsDetailed = isRealMcpData ? cleanKws.slice(0, 13).map(kw => ({
+    keyword: kw,
+    opportunityScore: overview.opportunity_score ?? null,
+    competingProducts: overview.sellers ?? null,
+    volume: overview.listings ?? null,
+    cpr: null,
+    tierBadge: '🎯 Valid Tag (<=20 chars)'
+  })) : null;
+
   db.run(
-    "INSERT INTO market_trends (category, trending_keywords) VALUES (?, ?)",
-    [category, topKeywordsStr],
+    "INSERT INTO market_trends (category, trending_keywords, keywords_detailed, marketplace) VALUES (?, ?, ?, ?)",
+    [category, topKeywordsStr, keywordsDetailed ? JSON.stringify(keywordsDetailed) : null, 'ETSY'],
     function(dbErr) {
       if (dbErr) return res.status(500).json({ error: dbErr.message });
       
@@ -1540,8 +1553,8 @@ app.post('/api/amazon/quick-draft', requireAuth(db), requireRole(['OWNER', 'MANA
 
     // 1. Create or retrieve market trend entry
     db.run(
-      "INSERT INTO market_trends (category, trending_keywords) VALUES (?, ?)",
-      [category, `${cleanSeed} (Amazon A10 Quick Batch)`],
+      "INSERT INTO market_trends (category, trending_keywords, marketplace) VALUES (?, ?, ?)",
+      [category, `${cleanSeed} (Amazon A10 Quick Batch)`, 'AMAZON'],
       function(trendErr) {
         if (trendErr) return res.status(500).json({ error: trendErr.message });
         const trendId = this.lastID;
@@ -1705,15 +1718,16 @@ app.get('/api/master-keywords', (req, res) => {
     });
 
     marketRows.forEach(r => {
-      // Prefer real per-keyword data (Volume/CPR/Score) persisted at upload
-      // time. Falls back to re-deriving placeholder tiers from the flat
-      // keyword string for older rows uploaded before this was tracked.
+      // Only surface keywords with real persisted Volume/CPR/Score data.
+      // Rows uploaded before this tracking existed have no way to recover
+      // that data, and showing keywords with no evidence behind them is
+      // exactly what staff need this list to NOT do.
+      if (!r.keywords_detailed) return;
       let detailed = null;
-      if (r.keywords_detailed) {
-        try { detailed = JSON.parse(r.keywords_detailed); } catch (e) { detailed = null; }
-      }
+      try { detailed = JSON.parse(r.keywords_detailed); } catch (e) { return; }
+      if (!Array.isArray(detailed)) return;
 
-      const kws = detailed || (r.trending_keywords || '').split(/[,|]/).map(kw => ({ keyword: kw.trim() }));
+      const kws = detailed;
       kws.forEach((kwItem, idx) => {
         const cleanKw = (kwItem.keyword || '').trim();
         if (cleanKw && cleanKw.length > 2 && !seen.has(cleanKw.toLowerCase())) {
@@ -1739,7 +1753,8 @@ app.get('/api/master-keywords', (req, res) => {
             ipHits: ipRes.hits.map(h => h.term),
             volume: kwItem.volume ?? kwItem.searchVolume ?? null,
             cpr: kwItem.cpr ?? null,
-            competingProducts: kwItem.density ?? kwItem.titleDensity ?? null,
+            competingProducts: kwItem.competingProducts ?? null,
+            titleDensity: kwItem.titleDensity ?? kwItem.density ?? null,
             opportunityScore: kwItem.opportunityScore ?? kwItem.score ?? null
           });
         }
@@ -1772,6 +1787,7 @@ const handleReportUpload = async (req, res) => {
   const filePath = file.path;
   const fileName = file.originalname;
   const targetCategory = req.body.category || 'Apparel: Sweatshirt';
+  const targetMarketplace = req.body.marketplace === 'ETSY' ? 'ETSY' : 'AMAZON';
 
   try {
     let rawRows = [];
@@ -1938,8 +1954,8 @@ const handleReportUpload = async (req, res) => {
     // Volume/CPR/Score per keyword so staff can see the underlying data, not
     // just an AI-picked keyword string)
     db.run(
-      "INSERT INTO market_trends (category, trending_keywords, keywords_detailed) VALUES (?, ?, ?)",
-      [targetCategory, trendingKeywordsStr, JSON.stringify(topKeywordsDetailed)],
+      "INSERT INTO market_trends (category, trending_keywords, keywords_detailed, marketplace) VALUES (?, ?, ?, ?)",
+      [targetCategory, trendingKeywordsStr, JSON.stringify(topKeywordsDetailed), targetMarketplace],
       function(dbErr) {
         if (dbErr) return res.status(500).json({ error: dbErr.message });
         
@@ -1970,6 +1986,21 @@ const handleReportUpload = async (req, res) => {
 
 app.post('/api/upload-h10', upload.any(), handleReportUpload);
 app.post('/api/upload-trends', upload.any(), handleReportUpload);
+
+// API: Batch a pasted ASIN list into Cerebro-ready groups of 10 (AsinBatcherWidget's
+// manual-paste flow — separate from /api/upload-h10's file-upload flow)
+app.post('/api/asins/batch', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
+  const { asins, seedKeyword } = req.body || {};
+  if (!asins || (typeof asins === 'string' && !asins.trim())) {
+    return res.status(400).json({ success: false, error: 'Please paste 10-30 ASINs to batch.' });
+  }
+  try {
+    const batchResult = asinBatcher.filterAndBatchXrayAsins(asins, seedKeyword || 'Custom Product');
+    res.json({ success: true, ...batchResult });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
 
 // Real Analytics Summary Endpoint (Driven by real listings & feedback)
 app.get('/api/analytics-summary', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
@@ -2389,8 +2420,8 @@ const backgroundAgentTimer = setInterval(() => {
                                  topKw.keyword.includes('blanket') ? 'Blanket' : 'Acrylic';
 
                 db.run(
-                  "INSERT INTO market_trends (category, trending_keywords) VALUES (?, ?)",
-                  [category, `${topKw.keyword}, sold24h:${topKw.sold24h || 0}, conv:${topKw.conversion || '2%'}`],
+                  "INSERT INTO market_trends (category, trending_keywords, marketplace) VALUES (?, ?, ?)",
+                  [category, `${topKw.keyword}, sold24h:${topKw.sold24h || 0}, conv:${topKw.conversion || '2%'}`, 'ETSY'],
                   function(err) {
                     if (!err) {
                       const msg = `[YTRENDS HTML IMPORT] Extracted keyword "${topKw.keyword}" (Sold24h: ${topKw.sold24h}, Conv: ${topKw.conversion}) from HTML file: ${fileToProcess}`;
@@ -2413,8 +2444,8 @@ const backgroundAgentTimer = setInterval(() => {
                                  fileToProcess.toLowerCase().includes('blanket') ? 'Blanket' : 'Acrylic';
 
                 db.run(
-                  "INSERT INTO market_trends (category, trending_keywords) VALUES (?, ?)",
-                  [category, `${realKw}, personalized ${category.toLowerCase()}, best gift 2026`],
+                  "INSERT INTO market_trends (category, trending_keywords, marketplace) VALUES (?, ?, ?)",
+                  [category, `${realKw}, personalized ${category.toLowerCase()}, best gift 2026`, 'AMAZON'],
                   function(err) {
                     if (!err) {
                       const msg = `[AMAZON H10 IMPORT] Extracted top keyword "${realKw}" from file: ${fileToProcess}`;
@@ -2449,8 +2480,8 @@ const backgroundAgentTimer = setInterval(() => {
               const kwPayload = topTags ? `${targetSeed}, ${topTags}` : targetSeed;
 
               db.run(
-                "INSERT INTO market_trends (category, trending_keywords) VALUES (?, ?)",
-                [category, kwPayload],
+                "INSERT INTO market_trends (category, trending_keywords, marketplace) VALUES (?, ?, ?)",
+                [category, kwPayload, 'ETSY'],
                 function(err) {
                   if (!err) {
                     const msg = `[YTRENDS MCP LIVE] Extracted niche data for "${targetSeed}" (Rev: $${Math.round(overview.total_revenue_usd || 0)}, OppScore: ${overview.opportunity_score || 50}). Tags: ${topTags || targetSeed}`;

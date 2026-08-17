@@ -107,6 +107,7 @@ function rankKeywords(keywordList, contextCategory = 'Jewelry', seedPhrase = '')
     const vol = typeof item === 'object' ? (parseFloat(item.searchVolume || item.volume || item.searches) || 100) : 100;
     const density = typeof item === 'object' ? (parseFloat(item.titleDensity || item.density) || 10) : 10;
     const cpr = typeof item === 'object' ? (parseFloat(item.cpr) || 8) : 8;
+    const competingProducts = (typeof item === 'object' && item.competingProducts != null) ? parseFloat(item.competingProducts) : null;
 
     // Long-tail Keyword Priority Multiplier
     const wordsCount = kw.split(/\s+/).length;
@@ -139,6 +140,7 @@ function rankKeywords(keywordList, contextCategory = 'Jewelry', seedPhrase = '')
       searchVolume: vol,
       density,
       titleDensity: density,
+      competingProducts,
       cpr,
       score,
       opportunityScore: Math.round(score),

@@ -1,13 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  Brain, Link2, FileText, Sparkles, CheckCircle2, Trash2, RefreshCw, 
-  ArrowRight, ShieldCheck, Tag, ExternalLink, Zap
+import {
+  Brain, Link2, FileText, Sparkles, CheckCircle2, Trash2, RefreshCw,
+  ArrowRight, ShieldCheck, Tag, ExternalLink, Zap, Users
 } from 'lucide-react';
 
-export default function LearningBoxWidget({ platform = 'AMAZON', onShowToast }) {
+export default function LearningBoxWidget({ platform = 'AMAZON', onShowToast, scannedSellers = [] }) {
   const [url, setUrl] = useState('');
   const [rawText, setRawText] = useState('');
-  const [inputMode, setInputMode] = useState('url'); // 'url' | 'text'
+  const [inputMode, setInputMode] = useState('url'); // 'url' | 'text' | 'seller'
+  const [selectedSellerId, setSelectedSellerId] = useState('');
   const [category, setCategory] = useState('Apparel: Sweatshirt');
   const [learning, setLearning] = useState(false);
   const [templates, setTemplates] = useState([]);
@@ -38,9 +39,16 @@ export default function LearningBoxWidget({ platform = 'AMAZON', onShowToast }) 
     fetchTemplates();
   }, [platform]);
 
+  const selectedSeller = scannedSellers.find(s => s.id === selectedSellerId);
+  const sellerAsRawText = selectedSeller
+    ? `Title: ${selectedSeller.title}\nShop: ${selectedSeller.shopName} (${selectedSeller.country})\nPrice: ${selectedSeller.price}\nViews 24h: ${selectedSeller.views24h}\nSold 24h: ${selectedSeller.sold24h}\nFavorites: ${selectedSeller.favorites}`
+    : '';
+
   const handleLearn = async (e) => {
     e.preventDefault();
-    if (!url.trim() && !rawText.trim()) return;
+    if (inputMode === 'url' && !url.trim()) return;
+    if (inputMode === 'text' && !rawText.trim()) return;
+    if (inputMode === 'seller' && !selectedSeller) return;
 
     setLearning(true);
     try {
@@ -49,8 +57,8 @@ export default function LearningBoxWidget({ platform = 'AMAZON', onShowToast }) 
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          url: inputMode === 'url' ? url.trim() : '',
-          rawText: inputMode === 'text' ? rawText.trim() : '',
+          url: inputMode === 'url' ? url.trim() : (selectedSeller?.url || ''),
+          rawText: inputMode === 'text' ? rawText.trim() : (inputMode === 'seller' ? sellerAsRawText : ''),
           category,
           marketplace: platform
         })
@@ -62,6 +70,7 @@ export default function LearningBoxWidget({ platform = 'AMAZON', onShowToast }) 
       if (onShowToast) onShowToast(`🧠 Đã học thành công cấu trúc DNA cho ${platform}!`);
       setUrl('');
       setRawText('');
+      setSelectedSellerId('');
       fetchTemplates();
     } catch (err) {
       if (onShowToast) onShowToast(`Lỗi học listing: ${err.message}`);
@@ -148,12 +157,62 @@ export default function LearningBoxWidget({ platform = 'AMAZON', onShowToast }) 
             <FileText size={14} />
             <span>Dán Văn Bản Mẫu</span>
           </button>
+
+          {!isAmazon && (
+            <button
+              type="button"
+              onClick={() => setInputMode('seller')}
+              disabled={scannedSellers.length === 0}
+              title={scannedSellers.length === 0 ? 'Chưa có seller nào được quét ở Stage 1' : undefined}
+              style={{
+                background: inputMode === 'seller' ? 'var(--bg-surface)' : 'transparent',
+                border: 'none',
+                borderRadius: '6px',
+                padding: '6px 12px',
+                fontSize: '0.8rem',
+                fontWeight: 700,
+                color: scannedSellers.length === 0 ? 'var(--text-muted)' : (inputMode === 'seller' ? themeColor : 'var(--text-secondary)'),
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                cursor: scannedSellers.length === 0 ? 'not-allowed' : 'pointer'
+              }}
+            >
+              <Users size={14} />
+              <span>Chọn Từ Sellers Đã Quét ({scannedSellers.length})</span>
+            </button>
+          )}
         </div>
       </div>
 
       {/* Input Form */}
       <form onSubmit={handleLearn} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-        {inputMode === 'url' ? (
+        {inputMode === 'seller' ? (
+          <div style={{ display: 'flex', gap: '10px' }}>
+            <select
+              className="form-input"
+              style={{ flex: 1, fontSize: '0.85rem' }}
+              value={selectedSellerId}
+              onChange={(e) => setSelectedSellerId(e.target.value)}
+            >
+              <option value="">-- Chọn 1 seller đã quét ở Stage 1 --</option>
+              {scannedSellers.map(s => (
+                <option key={s.id} value={s.id}>
+                  {s.title.slice(0, 60)} — {s.shopName}
+                </option>
+              ))}
+            </select>
+            <button
+              type="submit"
+              disabled={learning || !selectedSeller}
+              className="btn btn-primary"
+              style={{ background: themeColor, fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px', minWidth: '140px', justifyContent: 'center' }}
+            >
+              {learning ? <RefreshCw size={15} className="spinner" /> : <Sparkles size={15} />}
+              <span>{learning ? 'Đang phân tích...' : '🧠 Học DNA'}</span>
+            </button>
+          </div>
+        ) : inputMode === 'url' ? (
           <div style={{ display: 'flex', gap: '10px' }}>
             <input
               type="url"

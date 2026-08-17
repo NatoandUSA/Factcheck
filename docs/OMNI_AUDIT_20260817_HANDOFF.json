@@ -1,0 +1,77 @@
+{
+  "project": "OmniSeller Studio / Factcheck",
+  "repository": "NatoandUSA/Factcheck",
+  "branch": "main",
+  "base_sha": "0433323d05382328e08f11fcd9794f0d071c6fa4",
+  "current_sha": "0433323d05382328e08f11fcd9794f0d071c6fa4",
+  "current_state": "AUDIT_ONLY_NO_CODE_CHANGED",
+  "objective": "Re-audit Track S P0 (route classification, SSRF) and P0.5 (ingestion truth) at exact SHA and select one Best Next Move.",
+  "what_changed": [],
+  "files_changed": [],
+  "gpt_suggestion_coverage": [
+    "PROJECT_GUIDE §7 route registry requirement — evaluated, NOT SATISFIED",
+    "PROJECT_GUIDE §7 SSRF policy (11 controls) — evaluated, 0/11 present",
+    "PROJECT_GUIDE §8 raw observation contract — evaluated, NOT PRESENT",
+    "PROJECT_GUIDE §17 stop-doing list (fabricated data) — 4 live violations found"
+  ],
+  "root_cause": "PR-2B/2C hardened the listing/approval surface only. The research, ingestion, learning, upload and agent surfaces were never included in the same pass, so requireAuth/requireRole was applied per-route by hand instead of via a centralized registry. No mechanism exists to detect an unclassified route, so the bug class regenerates on every new endpoint. Separately, several services were written with 'always return something so the UI never looks empty' as the design goal, which converts absent evidence into fabricated business signal.",
+  "impact_surface": [
+    "server/server.js (43 routes; 24 unauthenticated)",
+    "server/learningService.js (SSRF sink)",
+    "server/asinBatcher.js (fabricated competitor catalog)",
+    "server/googleTrendsService.js (simulated trend data)",
+    "tests/test_white_screen_failsafe.cjs (asserts fabrication as pass condition)",
+    "market_trends and learned_templates tables (unauthenticated writes)"
+  ],
+  "source_of_truth_review": "No new source of truth proposed. Recommended route registry consolidates classification that is currently implicit and scattered across 43 call sites; it derives from the existing requireAuth/requireRole middleware rather than replacing it. No change to publishGate.js or approval authority.",
+  "tests_executed": [
+    "npm ci + npm test on clean checkout of 0433323 (Node v22.22.2) -> 8/8 test files PASSED",
+    "Live SSRF proof-of-concept: learnFromListing() against local 127.0.0.1:9911 victim -> internal HTML content exfiltrated into title and description fields",
+    "Byte comparison of local D:\\Claude\\Factcheck working copy vs repo main (CRLF-normalized) -> identical for server.js, learningService.js, migrations.js, package.json",
+    "GitHub Actions API: run 31992003648 head_sha 0433323d... conclusion=success"
+  ],
+  "tests_not_executed": [
+    "Frontend src/** audit",
+    "Negative tests for SSRF controls (controls do not exist yet)",
+    "Runtime verification against a deployed non-localhost instance",
+    "Parity comparison against D:\\Claude\\22etsy-agent and D:\\Claude\\Amazon"
+  ],
+  "ci_evidence": {
+    "workflow": "OmniSeller Studio CI - Trust Baseline Verification",
+    "run_id": "31992003648",
+    "head_sha": "0433323d05382328e08f11fcd9794f0d071c6fa4",
+    "conclusion": "success",
+    "note": "GREEN is real and certifies nothing about these findings; test_white_screen_failsafe.cjs actively asserts fabricated output as the pass condition."
+  },
+  "runtime_evidence": [
+    "SSRF PoC executed in isolated container against loopback-only victim service; content reflection confirmed."
+  ],
+  "known_risks": [
+    "POST /api/learning/analyze is unauthenticated remote SSRF with content reflection and DB persistence.",
+    "DELETE /api/learning/templates/:id is unauthenticated destructive with no workspace scope.",
+    "POST /api/upload-h10 and /api/upload-trends accept unauthenticated file uploads that write market_trends.",
+    "POST /api/agents/:id/toggle allows unauthenticated activation of background outbound network agents.",
+    "asinBatcher REAL_CHILD_ASIN_CATALOG presents synthetic ASINs (B0D9999AAA, B0D8888BBB) with invented sales figures as real observed competitor data."
+  ],
+  "not_verified": [
+    "GitHub Security Issue #3 current open/closed state",
+    "Whether the server is bound beyond localhost in the owner's real deployment",
+    "Whether OMNI_MASTER_KEY is set in the production environment",
+    "PROJECT_GUIDE §10 compliance in the React UI (readiness recomputation)"
+  ],
+  "open_questions": [
+    "Is the Factcheck server ever reachable from outside the owner's PC? This changes the urgency ranking of route auth (but not of SSRF).",
+    "Should the Google Trends simulation be removed outright or retained behind an explicit MODELED provenance label?"
+  ],
+  "recommended_next_step": "P0: single-purpose PR fix/p0-ssrf-and-route-classification — add server/security/urlGuard.js (HTTPS-only, host allowlist, IPv4+IPv6 private/loopback/link-local/metadata rejection, manual redirect revalidation, 8s timeout, 2MB cap, generic errors) wired into learningService.js; plus a route registry table covering all 43 routes with a router-stack-walking test that fails CI on any unclassified route. Then P1: fix/p0.5-unknown-not-fabricated.",
+  "requested_gpt_review": [
+    "Challenge the P0-before-P1 ordering: the data-fabrication findings may have higher real business cost than the SSRF if the server is localhost-only.",
+    "Review the proposed host allowlist for urlGuard — is amazon/etsy-only too narrow for real competitor learning workflows?",
+    "Confirm that a route registry does not constitute a second source of truth over the existing middleware."
+  ],
+  "provenance": {
+    "basis": "Fresh clone of NatoandUSA/Factcheck at 0433323, local test execution, live SSRF PoC, GitHub Actions API, and byte comparison against the owner's D:\\Claude\\Factcheck working copy.",
+    "status": "CLAUDE-LIVE-VERIFIED except items listed in not_verified",
+    "audited_at": "2026-08-17T23:30:00+07:00"
+  }
+}

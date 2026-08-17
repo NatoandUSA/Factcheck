@@ -28,6 +28,7 @@ const { runMigrations } = require('./database/migrations');
 const { encryptSecret, decryptSecret, maskSecret } = require('./security/secretBox');
 const { approvalHash } = require('./security/approval');
 const { readFirstWorksheet } = require('./services/spreadsheetReader');
+const { UrlGuardError } = require('./security/urlGuard');
 
 // Make crashes visible instead of dying silently with no trace (systemd will
 // still restart the process via Restart=always; this just ensures the cause
@@ -837,7 +838,7 @@ app.post('/api/listings/:id/feedback', requireAuth(db), requireRole(['OWNER', 'M
 });
 
 // API: Get YTrends MCP Tools List from https://mcp.trends.ytuong.ai/mcp
-app.get('/api/mcp/tools', async (req, res) => {
+app.get('/api/mcp/tools', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
   try {
     const tools = await ytrendsMcp.listTools();
     res.json({ success: true, count: tools.length, tools });
@@ -846,8 +847,9 @@ app.get('/api/mcp/tools', async (req, res) => {
   }
 });
 
-// API: Call YTrends MCP Tool (Universal)
-app.post('/api/mcp/call', async (req, res) => {
+// API: Call YTrends MCP Tool (Universal) — restricted beyond SELLER since
+// toolName/args pass through to an external tool invocation
+app.post('/api/mcp/call', requireAuth(db), requireRole(['OWNER', 'MANAGER']), async (req, res) => {
   const { toolName, args = {} } = req.body;
   if (!toolName) return res.status(400).json({ error: 'toolName is required' });
 
@@ -860,7 +862,7 @@ app.post('/api/mcp/call', async (req, res) => {
 });
 
 // API: Explore Etsy Niche via YTrends MCP
-app.get('/api/mcp/niche', async (req, res) => {
+app.get('/api/mcp/niche', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
   const { seed = 'nurse sweatshirt' } = req.query;
   try {
     const data = await ytrendsMcp.exploreNiche(seed);
@@ -871,9 +873,15 @@ app.get('/api/mcp/niche', async (req, res) => {
 });
 
 // API: One-Click Auto-Pull Live Etsy Trends from MCP into Database
-app.post('/api/mcp/pull-etsy', async (req, res) => {
+app.post('/api/mcp/pull-etsy', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  // Etsy-only endpoint — reject a session authenticated into an Amazon
+  // workspace rather than silently writing an ETSY-tagged row under it
+  // (GPT PR-5 review finding P0-B1).
+  if (req.user.marketplace !== 'ETSY') {
+    return res.status(403).json({ success: false, error: 'MARKETPLACE_MISMATCH', message: 'This endpoint requires an Etsy workspace session.' });
+  }
   const { seed = 'custom gift', category = 'Custom Gift' } = req.body;
-  
+
   let mcpData = null;
   try {
     mcpData = await ytrendsMcp.exploreNiche(seed);
@@ -1085,8 +1093,8 @@ app.post('/api/mcp/pull-etsy', async (req, res) => {
   })) : null;
 
   db.run(
-    "INSERT INTO market_trends (category, trending_keywords, keywords_detailed, marketplace) VALUES (?, ?, ?, ?)",
-    [category, topKeywordsStr, keywordsDetailed ? JSON.stringify(keywordsDetailed) : null, 'ETSY'],
+    "INSERT INTO market_trends (category, trending_keywords, keywords_detailed, marketplace, tenant_id, workspace_id) VALUES (?, ?, ?, ?, ?, ?)",
+    [category, topKeywordsStr, keywordsDetailed ? JSON.stringify(keywordsDetailed) : null, req.user.marketplace, req.user.tenantId, req.user.workspaceId],
     function(dbErr) {
       if (dbErr) return res.status(500).json({ error: dbErr.message });
       
@@ -1110,7 +1118,7 @@ app.post('/api/mcp/pull-etsy', async (req, res) => {
 });
 
 // API: Helium 10 MCP Status & OAuth Check (https://mcp.helium10.com/mcp)
-app.get('/api/mcp/h10/status', async (req, res) => {
+app.get('/api/mcp/h10/status', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
   try {
     const statusData = await h10Mcp.checkConnection();
     res.json({ success: true, ...statusData });
@@ -1120,7 +1128,7 @@ app.get('/api/mcp/h10/status', async (req, res) => {
 });
 
 // API: Helium 10 MCP Tools List
-app.get('/api/mcp/h10/tools', async (req, res) => {
+app.get('/api/mcp/h10/tools', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
   const token = req.headers.authorization?.replace('Bearer ', '') || null;
   try {
     const tools = await h10Mcp.listTools(token);
@@ -1132,7 +1140,7 @@ app.get('/api/mcp/h10/tools', async (req, res) => {
 
 
 // API: Real-Time Google Trends Cross-Check for Seed Phrase
-app.get('/api/google-trends', async (req, res) => {
+app.get('/api/google-trends', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
   const { keyword = 'custom gift' } = req.query;
   try {
     const trendData = await fetchGoogleTrends(keyword);
@@ -1143,7 +1151,7 @@ app.get('/api/google-trends', async (req, res) => {
 });
 
 // API: Unified IP & Trademark Guard Library
-app.get('/api/ip-guard/library', (req, res) => {
+app.get('/api/ip-guard/library', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
   try {
     const lib = JSON.parse(fs.readFileSync(path.resolve(__dirname, 'ip_library.json'), 'utf8'));
     res.json({ success: true, library: lib });
@@ -1233,15 +1241,19 @@ app.post('/api/settings/llm', requireAuth(db), requireRole(['OWNER']), (req, res
 });
 
 // API: Learning Box — Analyze Amazon/Etsy URL or Competitor text & Extract Structural DNA
-app.post('/api/learning/analyze', async (req, res) => {
-  const { url = '', rawText = '', category = 'Custom Gift', marketplace = 'AMAZON' } = req.body;
+app.post('/api/learning/analyze', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  const { url = '', rawText = '', category = 'Custom Gift' } = req.body;
+  // Marketplace is server-derived from the authenticated session, never
+  // trusted from the client body (GPT PR-5 review finding P0-B1).
+  const marketplace = req.user.marketplace;
 
   try {
     const analysis = await learnFromListing({ url, rawText, category, marketplace });
 
-    // Store in DB
+    // Store in DB, scoped to the caller's workspace (see learned_templates
+    // ownership migration — templates are workspace-owned, not global)
     db.run(
-      "INSERT INTO learned_templates (url, marketplace, category, title, bullets, tags, description, styleDna) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      "INSERT INTO learned_templates (url, marketplace, category, title, bullets, tags, description, styleDna, tenant_id, workspace_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       [
         analysis.url,
         analysis.marketplace,
@@ -1250,16 +1262,21 @@ app.post('/api/learning/analyze', async (req, res) => {
         JSON.stringify(analysis.bullets),
         JSON.stringify(analysis.tags),
         analysis.description,
-        JSON.stringify(analysis.styleDna)
+        JSON.stringify(analysis.styleDna),
+        req.user.tenantId,
+        req.user.workspaceId
       ],
       function(dbErr) {
-        if (dbErr) return res.status(500).json({ error: dbErr.message });
+        if (dbErr) return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
         res.json({ success: true, templateId: this.lastID, ...analysis });
       }
     );
   } catch (err) {
+    if (err instanceof UrlGuardError) {
+      return res.status(400).json({ success: false, error: 'URL_NOT_ALLOWED', message: 'This URL is not an allowed marketplace host, or could not be safely resolved.' });
+    }
     console.error('Learning parse error:', err);
-    res.status(500).json({ error: `Lỗi phân tích listing mẫu: ${err.message}` });
+    res.status(500).json({ success: false, error: 'LEARNING_PARSE_FAILED' });
   }
 });
 
@@ -1272,9 +1289,12 @@ function safeJsonParse(str, fallback = {}) {
 }
 
 // API: Get all learned templates
-app.get('/api/learning/templates', (req, res) => {
-  db.all("SELECT * FROM learned_templates ORDER BY createdAt DESC LIMIT 20", [], (err, rows) => {
-    if (err) return res.status(500).json({ error: err.message });
+app.get('/api/learning/templates', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
+  db.all(
+    "SELECT * FROM learned_templates WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ? ORDER BY createdAt DESC LIMIT 20",
+    [req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+    (err, rows) => {
+    if (err) return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
     const parsed = rows.map(r => ({
       ...r,
       bullets: safeJsonParse(r.bullets, []),
@@ -1286,17 +1306,25 @@ app.get('/api/learning/templates', (req, res) => {
 });
 
 
-// API: Delete learned template
-app.delete('/api/learning/templates/:id', (req, res) => {
+// API: Delete learned template (workspace-scoped — IDOR-safe 404 for out-of-scope IDs)
+app.delete('/api/learning/templates/:id', requireAuth(db), requireRole(['OWNER', 'MANAGER']), (req, res) => {
   const { id } = req.params;
-  db.run("DELETE FROM learned_templates WHERE id = ?", [id], function(err) {
-    if (err) return res.status(500).json({ error: err.message });
+  db.run(
+    "DELETE FROM learned_templates WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?",
+    [id, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+    function(err) {
+    if (err) return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
+    if (this.changes === 0) return res.status(404).json({ success: false, error: 'TEMPLATE_NOT_FOUND' });
     res.json({ success: true, deletedId: id });
   });
 });
 
 // API: ETSY Search & Top Sellers Scanner (HeyEtsy / Search Page / Live MCP)
-app.post('/api/etsy/scan-search', async (req, res) => {
+app.post('/api/etsy/scan-search', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  // Etsy-only endpoint (GPT PR-5 re-review finding, same class as P0-B1).
+  if (req.user.marketplace !== 'ETSY') {
+    return res.status(403).json({ success: false, error: 'MARKETPLACE_MISMATCH', message: 'This endpoint requires an Etsy workspace session.' });
+  }
   const { seedPhrase = 'nurse sweatshirt', htmlContent = '', csvRows = [] } = req.body;
 
   try {
@@ -1470,6 +1498,10 @@ app.post('/api/etsy/scan-search', async (req, res) => {
 
 // API: ETSY Deep Batch Learn 5-10 Selected Sellers
 app.post('/api/etsy/batch-learn', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  // Etsy-only endpoint (GPT PR-5 re-review finding, same class as P0-B1).
+  if (req.user.marketplace !== 'ETSY') {
+    return res.status(403).json({ success: false, error: 'MARKETPLACE_MISMATCH', message: 'This endpoint requires an Etsy workspace session.' });
+  }
   const { seedPhrase = 'nurse sweatshirt', category = 'Apparel: Sweatshirt', sellers = [] } = req.body;
 
   try {
@@ -1553,8 +1585,8 @@ app.post('/api/amazon/quick-draft', requireAuth(db), requireRole(['OWNER', 'MANA
 
     // 1. Create or retrieve market trend entry
     db.run(
-      "INSERT INTO market_trends (category, trending_keywords, marketplace) VALUES (?, ?, ?)",
-      [category, `${cleanSeed} (Amazon A10 Quick Batch)`, 'AMAZON'],
+      "INSERT INTO market_trends (category, trending_keywords, marketplace, tenant_id, workspace_id) VALUES (?, ?, ?, ?, ?)",
+      [category, `${cleanSeed} (Amazon A10 Quick Batch)`, 'AMAZON', req.user.tenantId, req.user.workspaceId],
       function(trendErr) {
         if (trendErr) return res.status(500).json({ error: trendErr.message });
         const trendId = this.lastID;
@@ -1695,29 +1727,24 @@ Return ONLY raw JSON without markdown code fences:
 });
 
 // API: Get Master Keyword List Across Processed Files (Marketplace-specific separation)
-app.get('/api/master-keywords', (req, res) => {
-  const { marketplace = 'AMAZON' } = req.query;
-  const targetMarket = String(marketplace).toUpperCase();
+app.get('/api/master-keywords', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
+  // Marketplace is server-derived from the authenticated session — a query
+  // parameter must never be able to select a different marketplace's data
+  // (GPT PR-5 review finding P0-B1).
+  const targetMarket = req.user.marketplace;
 
-  db.all("SELECT * FROM market_trends ORDER BY discoveredAt DESC", [], (err, rows) => {
-    if (err) return res.status(500).json({ error: err.message });
+  db.all(
+    "SELECT * FROM market_trends WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ? ORDER BY discoveredAt DESC",
+    [req.user.tenantId, req.user.workspaceId, targetMarket],
+    (err, rows) => {
+    if (err) return res.status(500).json({ error: 'DATABASE_ERROR' });
     
     const masterKeywords = [];
     const seen = new Set();
 
-    // Filter rows by marketplace if available or fallback by category signature
-    const marketRows = rows.filter(r => {
-      if (r.marketplace) {
-        return String(r.marketplace).toUpperCase() === targetMarket;
-      }
-      const catLower = String(r.category || '').toLowerCase();
-      if (targetMarket === 'ETSY') {
-        return catLower.includes('etsy') || r.source === 'ETSY_MCP_LIVE' || r.source === 'ERANK';
-      }
-      return !catLower.includes('etsy');
-    });
-
-    marketRows.forEach(r => {
+    // rows is already marketplace-filtered by the SQL WHERE clause above
+    // (legacy NULL-marketplace rows are excluded by that same condition).
+    rows.forEach(r => {
       // Only surface keywords with real persisted Volume/CPR/Score data.
       // Rows uploaded before this tracking existed have no way to recover
       // that data, and showing keywords with no evidence behind them is
@@ -1767,7 +1794,7 @@ app.get('/api/master-keywords', (req, res) => {
 
 
 // API: Multi-Source Market Benchmark & Go/No-Go Decision Engine
-app.get('/api/benchmark/validate', async (req, res) => {
+app.get('/api/benchmark/validate', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
   const { seed = 'mom sweatshirt', category = 'Apparel: Sweatshirt' } = req.query;
   try {
     const data = await benchmarkService.getMarketBenchmark({ seed, category });
@@ -1787,7 +1814,9 @@ const handleReportUpload = async (req, res) => {
   const filePath = file.path;
   const fileName = file.originalname;
   const targetCategory = req.body.category || 'Apparel: Sweatshirt';
-  const targetMarketplace = req.body.marketplace === 'ETSY' ? 'ETSY' : 'AMAZON';
+  // Marketplace is server-derived from the authenticated session, never
+  // trusted from the client body (GPT PR-5 review finding P0-B1).
+  const targetMarketplace = req.user.marketplace;
 
   try {
     let rawRows = [];
@@ -1954,8 +1983,8 @@ const handleReportUpload = async (req, res) => {
     // Volume/CPR/Score per keyword so staff can see the underlying data, not
     // just an AI-picked keyword string)
     db.run(
-      "INSERT INTO market_trends (category, trending_keywords, keywords_detailed, marketplace) VALUES (?, ?, ?, ?)",
-      [targetCategory, trendingKeywordsStr, JSON.stringify(topKeywordsDetailed), targetMarketplace],
+      "INSERT INTO market_trends (category, trending_keywords, keywords_detailed, marketplace, tenant_id, workspace_id) VALUES (?, ?, ?, ?, ?, ?)",
+      [targetCategory, trendingKeywordsStr, JSON.stringify(topKeywordsDetailed), targetMarketplace, req.user.tenantId, req.user.workspaceId],
       function(dbErr) {
         if (dbErr) return res.status(500).json({ error: dbErr.message });
         
@@ -1984,8 +2013,8 @@ const handleReportUpload = async (req, res) => {
   }
 };
 
-app.post('/api/upload-h10', upload.any(), handleReportUpload);
-app.post('/api/upload-trends', upload.any(), handleReportUpload);
+app.post('/api/upload-h10', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), upload.any(), handleReportUpload);
+app.post('/api/upload-trends', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), upload.any(), handleReportUpload);
 
 // API: Batch a pasted ASIN list into Cerebro-ready groups of 10 (AsinBatcherWidget's
 // manual-paste flow — separate from /api/upload-h10's file-upload flow)
@@ -2025,7 +2054,8 @@ app.get('/api/analytics-summary', requireAuth(db), requireRole(['OWNER', 'MANAGE
       db.get(`
         SELECT COUNT(*) as totalTrends, SUM(CASE WHEN processed = 1 THEN 1 ELSE 0 END) as processedTrends
         FROM market_trends
-      `, [], (trendErr, trendStats) => {
+        WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ?
+      `, [req.user.tenantId, req.user.workspaceId, req.user.marketplace], (trendErr, trendStats) => {
         if (trendErr) return res.status(500).json({ error: trendErr.message });
 
         db.all(`
@@ -2047,9 +2077,12 @@ app.get('/api/analytics-summary', requireAuth(db), requireRole(['OWNER', 'MANAGE
   });
 });
 // API: Get all imported keyword trends
-app.get('/api/trends', (req, res) => {
-  db.all("SELECT * FROM market_trends ORDER BY discoveredAt DESC LIMIT 30", [], (err, rows) => {
-    if (err) return res.status(500).json({ error: err.message });
+app.get('/api/trends', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
+  db.all(
+    "SELECT * FROM market_trends WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ? ORDER BY discoveredAt DESC LIMIT 30",
+    [req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+    (err, rows) => {
+    if (err) return res.status(500).json({ error: 'DATABASE_ERROR' });
     res.json(rows);
   });
 });
@@ -2057,8 +2090,11 @@ app.get('/api/trends', (req, res) => {
 // API: Instantly Draft listing for a specific trend using Multi-LLM Gateway (Gemini / GPT-4o / Claude) + Few-Shot Learning
 app.post('/api/trends/:id/draft', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
   const { id } = req.params;
-  
-  db.get("SELECT * FROM market_trends WHERE id = ?", [id], (err, trend) => {
+
+  db.get(
+    "SELECT * FROM market_trends WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?",
+    [id, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+    (err, trend) => {
     if (err || !trend) return res.status(404).json({ error: 'Trend cluster not found' });
 
     // 1. Get LLM Settings
@@ -2080,8 +2116,13 @@ app.post('/api/trends/:id/draft', requireAuth(db), requireRole(['OWNER', 'MANAGE
         return res.status(400).json({ error: 'Chưa có Anthropic Claude API Key. Vui lòng cấu hình trong Settings.' });
       }
 
-      // 2. Fetch Latest Learned Template for Few-Shot Injection
-      db.get("SELECT * FROM learned_templates ORDER BY createdAt DESC LIMIT 1", [], async (tErr, learnedTpl) => {
+      // 2. Fetch Latest Learned Template for Few-Shot Injection — scoped to
+      // this workspace, otherwise another workspace's competitor research
+      // could shape this workspace's generated listing (GPT PR-5 re-review).
+      db.get(
+        "SELECT * FROM learned_templates WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ? ORDER BY createdAt DESC LIMIT 1",
+        [req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+        async (tErr, learnedTpl) => {
         let fewShotSection = '';
         if (learnedTpl) {
           fewShotSection = `
@@ -2331,13 +2372,17 @@ If the user asks a general question (not about drafting/writing), respond conver
 });
 
 // API: Analytics Dashboard Data
-app.get('/api/analytics', (req, res) => {
-  // Aggregate feedback actions
+app.get('/api/analytics', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
+  // Aggregate feedback actions, scoped to the caller's workspace via the
+  // owning listing (sales_feedback itself carries no tenant/workspace
+  // column — GPT PR-5 review finding P0-B2).
   db.all(`
-    SELECT action, COUNT(*) as count, SUM(revenue) as totalRevenue, SUM(orders) as totalOrders, SUM(views) as totalViews
-    FROM sales_feedback
-    GROUP BY action
-  `, [], (err, rows) => {
+    SELECT sf.action, COUNT(*) as count, SUM(sf.revenue) as totalRevenue, SUM(sf.orders) as totalOrders, SUM(sf.views) as totalViews
+    FROM sales_feedback sf
+    JOIN listings l ON l.id = sf.listingId
+    WHERE l.tenant_id = ? AND l.workspace_id = ? AND l.marketplace = ?
+    GROUP BY sf.action
+  `, [req.user.tenantId, req.user.workspaceId, req.user.marketplace], (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
     res.json(rows);
   });
@@ -2348,7 +2393,7 @@ app.get('/api/analytics', (req, res) => {
 // -----------------------------------------------------
 
 // API: Get Agents
-app.get('/api/agents', (req, res) => {
+app.get('/api/agents', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
   db.all("SELECT * FROM agents", [], (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
     res.json(rows);
@@ -2356,7 +2401,7 @@ app.get('/api/agents', (req, res) => {
 });
 
 // API: Get Agent Logs
-app.get('/api/agents/logs', (req, res) => {
+app.get('/api/agents/logs', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
   db.all(`
     SELECT l.*, a.name as agentName 
     FROM agent_logs l 
@@ -2368,8 +2413,8 @@ app.get('/api/agents/logs', (req, res) => {
   });
 });
 
-// API: Toggle Agent Status
-app.post('/api/agents/:id/toggle', (req, res) => {
+// API: Toggle Agent Status (controls background outbound network agents — OWNER/MANAGER only)
+app.post('/api/agents/:id/toggle', requireAuth(db), requireRole(['OWNER', 'MANAGER']), (req, res) => {
   const { id } = req.params;
   const { status } = req.body; // 'ONLINE' or 'OFFLINE'
   db.run("UPDATE agents SET status = ?, lastActive = CURRENT_TIMESTAMP WHERE id = ?", [status, id], function(err) {
@@ -2419,17 +2464,13 @@ const backgroundAgentTimer = setInterval(() => {
                                  topKw.keyword.includes('embroidery') ? 'Embroidery' :
                                  topKw.keyword.includes('blanket') ? 'Blanket' : 'Acrylic';
 
-                db.run(
-                  "INSERT INTO market_trends (category, trending_keywords, marketplace) VALUES (?, ?, ?)",
-                  [category, `${topKw.keyword}, sold24h:${topKw.sold24h || 0}, conv:${topKw.conversion || '2%'}`, 'ETSY'],
-                  function(err) {
-                    if (!err) {
-                      const msg = `[YTRENDS HTML IMPORT] Extracted keyword "${topKw.keyword}" (Sold24h: ${topKw.sold24h}, Conv: ${topKw.conversion}) from HTML file: ${fileToProcess}`;
-                      db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, msg]);
-                      db.run("UPDATE agents SET lastActive = CURRENT_TIMESTAMP WHERE id = ?", [agent.id]);
-                    }
-                  }
-                );
+                // market_trends is workspace-owned; a background agent has no
+                // request context to derive a workspace from, so it logs the
+                // discovery for staff instead of writing an orphaned,
+                // permanently-invisible row (GPT PR-5 review finding P0-B3).
+                const msg = `[YTRENDS HTML IMPORT] Discovered keyword "${topKw.keyword}" (Sold24h: ${topKw.sold24h}, Conv: ${topKw.conversion}) from HTML file: ${fileToProcess} -- not persisted, no workspace binding for background agents yet.`;
+                db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, msg]);
+                db.run("UPDATE agents SET lastActive = CURRENT_TIMESTAMP WHERE id = ?", [agent.id]);
               }
             } else {
               // Process Helium 10 / Amazon XLSX or CSV with the audited parser.
@@ -2443,17 +2484,10 @@ const backgroundAgentTimer = setInterval(() => {
                                  fileToProcess.toLowerCase().includes('embroidery') ? 'Embroidery' :
                                  fileToProcess.toLowerCase().includes('blanket') ? 'Blanket' : 'Acrylic';
 
-                db.run(
-                  "INSERT INTO market_trends (category, trending_keywords, marketplace) VALUES (?, ?, ?)",
-                  [category, `${realKw}, personalized ${category.toLowerCase()}, best gift 2026`, 'AMAZON'],
-                  function(err) {
-                    if (!err) {
-                      const msg = `[AMAZON H10 IMPORT] Extracted top keyword "${realKw}" from file: ${fileToProcess}`;
-                      db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, msg]);
-                      db.run("UPDATE agents SET lastActive = CURRENT_TIMESTAMP WHERE id = ?", [agent.id]);
-                    }
-                  }
-                );
+                // Not persisted to market_trends -- see note above (P0-B3).
+                const h10Msg = `[AMAZON H10 IMPORT] Discovered top keyword "${realKw}" from file: ${fileToProcess} -- not persisted, no workspace binding for background agents yet.`;
+                db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, h10Msg]);
+                db.run("UPDATE agents SET lastActive = CURRENT_TIMESTAMP WHERE id = ?", [agent.id]);
               }
             }
             // Archive processed file
@@ -2479,17 +2513,10 @@ const backgroundAgentTimer = setInterval(() => {
 
               const kwPayload = topTags ? `${targetSeed}, ${topTags}` : targetSeed;
 
-              db.run(
-                "INSERT INTO market_trends (category, trending_keywords, marketplace) VALUES (?, ?, ?)",
-                [category, kwPayload, 'ETSY'],
-                function(err) {
-                  if (!err) {
-                    const msg = `[YTRENDS MCP LIVE] Extracted niche data for "${targetSeed}" (Rev: $${Math.round(overview.total_revenue_usd || 0)}, OppScore: ${overview.opportunity_score || 50}). Tags: ${topTags || targetSeed}`;
-                    db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, msg]);
-                    db.run("UPDATE agents SET lastActive = CURRENT_TIMESTAMP WHERE id = ?", [agent.id]);
-                  }
-                }
-              );
+              // Not persisted to market_trends -- see note above (P0-B3).
+              const liveMsg = `[YTRENDS MCP LIVE] Discovered niche data for "${targetSeed}" (Rev: $${Math.round(overview.total_revenue_usd || 0)}, OppScore: ${overview.opportunity_score || 50}). Tags: ${topTags || targetSeed} -- not persisted, no workspace binding for background agents yet.`;
+              db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, liveMsg]);
+              db.run("UPDATE agents SET lastActive = CURRENT_TIMESTAMP WHERE id = ?", [agent.id]);
             })
             .catch(mcpErr => {
               const msg = `[REAL DATA ENGINE] Standing by... Drop .csv/.xlsx report files into data/imports/. YTrends MCP error: ${mcpErr.message}`;
@@ -2503,97 +2530,16 @@ const backgroundAgentTimer = setInterval(() => {
       // Agent 2: AI Drafter (Role: DRAFTER)
       if (agent.role === 'DRAFTER') {
         db.get("SELECT * FROM market_trends WHERE processed = 0 ORDER BY discoveredAt ASC LIMIT 1", (err, trend) => {
+          // Fail-closed unconditionally: this background loop has no
+          // authenticated workspace principal, so even a properly
+          // scoped trend must not be read, marked processed, or sent
+          // to an external LLM. Re-enable only once a real per-workspace
+          // service principal exists for background agents.
           if (!err && trend) {
-            db.run("UPDATE market_trends SET processed = 1 WHERE id = ?", [trend.id]);
-            
-            const setting = process.env.GEMINI_API_KEY ? { value: process.env.GEMINI_API_KEY } : null;
-            const settingsErr = null;
-            (async () => {
-              let payload;
-              
-              if (!settingsErr && setting && setting.value) {
-                // We have a real API key, use Gemini!
-                const msg = `Calling real Gemini AI to draft ${trend.category} listing for keywords: ${trend.trending_keywords}`;
-                db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, msg]);
-                
-                try {
-                  const client = new GoogleGenAI({ apiKey: setting.value });
-                  const prompt = `You are a world-class Amazon FBA and Etsy copywriter adhering to July 27, 2026 Amazon Policy. Write a highly converting, SEO-optimized e-commerce listing for a ${trend.category} product targeting these trending keywords: ${trend.trending_keywords}.
-                  Return ONLY valid JSON with these exact keys (do not include markdown block wrappers):
-                  - "amazonTitle": max 75 characters (strictly <= 75 chars), focusing on main product + personalization + key placement feature.
-                  - "itemHighlights": max 125 characters (strictly <= 125 chars), short feature/benefit snippets separated by bullet dot • (e.g. Custom cuff embroidery • Cozy gift for moms • Multiple colors).
-                  - "amazonBullets": array of exactly 5 strings, each 150-250 chars, focusing on benefits, quality, and gifting.
-                  - "amazonDescription": 1000-2000 chars rich Product Description covering material, care instructions, size guide, personalized details, and gift occasions. Use HTML tags (<p>, <ul>, <li>, <b>) for formatting.
-                  - "amazonSearchTerms": space separated unique backend keywords (no trademark terms, no commas).
-                  - "etsyTitle": max 140 chars, long-tail keyword stuffed for Etsy SEO.
-                  - "etsyDescription": A warm, handmade-feeling description with a hook, product details, and SEO tags at the bottom.
-                  - "etsyTags": array of exactly 13 long-tail keyword strings for Etsy SEO (each <= 20 chars).`;
-                  
-                  const interaction = await client.interactions.create({
-                    model: "gemini-3.6-flash",
-                    input: prompt,
-                    system_instruction: "You are an expert copywriter for Amazon and Etsy. Return ONLY valid JSON."
-                  });
-                  
-                  let text = interaction.output_text;
-                  if (text.includes('```json')) {
-                    text = text.split('```json')[1].split('```')[0].trim();
-                  } else if (text.includes('```')) {
-                    text = text.split('```')[1].split('```')[0].trim();
-                  }
-                  const aiData = safeJsonParse(text, {});
-
-                  
-                  // Rank & Deduplicate Keywords
-                  const rawKws = (trend.trending_keywords || '').split(/[,|]/);
-                  const title75 = aiData.amazonTitle ? aiData.amazonTitle.substring(0, 75) : keywordRanker.buildAmazonTitle75(rawKws, trend.category);
-                  const highlights125 = aiData.itemHighlights ? aiData.itemHighlights.substring(0, 125) : keywordRanker.buildAmazonItemHighlights125(rawKws, trend.category);
-                  const searchTerms = keywordRanker.buildAmazonSearchTerms(rawKws);
-                  const etsyTags = keywordRanker.buildEtsyTags(aiData.etsyTags || rawKws, trend.category);
-
-                  payload = {
-                    amazonTitle: title75,
-                    itemHighlights: highlights125,
-                    amazonBullets: aiData.amazonBullets || [],
-                    amazonDescription: aiData.amazonDescription || `<p><b>High Quality ${trend.category}</b></p><p>Crafted with premium materials and attention to detail. Perfect gift for family and loved ones on birthdays, anniversaries, and holidays.</p><p><b>Features:</b></p><ul><li>Durable & Long-lasting</li><li>Personalized Customization</li><li>Easy Care & Maintenance</li></ul>`,
-                    amazonSearchTerms: searchTerms || aiData.amazonSearchTerms || '',
-                    etsyTitle: aiData.etsyTitle || `New Trend ${trend.category}`,
-                    etsyDescription: aiData.etsyDescription || 'Description coming soon.',
-                    etsyTags: etsyTags,
-                    categoryName: trend.category,
-                    systemNote: `Generated via LIVE Gemini AI Agent using real market data (Aug 15 2026 policy compliant): ${trend.trending_keywords}`
-                  };
-
-
-                } catch (apiError) {
-                  db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, `Gemini API Error: ${apiError.message}. Real listing generation failed.`]);
-                }
-
-                if (payload) {
-                  const ipRes = ipGuard.screenListing(payload);
-                  const oppRes = opportunityScorer.calculateOpportunityScore(payload);
-
-                  payload.ipVerdict = ipRes.verdict;
-                  payload.ipHits = ipRes.hits;
-                  payload.opportunityScore = oppRes.overallScore;
-                  payload.verdict = oppRes.verdict;
-                  payload.metrics = oppRes.metrics;
-
-                  const listingStatus = (ipRes.verdict === 'BLOCK') ? 'IP_RISK_BLOCKED' : 'NEEDS_QA';
-
-                  // Fail closed: a background agent has no authenticated
-                  // workspace principal. Persisting this draft under a guessed
-                  // workspace would violate tenant isolation.
-                  db.run(
-                    "INSERT INTO agent_logs (agentId, message) VALUES (?, ?)",
-                    [agent.id, `[SCOPE_REQUIRED] Draft not persisted (${listingStatus}). Assign an explicit tenant/workspace service principal before enabling autonomous saves.`]
-                  );
-                }
-
-              } else {
-                db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, `[AI Drafter Standby] Gemini API key is missing in .env or Settings. Waiting for key configuration.`]);
-              }
-            })();
+            db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [
+              agent.id,
+              `[SCOPE_REQUIRED] Trend ${trend.id} not processed -- background AI Drafter has no workspace principal.`
+            ]);
           }
         });
       }

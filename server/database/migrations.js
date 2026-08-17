@@ -2,6 +2,7 @@ const LISTING_SCOPE_MIGRATION = '002_listing_workspace_scope';
 const SECURITY_CONTROLS_MIGRATION = '003_security_controls';
 const KEYWORD_DETAIL_MIGRATION = '004_keyword_detail_and_authorship';
 const MARKET_TRENDS_MARKETPLACE_MIGRATION = '005_market_trends_marketplace';
+const WORKSPACE_OWNERSHIP_MIGRATION = '006_market_trends_and_templates_ownership';
 
 function run(db, sql, params = []) {
   return new Promise((resolve, reject) => {
@@ -100,6 +101,24 @@ async function migrateMarketTrendsMarketplace(db) {
   await addColumnIfMissing(db, trendColumns, 'marketplace', "TEXT NULL CHECK(marketplace IN ('AMAZON', 'ETSY'))", 'market_trends');
 }
 
+async function migrateWorkspaceOwnership(db) {
+  const tableExists = async (name) => (await all(db, "SELECT name FROM sqlite_master WHERE type='table' AND name=?", [name])).length > 0;
+
+  if (await tableExists('market_trends')) {
+    const trendColumns = new Set((await all(db, 'PRAGMA table_info(market_trends)')).map(c => c.name));
+    await addColumnIfMissing(db, trendColumns, 'tenant_id', 'TEXT NULL', 'market_trends');
+    await addColumnIfMissing(db, trendColumns, 'workspace_id', 'INTEGER NULL REFERENCES workspaces(id)', 'market_trends');
+    // Legacy unscoped rows stay invisible to workspace-scoped reads/drafts —
+    // same IDOR-avoidance rationale as migrateListingWorkspaceScope.
+  }
+
+  if (await tableExists('learned_templates')) {
+    const templateColumns = new Set((await all(db, 'PRAGMA table_info(learned_templates)')).map(c => c.name));
+    await addColumnIfMissing(db, templateColumns, 'tenant_id', 'TEXT NULL', 'learned_templates');
+    await addColumnIfMissing(db, templateColumns, 'workspace_id', 'INTEGER NULL REFERENCES workspaces(id)', 'learned_templates');
+  }
+}
+
 async function runMigrations(db) {
   await run(db, `
     CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -160,6 +179,19 @@ async function runMigrations(db) {
       throw error;
     }
   }
+
+  const workspaceOwnershipApplied = await all(db, 'SELECT id FROM schema_migrations WHERE id = ?', [WORKSPACE_OWNERSHIP_MIGRATION]);
+  if (workspaceOwnershipApplied.length === 0) {
+    await run(db, 'BEGIN IMMEDIATE');
+    try {
+      await migrateWorkspaceOwnership(db);
+      await run(db, 'INSERT INTO schema_migrations (id) VALUES (?)', [WORKSPACE_OWNERSHIP_MIGRATION]);
+      await run(db, 'COMMIT');
+    } catch (error) {
+      try { await run(db, 'ROLLBACK'); } catch (_) {}
+      throw error;
+    }
+  }
 }
 
 module.exports = {
@@ -167,5 +199,6 @@ module.exports = {
   SECURITY_CONTROLS_MIGRATION,
   KEYWORD_DETAIL_MIGRATION,
   MARKET_TRENDS_MARKETPLACE_MIGRATION,
+  WORKSPACE_OWNERSHIP_MIGRATION,
   runMigrations
 };

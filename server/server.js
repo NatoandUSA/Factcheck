@@ -874,8 +874,14 @@ app.get('/api/mcp/niche', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SEL
 
 // API: One-Click Auto-Pull Live Etsy Trends from MCP into Database
 app.post('/api/mcp/pull-etsy', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  // Etsy-only endpoint — reject a session authenticated into an Amazon
+  // workspace rather than silently writing an ETSY-tagged row under it
+  // (GPT PR-5 review finding P0-B1).
+  if (req.user.marketplace !== 'ETSY') {
+    return res.status(403).json({ success: false, error: 'MARKETPLACE_MISMATCH', message: 'This endpoint requires an Etsy workspace session.' });
+  }
   const { seed = 'custom gift', category = 'Custom Gift' } = req.body;
-  
+
   let mcpData = null;
   try {
     mcpData = await ytrendsMcp.exploreNiche(seed);
@@ -1088,7 +1094,7 @@ app.post('/api/mcp/pull-etsy', requireAuth(db), requireRole(['OWNER', 'MANAGER',
 
   db.run(
     "INSERT INTO market_trends (category, trending_keywords, keywords_detailed, marketplace, tenant_id, workspace_id) VALUES (?, ?, ?, ?, ?, ?)",
-    [category, topKeywordsStr, keywordsDetailed ? JSON.stringify(keywordsDetailed) : null, 'ETSY', req.user.tenantId, req.user.workspaceId],
+    [category, topKeywordsStr, keywordsDetailed ? JSON.stringify(keywordsDetailed) : null, req.user.marketplace, req.user.tenantId, req.user.workspaceId],
     function(dbErr) {
       if (dbErr) return res.status(500).json({ error: dbErr.message });
       
@@ -1236,7 +1242,10 @@ app.post('/api/settings/llm', requireAuth(db), requireRole(['OWNER']), (req, res
 
 // API: Learning Box — Analyze Amazon/Etsy URL or Competitor text & Extract Structural DNA
 app.post('/api/learning/analyze', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
-  const { url = '', rawText = '', category = 'Custom Gift', marketplace = 'AMAZON' } = req.body;
+  const { url = '', rawText = '', category = 'Custom Gift' } = req.body;
+  // Marketplace is server-derived from the authenticated session, never
+  // trusted from the client body (GPT PR-5 review finding P0-B1).
+  const marketplace = req.user.marketplace;
 
   try {
     const analysis = await learnFromListing({ url, rawText, category, marketplace });
@@ -1282,8 +1291,8 @@ function safeJsonParse(str, fallback = {}) {
 // API: Get all learned templates
 app.get('/api/learning/templates', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
   db.all(
-    "SELECT * FROM learned_templates WHERE tenant_id = ? AND workspace_id = ? ORDER BY createdAt DESC LIMIT 20",
-    [req.user.tenantId, req.user.workspaceId],
+    "SELECT * FROM learned_templates WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ? ORDER BY createdAt DESC LIMIT 20",
+    [req.user.tenantId, req.user.workspaceId, req.user.marketplace],
     (err, rows) => {
     if (err) return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
     const parsed = rows.map(r => ({
@@ -1301,8 +1310,8 @@ app.get('/api/learning/templates', requireAuth(db), requireRole(['OWNER', 'MANAG
 app.delete('/api/learning/templates/:id', requireAuth(db), requireRole(['OWNER', 'MANAGER']), (req, res) => {
   const { id } = req.params;
   db.run(
-    "DELETE FROM learned_templates WHERE id = ? AND tenant_id = ? AND workspace_id = ?",
-    [id, req.user.tenantId, req.user.workspaceId],
+    "DELETE FROM learned_templates WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?",
+    [id, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
     function(err) {
     if (err) return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
     if (this.changes === 0) return res.status(404).json({ success: false, error: 'TEMPLATE_NOT_FOUND' });
@@ -1711,31 +1720,23 @@ Return ONLY raw JSON without markdown code fences:
 
 // API: Get Master Keyword List Across Processed Files (Marketplace-specific separation)
 app.get('/api/master-keywords', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
-  const { marketplace = 'AMAZON' } = req.query;
-  const targetMarket = String(marketplace).toUpperCase();
+  // Marketplace is server-derived from the authenticated session — a query
+  // parameter must never be able to select a different marketplace's data
+  // (GPT PR-5 review finding P0-B1).
+  const targetMarket = req.user.marketplace;
 
   db.all(
-    "SELECT * FROM market_trends WHERE tenant_id = ? AND workspace_id = ? ORDER BY discoveredAt DESC",
-    [req.user.tenantId, req.user.workspaceId],
+    "SELECT * FROM market_trends WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ? ORDER BY discoveredAt DESC",
+    [req.user.tenantId, req.user.workspaceId, targetMarket],
     (err, rows) => {
     if (err) return res.status(500).json({ error: 'DATABASE_ERROR' });
     
     const masterKeywords = [];
     const seen = new Set();
 
-    // Filter rows by marketplace if available or fallback by category signature
-    const marketRows = rows.filter(r => {
-      if (r.marketplace) {
-        return String(r.marketplace).toUpperCase() === targetMarket;
-      }
-      const catLower = String(r.category || '').toLowerCase();
-      if (targetMarket === 'ETSY') {
-        return catLower.includes('etsy') || r.source === 'ETSY_MCP_LIVE' || r.source === 'ERANK';
-      }
-      return !catLower.includes('etsy');
-    });
-
-    marketRows.forEach(r => {
+    // rows is already marketplace-filtered by the SQL WHERE clause above
+    // (legacy NULL-marketplace rows are excluded by that same condition).
+    rows.forEach(r => {
       // Only surface keywords with real persisted Volume/CPR/Score data.
       // Rows uploaded before this tracking existed have no way to recover
       // that data, and showing keywords with no evidence behind them is
@@ -1805,7 +1806,9 @@ const handleReportUpload = async (req, res) => {
   const filePath = file.path;
   const fileName = file.originalname;
   const targetCategory = req.body.category || 'Apparel: Sweatshirt';
-  const targetMarketplace = req.body.marketplace === 'ETSY' ? 'ETSY' : 'AMAZON';
+  // Marketplace is server-derived from the authenticated session, never
+  // trusted from the client body (GPT PR-5 review finding P0-B1).
+  const targetMarketplace = req.user.marketplace;
 
   try {
     let rawRows = [];
@@ -2043,7 +2046,8 @@ app.get('/api/analytics-summary', requireAuth(db), requireRole(['OWNER', 'MANAGE
       db.get(`
         SELECT COUNT(*) as totalTrends, SUM(CASE WHEN processed = 1 THEN 1 ELSE 0 END) as processedTrends
         FROM market_trends
-      `, [], (trendErr, trendStats) => {
+        WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ?
+      `, [req.user.tenantId, req.user.workspaceId, req.user.marketplace], (trendErr, trendStats) => {
         if (trendErr) return res.status(500).json({ error: trendErr.message });
 
         db.all(`
@@ -2067,8 +2071,8 @@ app.get('/api/analytics-summary', requireAuth(db), requireRole(['OWNER', 'MANAGE
 // API: Get all imported keyword trends
 app.get('/api/trends', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
   db.all(
-    "SELECT * FROM market_trends WHERE tenant_id = ? AND workspace_id = ? ORDER BY discoveredAt DESC LIMIT 30",
-    [req.user.tenantId, req.user.workspaceId],
+    "SELECT * FROM market_trends WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ? ORDER BY discoveredAt DESC LIMIT 30",
+    [req.user.tenantId, req.user.workspaceId, req.user.marketplace],
     (err, rows) => {
     if (err) return res.status(500).json({ error: 'DATABASE_ERROR' });
     res.json(rows);
@@ -2080,8 +2084,8 @@ app.post('/api/trends/:id/draft', requireAuth(db), requireRole(['OWNER', 'MANAGE
   const { id } = req.params;
 
   db.get(
-    "SELECT * FROM market_trends WHERE id = ? AND tenant_id = ? AND workspace_id = ?",
-    [id, req.user.tenantId, req.user.workspaceId],
+    "SELECT * FROM market_trends WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?",
+    [id, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
     (err, trend) => {
     if (err || !trend) return res.status(404).json({ error: 'Trend cluster not found' });
 
@@ -2356,12 +2360,16 @@ If the user asks a general question (not about drafting/writing), respond conver
 
 // API: Analytics Dashboard Data
 app.get('/api/analytics', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
-  // Aggregate feedback actions
+  // Aggregate feedback actions, scoped to the caller's workspace via the
+  // owning listing (sales_feedback itself carries no tenant/workspace
+  // column — GPT PR-5 review finding P0-B2).
   db.all(`
-    SELECT action, COUNT(*) as count, SUM(revenue) as totalRevenue, SUM(orders) as totalOrders, SUM(views) as totalViews
-    FROM sales_feedback
-    GROUP BY action
-  `, [], (err, rows) => {
+    SELECT sf.action, COUNT(*) as count, SUM(sf.revenue) as totalRevenue, SUM(sf.orders) as totalOrders, SUM(sf.views) as totalViews
+    FROM sales_feedback sf
+    JOIN listings l ON l.id = sf.listingId
+    WHERE l.tenant_id = ? AND l.workspace_id = ? AND l.marketplace = ?
+    GROUP BY sf.action
+  `, [req.user.tenantId, req.user.workspaceId, req.user.marketplace], (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
     res.json(rows);
   });
@@ -2443,17 +2451,13 @@ const backgroundAgentTimer = setInterval(() => {
                                  topKw.keyword.includes('embroidery') ? 'Embroidery' :
                                  topKw.keyword.includes('blanket') ? 'Blanket' : 'Acrylic';
 
-                db.run(
-                  "INSERT INTO market_trends (category, trending_keywords, marketplace) VALUES (?, ?, ?)",
-                  [category, `${topKw.keyword}, sold24h:${topKw.sold24h || 0}, conv:${topKw.conversion || '2%'}`, 'ETSY'],
-                  function(err) {
-                    if (!err) {
-                      const msg = `[YTRENDS HTML IMPORT] Extracted keyword "${topKw.keyword}" (Sold24h: ${topKw.sold24h}, Conv: ${topKw.conversion}) from HTML file: ${fileToProcess}`;
-                      db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, msg]);
-                      db.run("UPDATE agents SET lastActive = CURRENT_TIMESTAMP WHERE id = ?", [agent.id]);
-                    }
-                  }
-                );
+                // market_trends is workspace-owned; a background agent has no
+                // request context to derive a workspace from, so it logs the
+                // discovery for staff instead of writing an orphaned,
+                // permanently-invisible row (GPT PR-5 review finding P0-B3).
+                const msg = `[YTRENDS HTML IMPORT] Discovered keyword "${topKw.keyword}" (Sold24h: ${topKw.sold24h}, Conv: ${topKw.conversion}) from HTML file: ${fileToProcess} -- not persisted, no workspace binding for background agents yet.`;
+                db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, msg]);
+                db.run("UPDATE agents SET lastActive = CURRENT_TIMESTAMP WHERE id = ?", [agent.id]);
               }
             } else {
               // Process Helium 10 / Amazon XLSX or CSV with the audited parser.
@@ -2467,17 +2471,10 @@ const backgroundAgentTimer = setInterval(() => {
                                  fileToProcess.toLowerCase().includes('embroidery') ? 'Embroidery' :
                                  fileToProcess.toLowerCase().includes('blanket') ? 'Blanket' : 'Acrylic';
 
-                db.run(
-                  "INSERT INTO market_trends (category, trending_keywords, marketplace) VALUES (?, ?, ?)",
-                  [category, `${realKw}, personalized ${category.toLowerCase()}, best gift 2026`, 'AMAZON'],
-                  function(err) {
-                    if (!err) {
-                      const msg = `[AMAZON H10 IMPORT] Extracted top keyword "${realKw}" from file: ${fileToProcess}`;
-                      db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, msg]);
-                      db.run("UPDATE agents SET lastActive = CURRENT_TIMESTAMP WHERE id = ?", [agent.id]);
-                    }
-                  }
-                );
+                // Not persisted to market_trends -- see note above (P0-B3).
+                const h10Msg = `[AMAZON H10 IMPORT] Discovered top keyword "${realKw}" from file: ${fileToProcess} -- not persisted, no workspace binding for background agents yet.`;
+                db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, h10Msg]);
+                db.run("UPDATE agents SET lastActive = CURRENT_TIMESTAMP WHERE id = ?", [agent.id]);
               }
             }
             // Archive processed file
@@ -2503,17 +2500,10 @@ const backgroundAgentTimer = setInterval(() => {
 
               const kwPayload = topTags ? `${targetSeed}, ${topTags}` : targetSeed;
 
-              db.run(
-                "INSERT INTO market_trends (category, trending_keywords, marketplace) VALUES (?, ?, ?)",
-                [category, kwPayload, 'ETSY'],
-                function(err) {
-                  if (!err) {
-                    const msg = `[YTRENDS MCP LIVE] Extracted niche data for "${targetSeed}" (Rev: $${Math.round(overview.total_revenue_usd || 0)}, OppScore: ${overview.opportunity_score || 50}). Tags: ${topTags || targetSeed}`;
-                    db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, msg]);
-                    db.run("UPDATE agents SET lastActive = CURRENT_TIMESTAMP WHERE id = ?", [agent.id]);
-                  }
-                }
-              );
+              // Not persisted to market_trends -- see note above (P0-B3).
+              const liveMsg = `[YTRENDS MCP LIVE] Discovered niche data for "${targetSeed}" (Rev: $${Math.round(overview.total_revenue_usd || 0)}, OppScore: ${overview.opportunity_score || 50}). Tags: ${topTags || targetSeed} -- not persisted, no workspace binding for background agents yet.`;
+              db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, liveMsg]);
+              db.run("UPDATE agents SET lastActive = CURRENT_TIMESTAMP WHERE id = ?", [agent.id]);
             })
             .catch(mcpErr => {
               const msg = `[REAL DATA ENGINE] Standing by... Drop .csv/.xlsx report files into data/imports/. YTrends MCP error: ${mcpErr.message}`;
@@ -2527,6 +2517,13 @@ const backgroundAgentTimer = setInterval(() => {
       // Agent 2: AI Drafter (Role: DRAFTER)
       if (agent.role === 'DRAFTER') {
         db.get("SELECT * FROM market_trends WHERE processed = 0 ORDER BY discoveredAt ASC LIMIT 1", (err, trend) => {
+          if (!err && trend && !trend.tenant_id && !trend.workspace_id) {
+            // Same fail-closed reasoning as the draft-save below: a
+            // background agent has no workspace principal, so it must not
+            // read/mutate another workspace's data or spend a real Gemini
+            // call it can never attribute or save (GPT PR-5 review P0-B3).
+            return;
+          }
           if (!err && trend) {
             db.run("UPDATE market_trends SET processed = 1 WHERE id = ?", [trend.id]);
             

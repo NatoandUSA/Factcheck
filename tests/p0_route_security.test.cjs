@@ -146,6 +146,51 @@ async function main() {
     assert(!mklData.keywords.some(k => k.keyword === 'legacy unscoped keyword'), 'Legacy unscoped keyword must not appear in master-keywords');
     console.log('🟢 Item 9: legacy unscoped market_trends row is invisible to both /api/trends and /api/master-keywords.');
 
+    // --- GPT PR-5 review T1: marketplace is server-derived, not client-controlled ---
+    const pullEtsyFromAmazonRes = await fetch(`http://127.0.0.1:${port}/api/mcp/pull-etsy`, {
+      method: 'POST',
+      headers: { ...origin, 'Content-Type': 'application/json', Cookie: ownerAmzCookie },
+      body: JSON.stringify({ seed: 'test seed', category: 'Test' })
+    });
+    assert.strictEqual(pullEtsyFromAmazonRes.status, 403, `Amazon session calling Etsy-only pull-etsy must return 403, got ${pullEtsyFromAmazonRes.status}`);
+    const pullEtsyBody = await pullEtsyFromAmazonRes.json();
+    assert.strictEqual(pullEtsyBody.error, 'MARKETPLACE_MISMATCH');
+
+    const mklQueryOverrideRes = await fetch(`http://127.0.0.1:${port}/api/master-keywords?marketplace=ETSY`, {
+      headers: { ...origin, Cookie: ownerAmzCookie }
+    });
+    const mklQueryOverrideData = await mklQueryOverrideRes.json();
+    assert.strictEqual(mklQueryOverrideData.marketplace, 'AMAZON', 'master-keywords must ignore a ?marketplace= query override and use the session marketplace');
+    console.log('🟢 T1: marketplace is server-derived — Etsy-only route rejects Amazon session (403), query-param override ignored.');
+
+    // --- GPT PR-5 review T4: legacy unscoped + cross-workspace learned_templates are invisible ---
+    const legacyTemplateInsert = await dbRun(
+      "INSERT INTO learned_templates (url, marketplace, category, title, bullets, tags, description, styleDna) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      ['https://www.amazon.com/dp/LEGACY', 'AMAZON', 'Jewelry', 'Legacy Unscoped Template', '[]', '[]', '', '{}']
+    );
+    const foreignTemplateInsert = await dbRun(
+      "INSERT INTO learned_templates (url, marketplace, category, title, bullets, tags, description, styleDna, tenant_id, workspace_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      ['https://www.etsy.com/listing/FOREIGN', 'ETSY', 'Jewelry', 'Foreign Workspace Template', '[]', '[]', '', '{}', etsyWs.tenant_id, etsyWs.workspace_id]
+    );
+
+    const templatesListRes = await fetch(`http://127.0.0.1:${port}/api/learning/templates`, { headers: { ...origin, Cookie: ownerAmzCookie } });
+    const templatesListData = await templatesListRes.json();
+    assert(!templatesListData.templates.some(t => t.id === legacyTemplateInsert.lastID), 'Legacy unscoped template must not appear in the list');
+    assert(!templatesListData.templates.some(t => t.id === foreignTemplateInsert.lastID), 'Foreign-workspace (Etsy) template must not appear in an Amazon-session list');
+
+    const deleteLegacyRes = await fetch(`http://127.0.0.1:${port}/api/learning/templates/${legacyTemplateInsert.lastID}`, {
+      method: 'DELETE', headers: { ...origin, Cookie: ownerAmzCookie }
+    });
+    assert.strictEqual(deleteLegacyRes.status, 404, 'Deleting a legacy unscoped template must return IDOR-safe 404');
+    const deleteForeignRes = await fetch(`http://127.0.0.1:${port}/api/learning/templates/${foreignTemplateInsert.lastID}`, {
+      method: 'DELETE', headers: { ...origin, Cookie: ownerAmzCookie }
+    });
+    assert.strictEqual(deleteForeignRes.status, 404, 'Deleting a foreign-workspace template must return IDOR-safe 404');
+
+    const stillThereRows = await dbAll('SELECT id FROM learned_templates WHERE id IN (?, ?)', [legacyTemplateInsert.lastID, foreignTemplateInsert.lastID]);
+    assert.strictEqual(stillThereRows.length, 2, 'Neither legacy nor foreign-workspace template row was actually deleted by the rejected requests');
+    console.log('🟢 T4: legacy unscoped and cross-workspace learned_templates are invisible to list, and delete on either is an IDOR-safe 404 with zero mutation.');
+
     console.log('\n================================================================');
     console.log('  🟢 100% P0 ROUTE SECURITY REGRESSION SUITE PASSED!');
     console.log('================================================================\n');

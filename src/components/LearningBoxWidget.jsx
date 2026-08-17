@@ -20,7 +20,7 @@ export default function LearningBoxWidget({ platform = 'AMAZON', onShowToast }) 
 
   const fetchTemplates = async () => {
     try {
-      const res = await fetch(`http://localhost:3001/api/learning/templates?marketplace=${platform}`);
+      const res = await fetch(`/api/learning/templates?marketplace=${platform}`, { credentials: 'include' });
       if (res.ok) {
         const data = await res.json();
         const filtered = (data.templates || []).filter(t => (t.marketplace || 'AMAZON').toUpperCase() === platform.toUpperCase());
@@ -44,8 +44,9 @@ export default function LearningBoxWidget({ platform = 'AMAZON', onShowToast }) 
 
     setLearning(true);
     try {
-      const res = await fetch('http://localhost:3001/api/learning/analyze', {
+      const res = await fetch('/api/learning/analyze', {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           url: inputMode === 'url' ? url.trim() : '',
@@ -71,7 +72,7 @@ export default function LearningBoxWidget({ platform = 'AMAZON', onShowToast }) 
 
   const handleDeleteTemplate = async (id) => {
     try {
-      await fetch(`http://localhost:3001/api/learning/templates/${id}`, { method: 'DELETE' });
+      await fetch(`/api/learning/templates/${id}`, { method: 'DELETE', credentials: 'include' });
       if (onShowToast) onShowToast('Đã xóa listing mẫu.');
       fetchTemplates();
       if (activeTemplate?.id === id) setActiveTemplate(null);

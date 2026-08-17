@@ -18,8 +18,9 @@ export default function EtsyMultiSellerScanner({ seedPhrase, category, onShowToa
     setLoading(true);
     setSynthesizedResult(null);
     try {
-      const res = await fetch('http://localhost:3001/api/etsy/scan-search', {
+      const res = await fetch('/api/etsy/scan-search', {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           seedPhrase: seedPhrase || 'nurse sweatshirt'
@@ -52,14 +53,15 @@ export default function EtsyMultiSellerScanner({ seedPhrase, category, onShowToa
   const handleBatchLearn = async () => {
     const selected = sellers.filter(s => s.selected);
     if (selected.length === 0) {
-      if (onShowToast) onShowToast('Vui lòng chọn ít nhất 3-10 seller để học.');
+      if (onShowToast) onShowToast('Vui lòng chọn ít nhất 3 seller để học (tối đa 30).');
       return;
     }
 
     setLearning(true);
     try {
-      const res = await fetch('http://localhost:3001/api/etsy/batch-learn', {
+      const res = await fetch('/api/etsy/batch-learn', {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           seedPhrase,
@@ -145,6 +147,12 @@ export default function EtsyMultiSellerScanner({ seedPhrase, category, onShowToa
               style={{ padding: '6px 12px', borderRadius: '8px', fontSize: '0.75rem', fontWeight: 700, border: '1px solid', borderColor: activeBatchTab === 3 ? '#ea580c' : '#fdba74', background: activeBatchTab === 3 ? '#ea580c' : '#ffedd5', color: activeBatchTab === 3 ? '#fff' : '#9a3412', cursor: 'pointer' }}
             >
               ✨ Batch 3: Emerging Trends (Top 10 Thêu & Spanish Niche)
+            </button>
+            <button
+              onClick={() => setSellers(prev => prev.map(s => ({ ...s, selected: true })))}
+              style={{ padding: '6px 12px', borderRadius: '8px', fontSize: '0.75rem', fontWeight: 700, border: '1px solid #16a34a', background: '#dcfce7', color: '#166534', cursor: 'pointer' }}
+            >
+              🧠 Chọn Cả 30 (3 Batch)
             </button>
           </div>
         </div>

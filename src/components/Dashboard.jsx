@@ -13,6 +13,7 @@ import AsinBatcherWidget from './AsinBatcherWidget';
 import MasterKeywordTable from './MasterKeywordTable';
 import GoogleTrendsWidget from './GoogleTrendsWidget';
 import UnifiedIpGateModal from './UnifiedIpGateModal';
+import { parseJsonResponse } from '../utils/apiResponse';
 
 
 const CATEGORY_COLORS = {
@@ -59,21 +60,21 @@ export default function Dashboard({ onSelectListing, onApproveListing, onShowToa
       setLoading(true);
       
       // 1. Fetch Summary Stats
-      const summaryRes = await fetch('http://localhost:3001/api/analytics-summary');
+      const summaryRes = await fetch('/api/analytics-summary', { credentials: 'include' });
       if (summaryRes.ok) {
         const summary = await summaryRes.json();
         setData(summary);
       }
 
       // 2. Fetch Trends Queue
-      const trendsRes = await fetch('http://localhost:3001/api/trends');
+      const trendsRes = await fetch('/api/trends', { credentials: 'include' });
       if (trendsRes.ok) {
         const trendsData = await trendsRes.json();
         setTrends(trendsData);
       }
 
       // 3. Fetch Listings for QA Queue
-      const listingsRes = await fetch('http://localhost:3001/api/listings');
+      const listingsRes = await fetch('/api/listings', { credentials: 'include' });
       if (listingsRes.ok) {
         const listingsData = await listingsRes.json();
         const pending = listingsData
@@ -113,12 +114,13 @@ export default function Dashboard({ onSelectListing, onApproveListing, onShowToa
     formData.append('category', selectedCategory);
 
     try {
-      const res = await fetch('http://localhost:3001/api/upload-h10', {
+      const res = await fetch('/api/upload-h10', {
         method: 'POST',
+        credentials: 'include',
         body: formData
       });
 
-      const result = await res.json();
+      const result = await parseJsonResponse(res);
       if (!res.ok) throw new Error(result.error || 'Upload failed');
 
       setUploadStatus({
@@ -141,10 +143,11 @@ export default function Dashboard({ onSelectListing, onApproveListing, onShowToa
   const handleManualDraft = async (trendId) => {
     setDraftingTrendId(trendId);
     try {
-      const res = await fetch(`http://localhost:3001/api/trends/${trendId}/draft`, {
-        method: 'POST'
+      const res = await fetch(`/api/trends/${trendId}/draft`, {
+        method: 'POST',
+        credentials: 'include'
       });
-      const result = await res.json();
+      const result = await parseJsonResponse(res);
       if (!res.ok) throw new Error(result.error || 'Drafting failed');
 
       if (onShowToast) onShowToast('✅ Đã tạo listing thành công bằng Gemini 3.6 Flash!');
@@ -165,12 +168,13 @@ export default function Dashboard({ onSelectListing, onApproveListing, onShowToa
     setMcpPulling(true);
     setMcpResult(null);
     try {
-      const res = await fetch('http://localhost:3001/api/mcp/pull-etsy', {
+      const res = await fetch('/api/mcp/pull-etsy', {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ seed: etsySeed, category: selectedCategory })
       });
-      const data = await res.json();
+      const data = await parseJsonResponse(res);
       if (!res.ok) throw new Error(data.error || 'Failed to pull from MCP');
       
       setMcpResult(data);

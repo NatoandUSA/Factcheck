@@ -8,6 +8,7 @@ import EtsyMultiSellerScanner from './EtsyMultiSellerScanner';
 import MasterKeywordTable from './MasterKeywordTable';
 import UnifiedIpGateModal from './UnifiedIpGateModal';
 import MarketBenchmarkWidget from './MarketBenchmarkWidget';
+import { parseJsonResponse } from '../utils/apiResponse';
 
 export default function EtsyWorkspace({ onSelectListing, onApproveListing, onShowToast }) {
   const [seedPhrase, setSeedPhrase] = useState('para el amor de mi vida');
@@ -25,7 +26,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
 
   const fetchData = async () => {
     try {
-      const trendsRes = await fetch('http://localhost:3001/api/market-trends');
+      const trendsRes = await fetch('/api/market-trends', { credentials: 'include' });
       if (trendsRes.ok) {
         const trendsData = await trendsRes.json();
         const etsyTrends = (trendsData || []).filter(t => t.source === 'ETSY_MCP_LIVE' || t.category?.includes('Etsy') || t.source === 'ERANK' || t.source === 'YTRENDS');
@@ -50,8 +51,9 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
     formData.append('category', selectedCategory);
 
     try {
-      const res = await fetch('http://localhost:3001/api/upload-h10', {
+      const res = await fetch('/api/upload-h10', {
         method: 'POST',
+        credentials: 'include',
         body: formData
       });
       const result = await res.json();
@@ -76,10 +78,11 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
   const handleManualDraft = async (trendId) => {
     setDraftingTrendId(trendId);
     try {
-      const res = await fetch(`http://localhost:3001/api/trends/${trendId}/draft`, {
-        method: 'POST'
+      const res = await fetch(`/api/trends/${trendId}/draft`, {
+        method: 'POST',
+        credentials: 'include'
       });
-      const result = await res.json();
+      const result = await parseJsonResponse(res);
       if (!res.ok) throw new Error(result.error || 'Drafting failed');
 
       if (onShowToast) onShowToast('✅ Đã tạo Etsy Listing với 13 Tags thành công!');
@@ -105,8 +108,9 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
     setMcpResult(null);
 
     try {
-      const res = await fetch('http://localhost:3001/api/mcp/pull-etsy', {
+      const res = await fetch('/api/mcp/pull-etsy', {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           seed: seedPhrase.trim(),
@@ -114,7 +118,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
         })
       });
 
-      const data = await res.json();
+      const data = await parseJsonResponse(res);
       if (!res.ok) throw new Error(data.error || 'Failed to pull Etsy MCP');
 
       setMcpResult(data);

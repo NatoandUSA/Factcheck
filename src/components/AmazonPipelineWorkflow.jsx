@@ -4,6 +4,7 @@ import {
   Copy, UploadCloud, AlertCircle, Zap, ShieldCheck, Award, ExternalLink, RefreshCw
 } from 'lucide-react';
 import MasterKeywordTable from './MasterKeywordTable';
+import { parseJsonResponse } from '../utils/apiResponse';
 
 export default function AmazonPipelineWorkflow({ seedPhrase, selectedCategory, onShowToast, onSelectListing }) {
   // Step 1: Feed Xray State
@@ -41,8 +42,9 @@ export default function AmazonPipelineWorkflow({ seedPhrase, selectedCategory, o
     formData.append('category', selectedCategory);
 
     try {
-      const res = await fetch('http://localhost:3001/api/upload-h10', {
+      const res = await fetch('/api/upload-h10', {
         method: 'POST',
+        credentials: 'include',
         body: formData
       });
       const text = await res.text();
@@ -170,8 +172,9 @@ export default function AmazonPipelineWorkflow({ seedPhrase, selectedCategory, o
 
 
     try {
-      const res = await fetch('http://localhost:3001/api/upload-h10', {
+      const res = await fetch('/api/upload-h10', {
         method: 'POST',
+        credentials: 'include',
         body: formData
       });
       const text = await res.text();
@@ -201,12 +204,14 @@ export default function AmazonPipelineWorkflow({ seedPhrase, selectedCategory, o
     try {
       let res;
       if (cerebroSummary?.trendId) {
-        res = await fetch(`http://localhost:3001/api/trends/${cerebroSummary.trendId}/draft`, {
-          method: 'POST'
+        res = await fetch(`/api/trends/${cerebroSummary.trendId}/draft`, {
+          method: 'POST',
+          credentials: 'include'
         });
       } else {
-        res = await fetch(`http://localhost:3001/api/amazon/quick-draft`, {
+        res = await fetch(`/api/amazon/quick-draft`, {
           method: 'POST',
+          credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             seedPhrase,
@@ -216,7 +221,7 @@ export default function AmazonPipelineWorkflow({ seedPhrase, selectedCategory, o
         });
       }
 
-      const data = await res.json();
+      const data = await parseJsonResponse(res);
       if (!res.ok) throw new Error(data.error || 'Drafting failed');
 
       setDraftedListing(data.listing);

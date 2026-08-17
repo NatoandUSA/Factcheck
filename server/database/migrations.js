@@ -1,5 +1,6 @@
 const LISTING_SCOPE_MIGRATION = '002_listing_workspace_scope';
 const SECURITY_CONTROLS_MIGRATION = '003_security_controls';
+const KEYWORD_DETAIL_MIGRATION = '004_keyword_detail_and_authorship';
 
 function run(db, sql, params = []) {
   return new Promise((resolve, reject) => {
@@ -16,9 +17,9 @@ function all(db, sql, params = []) {
   });
 }
 
-async function addColumnIfMissing(db, existingColumns, name, definition) {
+async function addColumnIfMissing(db, existingColumns, name, definition, table = 'listings') {
   if (existingColumns.has(name)) return;
-  await run(db, `ALTER TABLE listings ADD COLUMN ${name} ${definition}`);
+  await run(db, `ALTER TABLE ${table} ADD COLUMN ${name} ${definition}`);
   existingColumns.add(name);
 }
 
@@ -83,6 +84,13 @@ async function migrateSecurityControls(db) {
   `);
 }
 
+async function migrateKeywordDetailAndAuthorship(db) {
+  const tableExists = await all(db, "SELECT name FROM sqlite_master WHERE type='table' AND name='market_trends'");
+  if (tableExists.length === 0) return; // table is created by server.js before migrations run in production
+  const trendColumns = new Set((await all(db, 'PRAGMA table_info(market_trends)')).map(column => column.name));
+  await addColumnIfMissing(db, trendColumns, 'keywords_detailed', 'TEXT NULL', 'market_trends');
+}
+
 async function runMigrations(db) {
   await run(db, `
     CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -117,10 +125,24 @@ async function runMigrations(db) {
       throw error;
     }
   }
+
+  const keywordDetailApplied = await all(db, 'SELECT id FROM schema_migrations WHERE id = ?', [KEYWORD_DETAIL_MIGRATION]);
+  if (keywordDetailApplied.length === 0) {
+    await run(db, 'BEGIN IMMEDIATE');
+    try {
+      await migrateKeywordDetailAndAuthorship(db);
+      await run(db, 'INSERT INTO schema_migrations (id) VALUES (?)', [KEYWORD_DETAIL_MIGRATION]);
+      await run(db, 'COMMIT');
+    } catch (error) {
+      try { await run(db, 'ROLLBACK'); } catch (_) {}
+      throw error;
+    }
+  }
 }
 
 module.exports = {
   LISTING_SCOPE_MIGRATION,
   SECURITY_CONTROLS_MIGRATION,
+  KEYWORD_DETAIL_MIGRATION,
   runMigrations
 };

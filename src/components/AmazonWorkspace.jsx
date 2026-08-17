@@ -4,6 +4,7 @@ import {
 } from 'lucide-react';
 import GoogleTrendsWidget from './GoogleTrendsWidget';
 import LearningBoxWidget from './LearningBoxWidget';
+import { parseJsonResponse } from '../utils/apiResponse';
 import AmazonPipelineWorkflow from './AmazonPipelineWorkflow';
 import MasterKeywordTable from './MasterKeywordTable';
 import UnifiedIpGateModal from './UnifiedIpGateModal';
@@ -23,15 +24,16 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
     }
     setQuickGenerating(true);
     try {
-      const res = await fetch('http://localhost:3001/api/amazon/quick-draft', {
+      const res = await fetch('/api/amazon/quick-draft', {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           seedPhrase,
           category: selectedCategory
         })
       });
-      const data = await res.json();
+      const data = await parseJsonResponse(res);
       if (!res.ok) throw new Error(data.error || 'Quick launch failed');
       
       if (onShowToast) onShowToast('🚀 Đã tạo thành công Amazon Listing A10!');

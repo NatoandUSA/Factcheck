@@ -14,7 +14,7 @@ export default function MasterKeywordTable({ marketplace = 'AMAZON', keywords: p
   const fetchMasterKeywords = async () => {
     try {
       setLoading(true);
-      const res = await fetch(`http://localhost:3001/api/master-keywords?marketplace=${marketplace}`);
+      const res = await fetch(`/api/master-keywords?marketplace=${marketplace}`, { credentials: 'include' });
       if (res.ok) {
         const data = await res.json();
         setKeywords(data.keywords || []);
@@ -102,9 +102,13 @@ export default function MasterKeywordTable({ marketplace = 'AMAZON', keywords: p
                 <th style={{ padding: '10px 14px', fontWeight: 700 }}>STT</th>
                 <th style={{ padding: '10px 14px', fontWeight: 700 }}>{isAmazon ? 'Cụm Từ Khóa (Keyword Phrase)' : 'Etsy Tag (<= 20 ký tự)'}</th>
                 <th style={{ padding: '10px 14px', fontWeight: 700 }}>Danh Mục</th>
+                <th style={{ padding: '10px 14px', fontWeight: 700 }} title="Search Volume thực tế từ báo cáo nạp vào">Volume</th>
+                <th style={{ padding: '10px 14px', fontWeight: 700 }} title="Competing Products Rank thực tế từ báo cáo nạp vào">CPR</th>
+                <th style={{ padding: '10px 14px', fontWeight: 700 }} title="Opportunity Score tính từ dữ liệu thực, không phải AI đoán">Score</th>
                 <th style={{ padding: '10px 14px', fontWeight: 700 }}>{isAmazon ? 'Phân Tầng A10 (MKL Tier)' : 'Loại Tag Etsy'}</th>
                 <th style={{ padding: '10px 14px', fontWeight: 700 }}>Kiểm Duyệt IP Gate</th>
                 <th style={{ padding: '10px 14px', fontWeight: 700 }}>Độ Dài</th>
+                <th style={{ padding: '10px 14px', fontWeight: 700 }}>Ngày Cập Nhật</th>
               </tr>
             </thead>
             <tbody>
@@ -150,6 +154,15 @@ export default function MasterKeywordTable({ marketplace = 'AMAZON', keywords: p
                     <td style={{ padding: '10px 14px', color: 'var(--text-secondary)' }}>
                       {item.category || 'Apparel: Sweatshirt'}
                     </td>
+                    <td style={{ padding: '10px 14px', color: 'var(--text-secondary)', fontWeight: 600 }}>
+                      {item.volume != null ? item.volume.toLocaleString() : '—'}
+                    </td>
+                    <td style={{ padding: '10px 14px', color: 'var(--text-secondary)', fontWeight: 600 }}>
+                      {item.cpr != null ? item.cpr : '—'}
+                    </td>
+                    <td style={{ padding: '10px 14px', color: 'var(--text-secondary)', fontWeight: 600 }}>
+                      {item.opportunityScore != null ? Math.round(item.opportunityScore).toLocaleString() : '—'}
+                    </td>
                     <td style={{ padding: '10px 14px' }}>
                       <span style={{ fontSize: '0.75rem', fontWeight: 700, padding: '4px 10px', borderRadius: '20px', background: tierBg, color: tierColor, display: 'inline-block' }}>
                         {tierBadge}
@@ -174,6 +187,9 @@ export default function MasterKeywordTable({ marketplace = 'AMAZON', keywords: p
                     </td>
                     <td style={{ padding: '10px 14px', color: len > 20 && !isAmazon ? '#dc2626' : 'var(--text-secondary)', fontWeight: 600, fontSize: '0.8rem' }}>
                       {len} chars
+                    </td>
+                    <td style={{ padding: '10px 14px', color: 'var(--text-muted)', fontSize: '0.78rem' }}>
+                      {item.discoveredAt ? new Date(item.discoveredAt).toLocaleString() : '—'}
                     </td>
                   </tr>
                 );

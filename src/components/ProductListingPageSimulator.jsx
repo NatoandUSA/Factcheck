@@ -89,6 +89,43 @@ export default function ProductListingPageSimulator({ currentListing, history = 
         )}
       </div>
 
+      {/* Staff-facing Multi-ASIN Variations (1 Parent + 4 Child ASINs) */}
+      {platformView === 'AMAZON' && activeListing?.parentSku && (
+        <div style={{ background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: '10px', padding: '14px 18px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px', fontWeight: 800, color: '#0369a1', fontSize: '0.9rem' }}>
+            <Layers size={18} />
+            <span>Bộ Biến Thể Amazon Multi-ASIN (1 Parent + 4 Child ASINs)</span>
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem', background: '#ffffff', borderRadius: '8px', overflow: 'hidden' }}>
+              <thead>
+                <tr style={{ background: '#0284c7', color: '#ffffff', textAlign: 'left' }}>
+                  <th style={{ padding: '8px 12px' }}>Loại ASIN</th>
+                  <th style={{ padding: '8px 12px' }}>SKU</th>
+                  <th style={{ padding: '8px 12px' }}>Thuộc Tính Biến Thể</th>
+                  <th style={{ padding: '8px 12px' }}>Tiêu Đề</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr style={{ borderBottom: '1px solid #e2e8f0' }}>
+                  <td style={{ padding: '8px 12px', fontWeight: 800, color: '#0f766e' }}>👑 PARENT</td>
+                  <td style={{ padding: '8px 12px', fontWeight: 700, fontFamily: 'monospace' }}>{activeListing.parentSku}</td>
+                  <td style={{ padding: '8px 12px', color: '#64748b' }} colSpan={2}>Parent Catalog Anchor (Non-sellable Container)</td>
+                </tr>
+                {(activeListing.variations || []).map((v) => (
+                  <tr key={v.childIndex} style={{ borderBottom: '1px solid #e2e8f0' }}>
+                    <td style={{ padding: '8px 12px', fontWeight: 700, color: '#0284c7' }}>💎 CHILD #{v.childIndex}</td>
+                    <td style={{ padding: '8px 12px', fontWeight: 700, fontFamily: 'monospace' }}>{v.sku}</td>
+                    <td style={{ padding: '8px 12px', fontWeight: 600, color: '#1e293b' }}>{v.variationAttribute}</td>
+                    <td style={{ padding: '8px 12px', color: '#334155' }}>{v.childTitle}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       {/* Render Selected Platform View */}
       {platformView === 'AMAZON' ? (
         <AmazonRealProductPage listing={activeListing} onShowToast={onShowToast} />

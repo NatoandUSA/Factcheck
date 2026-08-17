@@ -29,6 +29,18 @@ const { encryptSecret, decryptSecret, maskSecret } = require('./security/secretB
 const { approvalHash } = require('./security/approval');
 const { readFirstWorksheet } = require('./services/spreadsheetReader');
 
+// Make crashes visible instead of dying silently with no trace (systemd will
+// still restart the process via Restart=always; this just ensures the cause
+// is logged before that happens).
+process.on('uncaughtException', (err) => {
+  console.error('FATAL uncaughtException:', err);
+  process.exit(1);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('FATAL unhandledRejection:', reason);
+  process.exit(1);
+});
+
 const app = express();
 app.use(cors(corsOptionsDelegate));
 app.use(express.json({ limit: '100kb' }));
@@ -632,9 +644,11 @@ app.post('/api/listings', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SEL
 // Get all listings
 app.get('/api/listings', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
   db.all(
-    `SELECT * FROM listings
-     WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ?
-     ORDER BY generatedAt DESC`,
+    `SELECT listings.*, users.name AS authorName, users.email AS authorEmail
+     FROM listings
+     LEFT JOIN users ON users.id = listings.authorId
+     WHERE listings.tenant_id = ? AND listings.workspace_id = ? AND listings.marketplace = ?
+     ORDER BY listings.generatedAt DESC`,
     [req.user.tenantId, req.user.workspaceId, req.user.marketplace],
     (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
@@ -1691,18 +1705,29 @@ app.get('/api/master-keywords', (req, res) => {
     });
 
     marketRows.forEach(r => {
-      const kws = (r.trending_keywords || '').split(/[,|]/);
-      kws.forEach((kw, idx) => {
-        const cleanKw = kw.trim();
+      // Prefer real per-keyword data (Volume/CPR/Score) persisted at upload
+      // time. Falls back to re-deriving placeholder tiers from the flat
+      // keyword string for older rows uploaded before this was tracked.
+      let detailed = null;
+      if (r.keywords_detailed) {
+        try { detailed = JSON.parse(r.keywords_detailed); } catch (e) { detailed = null; }
+      }
+
+      const kws = detailed || (r.trending_keywords || '').split(/[,|]/).map(kw => ({ keyword: kw.trim() }));
+      kws.forEach((kwItem, idx) => {
+        const cleanKw = (kwItem.keyword || '').trim();
         if (cleanKw && cleanKw.length > 2 && !seen.has(cleanKw.toLowerCase())) {
           seen.add(cleanKw.toLowerCase());
           const ipRes = ipGuard.screenText(cleanKw);
-          
-          let tierBadge = targetMarket === 'AMAZON' ? '👑 Tier 1 (Title Hook)' : '🎯 Valid Tag (<=20 chars)';
-          if (masterKeywords.length >= 10 && masterKeywords.length < 35) {
-            tierBadge = targetMarket === 'AMAZON' ? '💎 Tier 2 (5 Bullets)' : '🎯 Secondary Tag';
-          } else if (masterKeywords.length >= 35) {
-            tierBadge = targetMarket === 'AMAZON' ? '📦 Tier 3 (Backend Fuel)' : '📝 Title Keyword';
+
+          let tierBadge = kwItem.tierBadge;
+          if (!tierBadge) {
+            tierBadge = targetMarket === 'AMAZON' ? '👑 Tier 1 (Title Hook)' : '🎯 Valid Tag (<=20 chars)';
+            if (masterKeywords.length >= 10 && masterKeywords.length < 35) {
+              tierBadge = targetMarket === 'AMAZON' ? '💎 Tier 2 (5 Bullets)' : '🎯 Secondary Tag';
+            } else if (masterKeywords.length >= 35) {
+              tierBadge = targetMarket === 'AMAZON' ? '📦 Tier 3 (Backend Fuel)' : '📝 Title Keyword';
+            }
           }
 
           masterKeywords.push({
@@ -1711,7 +1736,11 @@ app.get('/api/master-keywords', (req, res) => {
             discoveredAt: r.discoveredAt,
             ipVerdict: ipRes.verdict,
             tierBadge,
-            ipHits: ipRes.hits.map(h => h.term)
+            ipHits: ipRes.hits.map(h => h.term),
+            volume: kwItem.volume ?? kwItem.searchVolume ?? null,
+            cpr: kwItem.cpr ?? null,
+            competingProducts: kwItem.density ?? kwItem.titleDensity ?? null,
+            opportunityScore: kwItem.opportunityScore ?? kwItem.score ?? null
           });
         }
       });
@@ -1905,10 +1934,12 @@ const handleReportUpload = async (req, res) => {
     const trendingKeywordsStr = keywords.slice(0, 30).join(', ');
 
 
-    // Insert into market_trends for AI Drafter
+    // Insert into market_trends for AI Drafter (keywords_detailed preserves real
+    // Volume/CPR/Score per keyword so staff can see the underlying data, not
+    // just an AI-picked keyword string)
     db.run(
-      "INSERT INTO market_trends (category, trending_keywords) VALUES (?, ?)",
-      [targetCategory, trendingKeywordsStr],
+      "INSERT INTO market_trends (category, trending_keywords, keywords_detailed) VALUES (?, ?, ?)",
+      [targetCategory, trendingKeywordsStr, JSON.stringify(topKeywordsDetailed)],
       function(dbErr) {
         if (dbErr) return res.status(500).json({ error: dbErr.message });
         
@@ -2104,8 +2135,29 @@ Return ONLY a valid raw JSON object without markdown code fences:
           }
           const aiData = safeJsonParse(text, {});
 
+        // Generate 1 Parent + 4 Child ASIN variations (same structure as
+        // /api/amazon/quick-draft) so every draft path produces a consistent,
+        // real Multi-ASIN package instead of the UI falling back to placeholders.
+        const seedForSku = (trend.trending_keywords || trend.category || 'PRODUCT').split(',')[0].trim();
+        const variationThemes = [
+          { sku: `SKU-${seedForSku.substring(0,4).toUpperCase()}-GOLD-S`, name: 'Gold Finish / Small (S)' },
+          { sku: `SKU-${seedForSku.substring(0,4).toUpperCase()}-SILVER-M`, name: 'Sterling Silver / Medium (M)' },
+          { sku: `SKU-${seedForSku.substring(0,4).toUpperCase()}-ROSE-L`, name: 'Rose Gold Finish / Large (L)' },
+          { sku: `SKU-${seedForSku.substring(0,4).toUpperCase()}-CUSTOM-XL`, name: 'Custom Message Card / Extra Large (XL)' }
+        ];
+        const childVariations = variationThemes.map((v, i) => ({
+          childIndex: i + 1,
+          sku: v.sku,
+          variationAttribute: v.name,
+          childTitle: `${(aiData.amazonTitle || trend.category).substring(0, 55)} - ${v.name.split('/')[0].trim()}`.substring(0, 75),
+          childBullets: aiData.amazonBullets || [],
+          childSearchTerms: aiData.amazonSearchTerms || '',
+          childDescription: aiData.amazonDescription || ''
+        }));
 
         const payload = {
+          parentSku: `PARENT-SKU-${seedForSku.substring(0,6).toUpperCase()}`,
+          variations: childVariations,
           amazonTitle: aiData.amazonTitle || `Personalized ${trend.category}`,
           amazonBullets: aiData.amazonBullets || [],
           amazonSearchTerms: aiData.amazonSearchTerms || '',
@@ -2299,7 +2351,15 @@ app.post('/api/agents/:id/toggle', (req, res) => {
 });
 
 // Background Interval Engine (Simulates independent agents)
+let backgroundAgentTickRunning = false;
 const backgroundAgentTimer = setInterval(() => {
+  if (backgroundAgentTickRunning) return; // prevent overlapping ticks from piling up (each MCP call can take 10-20s)
+  backgroundAgentTickRunning = true;
+  // Self-healing release: the per-agent work below uses mixed callback/promise
+  // chains that aren't all awaited, so release the lock on a bounded timer
+  // rather than trying to track every completion path.
+  setTimeout(() => { backgroundAgentTickRunning = false; }, 15000);
+
   db.all("SELECT * FROM agents WHERE status = 'ONLINE'", [], (err, onlineAgents) => {
     if (err || !onlineAgents) return;
 
@@ -2512,6 +2572,32 @@ const backgroundAgentTimer = setInterval(() => {
 
 // Do not keep test runners or short-lived CLI processes alive solely for this timer.
 backgroundAgentTimer.unref();
+
+// Serve the production frontend build (npm run build output) when present.
+const distDir = path.resolve(__dirname, '../dist');
+if (fs.existsSync(distDir)) {
+  app.use(express.static(distDir, {
+    index: false,
+    setHeaders: (res, filePath) => {
+      if (/-[A-Za-z0-9_]{6,}\.(js|css)$/.test(filePath)) {
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      }
+    }
+  }));
+  app.get(/^(?!\/api\/).*/, (req, res) => {
+    res.setHeader('Cache-Control', 'no-cache');
+    res.sendFile(path.join(distDir, 'index.html'));
+  });
+}
+
+// Final safety net: any error passed via next(err), or thrown/rejected inside
+// an async route handler (auto-forwarded by Express 5), lands here instead of
+// Express's default HTML error page — so the frontend always gets JSON back.
+app.use((err, req, res, next) => {
+  console.error('Unhandled request error:', err);
+  if (res.headersSent) return next(err);
+  res.status(500).json({ success: false, error: 'INTERNAL_SERVER_ERROR', message: err.message });
+});
 
 const PORT = process.env.PORT || 3001;
 let serverInstance = null;

@@ -121,9 +121,9 @@ function parseEtsySearchResults({ htmlContent = '', csvRows = [] }) {
  * - Synthesized Master Listing based directly on these real sellers
  */
 async function synthesizeEtsyBatchLearnings({ seedPhrase, sellers = [], category = 'Apparel: Sweatshirt', llmConfig = {} }) {
-  const selectedSellers = sellers.filter(s => s.selected !== false).slice(0, 10);
+  const selectedSellers = sellers.filter(s => s.selected !== false).slice(0, 30);
   if (selectedSellers.length === 0) {
-    throw new Error('Please select at least 3-10 top sellers to learn from.');
+    throw new Error('Please select at least 3 top sellers to learn from.');
   }
 
   // Extract all tag candidates and title words from real sellers

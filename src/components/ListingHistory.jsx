@@ -44,8 +44,9 @@ export default function ListingHistory({ history, onSelectListing, onDeleteListi
     const revenue = parseFloat(formData.get('revenue') || 0);
 
     try {
-      const res = await fetch(`http://localhost:3001/api/listings/${item.dbId}/feedback`, {
+      const res = await fetch(`/api/listings/${item.dbId}/feedback`, {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ views, orders, revenue })
       });
@@ -178,8 +179,13 @@ export default function ListingHistory({ history, onSelectListing, onDeleteListi
                     {item.status === 'MANAGER_APPROVED' ? '✅ ĐÃ DUYỆT' : '⏳ CHỜ QA'}
                   </span>
                   <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                    {new Date(item.generatedAt || Date.now()).toLocaleDateString()}
+                    {new Date(item.generatedAt || Date.now()).toLocaleString()}
                   </span>
+                  {item.authorName && (
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      · 👤 {item.authorName}
+                    </span>
+                  )}
                 </div>
                 <div style={{ fontWeight: '600', fontSize: '0.95rem', marginBottom: '4px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                   {item.amazonTitle || item.etsyTitle || 'Untitled Listing'}

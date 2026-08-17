@@ -10,10 +10,10 @@ export default function AgentHub({ onShowToast }) {
 
   const fetchAgentsAndLogs = async () => {
     try {
-      const agentRes = await fetch('http://localhost:3001/api/agents');
+      const agentRes = await fetch('/api/agents', { credentials: 'include' });
       if (agentRes.ok) setAgents(await agentRes.json());
 
-      const logRes = await fetch('http://localhost:3001/api/agents/logs');
+      const logRes = await fetch('/api/agents/logs', { credentials: 'include' });
       if (logRes.ok) setLogs(await logRes.json());
     } catch (err) {
       console.error("Agent Hub Error:", err);
@@ -35,8 +35,9 @@ export default function AgentHub({ onShowToast }) {
   const toggleAgent = async (id, currentStatus) => {
     const newStatus = currentStatus === 'ONLINE' ? 'OFFLINE' : 'ONLINE';
     try {
-      const res = await fetch(`http://localhost:3001/api/agents/${id}/toggle`, {
+      const res = await fetch(`/api/agents/${id}/toggle`, {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: newStatus })
       });

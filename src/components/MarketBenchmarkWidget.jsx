@@ -14,7 +14,7 @@ export default function MarketBenchmarkWidget({ seedPhrase, category, onSelectNi
 
     setLoading(true);
     try {
-      const res = await fetch(`http://localhost:3001/api/benchmark/validate?seed=${encodeURIComponent(clean)}&category=${encodeURIComponent(category || '')}`);
+      const res = await fetch(`/api/benchmark/validate?seed=${encodeURIComponent(clean)}&category=${encodeURIComponent(category || '')}`, { credentials: 'include' });
       if (res.ok) {
         const json = await res.json();
         setData(json);

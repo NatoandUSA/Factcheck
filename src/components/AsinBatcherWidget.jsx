@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Layers, CheckCircle2, ArrowRight, FileSpreadsheet, Sparkles, HelpCircle } from 'lucide-react';
+import { parseJsonResponse } from '../utils/apiResponse';
 
 export default function AsinBatcherWidget({ onShowToast }) {
   const [asinInput, setAsinInput] = useState('');
@@ -15,13 +16,14 @@ export default function AsinBatcherWidget({ onShowToast }) {
 
     try {
       setLoading(true);
-      const res = await fetch('http://localhost:3001/api/asins/batch', {
+      const res = await fetch('/api/asins/batch', {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ asins: asinInput, seedKeyword })
       });
 
-      const data = await res.json();
+      const data = await parseJsonResponse(res);
       if (res.ok && data.success) {
         setBatchResult(data);
         onShowToast?.(`Đã tạo thành công ${data.batchCount} Batch (mỗi Batch 10 ASINs)!`, 'success');

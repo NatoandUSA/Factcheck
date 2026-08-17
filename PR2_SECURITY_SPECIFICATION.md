@@ -106,33 +106,34 @@
 
 ### A8. AES-256-GCM API Key Encryption-at-Rest (`C6`)
 - Stored keys use **AES-256-GCM**: `encrypted_key`, `iv` (12 random bytes), `auth_tag` (16 bytes).
-- Master encryption key passed via 32-byte base64/hex decoded `ENCRYPTION_SECRET` environment variable.
-- Additional Authenticated Data (AAD) bound to `tenant_id:provider`.
+- Master encryption key passed via 32-byte base64-decoded `OMNI_MASTER_KEY` environment variable (implemented in `server/security/secretBox.js`; throws if unset).
+- Additional Authenticated Data (AAD) bound to tenant/workspace/key context.
 - `GET /api/settings` returns masked metadata (`sk-***1234`) and provider name only. Plaintext key is write-only (`POST /api/settings`).
 
 ### A9. Admin Reset Protection Protocol
-- Disabled by default (`ENABLE_ADMIN_RESET === 'true'`).
-- Requires:
-  1. Authenticated `OWNER` session with recent re-auth ($\le 15$ mins old).
-  2. Short-lived one-time confirmation token (`reset_nonce`).
-  3. Explicit typed payload string `"DELETE_DATABASE_PERMANENTLY"`.
+- Requires (implemented in `server/server.js`, `DELETE /api/reset-database`):
+  1. Authenticated `OWNER` session with recent re-auth via `POST /api/auth/reauth` (5-minute nonce TTL, `REAUTH_TTL_MS`).
+  2. Short-lived one-time confirmation nonce, consumed via `x-reset-nonce` header.
+  3. Explicit typed payload string `"RESET <workspaceId>"`.
+- Scoped to the caller's `tenant_id`/`workspace_id`/`marketplace` — not a full database wipe.
 
 ### A10. Append-Only Audit Log Schema (`C7`)
-- `audit_events` Table Schema:
+- `audit_events` Table Schema (as implemented in `server/server.js`):
   ```sql
   CREATE TABLE IF NOT EXISTS audit_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    tenant_id INTEGER NOT NULL,
-    actor_id INTEGER NOT NULL,
+    tenant_id TEXT,
+    actor_id INTEGER,
     action TEXT NOT NULL,
     resource_type TEXT NOT NULL,
     resource_id TEXT NULL,
     outcome TEXT NOT NULL,
     ip_address TEXT NULL,
-    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
     metadata TEXT NULL
   );
   ```
+  `tenant_id`/`actor_id` are nullable to allow pre-authentication events (e.g. failed login attempts).
 - Application code contains zero `UPDATE` or `DELETE` queries targeting `audit_events`.
 
 ---

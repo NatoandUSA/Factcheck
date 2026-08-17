@@ -14,7 +14,7 @@ export default function UnifiedIpGateModal({ isOpen, onClose, onShowToast }) {
   const fetchLibrary = async () => {
     try {
       setLoading(true);
-      const res = await fetch('http://localhost:3001/api/ip-guard/library');
+      const res = await fetch('/api/ip-guard/library', { credentials: 'include' });
       if (res.ok) {
         const data = await res.json();
         setLibrary(data.library);
@@ -37,8 +37,9 @@ export default function UnifiedIpGateModal({ isOpen, onClose, onShowToast }) {
     if (!newTerm.trim()) return;
     setSubmitting(true);
     try {
-      const res = await fetch('http://localhost:3001/api/ip-guard/custom-term', {
+      const res = await fetch('/api/ip-guard/custom-term', {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           term: newTerm.trim(),

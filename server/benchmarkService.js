@@ -16,7 +16,14 @@ async function getMarketBenchmark({ seed = 'mom sweatshirt', category = 'Apparel
 
   // 1. Fetch Google Trends Data
   try {
-    googleData = await googleTrends.getTrendsData(cleanSeed);
+    const gt = await googleTrends.fetchGoogleTrends(cleanSeed);
+    googleData = {
+      summary: {
+        growth: gt.momentumPercent,
+        status: gt.isBreakout ? 'ĐỘT PHÁ' : gt.momentumPercent > 10 ? 'TĂNG' : 'ỔN ĐỊNH'
+      },
+      relatedQueries: gt.relatedQueries
+    };
   } catch (gtErr) {
     console.warn('Google Trends fetch in benchmark warning:', gtErr.message);
   }

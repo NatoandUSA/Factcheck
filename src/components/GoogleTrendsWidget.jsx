@@ -16,7 +16,7 @@ export default function GoogleTrendsWidget({ seedPhrase, onShowToast }) {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`http://localhost:3001/api/google-trends?keyword=${encodeURIComponent(keyword.trim())}`);
+      const res = await fetch(`/api/google-trends?keyword=${encodeURIComponent(keyword.trim())}`, { credentials: 'include' });
       if (!res.ok) throw new Error('Không thể lấy dữ liệu Google Trends');
       const data = await res.json();
       setTrendsData(data);

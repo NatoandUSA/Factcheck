@@ -13,14 +13,18 @@ async function learnFromListing({ url = '', rawText = '', category = 'Custom Gif
   let materials = [];
   let extractedUrl = url.trim();
 
-  const isEtsy = marketplace === 'ETSY' || extractedUrl.includes('etsy.');
-  const resolvedMarketplace = isEtsy ? 'ETSY' : 'AMAZON';
+  // The authenticated session marketplace is the sole authority — never
+  // inferred from URL text, which a caller fully controls (GPT PR-5 final
+  // review, P0-FINAL-1: a session could otherwise submit a same-marketplace
+  // -looking request but point the URL at the other marketplace).
+  const resolvedMarketplace = marketplace === 'ETSY' ? 'ETSY' : 'AMAZON';
 
   // 1. If URL provided, try fetching & scraping (allowlisted marketplace
-  // hosts only, SSRF-guarded — see server/security/urlGuard.js)
+  // hosts only, SSRF-guarded and pinned to the session marketplace on every
+  // redirect hop — see server/security/urlGuard.js)
   if (extractedUrl.startsWith('http')) {
     try {
-      const html = await safeFetch(extractedUrl);
+      const html = await safeFetch(extractedUrl, resolvedMarketplace);
       const $ = cheerio.load(html);
 
       if (resolvedMarketplace === 'AMAZON') {

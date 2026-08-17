@@ -13,9 +13,9 @@ function makeOkResponse(bodyText) {
   return new Response(bodyText, { status: 200 });
 }
 
-async function assertRejects(url, label) {
+async function assertRejects(url, label, expectedMarketplace) {
   try {
-    await assertSafeUrl(url);
+    await assertSafeUrl(url, expectedMarketplace);
     throw new Error(`Expected rejection for ${label} (${url}) but it was allowed`);
   } catch (e) {
     assert(e instanceof UrlGuardError, `${label} should reject with UrlGuardError, got: ${e.message}`);
@@ -77,12 +77,21 @@ async function main() {
 
   console.log('🟢 SSRF negative/boundary cases: all rejected as expected.');
 
+  // --- expectedMarketplace pinning: an allowlisted host from the *other*
+  // marketplace must still be rejected when a session marketplace is given
+  // (GPT PR-5 final review, P0-FINAL-1 — marketplace must be a single
+  // authority, not overridable by URL content) ---
+  await assertRejects('https://www.etsy.com/listing/12345', 'Etsy host under an Amazon-session expectation', 'AMAZON');
+  await assertRejects('https://www.amazon.com/dp/B000TEST', 'Amazon host under an Etsy-session expectation', 'ETSY');
+  console.log('🟢 assertSafeUrl: cross-marketplace host rejected when expectedMarketplace is pinned.');
+
   // --- Positive path: real allowlisted host resolves and passes (network
   // required — matches PROJECT_GUIDE §15's requirement to prove the
   // allowlist doesn't just block everything) ---
   try {
     await assertSafeUrl('https://www.amazon.com/');
-    console.log('🟢 Allowlisted HTTPS host (www.amazon.com) passed assertSafeUrl.');
+    await assertSafeUrl('https://www.amazon.com/', 'AMAZON');
+    console.log('🟢 Allowlisted HTTPS host (www.amazon.com) passed assertSafeUrl, with and without marketplace pinning.');
   } catch (e) {
     console.warn('⚠️  Positive-path DNS check skipped (no network in this environment):', e.message);
   }
@@ -101,7 +110,7 @@ async function main() {
       return makeRedirectResponse('https://evil.com/steal');
     };
     try {
-      await safeFetch('https://www.amazon.com/dp/B000TEST', fetchImpl);
+      await safeFetch('https://www.amazon.com/dp/B000TEST', 'AMAZON', fetchImpl);
       throw new Error('Expected safeFetch to reject a redirect to a disallowed host');
     } catch (e) {
       assert(e instanceof UrlGuardError, `redirect-to-disallowed-host should reject with UrlGuardError, got: ${e.message}`);
@@ -119,7 +128,7 @@ async function main() {
       return makeRedirectResponse('https://www.amazon.com/');
     };
     try {
-      await safeFetch('https://www.amazon.com/', fetchImpl);
+      await safeFetch('https://www.amazon.com/', 'AMAZON', fetchImpl);
       throw new Error('Expected safeFetch to reject after exceeding the redirect budget');
     } catch (e) {
       assert(e instanceof UrlGuardError, `too-many-redirects should reject with UrlGuardError, got: ${e.message}`);
@@ -128,18 +137,37 @@ async function main() {
     console.log('🟢 safeFetch: exceeding the redirect budget is rejected.');
   }
 
-  // A redirect to another allowlisted host is followed end-to-end and the
-  // final body is returned.
+  // A redirect to another host within the SAME marketplace is followed
+  // end-to-end and the final body is returned.
   {
     let hop = 0;
     const fetchImpl = async () => {
       hop++;
-      if (hop === 1) return makeRedirectResponse('https://www.etsy.com/');
+      if (hop === 1) return makeRedirectResponse('https://www.amazon.co.uk/');
       return makeOkResponse('final body content');
     };
-    const body = await safeFetch('https://www.amazon.com/', fetchImpl);
-    assert.strictEqual(body, 'final body content', 'safeFetch should return the final hop body after following an allowlisted redirect');
-    console.log('🟢 safeFetch: redirect to an allowlisted host is followed and body returned.');
+    const body = await safeFetch('https://www.amazon.com/', 'AMAZON', fetchImpl);
+    assert.strictEqual(body, 'final body content', 'safeFetch should return the final hop body after following a same-marketplace redirect');
+    console.log('🟢 safeFetch: redirect to another host in the same marketplace is followed and body returned.');
+  }
+
+  // A redirect that crosses marketplaces (Amazon host -> Etsy host) must be
+  // rejected even though both hosts are individually allowlisted (GPT PR-5
+  // final review, P0-FINAL-1).
+  {
+    let fetchCalls = 0;
+    const fetchImpl = async () => {
+      fetchCalls++;
+      return makeRedirectResponse('https://www.etsy.com/listing/999');
+    };
+    try {
+      await safeFetch('https://www.amazon.com/', 'AMAZON', fetchImpl);
+      throw new Error('Expected safeFetch to reject a redirect that crosses from Amazon to Etsy');
+    } catch (e) {
+      assert(e instanceof UrlGuardError, `cross-marketplace redirect should reject with UrlGuardError, got: ${e.message}`);
+      assert.strictEqual(fetchCalls, 1, 'fetchImpl must not be called again once the cross-marketplace redirect target fails assertSafeUrl');
+    }
+    console.log('🟢 safeFetch: redirect that crosses from Amazon to Etsy is rejected.');
   }
 
   // Response bodies larger than MAX_RESPONSE_BYTES must be rejected rather
@@ -148,7 +176,7 @@ async function main() {
     const oversized = 'a'.repeat(2 * 1024 * 1024 + 10);
     const fetchImpl = async () => makeOkResponse(oversized);
     try {
-      await safeFetch('https://www.amazon.com/', fetchImpl);
+      await safeFetch('https://www.amazon.com/', 'AMAZON', fetchImpl);
       throw new Error('Expected safeFetch to reject an oversized response body');
     } catch (e) {
       assert(e instanceof UrlGuardError, `oversized-body should reject with UrlGuardError, got: ${e.message}`);
@@ -165,7 +193,7 @@ async function main() {
       capturedOpts = opts;
       return makeOkResponse('ok');
     };
-    await safeFetch('https://www.amazon.com/', fetchImpl);
+    await safeFetch('https://www.amazon.com/', 'AMAZON', fetchImpl);
     assert(capturedOpts && capturedOpts.signal instanceof AbortSignal, 'safeFetch must pass an AbortSignal to fetchImpl to enforce the timeout');
     console.log('🟢 safeFetch: requests are issued with an AbortSignal (timeout enforced).');
   }

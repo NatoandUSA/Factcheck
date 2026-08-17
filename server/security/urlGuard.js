@@ -4,8 +4,11 @@ const net = require('net');
 // Only the marketplace hosts the Learning Box is actually meant to read.
 // Exact-match on the registrable domain (or its www subdomain) — not a
 // substring/suffix check — so `evil.com/amazon.com` or
-// `amazon.com.attacker.com` cannot pass.
-const ALLOWED_HOSTS = new Set([
+// `amazon.com.attacker.com` cannot pass. Hosts are grouped by marketplace
+// (rather than one flat set) so a fetch can be pinned to the caller's
+// authenticated session marketplace and reject cross-marketplace hosts,
+// including on redirect hops (GPT PR-5 final review, P0-FINAL-1).
+const AMAZON_HOSTS = new Set([
   'amazon.com', 'www.amazon.com',
   'amazon.co.uk', 'www.amazon.co.uk',
   'amazon.de', 'www.amazon.de',
@@ -25,9 +28,17 @@ const ALLOWED_HOSTS = new Set([
   'amazon.sa', 'www.amazon.sa',
   'amazon.sg', 'www.amazon.sg',
   'amazon.eg', 'www.amazon.eg',
-  'amazon.com.tr', 'www.amazon.com.tr',
-  'etsy.com', 'www.etsy.com'
+  'amazon.com.tr', 'www.amazon.com.tr'
 ]);
+const ETSY_HOSTS = new Set(['etsy.com', 'www.etsy.com']);
+const ALLOWED_HOSTS = new Set([...AMAZON_HOSTS, ...ETSY_HOSTS]);
+
+function hostMarketplace(hostname) {
+  const h = hostname.toLowerCase();
+  if (AMAZON_HOSTS.has(h)) return 'AMAZON';
+  if (ETSY_HOSTS.has(h)) return 'ETSY';
+  return null;
+}
 
 const MAX_REDIRECTS = 3;
 const TIMEOUT_MS = 8000;
@@ -109,7 +120,13 @@ async function assertResolvesToPublicIp(hostname) {
   }
 }
 
-async function assertSafeUrl(rawUrl) {
+/**
+ * expectedMarketplace, when passed, pins the URL (and every redirect hop,
+ * via safeFetch below) to that marketplace's host set — an AMAZON session
+ * cannot be pointed at an Etsy host and vice versa, even though both are
+ * on the combined allowlist. Omit it for marketplace-agnostic checks.
+ */
+async function assertSafeUrl(rawUrl, expectedMarketplace) {
   let parsed;
   try {
     parsed = new URL(rawUrl);
@@ -119,7 +136,11 @@ async function assertSafeUrl(rawUrl) {
   if (parsed.protocol !== 'https:') {
     throw new UrlGuardError('URL_NOT_ALLOWED');
   }
-  if (!isAllowedHost(parsed.hostname)) {
+  const hostMkt = hostMarketplace(parsed.hostname);
+  if (!hostMkt) {
+    throw new UrlGuardError('URL_NOT_ALLOWED');
+  }
+  if (expectedMarketplace && hostMkt !== expectedMarketplace) {
     throw new UrlGuardError('URL_NOT_ALLOWED');
   }
   await assertResolvesToPublicIp(parsed.hostname);
@@ -132,13 +153,18 @@ async function assertSafeUrl(rawUrl) {
  * every hop against the same rules), enforces a timeout and a streamed
  * response-size cap, and never leaks internal fetch error detail to callers.
  *
+ * expectedMarketplace, when passed, pins every hop (initial URL and every
+ * redirect) to that marketplace's hosts — a redirect from an Amazon host
+ * to an Etsy host (or vice versa) is rejected just like an initial
+ * cross-marketplace URL would be.
+ *
  * fetchImpl defaults to the global fetch; tests inject a stub to exercise
  * redirect/cap behavior deterministically without live network calls.
  */
-async function safeFetch(rawUrl, fetchImpl = fetch) {
+async function safeFetch(rawUrl, expectedMarketplace, fetchImpl = fetch) {
   let currentUrl = rawUrl;
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-    await assertSafeUrl(currentUrl);
+    await assertSafeUrl(currentUrl, expectedMarketplace);
 
     const response = await fetchImpl(currentUrl, {
       redirect: 'manual',

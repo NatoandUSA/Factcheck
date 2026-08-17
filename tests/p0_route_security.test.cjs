@@ -181,6 +181,30 @@ async function main() {
     assert.strictEqual((await batchLearnFromAmazonRes.json()).error, 'MARKETPLACE_MISMATCH');
     console.log('🟢 T5: Etsy-only scan-search and batch-learn both reject an Amazon session (403 MARKETPLACE_MISMATCH).');
 
+    // --- GPT PR-5 final review P0-FINAL-1: Learning Box URL can no longer
+    // override the server-derived session marketplace ---
+    const templatesBefore = (await dbAll('SELECT COUNT(*) c FROM learned_templates'))[0].c;
+
+    const amazonSessionEtsyUrlRes = await fetch(`http://127.0.0.1:${port}/api/learning/analyze`, {
+      method: 'POST',
+      headers: { ...origin, 'Content-Type': 'application/json', Cookie: ownerAmzCookie },
+      body: JSON.stringify({ url: 'https://www.etsy.com/listing/12345/test-listing' })
+    });
+    assert.strictEqual(amazonSessionEtsyUrlRes.status, 400, `Amazon session analyzing an Etsy URL must return 400, got ${amazonSessionEtsyUrlRes.status}`);
+    assert.strictEqual((await amazonSessionEtsyUrlRes.json()).error, 'URL_NOT_ALLOWED');
+
+    const etsySessionAmazonUrlRes = await fetch(`http://127.0.0.1:${port}/api/learning/analyze`, {
+      method: 'POST',
+      headers: { ...origin, 'Content-Type': 'application/json', Cookie: ownerEtsyCookie },
+      body: JSON.stringify({ url: 'https://www.amazon.com/dp/B000TEST' })
+    });
+    assert.strictEqual(etsySessionAmazonUrlRes.status, 400, `Etsy session analyzing an Amazon URL must return 400, got ${etsySessionAmazonUrlRes.status}`);
+    assert.strictEqual((await etsySessionAmazonUrlRes.json()).error, 'URL_NOT_ALLOWED');
+
+    const templatesAfter = (await dbAll('SELECT COUNT(*) c FROM learned_templates'))[0].c;
+    assert.strictEqual(templatesAfter, templatesBefore, 'Neither cross-marketplace analyze attempt should have persisted a learned_templates row');
+    console.log('🟢 P0-FINAL-1: cross-marketplace Learning Box URLs (Amazon session + Etsy URL, Etsy session + Amazon URL) are both rejected with zero DB mutation.');
+
     // --- GPT PR-5 review T4: legacy unscoped + cross-workspace learned_templates are invisible ---
     const legacyTemplateInsert = await dbRun(
       "INSERT INTO learned_templates (url, marketplace, category, title, bullets, tags, description, styleDna) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",

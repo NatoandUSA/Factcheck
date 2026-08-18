@@ -1443,7 +1443,12 @@ Return ONLY raw JSON without markdown code fences:
             const highlights125 = keywordRanker.buildAmazonItemHighlights125([cleanSeed], category);
 
             const payload = {
-              parentSku: `PARENT-SKU-${cleanSeed.substring(0,6).toUpperCase()}`,
+              // No auto-generated SKU: the Staff viewer presents this as
+              // paste-ready "Raw Data ... for Seller Central", so a fake
+              // seed-derived string here would be an inventory-hygiene risk,
+              // not just a display placeholder. Real SKUs must be assigned
+              // by a human against real inventory (GPT PR-10 re-audit).
+              parentSku: '',
               amazonTitle: title75,
               itemHighlights: highlights125,
               amazonBullets: aiData.amazonBullets || [],
@@ -1991,16 +1996,17 @@ Return ONLY a valid raw JSON object without markdown code fences:
           }
           const aiData = safeJsonParse(text, {});
 
-        const seedForSku = (trend.trending_keywords || trend.category || 'PRODUCT').split(',')[0].trim();
-
         const payload = {
-          parentSku: `PARENT-SKU-${seedForSku.substring(0,6).toUpperCase()}`,
-          // No fabricated Gold/Silver/Rose-Gold child variations: nobody has
-          // verified this product actually comes in those finishes. Real
-          // variations must be entered from real product data, not invented
-          // to fill the UI (GPT PR-10 re-audit).
+          // No auto-generated SKU (same reasoning as Quick Draft: the Staff
+          // viewer presents this as paste-ready Seller Central data) and no
+          // fabricated Gold/Silver/Rose-Gold child variations -- both must
+          // come from a human against real product/inventory data, not be
+          // invented to fill the UI (GPT PR-10 re-audit).
+          parentSku: '',
           variations: [],
-          amazonTitle: aiData.amazonTitle || `Personalized ${trend.category}`,
+          // No unconditional "Personalized" claim: search-demand keywords
+          // are not evidence this specific product supports personalization.
+          amazonTitle: aiData.amazonTitle || trend.category,
           amazonBullets: aiData.amazonBullets || [],
           amazonSearchTerms: aiData.amazonSearchTerms || '',
           amazonDescription: aiData.amazonDescription || '',
@@ -2074,19 +2080,23 @@ CRITICAL RULES:
 2. When the user asks to draft, rewrite, or optimize a listing, you MUST include a JSON block in your response.
 3. The JSON block MUST be wrapped in \`\`\`json ... \`\`\` markers.
 4. You may include a brief intro sentence BEFORE the JSON block, but the JSON is MANDATORY.
+5. PRODUCT TRUTH BOUNDARY: unless the user's message states real materials, specs, or
+   personalization capability for this specific product, you have no real product facts.
+   Do not invent them. Write title/bullets/tags/description copy that works without
+   asserting unverified specifics.
 
 The JSON block MUST contain ALL of these fields:
 {
   "amazonTitle": "Concise (75-80 chars max), Title Case, mobile-first front-loaded",
-  "amazonBullets": ["5 bullets, each starting with [CAPITALIZED HOOK]"],
+  "amazonBullets": ["5 bullets, each starting with [CAPITALIZED HOOK], using only facts the user actually gave you"],
   "amazonSearchTerms": "space-separated backend keywords under 240 bytes",
-  "amazonDescription": "<p>HTML formatted product description</p>",
-  "amazonAPlusPoints": ["3 highlight story blurbs"],
+  "amazonDescription": "<p>HTML formatted product description, no invented materials/specs/care</p>",
+  "amazonAPlusPoints": ["3 highlight story blurbs, generic benefit language only if no real facts given"],
   "etsyTitle": "Under 140 chars, front-loaded keywords",
   "etsyTags": ["exactly 13 tags", "each under 20 chars"],
-  "etsyMaterials": ["3-5 material strings"],
-  "etsyPersonalizationInstructions": "Clear buyer instructions",
-  "etsyDescription": "Story-driven description with Details, Sizing, How to Order"
+  "etsyMaterials": "empty array [] unless the user stated real materials for this product",
+  "etsyPersonalizationInstructions": "empty string unless the user stated a real personalization mechanic",
+  "etsyDescription": "Story-driven description with Details and How to Order -- no Specifications/Care/Workshop claims unless the user supplied them"
 }
 
 If the user asks a general question (not about drafting/writing), respond conversationally WITHOUT a JSON block.`,

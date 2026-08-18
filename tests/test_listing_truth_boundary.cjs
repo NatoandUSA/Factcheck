@@ -85,6 +85,19 @@ function run() {
   assert.ok(!serverSrc.includes('US WORKSHOP PROMISE') && !serverSrc.includes('US Workshop Promise'), 'trend-draft prompt must not instruct the AI to assert an unverified workshop/origin claim');
   console.log('🟢 server.js Quick Draft / trend-draft prompts no longer instruct the AI to invent materials/specs/workshop facts.');
 
+  // --- 5c. server.js: /api/chat (the Copilot Chat endpoint geminiService.js
+  // actually calls) had its OWN separate, unedited system_instruction still
+  // mandating "3-5 material strings" -- a fourth independent prompt-builder
+  // missed across three prior rounds. Fixed now. Also: no auto-generated
+  // parentSku (the live viewer presents it as paste-ready Seller Central
+  // data, not just an internal label) and no unconditional "Personalized"
+  // title claim from search-demand keywords alone (GPT PR-10 3rd re-audit) ---
+  assert.ok(!serverSrc.includes('3-5 material strings'), '/api/chat system_instruction must not mandate fabricated materials');
+  assert.ok(!serverSrc.includes('"Clear buyer instructions"'), '/api/chat system_instruction must not mandate fabricated personalization instructions');
+  assert.ok(!serverSrc.includes('parentSku: `PARENT-SKU-'), 'Quick Draft / trend-draft must not auto-generate a fake parentSku presented as real Seller Central data');
+  assert.ok(!serverSrc.includes('`Personalized ${trend.category}`'), 'trend-draft must not unconditionally claim "Personalized" as a verified product capability');
+  console.log('🟢 server.js /api/chat no longer mandates fabricated materials/personalization, and no path auto-generates a fake parentSku or unconditional Personalized claim.');
+
   // --- 6. geminiService.js: sanitizer no longer injects fabricated A+ module
   // claims or category defaultMaterials as if they were confirmed facts ---
   const geminiSrc = fs.readFileSync(path.resolve(__dirname, '../src/services/geminiService.js'), 'utf8');
@@ -93,7 +106,9 @@ function run() {
   assert.ok(!geminiSrc.includes('category?.defaultMaterials || []'), 'geminiService.js must not silently fall back to unverified category defaults as real materials');
   assert.ok(geminiSrc.includes('do NOT invent material claims'), 'prompt must instruct the AI not to invent unverified materials');
   assert.ok(!geminiSrc.includes('Carefully inspected and packaged'), 'geminiService.js bullet padding must not assert an unverified inspection/packaging process claim');
-  console.log('🟢 geminiService.js no longer fabricates material/A+ content claims or process claims in bullet padding.');
+  assert.ok(!geminiSrc.includes('[GIFT PRESENTATION BOX]') && !geminiSrc.includes('[CARE INSTRUCTIONS]'), 'geminiService.js prompt must not mandate a specific packaging/care bullet hook regardless of real input');
+  assert.ok(!geminiSrc.includes('Product Specifications & Gift Unboxing'), 'geminiService.js prompt must not mandate an A+ specifications module with no real specs');
+  console.log('🟢 geminiService.js no longer fabricates material/A+ content claims, process claims in bullet padding, or mandatory packaging/care/specs hooks.');
 
   // --- 7. SingleListingGenerator.jsx: category presets are no longer sent to
   // the AI as if they were confirmed real materials for this product ---

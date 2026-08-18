@@ -53,24 +53,23 @@ PLATFORM-SPECIFIC KEYWORD & COPYWRITING STRATEGY:
 
 1. AMAZON FBM & A10 ALGORITHM STRATEGY (Modern Concise Title Policy):
    - "amazonTitle": Concise (75-80 characters max), Title Case. Strictly front-load top 1-2 Golden root keywords and core USP within the first 75 characters for zero mobile truncation and Amazon algorithm compliance. Zero banned words (no "best seller", "free shipping", "guarantee", "perfect gift").
-   - "amazonBullets": EXACTLY 5 bullet points (150-250 chars each). Each MUST start with a [CAPITALIZED HOOK] focusing on: [EMOTIONAL BENEFIT], [KEY FEATURE] (use only materials/specs actually given above, or a generic non-material hook like [EASY USAGE] if none were given), [EASY USAGE/FIT], [GIFT PRESENTATION BOX], [CARE INSTRUCTIONS].
+   - "amazonBullets": EXACTLY 5 bullet points (150-250 chars each). Each MUST start with a [CAPITALIZED HOOK] focusing on: [EMOTIONAL BENEFIT], [KEY FEATURE] (use only materials/specs actually given above, or a generic non-material hook like [EASY USAGE] if none were given), [EASY USAGE/FIT], [GIFT-GIVING OCCASION] (generic -- do not claim a specific presentation box/packaging unless given above), [WHY THEY'LL LOVE IT] (generic sentiment, not a care/material instruction unless given above).
    - "amazonSearchTerms": Space-separated generic keywords strictly under 240 UTF-8 bytes total. NO COMMAS. Include relevant long-tail synonyms, use cases, and alternative search queries not in the title.
-   - "amazonDescription": High-converting HTML formatted product description (<p>, <ul>, <strong>).
+   - "amazonDescription": High-converting HTML formatted product description (<p>, <ul>, <strong>). Use only the materials/specs actually given above; no invented care/packaging/manufacturing claims.
    - "amazonAPlusContent": A structured A+ Content Story Package containing:
      * "brandStoryHeadline": Compelling brand mission statement
      * "brandStoryBody": 2-3 sentences on brand dedication and emotional gifting
-     * "modules": Array of 3 distinct A+ modules:
+     * "modules": Array of 2 distinct A+ modules (no Specifications/Unboxing module -- no real specs exist unless given above):
        1. { "moduleType": "Hero Banner Story", "heading": "...", "body": "..." }
        2. { "moduleType": "Three Feature Highlights", "features": [{ "title": "...", "desc": "..." }, { "title": "...", "desc": "..." }, { "title": "...", "desc": "..." }] }
-       3. { "moduleType": "Product Specifications & Gift Unboxing", "heading": "...", "body": "..." }
 
 2. ETSY ALGORITHM & BUYER PSYCHOLOGY STRATEGY:
    - Note: Etsy buyers search for GIFT OCCASIONS, AESTHETICS, and HANDMADE CRAFTSMANSHIP (different from Amazon!).
    - "etsyTitle": Max 140 characters. Front-load the top gift recipient and occasion keyword in the first 40 characters for mobile Etsy search.
    - "etsyTags": EXACTLY 13 multi-word long-tail tags. Each tag MUST be 20 characters or fewer (letters, numbers, spaces only, no punctuation). Target recipient (e.g. "gift for husband"), occasion (e.g. "1st anniversary gift"), and handmade aesthetic (e.g. "custom wood plaque").
    - "etsyMaterials": If real materials/specs were given in PRODUCT INPUTS above, list ONLY those. If none were given, return an empty array -- do NOT invent material claims for a product you have no real data about.
-   - "etsyPersonalizationInstructions": Step-by-step buyer guide on how to provide personalization details.
-   - "etsyDescription": Warm, story-driven description structured into: ✨ ITEM DETAILS, ✦ SPECIFICATIONS, ✦ HOW TO ORDER, ✦ CARE INSTRUCTIONS. Use only the materials/specs actually given above; do not assert unverified origin, workshop, or manufacturing claims.
+   - "etsyPersonalizationInstructions": If PRODUCT INPUTS above state a real personalization mechanic, describe it. If none was given, return an empty string -- do NOT invent a personalization capability.
+   - "etsyDescription": Warm, story-driven description structured into: ✨ ITEM DETAILS and ✦ HOW TO ORDER only. Use only the materials/specs actually given above; do not assert unverified specifications, care instructions, origin, or workshop claims.
 
 Return ONLY a valid raw JSON object (without markdown code fences) with the exact structure:
 {
@@ -83,14 +82,13 @@ Return ONLY a valid raw JSON object (without markdown code fences) with the exac
     "brandStoryBody": "...",
     "modules": [
       { "moduleType": "Hero Banner Story", "heading": "...", "body": "..." },
-      { "moduleType": "Three Feature Highlights", "features": [{ "title": "...", "desc": "..." }, { "title": "...", "desc": "..." }, { "title": "...", "desc": "..." }] },
-      { "moduleType": "Product Specifications & Gift Unboxing", "heading": "...", "body": "..." }
+      { "moduleType": "Three Feature Highlights", "features": [{ "title": "...", "desc": "..." }, { "title": "...", "desc": "..." }, { "title": "...", "desc": "..." }] }
     ]
   },
   "etsyTitle": "...",
   "etsyTags": ["tag1", ... (13 items, <=20 chars each)],
-  "etsyMaterials": ["...", "..."],
-  "etsyPersonalizationInstructions": "...",
+  "etsyMaterials": [],
+  "etsyPersonalizationInstructions": "",
   "etsyDescription": "..."
 }
 `;

@@ -146,18 +146,19 @@ async function run() {
 
   const scannerSrc = fs.readFileSync(path.join(ROOT, 'src', 'components', 'EtsyMultiSellerScanner.jsx'), 'utf8');
   assert.ok(scannerSrc.includes('STAFF_MANUAL_ASSERTION'));
-  assert.ok(scannerSrc.includes('data.isSynthetic'));
+  assert.ok(!scannerSrc.includes('const scanSellers = async'), 'source-less seller scan action must not remain in Staff UI');
+  assert.ok(!scannerSrc.includes('Kiểm Tra Seller Evidence'), 'UI must not imply an automatic evidence connector exists');
   assert.ok(scannerSrc.includes('selectedCount < 3'));
   for (const forbidden of ['42-78 sold/24h', 'Revenue Leaders', 'Top Sellers Deep Reverse-Engineer']) {
     assert.ok(!scannerSrc.includes(forbidden), `frontend still presents unsupported seller ranking: ${forbidden}`);
   }
-  console.log('  🟢 Staff UI renders evidence/UNKNOWN states instead of synthetic Top Seller claims.');
+  console.log('  🟢 Staff UI exposes explicit evidence/UNKNOWN workflow without a faux live-scan action.');
 
   const workspaceSrc = fs.readFileSync(path.join(ROOT, 'src', 'components', 'EtsyWorkspace.jsx'), 'utf8');
   assert.ok(workspaceSrc.includes("data.source !== 'ETSY_MCP_LIVE'"));
   assert.ok(workspaceSrc.includes("data.evidenceState !== 'OBSERVED'"));
   assert.ok(workspaceSrc.includes("t.marketplace === 'ETSY' && t.keywords_detailed"));
-  console.log('  🟢 Etsy workspace refuses non-live MCP results as listing evidence.');
+  console.log('  🟢 Etsy workspace refuses non-live MCP responses as new listing evidence.');
 
   assert.ok(!serverSrc.includes('overview.opportunity_score || 50'), 'background MCP log must not turn missing opportunity into 50');
   console.log('  🟢 Background log keeps missing MCP metrics UNKNOWN rather than zero/default.');

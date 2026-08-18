@@ -7,8 +7,8 @@ server/app.db
 *.xlsx
 !tests/fixtures/*.xlsx
 
-data/imports/processed_*
+# Mutable runtime imports are state, not source. Production must point
+# OMNI_IMPORTS_DIR outside the Git worktree; dev creates this directory as needed.
+data/imports/
+
 scratch/
-
-
-

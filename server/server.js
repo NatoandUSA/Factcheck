@@ -2001,14 +2001,19 @@ Return ONLY a valid raw JSON object without markdown code fences:
             text = text.split('```')[1].split('```')[0].trim();
           }
           const aiData = safeJsonParse(text, {});
-          // Strip a leading "Personalized" claim from the model's own title
-          // output, not just the fallback: this route has no real
-          // personalization-capability evidence, so the model asserting it
-          // directly is the same unverified claim regardless of whether it
-          // came from the fallback or the model itself (independent
-          // integration-test finding, round 5).
-          const trendTitleRaw = (aiData.amazonTitle || '').trim();
-          const trendTitleSafe = trendTitleRaw.replace(/^personalized\s+/i, '').trim();
+          // Strip a leading "Personalized"/"Custom" claim from BOTH the
+          // Amazon and Etsy title fields the model returns -- not just the
+          // empty-output fallback, and not just amazonTitle. This route has
+          // no real personalization-capability evidence, so the model
+          // asserting it directly is the same unverified claim regardless of
+          // which title field it appears in (independent integration-test
+          // finding: round 5 only stripped amazonTitle, missing the
+          // identical gap in etsyTitle -- fixed with one shared helper this
+          // time instead of a second field-specific patch).
+          const stripUnverifiedCapabilityClaim = (title) =>
+            String(title || '').trim().replace(/^(personalized|custom)\s+/i, '').trim();
+          const trendAmazonTitle = stripUnverifiedCapabilityClaim(aiData.amazonTitle);
+          const trendEtsyTitle = stripUnverifiedCapabilityClaim(aiData.etsyTitle);
 
         const payload = {
           // No auto-generated SKU (same reasoning as Quick Draft: the Staff
@@ -2018,15 +2023,13 @@ Return ONLY a valid raw JSON object without markdown code fences:
           // invented to fill the UI (GPT PR-10 re-audit).
           parentSku: '',
           variations: [],
-          amazonTitle: trendTitleSafe || trend.category,
+          amazonTitle: trendAmazonTitle || trend.category,
           amazonBullets: aiData.amazonBullets || [],
           amazonSearchTerms: aiData.amazonSearchTerms || '',
           amazonDescription: aiData.amazonDescription || '',
           amazonAPlusContent: aiData.amazonAPlusContent || null,
           amazonAPlusPoints: aiData.amazonAPlusPoints || [],
-          // No "Custom" claim in the fallback: implies a customization
-          // capability with no evidence, same reasoning as the Amazon title.
-          etsyTitle: aiData.etsyTitle || trend.category,
+          etsyTitle: trendEtsyTitle || trend.category,
           etsyDescription: aiData.etsyDescription || '',
           etsyTags: (aiData.etsyTags || []).slice(0, 13).map(t => String(t).substring(0, 20)),
           // Hard-coded empty, not aiData-derived, for both fields: trending

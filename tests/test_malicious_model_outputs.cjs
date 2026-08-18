@@ -166,7 +166,11 @@ function assertSkuEmpty(listing, label) {
 }
 
 function assertTitleNotUnconditionallyPersonalized(listing, label) {
-  assert.ok(!/^personalized\b/i.test(String(listing.amazonTitle || '')), `${label}: unconditional Personalized title reached the response`);
+  // Checks BOTH title fields, not just amazonTitle: an earlier round of this
+  // fix stripped the claim from amazonTitle only, leaving etsyTitle with the
+  // identical unfiltered gap (independent probe finding, round 6).
+  assert.ok(!/^(personalized|custom)\b/i.test(String(listing.amazonTitle || '')), `${label}: unconditional Personalized/Custom Amazon title reached the response`);
+  assert.ok(!/^(personalized|custom)\b/i.test(String(listing.etsyTitle || '')), `${label}: unconditional Personalized/Custom Etsy title reached the response`);
 }
 
 async function main() {

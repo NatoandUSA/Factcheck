@@ -1,4 +1,5 @@
 const ipGuard = require('./ipGuard');
+const { toObservedNumber } = require('./researchTruth');
 
 /**
  * Master Keyword Selection & Ranking Engine (Updated for Aug 15, 2026 Policy Standards)
@@ -17,13 +18,13 @@ const GARBAGE_PATTERNS = [
 
 
 const BANNED_DELIVERY_TERMS = [
-  'same day', 'sameday', 'overnight', 'overnight delivery', 'delivery gifts', 
-  'delivery items', 'express delivery', 'express shipping', '24h shipping', 
+  'same day', 'sameday', 'overnight', 'overnight delivery', 'delivery gifts',
+  'delivery items', 'express delivery', 'express shipping', '24h shipping',
   'fresh flowers', 'flowers', 'fast shipping', 'next day'
 ];
 
 const BANNED_IRRELEVANT_TERMS = [
-  'abused', 'abuse', 'girlfriend abused', 'chucky', 'chucky doll', 'horror', 
+  'abused', 'abuse', 'girlfriend abused', 'chucky', 'chucky doll', 'horror',
   'dog toy', 'cat toy', 'phone case', 'keychain', 'sticker', 'plastic', 'cheap'
 ];
 
@@ -63,10 +64,10 @@ function sanitizeKeyword(rawKw) {
  */
 function computeDynamicSeedRelevance(keyword, seedPhrase) {
   if (!seedPhrase || typeof seedPhrase !== 'string') return 1.0;
-  
+
   const seedLower = seedPhrase.toLowerCase().trim();
   const kwLower = keyword.toLowerCase().trim();
-  
+
   const seedTokens = seedLower.split(/\s+/).filter(t => t.length > 2);
   const kwTokens = kwLower.split(/\s+/).filter(t => t.length > 2);
 
@@ -104,23 +105,17 @@ function rankKeywords(keywordList, contextCategory = 'Jewelry', seedPhrase = '')
 
     if (!kw) return null;
 
-    // Real evidence (including an explicit 0) is kept separate from the
-    // internal sort heuristic below. A keyword ranked with no real metrics
-    // (e.g. a bare keyword string, or an upload row with missing columns)
-    // must not present a defaulted 100/10/8 as if it were an observed
-    // volume/density/cpr, and must not get a fabricated opportunityScore
-    // (P0.5-C truth fix -- this function previously overwrote whatever
-    // real/null values the caller had already computed).
+    // Real evidence (including an explicit 0) stays distinct from the
+    // sort-only heuristic below. Invalid numeric strings are UNKNOWN rather
+    // than NaN-shaped pseudo-evidence.
     const isObj = typeof item === 'object' && item !== null;
-    const realVolume = isObj && (item.searchVolume ?? item.volume ?? item.searches) != null
-      ? parseFloat(item.searchVolume ?? item.volume ?? item.searches) : null;
-    const realDensity = isObj && (item.titleDensity ?? item.density) != null
-      ? parseFloat(item.titleDensity ?? item.density) : null;
-    const realCpr = isObj && item.cpr != null ? parseFloat(item.cpr) : null;
-    const competingProducts = isObj && item.competingProducts != null ? parseFloat(item.competingProducts) : null;
+    const realVolume = isObj ? toObservedNumber(item.searchVolume ?? item.volume ?? item.searches) : null;
+    const realDensity = isObj ? toObservedNumber(item.titleDensity ?? item.density) : null;
+    const realCpr = isObj ? toObservedNumber(item.cpr) : null;
+    const competingProducts = isObj ? toObservedNumber(item.competingProducts) : null;
 
-    // Sort-only heuristic values -- used to produce a stable relative
-    // ordering when real metrics are absent, but never exposed as output.
+    // Sort-only heuristics keep keyword ordering deterministic when source
+    // metrics are absent. They MUST NOT leak into score/opportunityScore.
     const sortVol = realVolume ?? 100;
     const sortDensity = realDensity ?? 10;
     const sortCpr = realCpr ?? 8;
@@ -135,7 +130,7 @@ function rankKeywords(keywordList, contextCategory = 'Jewelry', seedPhrase = '')
     }
 
     if (sortDensity < 5) {
-      longTailMultiplier *= 1.4; // Low competition boost
+      longTailMultiplier *= 1.4; // Low competition boost for ordering only if density is missing
     }
 
     // Dynamic Concept Intent Matcher (Adapts to ANY active seed phrase dynamically!)
@@ -146,17 +141,17 @@ function rankKeywords(keywordList, contextCategory = 'Jewelry', seedPhrase = '')
       longTailMultiplier *= 0.3;
     }
 
-    // Base Ranking Score Formula with Long-tail Priority & Dynamic Intent
-    const baseScore = (sortVol * Math.max(1, 100 - sortDensity)) / (sortCpr + 1);
-    const score = baseScore * longTailMultiplier * dynamicIntentMultiplier;
+    const baseSortScore = (sortVol * Math.max(1, 100 - sortDensity)) / (sortCpr + 1);
+    const sortScore = baseSortScore * longTailMultiplier * dynamicIntentMultiplier;
 
-    // The score formula above always runs (sortVol/sortDensity/sortCpr fill
-    // in for ranking purposes even when metrics are missing), but the
-    // exposed opportunityScore/scoringState must only claim SCORED when
-    // every input the formula used is a real observation -- volume alone is
-    // not sufficient evidence for a decision-grade score (P0.5-C truth fix,
-    // same all-or-nothing rule as researchTruth.scoreKeywordEvidence).
-    const hasFullMetrics = realVolume !== null && realDensity !== null && realCpr !== null;
+    // Decision/exposed score requires every input used by the formula. A real
+    // volume alone is not enough: missing density or CPR must remain
+    // INSUFFICIENT_EVIDENCE rather than silently using 10/8 and calling it
+    // SCORED.
+    const completeScoreEvidence = [realVolume, realDensity, realCpr]
+      .every(value => value !== null && value >= 0);
+    const exposedScore = completeScoreEvidence ? sortScore : null;
+
     return {
       keyword: kw,
       volume: realVolume,
@@ -165,16 +160,20 @@ function rankKeywords(keywordList, contextCategory = 'Jewelry', seedPhrase = '')
       titleDensity: realDensity,
       competingProducts,
       cpr: realCpr,
-      score, // internal sort key only -- not a claimed real business metric
-      opportunityScore: hasFullMetrics ? Math.round(score) : null,
-      scoringState: hasFullMetrics ? 'SCORED' : 'INSUFFICIENT_EVIDENCE',
+      score: exposedScore,
+      opportunityScore: completeScoreEvidence ? Math.round(exposedScore) : null,
+      scoringState: completeScoreEvidence ? 'SCORED' : 'INSUFFICIENT_EVIDENCE',
       isLongTail: wordsCount >= 3,
-      isNicheRelevant: dynamicIntentMultiplier > 0.5
+      isNicheRelevant: dynamicIntentMultiplier > 0.5,
+      _sortScore: sortScore
     };
   }).filter(Boolean);
 
-  // Sort descending by opportunity score
-  return scoredList.sort((a, b) => b.score - a.score);
+  // Internal heuristic is used for ordering only, then removed so it cannot
+  // be persisted or surfaced as a business metric.
+  return scoredList
+    .sort((a, b) => b._sortScore - a._sortScore)
+    .map(({ _sortScore, ...item }) => item);
 }
 
 
@@ -287,8 +286,8 @@ function buildAmazonSearchTerms(keywordList) {
 
   // Fallback relevant terms to fill up to 249 bytes if needed
   const fallbackTerms = [
-    'gifts', 'gift', 'women', 'mom', 'spanish', 'birthday', 'wedding', 'anniversary', 
-    'personalized', 'custom', 'handmade', 'unique', 'keepsake', 'mother', 'daughter', 
+    'gifts', 'gift', 'women', 'mom', 'spanish', 'birthday', 'wedding', 'anniversary',
+    'personalized', 'custom', 'handmade', 'unique', 'keepsake', 'mother', 'daughter',
     'regalos', 'para', 'mujer', 'esposa', 'novia', 'navidad', 'cumpleanos', 'collar'
   ];
 
@@ -374,4 +373,3 @@ module.exports = {
   buildEtsyTitleClean,
   buildEtsyTags
 };
-

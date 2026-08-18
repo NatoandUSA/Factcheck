@@ -137,13 +137,13 @@ export default function MarketBenchmarkWidget({ seedPhrase, category, onSelectNi
               <span style={{ fontSize: '0.75rem', fontWeight: 800, color: '#0369a1', textTransform: 'uppercase' }}>
                 📈 1. Google Trends 90D
               </span>
-              {data.sources.googleTrends?.evidenceState !== 'SOURCE_ERROR' && (
+              {data.sources.googleTrends?.evidenceState === 'OBSERVED' && (
                 <span style={{ fontSize: '0.75rem', fontWeight: 700, color: data.sources.googleTrends.growth >= 0 ? '#16a34a' : '#dc2626' }}>
                   {data.sources.googleTrends.growth >= 0 ? `+${data.sources.googleTrends.growth}%` : `${data.sources.googleTrends.growth}%`}
                 </span>
               )}
             </div>
-            {data.sources.googleTrends?.evidenceState === 'SOURCE_ERROR' ? (
+            {data.sources.googleTrends?.evidenceState !== 'OBSERVED' ? (
               <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>
                 Không khả dụng lúc này -- không dùng số liệu giả định.
               </div>

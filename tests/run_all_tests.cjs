@@ -18,6 +18,7 @@ function runAllTests() {
     'tests/test_runtime_paths.cjs',
     'tests/test_etsy_truth_semantics.cjs',
     'tests/test_etsy_provenance_authority.cjs',
+    'tests/test_etsy_scanner_evidence_ui.cjs',
     'tests/test_strict_keyword_sanitizer.cjs',
     'tests/test_full_cerebro_mkl_flow.cjs',
     'tests/test_white_screen_failsafe.cjs'

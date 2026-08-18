@@ -221,6 +221,13 @@ async function main() {
       assertPersonalizationEmpty(payload.listing, 'Quick Draft');
       assertSkuEmpty(payload.listing, 'Quick Draft');
       assert.strictEqual(payload.listing.variations?.length || 0, 0, 'Quick Draft must not fabricate child variations');
+      // Quick Draft's title/highlights are built deterministically by
+      // keywordRanker, not the mocked model -- this is the app's OWN code
+      // fabricating capability claims, a different bug than untrusted model
+      // output (independent re-audit finding, round 6).
+      assertTitleNotUnconditionallyPersonalized(payload.listing, 'Quick Draft');
+      assert.ok(!/custom handmade gift/i.test(payload.listing.etsyTitle || ''), 'Quick Draft etsyTitle must not fabricate a "Custom Handmade Gift" claim');
+      assert.ok(!/multiple colors & sizes available/i.test(payload.listing.itemHighlights || ''), 'Quick Draft itemHighlights must not fabricate a variation-availability claim');
     });
 
     let trendDraftId = null;

@@ -1162,6 +1162,15 @@ function safeJsonParse(str, fallback = {}) {
   }
 }
 
+// A non-compliant model can return any JSON shape it wants for a field the
+// prompt asked to be an array (e.g. a comma-separated string instead of a
+// real array). Calling .slice()/.map() directly on that would 500 the whole
+// route -- normalize defensively instead of trusting the model's type
+// (independent adversarial-test finding: wrong-type model JSON).
+function safeStringArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
 // API: Get all learned templates
 app.get('/api/learning/templates', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
   db.all(
@@ -1451,11 +1460,11 @@ Return ONLY raw JSON without markdown code fences:
               parentSku: '',
               amazonTitle: title75,
               itemHighlights: highlights125,
-              amazonBullets: aiData.amazonBullets || [],
+              amazonBullets: safeStringArray(aiData.amazonBullets),
               amazonSearchTerms: aiData.amazonSearchTerms || '',
               amazonDescription: aiData.amazonDescription || '',
               amazonAPlusContent: aiData.amazonAPlusContent || null,
-              amazonAPlusPoints: aiData.amazonAPlusPoints || [],
+              amazonAPlusPoints: safeStringArray(aiData.amazonAPlusPoints),
               // No fabricated Gold/Silver/Rose-Gold child variations: nobody
               // has verified this product actually comes in those finishes.
               // Real variations must be entered from real product data, not
@@ -1463,7 +1472,7 @@ Return ONLY raw JSON without markdown code fences:
               variations: [],
               etsyTitle: keywordRanker.buildEtsyTitleClean([cleanSeed], category),
               etsyDescription: aiData.etsyDescription || '',
-              etsyTags: (aiData.etsyTags || []).slice(0, 13).map(t => String(t).substring(0, 20)),
+              etsyTags: safeStringArray(aiData.etsyTags).slice(0, 13).map(t => String(t).substring(0, 20)),
               // Hard-coded empty, not aiData-derived, for both fields: a seed
               // keyword is no evidence of real materials or personalization
               // capability, so the model's output is never trusted here no
@@ -2024,14 +2033,14 @@ Return ONLY a valid raw JSON object without markdown code fences:
           parentSku: '',
           variations: [],
           amazonTitle: trendAmazonTitle || trend.category,
-          amazonBullets: aiData.amazonBullets || [],
+          amazonBullets: safeStringArray(aiData.amazonBullets),
           amazonSearchTerms: aiData.amazonSearchTerms || '',
           amazonDescription: aiData.amazonDescription || '',
           amazonAPlusContent: aiData.amazonAPlusContent || null,
-          amazonAPlusPoints: aiData.amazonAPlusPoints || [],
+          amazonAPlusPoints: safeStringArray(aiData.amazonAPlusPoints),
           etsyTitle: trendEtsyTitle || trend.category,
           etsyDescription: aiData.etsyDescription || '',
-          etsyTags: (aiData.etsyTags || []).slice(0, 13).map(t => String(t).substring(0, 20)),
+          etsyTags: safeStringArray(aiData.etsyTags).slice(0, 13).map(t => String(t).substring(0, 20)),
           // Hard-coded empty, not aiData-derived, for both fields: trending
           // keywords are no evidence of real materials or personalization
           // capability, so the model's output is never trusted here no

@@ -1,13 +1,14 @@
 /**
  * P0.5-C research-signal truth hardening.
  *
- * Locks the six remaining gaps identified in PR #13:
+ * Locks the seven remaining gaps identified in PR #13:
  * 1) explicit zero through YTrends HTML ingestion;
  * 2) generic partial-metric scoring;
  * 3) keywordRanker partial-metric scoring;
  * 4) Google Trends empty timeline;
  * 5) Google Trends short timeline;
- * 6) deterministic provider-failure/provenance matrix.
+ * 6) deterministic provider-failure/provenance matrix;
+ * 7) Google Trends relatedQueries sub-source provenance.
  */
 const assert = require('assert');
 const fs = require('fs');
@@ -33,13 +34,26 @@ function trendPayload(values) {
   });
 }
 
-function fakeTrendClient(values, { throwInterest = null } = {}) {
+function fakeTrendClient(values, { throwInterest = null, relatedQueriesBehavior = 'empty' } = {}) {
   return {
     async interestOverTime() {
       if (throwInterest) throw throwInterest;
       return trendPayload(values);
     },
     async relatedQueries() {
+      if (relatedQueriesBehavior === 'throw') throw new Error('related queries provider down');
+      if (relatedQueriesBehavior === 'malformed') return '{not valid json';
+      if (relatedQueriesBehavior === 'nonempty') {
+        return JSON.stringify({
+          default: {
+            rankedList: [
+              { rankedKeyword: [{ query: 'rising related term', value: 120 }] },
+              { rankedKeyword: [{ query: 'top related term', value: 88 }] }
+            ]
+          }
+        });
+      }
+      // 'empty' (default): a valid provider response with no usable ranked queries.
       return JSON.stringify({ default: { rankedList: [] } });
     }
   };
@@ -250,6 +264,33 @@ async function main() {
   assert.strictEqual(fullyObserved.sources.pinterestGiftIntent, undefined);
   console.log('🟢 GAP 6: provider failure matrix is deterministic and verdict provenance is explicit.');
 
+  // GAP 7: relatedQueries is a separate sub-source with its own field-level
+  // provenance. A throw/malformed related-query response must not collapse
+  // into the same [] shape as a genuinely empty result, and neither must
+  // downgrade the already-confirmed OBSERVED timeline.
+  const relatedThrow = await fetchGoogleTrends('seed', fakeTrendClient([10, 12, 14, 16, 18, 20, 22, 24], { relatedQueriesBehavior: 'throw' }));
+  assert.strictEqual(relatedThrow.success, true, 'A related-query failure must not downgrade a valid timeline');
+  assert.strictEqual(relatedThrow.evidenceState, 'OBSERVED');
+  assert.strictEqual(relatedThrow.currentScore, 24);
+  assert.strictEqual(relatedThrow.relatedQueriesEvidenceState, 'SOURCE_ERROR');
+  assert.deepStrictEqual(relatedThrow.relatedQueries, []);
+  assert.ok(relatedThrow.relatedQueriesReason, 'A related-query provider failure must carry a visible reason');
+
+  const relatedMalformed = await fetchGoogleTrends('seed', fakeTrendClient([10, 12, 14, 16, 18, 20, 22, 24], { relatedQueriesBehavior: 'malformed' }));
+  assert.strictEqual(relatedMalformed.evidenceState, 'OBSERVED');
+  assert.strictEqual(relatedMalformed.relatedQueriesEvidenceState, 'SOURCE_ERROR', 'Malformed related-query JSON must be visible, not silently empty');
+
+  const relatedEmpty = await fetchGoogleTrends('seed', fakeTrendClient([10, 12, 14, 16, 18, 20, 22, 24], { relatedQueriesBehavior: 'empty' }));
+  assert.strictEqual(relatedEmpty.evidenceState, 'OBSERVED');
+  assert.strictEqual(relatedEmpty.relatedQueriesEvidenceState, 'INSUFFICIENT_EVIDENCE', 'A valid empty related-query response is distinct from a provider failure');
+  assert.deepStrictEqual(relatedEmpty.relatedQueries, []);
+
+  const relatedObserved = await fetchGoogleTrends('seed', fakeTrendClient([10, 12, 14, 16, 18, 20, 22, 24], { relatedQueriesBehavior: 'nonempty' }));
+  assert.strictEqual(relatedObserved.evidenceState, 'OBSERVED');
+  assert.strictEqual(relatedObserved.relatedQueriesEvidenceState, 'OBSERVED');
+  assert.ok(relatedObserved.relatedQueries.length > 0, 'Usable related queries must be preserved');
+  console.log('🟢 GAP 7: relatedQueries provider failure/malformed/empty/observed are provenance-distinct and never downgrade a valid timeline.');
+
   // Secondary same-bug-class tripwires.
   const gtSrc = fs.readFileSync(path.resolve(__dirname, '../server/googleTrendsService.js'), 'utf8');
   const benchSrc = fs.readFileSync(path.resolve(__dirname, '../server/benchmarkService.js'), 'utf8');
@@ -262,7 +303,7 @@ async function main() {
   assert.ok(!benchSrc.includes('growth || 15'));
 
   console.log('\n================================================================');
-  console.log('  🟢 P0.5-C SIX-GAP HARDENING SUITE PASSED');
+  console.log('  🟢 P0.5-C SEVEN-GAP HARDENING SUITE PASSED');
   console.log('================================================================');
 }
 

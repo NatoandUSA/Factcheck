@@ -71,7 +71,14 @@ async function fetchGoogleTrends(seedKeyword, client = googleTrends) {
     const currentScore = points[points.length - 1].value;
     const peakScore = Math.max(...points.map(p => p.value));
 
+    // relatedQueries is a separate sub-source from the timeline above. A
+    // provider throw/malformed response must not collapse into the same []
+    // shape as a genuinely valid "no related queries" result -- otherwise
+    // Staff cannot tell provider failure from real absence of related demand
+    // (P0.5-C truth fix).
     let relatedQueries = [];
+    let relatedQueriesEvidenceState = 'SOURCE_ERROR';
+    let relatedQueriesReason = null;
     try {
       const relatedResults = await client.relatedQueries({
         keyword: seed,
@@ -86,10 +93,16 @@ async function fetchGoogleTrends(seedKeyword, client = googleTrends) {
         ...risingList.slice(0, 5).map(q => ({ query: q.query, value: `+${q.value}% (Breakout)`, type: 'RISING' })),
         ...topList.slice(0, 5).map(q => ({ query: q.query, value: `${q.value}/100`, type: 'TOP' }))
       ];
+      relatedQueriesEvidenceState = relatedQueries.length > 0 ? 'OBSERVED' : 'INSUFFICIENT_EVIDENCE';
     } catch (relErr) {
       console.warn('Google Trends related queries skipped:', relErr.message);
+      relatedQueriesEvidenceState = 'SOURCE_ERROR';
+      relatedQueriesReason = relErr.message;
     }
 
+    // A related-query failure does not downgrade the overall response: the
+    // timeline above is already confirmed OBSERVED and remains decision-usable
+    // on its own.
     return {
       success: true,
       evidenceState: 'OBSERVED',
@@ -101,7 +114,9 @@ async function fetchGoogleTrends(seedKeyword, client = googleTrends) {
       isBreakout: momentumPercent > 50,
       statusBadge: momentumPercent > 50 ? '🔥 BREAKOUT MOMENTUM' : momentumPercent > 10 ? '📈 RISING DEMAND' : '📊 STABLE INTEREST',
       timeline: points.slice(-24),
-      relatedQueries
+      relatedQueries,
+      relatedQueriesEvidenceState,
+      relatedQueriesReason
     };
   } catch (err) {
     console.warn(`Google Trends API error for "${seed}": ${err.message}`);

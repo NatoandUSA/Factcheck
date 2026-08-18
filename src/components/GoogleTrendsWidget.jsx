@@ -181,8 +181,10 @@ export default function GoogleTrendsWidget({ seedPhrase, onShowToast }) {
             </div>
           )}
 
-          {/* Related / Rising Queries Cross-Check */}
-          {trendsData.relatedQueries && trendsData.relatedQueries.length > 0 && (
+          {/* Related / Rising Queries Cross-Check -- a provider failure on
+              this sub-source must stay visible to Staff, not silently hide
+              like a genuine "no related queries" result (P0.5-C truth fix). */}
+          {trendsData.relatedQueriesEvidenceState === 'OBSERVED' && trendsData.relatedQueries?.length > 0 ? (
             <div style={{ borderTop: '1px solid rgba(255, 255, 255, 0.1)', paddingTop: '12px' }}>
               <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
                 <Sparkles size={14} color="#60a5fa" />
@@ -207,7 +209,15 @@ export default function GoogleTrendsWidget({ seedPhrase, onShowToast }) {
                 ))}
               </div>
             </div>
-          )}
+          ) : trendsData.relatedQueriesEvidenceState === 'SOURCE_ERROR' ? (
+            <div style={{ borderTop: '1px solid rgba(255, 255, 255, 0.1)', paddingTop: '12px', fontSize: '0.78rem', color: '#94a3b8', fontStyle: 'italic' }}>
+              Không lấy được cụm từ khóa mở rộng lúc này -- không dùng dữ liệu giả định.
+            </div>
+          ) : trendsData.relatedQueriesEvidenceState === 'INSUFFICIENT_EVIDENCE' ? (
+            <div style={{ borderTop: '1px solid rgba(255, 255, 255, 0.1)', paddingTop: '12px', fontSize: '0.78rem', color: '#94a3b8', fontStyle: 'italic' }}>
+              Chưa có đủ cụm từ khóa mở rộng liên quan cho seed phrase này.
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>

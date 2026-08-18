@@ -1464,11 +1464,13 @@ Return ONLY raw JSON without markdown code fences:
               etsyTitle: keywordRanker.buildEtsyTitleClean([cleanSeed], category),
               etsyDescription: aiData.etsyDescription || '',
               etsyTags: (aiData.etsyTags || []).slice(0, 13).map(t => String(t).substring(0, 20)),
-              etsyMaterials: aiData.etsyMaterials || [],
-              // Hard-coded empty, not aiData-derived: a seed keyword is not
-              // evidence this product actually supports personalization, so
-              // the model's inference is never trusted here regardless of
-              // what it returns (GPT PR-10 4th re-audit).
+              // Hard-coded empty, not aiData-derived, for both fields: a seed
+              // keyword is no evidence of real materials or personalization
+              // capability, so the model's output is never trusted here no
+              // matter what it returns -- prompt wording alone was proven
+              // insufficient against a non-compliant model (independent
+              // integration-test finding, round 5).
+              etsyMaterials: [],
               etsyPersonalizationInstructions: '',
               categoryName: category,
               generatedAt: new Date().toISOString(),
@@ -1999,6 +2001,14 @@ Return ONLY a valid raw JSON object without markdown code fences:
             text = text.split('```')[1].split('```')[0].trim();
           }
           const aiData = safeJsonParse(text, {});
+          // Strip a leading "Personalized" claim from the model's own title
+          // output, not just the fallback: this route has no real
+          // personalization-capability evidence, so the model asserting it
+          // directly is the same unverified claim regardless of whether it
+          // came from the fallback or the model itself (independent
+          // integration-test finding, round 5).
+          const trendTitleRaw = (aiData.amazonTitle || '').trim();
+          const trendTitleSafe = trendTitleRaw.replace(/^personalized\s+/i, '').trim();
 
         const payload = {
           // No auto-generated SKU (same reasoning as Quick Draft: the Staff
@@ -2008,9 +2018,7 @@ Return ONLY a valid raw JSON object without markdown code fences:
           // invented to fill the UI (GPT PR-10 re-audit).
           parentSku: '',
           variations: [],
-          // No unconditional "Personalized" claim: search-demand keywords
-          // are not evidence this specific product supports personalization.
-          amazonTitle: aiData.amazonTitle || trend.category,
+          amazonTitle: trendTitleSafe || trend.category,
           amazonBullets: aiData.amazonBullets || [],
           amazonSearchTerms: aiData.amazonSearchTerms || '',
           amazonDescription: aiData.amazonDescription || '',
@@ -2021,10 +2029,13 @@ Return ONLY a valid raw JSON object without markdown code fences:
           etsyTitle: aiData.etsyTitle || trend.category,
           etsyDescription: aiData.etsyDescription || '',
           etsyTags: (aiData.etsyTags || []).slice(0, 13).map(t => String(t).substring(0, 20)),
-          etsyMaterials: aiData.etsyMaterials || [],
-          // Hard-coded empty, not aiData-derived: trending keywords are not
-          // evidence this product actually supports personalization (GPT
-          // PR-10 4th re-audit).
+          // Hard-coded empty, not aiData-derived, for both fields: trending
+          // keywords are no evidence of real materials or personalization
+          // capability, so the model's output is never trusted here no
+          // matter what it returns -- prompt wording alone was proven
+          // insufficient against a non-compliant model (independent
+          // integration-test finding, round 5).
+          etsyMaterials: [],
           etsyPersonalizationInstructions: '',
           categoryName: trend.category,
           generatedAt: new Date().toISOString(),

@@ -1,7 +1,7 @@
 /**
  * P0.5-C research-signal truth hardening.
  *
- * Locks the eight remaining gaps identified in PR #13:
+ * Locks the nine remaining gaps identified in PR #13:
  * 1) explicit zero through YTrends HTML ingestion;
  * 2) generic partial-metric scoring;
  * 3) keywordRanker partial-metric scoring;
@@ -9,7 +9,8 @@
  * 5) Google Trends short timeline;
  * 6) deterministic provider-failure/provenance matrix;
  * 7) Google Trends relatedQueries sub-source provenance;
- * 8) Staff-facing measurement-window labels (real-time/30d/90D claims).
+ * 8) Staff-facing measurement-window labels (real-time/30d/90D claims);
+ * 9) benchmarkService propagating relatedQueries provenance (no false zero).
  */
 const assert = require('assert');
 const fs = require('fs');
@@ -271,6 +272,36 @@ async function main() {
   assert.strictEqual(fullyObserved.sources.pinterestGiftIntent, undefined);
   console.log('🟢 GAP 6: provider failure matrix is deterministic and verdict provenance is explicit.');
 
+  // GAP 9: benchmarkService must propagate relatedQueries sub-source
+  // provenance rather than presenting an unavailable/failed related-query
+  // fetch as a confirmed "0 breakout keywords" fact.
+  const benchRelatedUnavailable = await getMarketBenchmark(
+    { seed: 'test seed phrase', category: 'Jewelry' },
+    { fetchGoogleTrends: async () => observedGoogleResult({ relatedQueriesEvidenceState: 'SOURCE_ERROR' }), fetch: amazonSuccess }
+  );
+  assert.strictEqual(benchRelatedUnavailable.sources.googleTrends.relatedQueriesEvidenceState, 'SOURCE_ERROR');
+  assert.strictEqual(benchRelatedUnavailable.sources.googleTrends.breakoutCount, null, 'Unavailable related-query evidence must not present as a factual 0');
+
+  const benchRelatedInsufficientEvidence = await getMarketBenchmark(
+    { seed: 'test seed phrase', category: 'Jewelry' },
+    { fetchGoogleTrends: async () => observedGoogleResult({ relatedQueriesEvidenceState: 'INSUFFICIENT_EVIDENCE' }), fetch: amazonFetchFailure() }
+  );
+  assert.strictEqual(benchRelatedInsufficientEvidence.sources.googleTrends.breakoutCount, null, 'Insufficient related-query evidence must not present as a factual 0 even on the INSUFFICIENT_EVIDENCE benchmark branch');
+
+  const benchRelatedObserved = await getMarketBenchmark(
+    { seed: 'test seed phrase', category: 'Jewelry' },
+    {
+      fetchGoogleTrends: async () => observedGoogleResult({
+        relatedQueriesEvidenceState: 'OBSERVED',
+        relatedQueries: [{ query: 'a', value: '1', type: 'TOP' }, { query: 'b', value: '2', type: 'RISING' }]
+      }),
+      fetch: amazonSuccess
+    }
+  );
+  assert.strictEqual(benchRelatedObserved.sources.googleTrends.relatedQueriesEvidenceState, 'OBSERVED');
+  assert.strictEqual(benchRelatedObserved.sources.googleTrends.breakoutCount, 2, 'Real observed related queries must still be counted');
+  console.log('🟢 GAP 9: benchmark propagates relatedQueries sub-source provenance instead of a false zero breakout count.');
+
   // GAP 7: relatedQueries is a separate sub-source with its own field-level
   // provenance. A throw/malformed related-query response must not collapse
   // into the same [] shape as a genuinely empty result, and neither must
@@ -323,7 +354,7 @@ async function main() {
   console.log('🟢 GAP 8: Staff-facing measurement-window labels match the actual 12-month query / 4-week momentum formula.');
 
   console.log('\n================================================================');
-  console.log('  🟢 P0.5-C EIGHT-GAP HARDENING SUITE PASSED');
+  console.log('  🟢 P0.5-C NINE-GAP HARDENING SUITE PASSED');
   console.log('================================================================');
 }
 

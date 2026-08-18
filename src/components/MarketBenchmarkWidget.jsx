@@ -153,7 +153,9 @@ export default function MarketBenchmarkWidget({ seedPhrase, category, onSelectNi
                   Trạng thái: {data.sources.googleTrends.status}
                 </div>
                 <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                  Có {data.sources.googleTrends.breakoutCount || 0} cụm từ khóa đột phá liên quan.
+                  {data.sources.googleTrends.breakoutCount !== null && data.sources.googleTrends.breakoutCount !== undefined
+                    ? `Có ${data.sources.googleTrends.breakoutCount} cụm từ khóa đột phá liên quan.`
+                    : 'Chưa lấy được cụm từ khóa đột phá liên quan -- không dùng số liệu giả định.'}
                 </div>
               </>
             )}

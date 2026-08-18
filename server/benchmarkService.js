@@ -34,7 +34,11 @@ async function getMarketBenchmark(
         growth: gt.momentumPercent,
         status: gt.isBreakout ? 'ĐỘT PHÁ' : gt.momentumPercent > 10 ? 'TĂNG' : 'ỔN ĐỊNH'
       },
-      relatedQueries: Array.isArray(gt.relatedQueries) ? gt.relatedQueries : []
+      relatedQueries: Array.isArray(gt.relatedQueries) ? gt.relatedQueries : [],
+      // relatedQueries is its own sub-source: a provider failure/malformed
+      // response on it must not present as a confirmed "zero breakout
+      // keywords" fact downstream (same class as the GoogleTrendsWidget fix).
+      relatedQueriesEvidenceState: gt.relatedQueriesEvidenceState || 'SOURCE_ERROR'
     };
   }
 
@@ -90,7 +94,8 @@ async function getMarketBenchmark(
               evidenceState: 'OBSERVED',
               growth: googleData.summary.growth,
               status: googleData.summary.status,
-              breakoutCount: googleData.relatedQueries.length
+              relatedQueriesEvidenceState: googleData.relatedQueriesEvidenceState,
+              breakoutCount: googleData.relatedQueriesEvidenceState === 'OBSERVED' ? googleData.relatedQueries.length : null
             }
           : { evidenceState: googleEvidenceState },
         amazonLiveSuggestions: amazonSuggestionsAvailable ? amazonSuggestions.slice(0, 6) : []
@@ -182,7 +187,8 @@ async function getMarketBenchmark(
         evidenceState: 'OBSERVED',
         growth: gtGrowth,
         status: gtStatus,
-        breakoutCount: googleData.relatedQueries.length
+        relatedQueriesEvidenceState: googleData.relatedQueriesEvidenceState,
+        breakoutCount: googleData.relatedQueriesEvidenceState === 'OBSERVED' ? googleData.relatedQueries.length : null
       },
       amazonLiveSuggestions: amazonSuggestions.slice(0, 6)
     }

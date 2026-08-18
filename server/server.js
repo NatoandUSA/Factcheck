@@ -693,7 +693,7 @@ app.patch('/api/listings/:id', requireAuth(db), requireRole(['OWNER', 'MANAGER',
     `UPDATE listings
      SET amazonTitle = ?, etsyTitle = ?, categoryName = ?, payload = ?, status = 'NEEDS_QA',
          listing_version = listing_version + 1, approved_version = NULL,
-         approved_hash = NULL, approved_by = NULL, approved_at = NULL
+         approved_hash = NULL, approved_by = NULL, approved_at = NULL, product_truth_notes = NULL
      WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?
        AND listing_version = ?`,
     [amazonTitle, etsyTitle, categoryName, JSON.stringify(newPayload), req.params.id,
@@ -719,11 +719,23 @@ app.patch('/api/listings/:id', requireAuth(db), requireRole(['OWNER', 'MANAGER',
 app.patch('/api/listings/:id/approve', requireAuth(db), requireRole(['OWNER', 'MANAGER']), (req, res) => {
   const { id } = req.params;
 
-  const { expectedVersion } = req.body || {};
+  const { expectedVersion, productTruthNotes } = req.body || {};
   if (!Number.isInteger(expectedVersion) || expectedVersion < 1) {
     return res.status(400).json({ success: false, error: 'EXPECTED_VERSION_REQUIRED' });
   }
-
+  // A generic approval click is not proof that materials/specs/facts were
+  // actually verified -- require the approver to state what they checked,
+  // bound to this exact listing_version (invalidated on any later edit, same
+  // as approved_hash). Model-generated non-empty text alone cannot satisfy
+  // this because it requires the human's own words (GPT PR-10 re-audit).
+  const truthNotes = typeof productTruthNotes === 'string' ? productTruthNotes.trim() : '';
+  if (truthNotes.length < 10) {
+    return res.status(400).json({
+      success: false,
+      error: 'PRODUCT_TRUTH_ATTESTATION_REQUIRED',
+      message: 'Describe what you personally verified about this product (materials, specs, personalization limits, etc.) before approving -- at least 10 characters.'
+    });
+  }
 
   db.get(
     `SELECT * FROM listings
@@ -738,14 +750,15 @@ app.patch('/api/listings/:id/approve', requireAuth(db), requireRole(['OWNER', 'M
     let parsedPayload = {};
     try { parsedPayload = JSON.parse(row.payload); } catch(e) {}
     const payloadHash = approvalHash(parsedPayload);
-    
+
     // C5B Fix: Evaluate via Canonical Publish Gate (Fail-Closed)
     parsedPayload.status = 'MANAGER_APPROVED';
+    parsedPayload.productTruthNotes = truthNotes;
     const gateRes = publishGate.evaluatePublishGate(parsedPayload);
 
     // Strictly reject any status other than PUBLISH_READY
     if (gateRes.final_status !== 'PUBLISH_READY' || !gateRes.canExport) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         error: `APPROVAL_DENIED: Cannot publish listing with status "${gateRes.final_status}".`,
         reasons: gateRes.reasons,
         publishGate: gateRes
@@ -755,10 +768,10 @@ app.patch('/api/listings/:id/approve', requireAuth(db), requireRole(['OWNER', 'M
     const approvedHash = payloadHash;
     db.run(
       `UPDATE listings SET status = 'PUBLISH_READY', approved_version = listing_version,
-         approved_hash = ?, approved_by = ?, approved_at = CURRENT_TIMESTAMP
+         approved_hash = ?, approved_by = ?, approved_at = CURRENT_TIMESTAMP, product_truth_notes = ?
        WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?
          AND listing_version = ?`,
-      [approvedHash, req.user.userId, id, req.user.tenantId, req.user.workspaceId, req.user.marketplace, expectedVersion],
+      [approvedHash, req.user.userId, truthNotes, id, req.user.tenantId, req.user.workspaceId, req.user.marketplace, expectedVersion],
       function(updateErr) {
       if (updateErr) return res.status(500).json({ error: updateErr.message });
       if (this.changes !== 1) return res.status(412).json({ success: false, error: 'STALE_LISTING_VERSION' });
@@ -788,6 +801,7 @@ app.get('/api/listings/:id/export', requireAuth(db), requireRole(['OWNER', 'MANA
       return res.status(409).json({ success: false, error: 'APPROVAL_INVALIDATED' });
     }
     parsedPayload.status = row.status;
+    parsedPayload.productTruthNotes = row.product_truth_notes || '';
 
     const gateRes = publishGate.evaluatePublishGate(parsedPayload);
     if (!gateRes.canExport) {
@@ -1424,25 +1438,6 @@ Return ONLY raw JSON without markdown code fences:
             const title75 = keywordRanker.buildAmazonTitle75([cleanSeed], category);
             const highlights125 = keywordRanker.buildAmazonItemHighlights125([cleanSeed], category);
 
-            // Generate 4 Child Variation ASINs
-            const variationThemes = [
-              { sku: `SKU-${cleanSeed.substring(0,4).toUpperCase()}-GOLD-S`, name: 'Gold Finish / Small (S)' },
-              { sku: `SKU-${cleanSeed.substring(0,4).toUpperCase()}-SILVER-M`, name: 'Sterling Silver / Medium (M)' },
-              { sku: `SKU-${cleanSeed.substring(0,4).toUpperCase()}-ROSE-L`, name: 'Rose Gold Finish / Large (L)' },
-              { sku: `SKU-${cleanSeed.substring(0,4).toUpperCase()}-CUSTOM-XL`, name: 'Custom Message Card / Extra Large (XL)' }
-            ];
-
-            const childVariations = variationThemes.map((v, i) => ({
-              childIndex: i + 1,
-              sku: v.sku,
-              variationAttribute: v.name,
-              childTitle: `${title75.substring(0, 55)} - ${v.name.split('/')[0].trim()}`.substring(0, 75),
-              itemHighlights: highlights125,
-              childBullets: aiData.amazonBullets || [],
-              childSearchTerms: aiData.amazonSearchTerms || '',
-              childDescription: aiData.amazonDescription || ''
-            }));
-
             const payload = {
               parentSku: `PARENT-SKU-${cleanSeed.substring(0,6).toUpperCase()}`,
               amazonTitle: title75,
@@ -1452,7 +1447,11 @@ Return ONLY raw JSON without markdown code fences:
               amazonDescription: aiData.amazonDescription || '',
               amazonAPlusContent: aiData.amazonAPlusContent || null,
               amazonAPlusPoints: aiData.amazonAPlusPoints || [],
-              variations: childVariations,
+              // No fabricated Gold/Silver/Rose-Gold child variations: nobody
+              // has verified this product actually comes in those finishes.
+              // Real variations must be entered from real product data, not
+              // invented to fill the UI (GPT PR-10 re-audit).
+              variations: [],
               etsyTitle: keywordRanker.buildEtsyTitleClean([cleanSeed], category),
               etsyDescription: aiData.etsyDescription || '',
               etsyTags: (aiData.etsyTags || []).slice(0, 13).map(t => String(t).substring(0, 20)),
@@ -1985,29 +1984,15 @@ Return ONLY a valid raw JSON object without markdown code fences:
           }
           const aiData = safeJsonParse(text, {});
 
-        // Generate 1 Parent + 4 Child ASIN variations (same structure as
-        // /api/amazon/quick-draft) so every draft path produces a consistent,
-        // real Multi-ASIN package instead of the UI falling back to placeholders.
         const seedForSku = (trend.trending_keywords || trend.category || 'PRODUCT').split(',')[0].trim();
-        const variationThemes = [
-          { sku: `SKU-${seedForSku.substring(0,4).toUpperCase()}-GOLD-S`, name: 'Gold Finish / Small (S)' },
-          { sku: `SKU-${seedForSku.substring(0,4).toUpperCase()}-SILVER-M`, name: 'Sterling Silver / Medium (M)' },
-          { sku: `SKU-${seedForSku.substring(0,4).toUpperCase()}-ROSE-L`, name: 'Rose Gold Finish / Large (L)' },
-          { sku: `SKU-${seedForSku.substring(0,4).toUpperCase()}-CUSTOM-XL`, name: 'Custom Message Card / Extra Large (XL)' }
-        ];
-        const childVariations = variationThemes.map((v, i) => ({
-          childIndex: i + 1,
-          sku: v.sku,
-          variationAttribute: v.name,
-          childTitle: `${(aiData.amazonTitle || trend.category).substring(0, 55)} - ${v.name.split('/')[0].trim()}`.substring(0, 75),
-          childBullets: aiData.amazonBullets || [],
-          childSearchTerms: aiData.amazonSearchTerms || '',
-          childDescription: aiData.amazonDescription || ''
-        }));
 
         const payload = {
           parentSku: `PARENT-SKU-${seedForSku.substring(0,6).toUpperCase()}`,
-          variations: childVariations,
+          // No fabricated Gold/Silver/Rose-Gold child variations: nobody has
+          // verified this product actually comes in those finishes. Real
+          // variations must be entered from real product data, not invented
+          // to fill the UI (GPT PR-10 re-audit).
+          variations: [],
           amazonTitle: aiData.amazonTitle || `Personalized ${trend.category}`,
           amazonBullets: aiData.amazonBullets || [],
           amazonSearchTerms: aiData.amazonSearchTerms || '',

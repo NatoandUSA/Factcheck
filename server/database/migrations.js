@@ -3,6 +3,7 @@ const SECURITY_CONTROLS_MIGRATION = '003_security_controls';
 const KEYWORD_DETAIL_MIGRATION = '004_keyword_detail_and_authorship';
 const MARKET_TRENDS_MARKETPLACE_MIGRATION = '005_market_trends_marketplace';
 const WORKSPACE_OWNERSHIP_MIGRATION = '006_market_trends_and_templates_ownership';
+const PRODUCT_TRUTH_ATTESTATION_MIGRATION = '007_listing_product_truth_attestation';
 
 function run(db, sql, params = []) {
   return new Promise((resolve, reject) => {
@@ -119,6 +120,14 @@ async function migrateWorkspaceOwnership(db) {
   }
 }
 
+async function migrateProductTruthAttestation(db) {
+  const columns = new Set((await all(db, 'PRAGMA table_info(listings)')).map(column => column.name));
+  // Bound to the same optimistic-concurrency version as approved_version, so
+  // editing a listing after attestation invalidates it exactly like the
+  // existing approval hash already does.
+  await addColumnIfMissing(db, columns, 'product_truth_notes', 'TEXT NULL');
+}
+
 async function runMigrations(db) {
   await run(db, `
     CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -192,6 +201,19 @@ async function runMigrations(db) {
       throw error;
     }
   }
+
+  const productTruthApplied = await all(db, 'SELECT id FROM schema_migrations WHERE id = ?', [PRODUCT_TRUTH_ATTESTATION_MIGRATION]);
+  if (productTruthApplied.length === 0) {
+    await run(db, 'BEGIN IMMEDIATE');
+    try {
+      await migrateProductTruthAttestation(db);
+      await run(db, 'INSERT INTO schema_migrations (id) VALUES (?)', [PRODUCT_TRUTH_ATTESTATION_MIGRATION]);
+      await run(db, 'COMMIT');
+    } catch (error) {
+      try { await run(db, 'ROLLBACK'); } catch (_) {}
+      throw error;
+    }
+  }
 }
 
 module.exports = {
@@ -200,5 +222,6 @@ module.exports = {
   KEYWORD_DETAIL_MIGRATION,
   MARKET_TRENDS_MARKETPLACE_MIGRATION,
   WORKSPACE_OWNERSHIP_MIGRATION,
+  PRODUCT_TRUTH_ATTESTATION_MIGRATION,
   runMigrations
 };

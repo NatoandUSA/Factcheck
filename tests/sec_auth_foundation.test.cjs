@@ -287,7 +287,7 @@ async function runAuthFoundationTests() {
     const ownerApproveRes = await fetch(`http://127.0.0.1:${port}/api/listings/${createdListing.id}/approve`, {
       method: 'PATCH',
       headers: { Cookie: ownerCookie, Origin: `http://127.0.0.1:${port}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ expectedVersion: 1 })
+      body: JSON.stringify({ expectedVersion: 1, productTruthNotes: 'Verified fixture: cotton-poly blend, matches sample photo.' })
     });
     assert.strictEqual(ownerApproveRes.status, 200, 'Owner approval did not return 200 OK');
     const ownerApproveBody = await ownerApproveRes.json();
@@ -433,7 +433,7 @@ async function runAuthFoundationTests() {
     const crossApproveRes = await fetch(`http://127.0.0.1:${port}/api/listings/${scopedListing.id}/approve`, {
       method: 'PATCH',
       headers: { Cookie: etsyCookie, Origin: `http://127.0.0.1:${port}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ expectedVersion: 1 })
+      body: JSON.stringify({ expectedVersion: 1, productTruthNotes: 'Attempted cross-workspace approval fixture.' })
     });
     assert.strictEqual(crossApproveRes.status, 404, 'Cross-workspace approval must return non-enumerating 404');
 
@@ -465,7 +465,7 @@ async function runAuthFoundationTests() {
     const approveRes = await fetch(`http://127.0.0.1:${port}/api/listings/${scopedListing.id}/approve`, {
       method: 'PATCH',
       headers: { Cookie: amzCookie, Origin: `http://127.0.0.1:${port}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ expectedVersion: 1 })
+      body: JSON.stringify({ expectedVersion: 1, productTruthNotes: 'Verified fixture: embroidered gift item, cotton blend, machine washable.' })
     });
     assert.strictEqual(approveRes.status, 200);
     const approved = await approveRes.json();

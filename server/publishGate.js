@@ -61,14 +61,26 @@ function evaluatePublishGate(listing) {
     }
   }
 
-  // 2b. Product Truth Check: a listing cannot reach PUBLISH_READY with no real
-  // description content. This is what actually stops a manager from approving
-  // unverified/fabricated material or quality claims -- upstream fixes now
-  // leave a missing description empty instead of injecting boilerplate, so an
-  // empty description here means nobody has written real product facts yet.
+  // 2b. Product Truth Check, part 1: a listing cannot reach PUBLISH_READY
+  // with no real description content. Upstream fixes leave a missing
+  // description empty instead of injecting boilerplate, so an empty
+  // description here means nobody has written real product facts yet.
   const description = listing.amazonDescription || listing.etsyDescription || '';
   if (!description || description.trim().length === 0) {
     issues.push('Missing product description -- write real product details before publishing (no auto-generated placeholder is used).');
+  }
+
+  // 2c. Product Truth Check, part 2: a non-empty description is necessary
+  // but not sufficient -- it could still be entirely AI-generated text that
+  // nobody actually verified against the real product. Require an explicit,
+  // human-authored attestation of what was checked, bound to this exact
+  // listing_version by the caller (server.js clears it on every edit, same
+  // as approved_hash). This is what actually distinguishes "a manager
+  // clicked approve" from "a manager verified the facts are real"
+  // (GPT PR-10 re-audit).
+  const truthNotes = typeof listing.productTruthNotes === 'string' ? listing.productTruthNotes.trim() : '';
+  if (truthNotes.length < 10) {
+    issues.push('Missing Product Truth attestation -- the approver must state what they verified about this product before publishing.');
   }
 
   // 3. Fail-Closed Status Determination (Ported from 22etsy-agent Truth Discipline)

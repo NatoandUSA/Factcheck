@@ -155,16 +155,35 @@ export default function App() {
       showToast('Error: Cannot approve an offline listing.');
       return;
     }
+    // A generic approval click is not proof the facts were verified --
+    // require the approver to state what they personally checked about this
+    // product before it can reach PUBLISH_READY.
+    const productTruthNotes = window.prompt(
+      'Product Truth confirmation required.\n\nDescribe what you personally verified about this product (materials, specs, personalization limits, etc.) before approving:'
+    );
+    if (productTruthNotes === null) {
+      return; // Staff cancelled -- not an error, just no approval.
+    }
+    if (productTruthNotes.trim().length < 10) {
+      showToast('Approval cancelled: description must be at least 10 characters.');
+      return;
+    }
     try {
       const res = await fetch(`/api/listings/${listingToApprove.dbId}/approve`, {
         method: 'PATCH',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ expectedVersion: listingToApprove.listingVersion || listingToApprove.listing_version || 1 })
+        body: JSON.stringify({
+          expectedVersion: listingToApprove.listingVersion || listingToApprove.listing_version || 1,
+          productTruthNotes: productTruthNotes.trim()
+        })
       });
-      if (!res.ok) throw new Error('Not authorized or server error');
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        throw new Error(errBody.message || errBody.error || 'Not authorized or server error');
+      }
       const data = await res.json();
-      
+
       const updated = { ...listingToApprove, status: data.status, approvedVersion: data.approvedVersion, approvedHash: data.approvedHash };
       setCurrentListing(updated);
       handleSaveToHistory(updated, false);

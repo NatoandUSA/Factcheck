@@ -76,11 +76,11 @@ export default function AsinBatcherWidget({ onShowToast }) {
               onClick={() => {
                 setAsinInput('B0DV4DSJ63 B0CPHXX2ZF B0CWQVR8MM B0G5NM4HM5 B0CPHV9JLX B0D1G8YB7K B0C7NYZYMP B0B8VL9QY5 B0F2788CZN B0DKBMF3LC B0FF9G91CH B0D25LRB3W B0DB5JC1LX B0D2525G6K B0FBM1D77B B0GVYGSJ1Z B0F5N1WCBM B0GGR92NT8 B0CCFYRH46 B09JZ1RT12 B0CQVF4RHM B0BCV9RTS3 B099Z5MK5N B09H2DB3T7 B097JF8R57 B0D6K6WCHK B0CWQVZ3C4 B0BBBG4QMF');
                 setSeedKeyword('regalo para el amor de mi vida');
-                onShowToast?.('Đã nạp 30 Real Child ASINs từ file tìm kiếm Amazon!', 'info');
+                onShowToast?.('Đã nạp 30 ASINs mẫu (demo) — không phải dữ liệu thị trường xác thực.', 'info');
               }}
               style={{ fontSize: '0.72rem', color: '#0284c7', background: '#e0f2fe', border: '1px solid #bae6fd', padding: '2px 8px', borderRadius: '6px' }}
             >
-              📥 Nạp 30 Real Child ASINs (Tải từ File Amazon HTML)
+              📥 Nạp 30 ASINs Mẫu (Demo, không xác thực)
             </button>
           </div>
           <textarea
@@ -107,7 +107,7 @@ export default function AsinBatcherWidget({ onShowToast }) {
             style={{ background: '#d97706', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', padding: '10px' }}
           >
             <Sparkles size={16} className={loading ? 'spinner' : ''} />
-            <span>{loading ? 'Đang phân tích...' : '⚡ Phân Chia 3 Batch (10 Child ASINs / Batch)'}</span>
+            <span>{loading ? 'Đang phân tích...' : '⚡ Phân Chia Thành Batch (tối đa 10 ASINs / Batch)'}</span>
           </button>
         </div>
 
@@ -115,12 +115,12 @@ export default function AsinBatcherWidget({ onShowToast }) {
           {!batchResult ? (
             <div style={{ background: 'var(--panel-header-bg, #f8fafc)', border: '1px border-dashed var(--border-color, #cbd5e1)', borderRadius: '12px', padding: '30px', textAlign: 'center', color: 'var(--text-muted)' }}>
               <FileSpreadsheet size={36} style={{ margin: '0 auto 10px', opacity: 0.5 }} />
-              <div>Kết quả phân chia 3 Batch Child ASINs thực tế và Lệnh dán Cerebro sẽ hiển thị tại đây.</div>
+              <div>Kết quả phân chia Batch ASINs (đúng theo dữ liệu bạn cung cấp) và Lệnh dán Cerebro sẽ hiển thị tại đây.</div>
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', maxHeight: '380px', overflowY: 'auto' }}>
               <div style={{ background: '#ecfdf5', border: '1px solid #a7f3d0', padding: '10px 14px', borderRadius: '8px', color: '#065f46', fontSize: '0.85rem', fontWeight: 600 }}>
-                ✅ Đã tạo {batchResult.batchCount} Batch (mỗi Batch đúng 10 Real Child ASINs) cho "{batchResult.seedKeyword}".
+                ✅ Đã tạo {batchResult.batchCount} Batch từ {batchResult.totalCleanAsins} ASINs đã cung cấp cho "{batchResult.seedKeyword}".
               </div>
 
               {batchResult.batches.map((b) => (
@@ -139,11 +139,11 @@ export default function AsinBatcherWidget({ onShowToast }) {
                       className="btn btn-secondary btn-sm"
                       onClick={() => {
                         navigator.clipboard.writeText(b.asins.join(' '));
-                        onShowToast?.(`Đã copy 10 Child ASINs của ${b.batchName} để dán vào H10 Cerebro!`, 'info');
+                        onShowToast?.(`Đã copy ${b.asinCount} ASINs của ${b.batchName} để dán vào H10 Cerebro!`, 'info');
                       }}
                       style={{ fontSize: '0.7rem', padding: '3px 10px', background: '#d97706', color: '#fff', border: 'none', fontWeight: 700 }}
                     >
-                      Copy 10 Child ASINs Dán H10 Cerebro
+                      Copy {b.asinCount} ASINs Dán H10 Cerebro
                     </button>
                   </div>
                 </div>

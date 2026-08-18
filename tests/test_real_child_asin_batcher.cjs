@@ -74,6 +74,67 @@ function testAsinBatcherTruthSemantics() {
   assert.strictEqual(byAsin['B0REAL0004'].sales, null, 'Missing sales on a real Xray row must stay null, never defaulted');
   console.log('  🟢 Real Xray rows preserve source price/sales exactly; missing fields stay null; junk filters use real prices only.');
 
+  // 6b. Manual-paste contract: 9 ASINs (below the 10-30 range) must fail closed.
+  const nine = Array.from({ length: 9 }, (_, i) => `B0DDDD${String(i).padStart(4, '0')}`);
+  const res9 = filterAndBatchXrayAsins(nine.join(' '), 'custom gift');
+  assert.strictEqual(res9.success, false, '9 pasted ASINs (below the 10-30 contract) must be rejected, not silently accepted');
+  assert.strictEqual(res9.code, 'ASIN_COUNT_OUT_OF_RANGE');
+  console.log('  🟢 9 pasted ASINs -> ASIN_COUNT_OUT_OF_RANGE (below manual-paste minimum).');
+
+  // 6c. 31 ASINs (above the 10-30 range) must fail closed.
+  const thirtyOne = Array.from({ length: 31 }, (_, i) => `B0EEEE${String(i).padStart(4, '0')}`);
+  const res31 = filterAndBatchXrayAsins(thirtyOne.join(' '), 'custom gift');
+  assert.strictEqual(res31.success, false, '31 pasted ASINs (above the 10-30 contract) must be rejected');
+  assert.strictEqual(res31.code, 'ASIN_COUNT_OUT_OF_RANGE');
+  console.log('  🟢 31 pasted ASINs -> ASIN_COUNT_OUT_OF_RANGE (above manual-paste maximum).');
+
+  // 6d. Malformed identifiers (wrong length/characters) must be rejected explicitly,
+  // not silently coerced into "valid" ASINs.
+  const malformedList = ten.slice(0, 9).concat(['NOT-AN-ASIN']);
+  const resMalformed = filterAndBatchXrayAsins(malformedList.join(' '), 'custom gift');
+  assert.strictEqual(resMalformed.success, false, 'A malformed token must reject the whole paste, not be dropped silently');
+  assert.strictEqual(resMalformed.code, 'INVALID_ASIN_FORMAT');
+  console.log('  🟢 Malformed ASIN token -> INVALID_ASIN_FORMAT, explicit rejection.');
+
+  // 6e. Duplicate identifiers must be rejected explicitly, not silently deduped
+  // down to a smaller "valid-looking" set.
+  const withDuplicate = ten.concat([ten[0]]); // 11 tokens, 10 unique
+  const resDup = filterAndBatchXrayAsins(withDuplicate.join(' '), 'custom gift');
+  assert.strictEqual(resDup.success, false, 'Duplicate ASINs must be rejected explicitly, not silently deduped');
+  assert.strictEqual(resDup.code, 'DUPLICATE_ASINS');
+  console.log('  🟢 Duplicate ASIN in paste -> DUPLICATE_ASINS, explicit rejection (no silent dedup-and-pass).');
+
+  // 7. Unknown sales must never be treated as numeric zero in sort ranking.
+  // A row with unknown sales must not be pushed below a row with verified
+  // zero sales just because (sales || 0) collapses both to the same number.
+  const mixedSalesRows = [
+    { ASIN: 'B0KNOWN001', Title: 'Custom Gift Necklace Known Zero Sales', Price: '19.99', Sales: '0' },
+    { ASIN: 'B0UNKNOWN1', Title: 'Custom Gift Necklace Unknown Sales', Price: '19.99' } // Sales field absent
+  ];
+  const resMixed = filterAndBatchXrayAsins(mixedSalesRows, 'custom gift');
+  assert.strictEqual(resMixed.success, true);
+  const mixedItems = resMixed.batches[0].items;
+  const knownItem = mixedItems.find(i => i.asin === 'B0KNOWN001');
+  const unknownItem = mixedItems.find(i => i.asin === 'B0UNKNOWN1');
+  assert.strictEqual(knownItem.sales, 0, 'Verified zero sales must be preserved as the number 0');
+  assert.strictEqual(unknownItem.sales, null, 'Unknown sales must stay null, never coerced to 0');
+  // With equal relevanceScore and no comparable sales evidence between them, the
+  // stable sort must preserve input order — B0KNOWN001 before B0UNKNOWN1 — rather
+  // than asserting a rank via (sales || 0).
+  const mixedOrder = mixedItems.map(i => i.asin);
+  assert.deepStrictEqual(mixedOrder, ['B0KNOWN001', 'B0UNKNOWN1'], 'Unknown sales must not out/under-rank a known value via zero-coercion; input order preserved');
+  console.log('  🟢 Unknown sales never treated as numeric zero in sort; input order preserved absent comparable evidence.');
+
+  // 8. Rejection reasons must be truth-safe: an observed price can justify a
+  // price-floor/ceiling rejection, but never an unsupported origin/quality claim.
+  const priceOnlyRows = [{ ASIN: 'B0CHEAP001', Title: 'Custom Gift Item', Price: '2.99' }];
+  const resCheap = filterAndBatchXrayAsins(priceOnlyRows, 'custom gift');
+  assert.strictEqual(resCheap.success, false); // only row, and it's rejected -> INSUFFICIENT_EVIDENCE
+  const cheapReason = resCheap.rejectedSample[0].reason;
+  assert.ok(!/chinese/i.test(cheapReason), `Rejection reason must not assert an unsupported origin claim: "${cheapReason}"`);
+  assert.ok(/price floor/i.test(cheapReason), `Rejection reason must cite the configured price floor: "${cheapReason}"`);
+  console.log('  🟢 Price-floor rejection reason is truth-safe (no unsupported origin/quality claim).');
+
   // 6. Production code must not contain the removed fabrication catalog.
   const fs = require('fs');
   const src = fs.readFileSync(require.resolve('../server/asinBatcher.js'), 'utf8');

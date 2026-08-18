@@ -264,7 +264,7 @@ export default function AmazonPipelineWorkflow({ seedPhrase, selectedCategory, o
           />
           <UploadCloud size={32} style={{ color: '#0284c7', margin: '0 auto 8px' }} />
           <div style={{ fontWeight: 700, fontSize: '0.95rem', color: '#0369a1' }}>
-            {xrayFile ? `Đã nạp: ${xrayFile.name}` : 'Kéo thả file Helium 10 Xray (.xlsx / .csv) vào đây hoặc bấm để chọn'}
+            {xrayFile ? `Đã chọn: ${xrayFile.name}` : 'Kéo thả file Helium 10 Xray (.xlsx / .csv) vào đây hoặc bấm để chọn'}
           </div>
           <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '4px' }}>
             Hỗ trợ báo cáo Xray Market Search, Competitor Analytics, và CSV xuất từ Helium 10 Extension

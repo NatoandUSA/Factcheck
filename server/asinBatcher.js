@@ -16,6 +16,10 @@ const OUTLIER_NEGATIVE_KEYWORDS = [
   'cheap', 'dress', 'shoes', 'phone case', 'keychain', 'sticker', 'mug cup'
 ];
 
+const ASIN_FORMAT = /^[A-Z0-9]{10}$/;
+const MANUAL_PASTE_MIN = 10;
+const MANUAL_PASTE_MAX = 30;
+
 function firstDefined(row, keys) {
   for (const key of keys) {
     const val = row[key];
@@ -37,11 +41,40 @@ function filterAndBatchXrayAsins(xrayData, seedKeyword = 'Custom Gift') {
   if (Array.isArray(xrayData) && xrayData.length > 0) {
     rawRows = xrayData;
   } else if (typeof xrayData === 'string' && xrayData.trim().length > 0) {
-    rawRows = xrayData
-      .split(/[\s,;\n]+/)
-      .map(a => a.trim())
-      .filter(a => a && a.length >= 8)
-      .map(asin => ({ ASIN: asin }));
+    // Manual-paste contract: 10-30 unique, well-formed ASINs, proven only as
+    // the identifiers Staff supplied — reject rather than silently coerce.
+    const tokens = xrayData.split(/[\s,;\n]+/).map(a => a.trim()).filter(Boolean).map(a => a.toUpperCase());
+
+    const invalid = tokens.filter(t => !ASIN_FORMAT.test(t));
+    if (invalid.length > 0) {
+      return {
+        success: false,
+        code: 'INVALID_ASIN_FORMAT',
+        error: `${invalid.length} supplied entr${invalid.length === 1 ? 'y is' : 'ies are'} not a valid 10-character ASIN (e.g. "${invalid[0]}").`,
+        cleanAsinsCount: 0
+      };
+    }
+
+    const uniqueTokens = [...new Set(tokens)];
+    if (uniqueTokens.length !== tokens.length) {
+      return {
+        success: false,
+        code: 'DUPLICATE_ASINS',
+        error: `Duplicate ASINs supplied (${tokens.length} entries, only ${uniqueTokens.length} unique). Please paste ${MANUAL_PASTE_MIN}-${MANUAL_PASTE_MAX} unique ASINs.`,
+        cleanAsinsCount: 0
+      };
+    }
+
+    if (uniqueTokens.length < MANUAL_PASTE_MIN || uniqueTokens.length > MANUAL_PASTE_MAX) {
+      return {
+        success: false,
+        code: 'ASIN_COUNT_OUT_OF_RANGE',
+        error: `Please paste between ${MANUAL_PASTE_MIN} and ${MANUAL_PASTE_MAX} unique ASINs (received ${uniqueTokens.length}).`,
+        cleanAsinsCount: 0
+      };
+    }
+
+    rawRows = uniqueTokens.map(asin => ({ ASIN: asin }));
   }
 
   if (rawRows.length === 0) {
@@ -71,14 +104,16 @@ function filterAndBatchXrayAsins(xrayData, seedKeyword = 'Custom Gift') {
     const price = parseNumericField(row, ['Price', 'price', 'Price  $', 'Price $']);
     const sales = parseNumericField(row, ['Sales', 'sales', 'Parent Level Sales', 'ASIN Sales']);
 
-    // 1. Filter out Chinese cheap junk (< $9.99) and luxury outliers (> $99.99).
-    // Only applies when a real price was supplied — never invent one to filter on.
+    // 1. Filter by configured price floor/ceiling. Only applies when a real
+    // price was supplied — never invent one to filter on. The reason text
+    // states only the observed price vs. the configured threshold; it makes
+    // no origin/quality/nationality claim the price alone can't support.
     if (price !== null && price < 9.99) {
-      rejectedAsins.push({ asin, title, reason: `Too cheap (Price $${price} < $9.99 - Cheap Chinese junk risk)` });
+      rejectedAsins.push({ asin, title, reason: `Below configured price floor (Price $${price} < $9.99)` });
       return;
     }
     if (price !== null && price > 99.99) {
-      rejectedAsins.push({ asin, title, reason: `Too luxury/expensive (Price $${price} > $99.99 - Outlier niche)` });
+      rejectedAsins.push({ asin, title, reason: `Above configured price ceiling (Price $${price} > $99.99)` });
       return;
     }
 
@@ -119,9 +154,17 @@ function filterAndBatchXrayAsins(xrayData, seedKeyword = 'Custom Gift') {
     };
   }
 
-  // Stable sort: rows with real relevance/sales metadata rank higher; rows
-  // with none (bare pasted ASINs) share a score of 0 and keep input order.
-  cleanAsins.sort((a, b) => (b.relevanceScore + Math.min(50, (b.sales || 0) / 10)) - (a.relevanceScore + Math.min(50, (a.sales || 0) / 10)));
+  // Stable sort: relevance first, then sales — but ONLY when both sides have
+  // a known sales figure. Unknown sales never competes as if it were 0; an
+  // unknown-vs-known (or unknown-vs-unknown) comparison falls through to the
+  // stable sort's input-order preservation instead of asserting a rank.
+  cleanAsins.sort((a, b) => {
+    if (b.relevanceScore !== a.relevanceScore) return b.relevanceScore - a.relevanceScore;
+    if (typeof a.sales === 'number' && typeof b.sales === 'number' && a.sales !== b.sales) {
+      return b.sales - a.sales;
+    }
+    return 0;
+  });
 
   const hasAnySourceMetadata = cleanAsins.some(i => i.hasMetadata);
 

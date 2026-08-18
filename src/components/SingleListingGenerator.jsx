@@ -6,14 +6,19 @@ export default function SingleListingGenerator({ onGenerate, isGenerating }) {
   const [selectedCategory, setSelectedCategory] = useState(CATEGORIES[0]);
   const [selectedOccasion, setSelectedOccasion] = useState(OCCASIONS[0]);
   const [selectedTone, setSelectedTone] = useState(TONES[0]);
-  const [productBrief, setProductBrief] = useState(CATEGORIES[0].sampleBrief);
+  // Never pre-fill with category.sampleBrief: that's category-level example
+  // text with invented specifics (e.g. "luxury gift box", "LED wooden light
+  // base"), not a real fact about this product. Staff must type their own
+  // brief; the textarea placeholder gives format guidance instead (GPT PR-10
+  // 4th re-audit).
+  const [productBrief, setProductBrief] = useState('');
   const [imagePreview, setImagePreview] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef(null);
 
   const handleCategorySelect = (category) => {
     setSelectedCategory(category);
-    setProductBrief(category.sampleBrief);
+    setProductBrief('');
   };
 
   const handleImageFile = (file) => {
@@ -42,7 +47,10 @@ export default function SingleListingGenerator({ onGenerate, isGenerating }) {
       occasion: selectedOccasion,
       tone: selectedTone,
       productBrief: productBrief.trim(),
-      materials: selectedCategory.defaultMaterials,
+      // Category presets are unverified suggestions for staff reference, not
+      // confirmed facts about this specific product -- never sent to the AI
+      // as real materials unless staff typed them into productBrief.
+      materials: [],
       imageBase64: imagePreview
     });
   };
@@ -189,28 +197,20 @@ export default function SingleListingGenerator({ onGenerate, isGenerating }) {
       <div className="form-group">
         <div className="form-label">
           <span>Product Brief & Personalization Specs</span>
-          <button
-            type="button"
-            className="btn btn-secondary btn-sm"
-            style={{ fontSize: '0.7rem', padding: '2px 6px' }}
-            onClick={() => setProductBrief(selectedCategory.sampleBrief)}
-          >
-            <RefreshCw size={10} /> Reset Sample Brief
-          </button>
         </div>
         <textarea
           className="form-textarea"
           rows={3}
           value={productBrief}
           onChange={(e) => setProductBrief(e.target.value)}
-          placeholder="Describe your design, personalization options, specs, sizing, and recipient details..."
+          placeholder={`e.g. "${selectedCategory.sampleBrief}" -- describe your design, personalization options, specs, sizing, and recipient details...`}
         />
       </div>
 
       {/* Materials Badges */}
       <div style={{ marginBottom: '20px' }}>
         <div style={{ fontSize: '0.75rem', fontWeight: '600', color: 'var(--text-muted)', marginBottom: '6px' }}>
-          DEFAULT SPECS INCLUDED:
+          SUGGESTED SPECS (reference only -- verify before publishing):
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
           {selectedCategory.defaultMaterials.map((mat, idx) => (

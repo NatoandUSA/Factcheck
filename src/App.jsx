@@ -74,7 +74,9 @@ export default function App() {
         status: 'NEEDS_QA'
       };
 
-      // Post to backend to enforce AMZ-style strict gating
+      // Post to backend to enforce AMZ-style strict gating. The backend is the
+      // sole catalog authority: if this write doesn't succeed, the listing is
+      // NOT_PERSISTED and must not be shown or saved as if it were.
       try {
         const res = await fetch('/api/listings', {
           method: 'POST',
@@ -91,16 +93,23 @@ export default function App() {
           const dbData = await res.json();
           enrichedResult.dbId = dbData.id;
           enrichedResult.status = dbData.status; // NEEDS_QA
+        } else {
+          enrichedResult.status = 'NOT_PERSISTED';
         }
       } catch (backendErr) {
-        console.warn('Backend unavailable, falling back to local only mode', backendErr);
+        console.warn('Backend unavailable, listing was not persisted', backendErr);
+        enrichedResult.status = 'NOT_PERSISTED';
       }
 
       setCurrentListing(enrichedResult);
-      showToast('Generated Amazon & Etsy listings successfully! Awaiting QA.');
-      
-      // Auto save to history
-      handleSaveToHistory(enrichedResult, false);
+
+      if (enrichedResult.dbId) {
+        showToast('Generated Amazon & Etsy listings successfully! Awaiting QA.');
+        // Auto save to history -- only for listings the backend actually persisted.
+        handleSaveToHistory(enrichedResult, false);
+      } else {
+        showToast('Draft generated but NOT saved (backend unavailable) -- this draft will be lost on refresh.');
+      }
     } catch (err) {
       console.error(err);
       showToast(`Error: ${err.message}`);
@@ -146,16 +155,35 @@ export default function App() {
       showToast('Error: Cannot approve an offline listing.');
       return;
     }
+    // A generic approval click is not proof the facts were verified --
+    // require the approver to state what they personally checked about this
+    // product before it can reach PUBLISH_READY.
+    const productTruthNotes = window.prompt(
+      'Product Truth confirmation required.\n\nDescribe what you personally verified about this product (materials, specs, personalization limits, etc.) before approving:'
+    );
+    if (productTruthNotes === null) {
+      return; // Staff cancelled -- not an error, just no approval.
+    }
+    if (productTruthNotes.trim().length < 10) {
+      showToast('Approval cancelled: description must be at least 10 characters.');
+      return;
+    }
     try {
       const res = await fetch(`/api/listings/${listingToApprove.dbId}/approve`, {
         method: 'PATCH',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ expectedVersion: listingToApprove.listingVersion || listingToApprove.listing_version || 1 })
+        body: JSON.stringify({
+          expectedVersion: listingToApprove.listingVersion || listingToApprove.listing_version || 1,
+          productTruthNotes: productTruthNotes.trim()
+        })
       });
-      if (!res.ok) throw new Error('Not authorized or server error');
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        throw new Error(errBody.message || errBody.error || 'Not authorized or server error');
+      }
       const data = await res.json();
-      
+
       const updated = { ...listingToApprove, status: data.status, approvedVersion: data.approvedVersion, approvedHash: data.approvedHash };
       setCurrentListing(updated);
       handleSaveToHistory(updated, false);

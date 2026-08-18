@@ -609,7 +609,11 @@ app.post('/api/listings', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SEL
     categoryName,
     amazonSearchTerms: searchTerms,
     etsyTags: etsyTags,
-    amazonDescription: payload.amazonDescription || `<p><b>High Quality ${categoryName}</b></p><p>Crafted with premium materials and attention to detail. Perfect gift for family and loved ones on birthdays, anniversaries, and holidays.</p><p><b>Features:</b></p><ul><li>Durable & Long-lasting</li><li>Personalized Customization</li><li>Easy Care & Maintenance</li></ul>`,
+    // No fallback description text: an empty description must stay empty so
+    // the Publish Gate can catch it, rather than silently asserting unverified
+    // material/quality claims that a manager could approve without noticing
+    // they were never real (GPT/Manus P0.5 audit, listing truth boundary).
+    amazonDescription: payload.amazonDescription || '',
     ipVerdict: ipResult.verdict,
     ipHits: ipResult.hits,
     opportunityScore: oppResult.overallScore,
@@ -689,7 +693,7 @@ app.patch('/api/listings/:id', requireAuth(db), requireRole(['OWNER', 'MANAGER',
     `UPDATE listings
      SET amazonTitle = ?, etsyTitle = ?, categoryName = ?, payload = ?, status = 'NEEDS_QA',
          listing_version = listing_version + 1, approved_version = NULL,
-         approved_hash = NULL, approved_by = NULL, approved_at = NULL
+         approved_hash = NULL, approved_by = NULL, approved_at = NULL, product_truth_notes = NULL
      WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?
        AND listing_version = ?`,
     [amazonTitle, etsyTitle, categoryName, JSON.stringify(newPayload), req.params.id,
@@ -715,11 +719,23 @@ app.patch('/api/listings/:id', requireAuth(db), requireRole(['OWNER', 'MANAGER',
 app.patch('/api/listings/:id/approve', requireAuth(db), requireRole(['OWNER', 'MANAGER']), (req, res) => {
   const { id } = req.params;
 
-  const { expectedVersion } = req.body || {};
+  const { expectedVersion, productTruthNotes } = req.body || {};
   if (!Number.isInteger(expectedVersion) || expectedVersion < 1) {
     return res.status(400).json({ success: false, error: 'EXPECTED_VERSION_REQUIRED' });
   }
-
+  // A generic approval click is not proof that materials/specs/facts were
+  // actually verified -- require the approver to state what they checked,
+  // bound to this exact listing_version (invalidated on any later edit, same
+  // as approved_hash). Model-generated non-empty text alone cannot satisfy
+  // this because it requires the human's own words (GPT PR-10 re-audit).
+  const truthNotes = typeof productTruthNotes === 'string' ? productTruthNotes.trim() : '';
+  if (truthNotes.length < 10) {
+    return res.status(400).json({
+      success: false,
+      error: 'PRODUCT_TRUTH_ATTESTATION_REQUIRED',
+      message: 'Describe what you personally verified about this product (materials, specs, personalization limits, etc.) before approving -- at least 10 characters.'
+    });
+  }
 
   db.get(
     `SELECT * FROM listings
@@ -734,14 +750,15 @@ app.patch('/api/listings/:id/approve', requireAuth(db), requireRole(['OWNER', 'M
     let parsedPayload = {};
     try { parsedPayload = JSON.parse(row.payload); } catch(e) {}
     const payloadHash = approvalHash(parsedPayload);
-    
+
     // C5B Fix: Evaluate via Canonical Publish Gate (Fail-Closed)
     parsedPayload.status = 'MANAGER_APPROVED';
+    parsedPayload.productTruthNotes = truthNotes;
     const gateRes = publishGate.evaluatePublishGate(parsedPayload);
 
     // Strictly reject any status other than PUBLISH_READY
     if (gateRes.final_status !== 'PUBLISH_READY' || !gateRes.canExport) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         error: `APPROVAL_DENIED: Cannot publish listing with status "${gateRes.final_status}".`,
         reasons: gateRes.reasons,
         publishGate: gateRes
@@ -751,10 +768,10 @@ app.patch('/api/listings/:id/approve', requireAuth(db), requireRole(['OWNER', 'M
     const approvedHash = payloadHash;
     db.run(
       `UPDATE listings SET status = 'PUBLISH_READY', approved_version = listing_version,
-         approved_hash = ?, approved_by = ?, approved_at = CURRENT_TIMESTAMP
+         approved_hash = ?, approved_by = ?, approved_at = CURRENT_TIMESTAMP, product_truth_notes = ?
        WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?
          AND listing_version = ?`,
-      [approvedHash, req.user.userId, id, req.user.tenantId, req.user.workspaceId, req.user.marketplace, expectedVersion],
+      [approvedHash, req.user.userId, truthNotes, id, req.user.tenantId, req.user.workspaceId, req.user.marketplace, expectedVersion],
       function(updateErr) {
       if (updateErr) return res.status(500).json({ error: updateErr.message });
       if (this.changes !== 1) return res.status(412).json({ success: false, error: 'STALE_LISTING_VERSION' });
@@ -784,6 +801,7 @@ app.get('/api/listings/:id/export', requireAuth(db), requireRole(['OWNER', 'MANA
       return res.status(409).json({ success: false, error: 'APPROVAL_INVALIDATED' });
     }
     parsedPayload.status = row.status;
+    parsedPayload.productTruthNotes = row.product_truth_notes || '';
 
     const gateRes = publishGate.evaluatePublishGate(parsedPayload);
     if (!gateRes.canExport) {
@@ -1366,17 +1384,22 @@ app.post('/api/amazon/quick-draft', requireAuth(db), requireRole(['OWNER', 'MANA
 Write a highly converting, policy-compliant Amazon listing for a ${category} product anchored on this Seed Phrase: "${cleanSeed}".
 ${asinNote}
 
+This is a QUICK SEO/COPY DRAFT from a keyword only -- no real product materials,
+specs, or personalization capability have been supplied. Do NOT invent specific
+material, dimension, or manufacturing facts; write copy that works regardless of
+the exact product, and leave fact fields empty for a human to fill in later.
+
 CRITICAL RULES:
 1. "amazonTitle": Strictly 75-80 characters max. Title Case. Front-load the exact seed phrase "${cleanSeed}" in the first 75 characters. Zero prohibited claims (no "best seller", "free shipping", "guarantee", "perfect gift").
-2. "amazonBullets": EXACTLY 5 bullet points (150-200 chars each). Each MUST start with a [CAPITALIZED HOOK].
+2. "amazonBullets": EXACTLY 5 bullet points (150-200 chars each). Each MUST start with a [CAPITALIZED HOOK]. Use only generic, non-material-specific benefit language (e.g. gifting occasion, ease of use) -- no invented material/construction claims.
 3. "amazonSearchTerms": Space-separated generic terms strictly under 240 UTF-8 bytes. NO COMMAS.
-4. "amazonDescription": High-converting HTML formatted product description (<p>, <ul>, <strong>).
-5. "amazonAPlusContent": Structured 10-module A+ package with Hero Banner, 3 Feature Cards, and Specifications.
+4. "amazonDescription": High-converting HTML formatted product description (<p>, <ul>, <strong>) using only the seed phrase/category -- no invented specs, materials, or care instructions.
+5. "amazonAPlusContent": Structured A+ package with Hero Banner and 3 Feature Cards using generic gifting/benefit language only -- no Specifications module, since no real specs exist yet.
 6. "etsyTitle": Under 140 chars, first 40 chars hook.
 7. "etsyTags": EXACTLY 13 tags, each <= 20 chars.
-8. "etsyMaterials": 3-5 authentic materials.
-9. "etsyPersonalizationInstructions": Step-by-step guide.
-10. "etsyDescription": Storytelling description with Item Details, Specs, Care, Sizing.
+8. "etsyMaterials": Return an EMPTY array -- no real materials were supplied, so none may be asserted.
+9. "etsyPersonalizationInstructions": Return an empty string unless the seed phrase itself specifies a personalization mechanic.
+10. "etsyDescription": Storytelling description using only the seed phrase/category and gifting occasion -- no invented specs, care instructions, or origin/workshop claims.
 
 Return ONLY raw JSON without markdown code fences:
 {
@@ -1389,8 +1412,7 @@ Return ONLY raw JSON without markdown code fences:
     "brandStoryBody": "...",
     "modules": [
       { "moduleType": "Hero Banner Story", "heading": "...", "body": "..." },
-      { "moduleType": "Three Feature Highlights", "features": [{ "title": "...", "desc": "..." }, { "title": "...", "desc": "..." }, { "title": "...", "desc": "..." }] },
-      { "moduleType": "Specifications & Unboxing", "heading": "...", "body": "..." }
+      { "moduleType": "Three Feature Highlights", "features": [{ "title": "...", "desc": "..." }, { "title": "...", "desc": "..." }, { "title": "...", "desc": "..." }] }
     ]
   },
   "etsyTitle": "...",
@@ -1420,27 +1442,13 @@ Return ONLY raw JSON without markdown code fences:
             const title75 = keywordRanker.buildAmazonTitle75([cleanSeed], category);
             const highlights125 = keywordRanker.buildAmazonItemHighlights125([cleanSeed], category);
 
-            // Generate 4 Child Variation ASINs
-            const variationThemes = [
-              { sku: `SKU-${cleanSeed.substring(0,4).toUpperCase()}-GOLD-S`, name: 'Gold Finish / Small (S)' },
-              { sku: `SKU-${cleanSeed.substring(0,4).toUpperCase()}-SILVER-M`, name: 'Sterling Silver / Medium (M)' },
-              { sku: `SKU-${cleanSeed.substring(0,4).toUpperCase()}-ROSE-L`, name: 'Rose Gold Finish / Large (L)' },
-              { sku: `SKU-${cleanSeed.substring(0,4).toUpperCase()}-CUSTOM-XL`, name: 'Custom Message Card / Extra Large (XL)' }
-            ];
-
-            const childVariations = variationThemes.map((v, i) => ({
-              childIndex: i + 1,
-              sku: v.sku,
-              variationAttribute: v.name,
-              childTitle: `${title75.substring(0, 55)} - ${v.name.split('/')[0].trim()}`.substring(0, 75),
-              itemHighlights: highlights125,
-              childBullets: aiData.amazonBullets || [],
-              childSearchTerms: aiData.amazonSearchTerms || '',
-              childDescription: aiData.amazonDescription || ''
-            }));
-
             const payload = {
-              parentSku: `PARENT-SKU-${cleanSeed.substring(0,6).toUpperCase()}`,
+              // No auto-generated SKU: the Staff viewer presents this as
+              // paste-ready "Raw Data ... for Seller Central", so a fake
+              // seed-derived string here would be an inventory-hygiene risk,
+              // not just a display placeholder. Real SKUs must be assigned
+              // by a human against real inventory (GPT PR-10 re-audit).
+              parentSku: '',
               amazonTitle: title75,
               itemHighlights: highlights125,
               amazonBullets: aiData.amazonBullets || [],
@@ -1448,12 +1456,20 @@ Return ONLY raw JSON without markdown code fences:
               amazonDescription: aiData.amazonDescription || '',
               amazonAPlusContent: aiData.amazonAPlusContent || null,
               amazonAPlusPoints: aiData.amazonAPlusPoints || [],
-              variations: childVariations,
+              // No fabricated Gold/Silver/Rose-Gold child variations: nobody
+              // has verified this product actually comes in those finishes.
+              // Real variations must be entered from real product data, not
+              // invented to fill the UI (GPT PR-10 re-audit).
+              variations: [],
               etsyTitle: keywordRanker.buildEtsyTitleClean([cleanSeed], category),
               etsyDescription: aiData.etsyDescription || '',
               etsyTags: (aiData.etsyTags || []).slice(0, 13).map(t => String(t).substring(0, 20)),
               etsyMaterials: aiData.etsyMaterials || [],
-              etsyPersonalizationInstructions: aiData.etsyPersonalizationInstructions || '',
+              // Hard-coded empty, not aiData-derived: a seed keyword is not
+              // evidence this product actually supports personalization, so
+              // the model's inference is never trusted here regardless of
+              // what it returns (GPT PR-10 4th re-audit).
+              etsyPersonalizationInstructions: '',
               categoryName: category,
               generatedAt: new Date().toISOString(),
               status: 'NEEDS_QA'
@@ -1916,29 +1932,33 @@ ${fewShotSection}
 CRITICAL SEED PHRASE & RECIPIENT MANDATE:
 - You MUST strictly preserve and prominently feature the core SEED PHRASE and TARGET RECIPIENT from the keywords (e.g., if keywords contain "suegra", "para el amor de mi vida", "nurse", "mom", "grandma", this EXACT seed phrase / recipient MUST be in the Amazon Title, Etsy Title, Bullets, and Tags). NEVER strip or omit the specific recipient or Spanish/English emotional hook!
 
+PRODUCT TRUTH BOUNDARY: this draft is generated from trending keywords only --
+no real product materials, specs, or manufacturing/origin facts have been
+supplied. Do NOT invent them; write copy that works regardless of the exact
+product and leave fact fields empty for a human to fill in later.
+
 STRICT PLATFORM RULES:
 1. AMAZON FBM (A10 Algorithm & Modern Concise Title Policy):
-   - "amazonTitle": Concise (75-80 chars max), Title Case, strictly front-load top 1-2 root Golden commercial keywords (including the core Seed Phrase/Recipient) + Brand/Material. Must fit within 75 characters for zero mobile truncation. Zero prohibited claims (no "best seller", "free shipping", "guarantee", "perfect gift").
-   - "amazonBullets": EXACTLY 5 bullet points (150-200 chars each). Each MUST start with a [CAPITALIZED HOOK].
+   - "amazonTitle": Concise (75-80 chars max), Title Case, strictly front-load top 1-2 root Golden commercial keywords (including the core Seed Phrase/Recipient). Must fit within 75 characters for zero mobile truncation. Zero prohibited claims (no "best seller", "free shipping", "guarantee", "perfect gift") and no invented brand/material claims.
+   - "amazonBullets": EXACTLY 5 bullet points (150-200 chars each). Each MUST start with a [CAPITALIZED HOOK]. Use only generic, non-material-specific benefit language -- no invented material/construction claims.
    - "amazonSearchTerms": Space-separated generic terms strictly under 240 UTF-8 bytes. NO COMMAS.
-   - "amazonDescription": High-converting HTML formatted product description (<p>, <ul>, <strong>).
-   - "amazonAPlusContent": Structured A+ package:
+   - "amazonDescription": High-converting HTML formatted product description (<p>, <ul>, <strong>) using only the seed phrase/category and recipient/occasion -- no invented specs, materials, or care instructions.
+   - "amazonAPlusContent": Structured A+ package with Hero Banner and 3 Feature Cards using generic gifting/benefit language only -- no Specifications module, since no real specs exist yet:
      {
        "brandStoryHeadline": "Timeless Emotional Keepsakes",
        "brandStoryBody": "Crafting personalized gifts that celebrate lifelong relationships.",
        "modules": [
          { "moduleType": "Hero Banner Story", "heading": "...", "body": "..." },
-         { "moduleType": "Three Feature Highlights", "features": [{ "title": "...", "desc": "..." }, { "title": "...", "desc": "..." }, { "title": "...", "desc": "..." }] },
-         { "moduleType": "Specifications & Unboxing", "heading": "...", "body": "..." }
+         { "moduleType": "Three Feature Highlights", "features": [{ "title": "...", "desc": "..." }, { "title": "...", "desc": "..." }, { "title": "...", "desc": "..." }] }
        ]
      }
 
 2. ETSY (Contextual Search Algorithm & Handmade Guidelines):
    - "etsyTitle": Under 140 characters. The first 40 characters MUST contain the exact Seed Phrase / Recipient (e.g. "Regalo Para Suegra Collar...").
    - "etsyTags": EXACTLY 13 tags, each strictly <= 20 characters, containing recipient, occasion, and aesthetics.
-   - "etsyMaterials": 3-5 authentic handmade materials.
-   - "etsyPersonalizationInstructions": Clear buyer instructions.
-   - "etsyDescription": Story-driven description structured into: ✨ ITEM DETAILS, ✦ SPECIFICATIONS, ✦ HOW TO ORDER, ✦ CARE INSTRUCTIONS, and ✦ US WORKSHOP PROMISE.
+   - "etsyMaterials": Return an EMPTY array -- no real materials were supplied, so none may be asserted.
+   - "etsyPersonalizationInstructions": Return an empty string unless the keywords themselves specify a personalization mechanic.
+   - "etsyDescription": Story-driven description structured into: ✨ ITEM DETAILS and ✦ HOW TO ORDER only, using the recipient/occasion -- no SPECIFICATIONS, CARE INSTRUCTIONS, or WORKSHOP/origin claims, since none of that has been verified.
 
 Return ONLY a valid raw JSON object without markdown code fences:
 {
@@ -1951,14 +1971,13 @@ Return ONLY a valid raw JSON object without markdown code fences:
     "brandStoryBody": "...",
     "modules": [
       { "moduleType": "Hero Banner Story", "heading": "...", "body": "..." },
-      { "moduleType": "Three Feature Highlights", "features": [{ "title": "...", "desc": "..." }, { "title": "...", "desc": "..." }, { "title": "...", "desc": "..." }] },
-      { "moduleType": "Specifications & Unboxing", "heading": "...", "body": "..." }
+      { "moduleType": "Three Feature Highlights", "features": [{ "title": "...", "desc": "..." }, { "title": "...", "desc": "..." }, { "title": "...", "desc": "..." }] }
     ]
   },
   "etsyTitle": "...",
   "etsyTags": ["...", ... (13 items, <=20 chars each)],
-  "etsyMaterials": ["...", "..."],
-  "etsyPersonalizationInstructions": "...",
+  "etsyMaterials": [],
+  "etsyPersonalizationInstructions": "",
   "etsyDescription": "..."
 }`;
 
@@ -1981,40 +2000,32 @@ Return ONLY a valid raw JSON object without markdown code fences:
           }
           const aiData = safeJsonParse(text, {});
 
-        // Generate 1 Parent + 4 Child ASIN variations (same structure as
-        // /api/amazon/quick-draft) so every draft path produces a consistent,
-        // real Multi-ASIN package instead of the UI falling back to placeholders.
-        const seedForSku = (trend.trending_keywords || trend.category || 'PRODUCT').split(',')[0].trim();
-        const variationThemes = [
-          { sku: `SKU-${seedForSku.substring(0,4).toUpperCase()}-GOLD-S`, name: 'Gold Finish / Small (S)' },
-          { sku: `SKU-${seedForSku.substring(0,4).toUpperCase()}-SILVER-M`, name: 'Sterling Silver / Medium (M)' },
-          { sku: `SKU-${seedForSku.substring(0,4).toUpperCase()}-ROSE-L`, name: 'Rose Gold Finish / Large (L)' },
-          { sku: `SKU-${seedForSku.substring(0,4).toUpperCase()}-CUSTOM-XL`, name: 'Custom Message Card / Extra Large (XL)' }
-        ];
-        const childVariations = variationThemes.map((v, i) => ({
-          childIndex: i + 1,
-          sku: v.sku,
-          variationAttribute: v.name,
-          childTitle: `${(aiData.amazonTitle || trend.category).substring(0, 55)} - ${v.name.split('/')[0].trim()}`.substring(0, 75),
-          childBullets: aiData.amazonBullets || [],
-          childSearchTerms: aiData.amazonSearchTerms || '',
-          childDescription: aiData.amazonDescription || ''
-        }));
-
         const payload = {
-          parentSku: `PARENT-SKU-${seedForSku.substring(0,6).toUpperCase()}`,
-          variations: childVariations,
-          amazonTitle: aiData.amazonTitle || `Personalized ${trend.category}`,
+          // No auto-generated SKU (same reasoning as Quick Draft: the Staff
+          // viewer presents this as paste-ready Seller Central data) and no
+          // fabricated Gold/Silver/Rose-Gold child variations -- both must
+          // come from a human against real product/inventory data, not be
+          // invented to fill the UI (GPT PR-10 re-audit).
+          parentSku: '',
+          variations: [],
+          // No unconditional "Personalized" claim: search-demand keywords
+          // are not evidence this specific product supports personalization.
+          amazonTitle: aiData.amazonTitle || trend.category,
           amazonBullets: aiData.amazonBullets || [],
           amazonSearchTerms: aiData.amazonSearchTerms || '',
           amazonDescription: aiData.amazonDescription || '',
           amazonAPlusContent: aiData.amazonAPlusContent || null,
           amazonAPlusPoints: aiData.amazonAPlusPoints || [],
-          etsyTitle: aiData.etsyTitle || `Custom ${trend.category}`,
+          // No "Custom" claim in the fallback: implies a customization
+          // capability with no evidence, same reasoning as the Amazon title.
+          etsyTitle: aiData.etsyTitle || trend.category,
           etsyDescription: aiData.etsyDescription || '',
           etsyTags: (aiData.etsyTags || []).slice(0, 13).map(t => String(t).substring(0, 20)),
           etsyMaterials: aiData.etsyMaterials || [],
-          etsyPersonalizationInstructions: aiData.etsyPersonalizationInstructions || '',
+          // Hard-coded empty, not aiData-derived: trending keywords are not
+          // evidence this product actually supports personalization (GPT
+          // PR-10 4th re-audit).
+          etsyPersonalizationInstructions: '',
           categoryName: trend.category,
           generatedAt: new Date().toISOString(),
           status: 'NEEDS_QA'
@@ -2078,19 +2089,23 @@ CRITICAL RULES:
 2. When the user asks to draft, rewrite, or optimize a listing, you MUST include a JSON block in your response.
 3. The JSON block MUST be wrapped in \`\`\`json ... \`\`\` markers.
 4. You may include a brief intro sentence BEFORE the JSON block, but the JSON is MANDATORY.
+5. PRODUCT TRUTH BOUNDARY: unless the user's message states real materials, specs, or
+   personalization capability for this specific product, you have no real product facts.
+   Do not invent them. Write title/bullets/tags/description copy that works without
+   asserting unverified specifics.
 
 The JSON block MUST contain ALL of these fields:
 {
   "amazonTitle": "Concise (75-80 chars max), Title Case, mobile-first front-loaded",
-  "amazonBullets": ["5 bullets, each starting with [CAPITALIZED HOOK]"],
+  "amazonBullets": ["5 bullets, each starting with [CAPITALIZED HOOK], using only facts the user actually gave you"],
   "amazonSearchTerms": "space-separated backend keywords under 240 bytes",
-  "amazonDescription": "<p>HTML formatted product description</p>",
-  "amazonAPlusPoints": ["3 highlight story blurbs"],
+  "amazonDescription": "<p>HTML formatted product description, no invented materials/specs/care</p>",
+  "amazonAPlusPoints": ["3 highlight story blurbs, generic benefit language only if no real facts given"],
   "etsyTitle": "Under 140 chars, front-loaded keywords",
   "etsyTags": ["exactly 13 tags", "each under 20 chars"],
-  "etsyMaterials": ["3-5 material strings"],
-  "etsyPersonalizationInstructions": "Clear buyer instructions",
-  "etsyDescription": "Story-driven description with Details, Sizing, How to Order"
+  "etsyMaterials": "empty array [] unless the user stated real materials for this product",
+  "etsyPersonalizationInstructions": "empty string unless the user stated a real personalization mechanic",
+  "etsyDescription": "Story-driven description with Details and How to Order -- no Specifications/Care/Workshop claims unless the user supplied them"
 }
 
 If the user asks a general question (not about drafting/writing), respond conversationally WITHOUT a JSON block.`,

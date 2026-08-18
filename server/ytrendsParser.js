@@ -1,9 +1,21 @@
 const cheerio = require('cheerio');
 const fs = require('fs');
 
+function observedIntegerText(value) {
+  const text = String(value ?? '').replace(/,/g, '').trim();
+  if (!text || !/^-?\d+$/.test(text)) return null;
+  return text;
+}
+
 /**
  * Parses YTrends HTML pages or CSV exports
- * Returns an array of clean keyword objects with market metrics
+ * Returns an array of clean keyword objects with market metrics.
+ *
+ * Numeric source observations are kept as normalized numeric text where the
+ * upload pipeline still performs its own Number() conversion. This is
+ * intentional: the legacy upload adapter uses a truthiness check before
+ * multiplying views24h by 30, so an observed source "0" must remain truthy
+ * long enough to become numeric 0 rather than being collapsed to UNKNOWN.
  */
 function parseYTrendsHtml(htmlContent) {
   const $ = cheerio.load(htmlContent);
@@ -20,10 +32,10 @@ function parseYTrendsHtml(htmlContent) {
       if (kw && !seen.has(kw.toLowerCase()) && !/rank|keyword|momentum/i.test(kw)) {
         const rank = $(tds[0]).text().trim();
         const momentum = parseFloat($(tds[2]).text().trim()) || 0;
-        const sold24h = parseInt($(tds[3]).text().replace(/,/g, ''), 10) || 0;
-        const views24h = parseInt($(tds[4]).text().replace(/,/g, ''), 10) || 0;
-        const listings = parseInt($(tds[5]).text().replace(/,/g, ''), 10) || 0;
-        const sellers = parseInt($(tds[6]).text().replace(/,/g, ''), 10) || 0;
+        const sold24h = observedIntegerText($(tds[3]).text());
+        const views24h = observedIntegerText($(tds[4]).text());
+        const listings = observedIntegerText($(tds[5]).text());
+        const sellers = observedIntegerText($(tds[6]).text());
         const conversion = $(tds[7]).text().trim();
         const avgRevenue = $(tds[8]).text().trim();
         const action = $(tds[9]).text().trim();
@@ -56,14 +68,12 @@ function parseYTrendsHtml(htmlContent) {
 
       if (kw && !seen.has(kw.toLowerCase()) && kw.length < 100) {
         const textContent = $(el).text();
-        
-        let sold24h = 0;
-        const soldMatch = textContent.match(/Sold 24h\s*([\d,]+)/i);
-        if (soldMatch) sold24h = parseInt(soldMatch[1].replace(/,/g, ''), 10);
 
-        let views24h = 0;
+        const soldMatch = textContent.match(/Sold 24h\s*([\d,]+)/i);
+        const sold24h = soldMatch ? observedIntegerText(soldMatch[1]) : null;
+
         const viewsMatch = textContent.match(/Views 24h\s*([\d,]+)/i);
-        if (viewsMatch) views24h = parseInt(viewsMatch[1].replace(/,/g, ''), 10);
+        const views24h = viewsMatch ? observedIntegerText(viewsMatch[1]) : null;
 
         let conversion = '2.5%';
         const convMatch = textContent.match(/Conversion\s*([\d.]+%\s*)/i);

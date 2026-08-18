@@ -75,6 +75,16 @@ function run() {
   assert.ok(serverSrc.includes('PRODUCT_TRUTH_ATTESTATION_REQUIRED'), 'server.js approve endpoint must require an explicit Product Truth attestation');
   console.log('🟢 server.js no longer fabricates a fallback description or Gold/Silver/Rose-Gold variations, and requires attestation on approve.');
 
+  // --- 5b. server.js: the Amazon Quick Draft and trend-draft AI prompts no
+  // longer instruct the model to invent materials/specs/care/workshop facts
+  // when no real product data was supplied (GPT PR-10 second re-audit --
+  // these two prompts were missed by the first amendment, which only fixed
+  // the frontend geminiService.js generation path) ---
+  assert.ok(!serverSrc.includes('3-5 authentic materials'), 'Quick Draft prompt must not instruct the AI to invent materials');
+  assert.ok(!serverSrc.includes('3-5 authentic handmade materials'), 'trend-draft prompt must not instruct the AI to invent materials');
+  assert.ok(!serverSrc.includes('US WORKSHOP PROMISE') && !serverSrc.includes('US Workshop Promise'), 'trend-draft prompt must not instruct the AI to assert an unverified workshop/origin claim');
+  console.log('🟢 server.js Quick Draft / trend-draft prompts no longer instruct the AI to invent materials/specs/workshop facts.');
+
   // --- 6. geminiService.js: sanitizer no longer injects fabricated A+ module
   // claims or category defaultMaterials as if they were confirmed facts ---
   const geminiSrc = fs.readFileSync(path.resolve(__dirname, '../src/services/geminiService.js'), 'utf8');
@@ -82,7 +92,8 @@ function run() {
   assert.ok(!geminiSrc.includes('Solid wood build'), 'geminiService.js must not fabricate specific material claims');
   assert.ok(!geminiSrc.includes('category?.defaultMaterials || []'), 'geminiService.js must not silently fall back to unverified category defaults as real materials');
   assert.ok(geminiSrc.includes('do NOT invent material claims'), 'prompt must instruct the AI not to invent unverified materials');
-  console.log('🟢 geminiService.js no longer fabricates material/A+ content claims.');
+  assert.ok(!geminiSrc.includes('Carefully inspected and packaged'), 'geminiService.js bullet padding must not assert an unverified inspection/packaging process claim');
+  console.log('🟢 geminiService.js no longer fabricates material/A+ content claims or process claims in bullet padding.');
 
   // --- 7. SingleListingGenerator.jsx: category presets are no longer sent to
   // the AI as if they were confirmed real materials for this product ---

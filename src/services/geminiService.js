@@ -112,11 +112,14 @@ function sanitizeListingOutput(parsed, category) {
   let cleanTags = Array.isArray(parsed.etsyTags) ? parsed.etsyTags : (category?.etsyTagsSeed || []);
   cleanTags = cleanTags.slice(0, 13).map(t => String(t).replace(/[^a-zA-Z0-9\s]/g, '').trim().substring(0, 20));
 
-  // Ensure bullets is array of 5
+  // Ensure bullets is array of 5 (Amazon requires exactly 5). Padding text
+  // must not assert unverified process/handling facts ("carefully inspected
+  // and packaged") -- use purely sentiment-based copy that makes no claim
+  // about this specific product (GPT PR-10 re-audit).
   let cleanBullets = Array.isArray(parsed.amazonBullets) ? parsed.amazonBullets : [];
   if (cleanBullets.length < 5) {
     while (cleanBullets.length < 5) {
-      cleanBullets.push(`[QUALITY CRAFTSMANSHIP] Carefully inspected and packaged to ensure your personalized gift arrives in pristine condition.`);
+      cleanBullets.push(`[THOUGHTFUL GIFT] A meaningful choice for someone special -- great for any gifting occasion.`);
     }
   }
 

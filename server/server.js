@@ -1384,17 +1384,22 @@ app.post('/api/amazon/quick-draft', requireAuth(db), requireRole(['OWNER', 'MANA
 Write a highly converting, policy-compliant Amazon listing for a ${category} product anchored on this Seed Phrase: "${cleanSeed}".
 ${asinNote}
 
+This is a QUICK SEO/COPY DRAFT from a keyword only -- no real product materials,
+specs, or personalization capability have been supplied. Do NOT invent specific
+material, dimension, or manufacturing facts; write copy that works regardless of
+the exact product, and leave fact fields empty for a human to fill in later.
+
 CRITICAL RULES:
 1. "amazonTitle": Strictly 75-80 characters max. Title Case. Front-load the exact seed phrase "${cleanSeed}" in the first 75 characters. Zero prohibited claims (no "best seller", "free shipping", "guarantee", "perfect gift").
-2. "amazonBullets": EXACTLY 5 bullet points (150-200 chars each). Each MUST start with a [CAPITALIZED HOOK].
+2. "amazonBullets": EXACTLY 5 bullet points (150-200 chars each). Each MUST start with a [CAPITALIZED HOOK]. Use only generic, non-material-specific benefit language (e.g. gifting occasion, ease of use) -- no invented material/construction claims.
 3. "amazonSearchTerms": Space-separated generic terms strictly under 240 UTF-8 bytes. NO COMMAS.
-4. "amazonDescription": High-converting HTML formatted product description (<p>, <ul>, <strong>).
-5. "amazonAPlusContent": Structured 10-module A+ package with Hero Banner, 3 Feature Cards, and Specifications.
+4. "amazonDescription": High-converting HTML formatted product description (<p>, <ul>, <strong>) using only the seed phrase/category -- no invented specs, materials, or care instructions.
+5. "amazonAPlusContent": Structured A+ package with Hero Banner and 3 Feature Cards using generic gifting/benefit language only -- no Specifications module, since no real specs exist yet.
 6. "etsyTitle": Under 140 chars, first 40 chars hook.
 7. "etsyTags": EXACTLY 13 tags, each <= 20 chars.
-8. "etsyMaterials": 3-5 authentic materials.
-9. "etsyPersonalizationInstructions": Step-by-step guide.
-10. "etsyDescription": Storytelling description with Item Details, Specs, Care, Sizing.
+8. "etsyMaterials": Return an EMPTY array -- no real materials were supplied, so none may be asserted.
+9. "etsyPersonalizationInstructions": Return an empty string unless the seed phrase itself specifies a personalization mechanic.
+10. "etsyDescription": Storytelling description using only the seed phrase/category and gifting occasion -- no invented specs, care instructions, or origin/workshop claims.
 
 Return ONLY raw JSON without markdown code fences:
 {
@@ -1407,8 +1412,7 @@ Return ONLY raw JSON without markdown code fences:
     "brandStoryBody": "...",
     "modules": [
       { "moduleType": "Hero Banner Story", "heading": "...", "body": "..." },
-      { "moduleType": "Three Feature Highlights", "features": [{ "title": "...", "desc": "..." }, { "title": "...", "desc": "..." }, { "title": "...", "desc": "..." }] },
-      { "moduleType": "Specifications & Unboxing", "heading": "...", "body": "..." }
+      { "moduleType": "Three Feature Highlights", "features": [{ "title": "...", "desc": "..." }, { "title": "...", "desc": "..." }, { "title": "...", "desc": "..." }] }
     ]
   },
   "etsyTitle": "...",
@@ -1919,29 +1923,33 @@ ${fewShotSection}
 CRITICAL SEED PHRASE & RECIPIENT MANDATE:
 - You MUST strictly preserve and prominently feature the core SEED PHRASE and TARGET RECIPIENT from the keywords (e.g., if keywords contain "suegra", "para el amor de mi vida", "nurse", "mom", "grandma", this EXACT seed phrase / recipient MUST be in the Amazon Title, Etsy Title, Bullets, and Tags). NEVER strip or omit the specific recipient or Spanish/English emotional hook!
 
+PRODUCT TRUTH BOUNDARY: this draft is generated from trending keywords only --
+no real product materials, specs, or manufacturing/origin facts have been
+supplied. Do NOT invent them; write copy that works regardless of the exact
+product and leave fact fields empty for a human to fill in later.
+
 STRICT PLATFORM RULES:
 1. AMAZON FBM (A10 Algorithm & Modern Concise Title Policy):
-   - "amazonTitle": Concise (75-80 chars max), Title Case, strictly front-load top 1-2 root Golden commercial keywords (including the core Seed Phrase/Recipient) + Brand/Material. Must fit within 75 characters for zero mobile truncation. Zero prohibited claims (no "best seller", "free shipping", "guarantee", "perfect gift").
-   - "amazonBullets": EXACTLY 5 bullet points (150-200 chars each). Each MUST start with a [CAPITALIZED HOOK].
+   - "amazonTitle": Concise (75-80 chars max), Title Case, strictly front-load top 1-2 root Golden commercial keywords (including the core Seed Phrase/Recipient). Must fit within 75 characters for zero mobile truncation. Zero prohibited claims (no "best seller", "free shipping", "guarantee", "perfect gift") and no invented brand/material claims.
+   - "amazonBullets": EXACTLY 5 bullet points (150-200 chars each). Each MUST start with a [CAPITALIZED HOOK]. Use only generic, non-material-specific benefit language -- no invented material/construction claims.
    - "amazonSearchTerms": Space-separated generic terms strictly under 240 UTF-8 bytes. NO COMMAS.
-   - "amazonDescription": High-converting HTML formatted product description (<p>, <ul>, <strong>).
-   - "amazonAPlusContent": Structured A+ package:
+   - "amazonDescription": High-converting HTML formatted product description (<p>, <ul>, <strong>) using only the seed phrase/category and recipient/occasion -- no invented specs, materials, or care instructions.
+   - "amazonAPlusContent": Structured A+ package with Hero Banner and 3 Feature Cards using generic gifting/benefit language only -- no Specifications module, since no real specs exist yet:
      {
        "brandStoryHeadline": "Timeless Emotional Keepsakes",
        "brandStoryBody": "Crafting personalized gifts that celebrate lifelong relationships.",
        "modules": [
          { "moduleType": "Hero Banner Story", "heading": "...", "body": "..." },
-         { "moduleType": "Three Feature Highlights", "features": [{ "title": "...", "desc": "..." }, { "title": "...", "desc": "..." }, { "title": "...", "desc": "..." }] },
-         { "moduleType": "Specifications & Unboxing", "heading": "...", "body": "..." }
+         { "moduleType": "Three Feature Highlights", "features": [{ "title": "...", "desc": "..." }, { "title": "...", "desc": "..." }, { "title": "...", "desc": "..." }] }
        ]
      }
 
 2. ETSY (Contextual Search Algorithm & Handmade Guidelines):
    - "etsyTitle": Under 140 characters. The first 40 characters MUST contain the exact Seed Phrase / Recipient (e.g. "Regalo Para Suegra Collar...").
    - "etsyTags": EXACTLY 13 tags, each strictly <= 20 characters, containing recipient, occasion, and aesthetics.
-   - "etsyMaterials": 3-5 authentic handmade materials.
-   - "etsyPersonalizationInstructions": Clear buyer instructions.
-   - "etsyDescription": Story-driven description structured into: ✨ ITEM DETAILS, ✦ SPECIFICATIONS, ✦ HOW TO ORDER, ✦ CARE INSTRUCTIONS, and ✦ US WORKSHOP PROMISE.
+   - "etsyMaterials": Return an EMPTY array -- no real materials were supplied, so none may be asserted.
+   - "etsyPersonalizationInstructions": Return an empty string unless the keywords themselves specify a personalization mechanic.
+   - "etsyDescription": Story-driven description structured into: ✨ ITEM DETAILS and ✦ HOW TO ORDER only, using the recipient/occasion -- no SPECIFICATIONS, CARE INSTRUCTIONS, or WORKSHOP/origin claims, since none of that has been verified.
 
 Return ONLY a valid raw JSON object without markdown code fences:
 {
@@ -1954,14 +1962,13 @@ Return ONLY a valid raw JSON object without markdown code fences:
     "brandStoryBody": "...",
     "modules": [
       { "moduleType": "Hero Banner Story", "heading": "...", "body": "..." },
-      { "moduleType": "Three Feature Highlights", "features": [{ "title": "...", "desc": "..." }, { "title": "...", "desc": "..." }, { "title": "...", "desc": "..." }] },
-      { "moduleType": "Specifications & Unboxing", "heading": "...", "body": "..." }
+      { "moduleType": "Three Feature Highlights", "features": [{ "title": "...", "desc": "..." }, { "title": "...", "desc": "..." }, { "title": "...", "desc": "..." }] }
     ]
   },
   "etsyTitle": "...",
   "etsyTags": ["...", ... (13 items, <=20 chars each)],
-  "etsyMaterials": ["...", "..."],
-  "etsyPersonalizationInstructions": "...",
+  "etsyMaterials": [],
+  "etsyPersonalizationInstructions": "",
   "etsyDescription": "..."
 }`;
 

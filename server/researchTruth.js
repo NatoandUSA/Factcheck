@@ -1,6 +1,10 @@
 function toObservedNumber(value) {
-  if (value === undefined || value === null || value === '') return null;
-  const numeric = Number(value);
+  // Trim before the emptiness check: Number('   ') coerces to 0 in
+  // JavaScript, so a whitespace-only source cell would otherwise become an
+  // observed zero instead of the missing value it actually is.
+  const normalized = typeof value === 'string' ? value.trim() : value;
+  if (normalized === undefined || normalized === null || normalized === '') return null;
+  const numeric = Number(normalized);
   return Number.isFinite(numeric) ? numeric : null;
 }
 

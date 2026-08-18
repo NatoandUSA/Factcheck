@@ -1,14 +1,15 @@
 /**
  * P0.5-C research-signal truth hardening.
  *
- * Locks the seven remaining gaps identified in PR #13:
+ * Locks the eight remaining gaps identified in PR #13:
  * 1) explicit zero through YTrends HTML ingestion;
  * 2) generic partial-metric scoring;
  * 3) keywordRanker partial-metric scoring;
  * 4) Google Trends empty timeline;
  * 5) Google Trends short timeline;
  * 6) deterministic provider-failure/provenance matrix;
- * 7) Google Trends relatedQueries sub-source provenance.
+ * 7) Google Trends relatedQueries sub-source provenance;
+ * 8) Staff-facing measurement-window labels (real-time/30d/90D claims).
  */
 const assert = require('assert');
 const fs = require('fs');
@@ -110,6 +111,12 @@ async function main() {
   assert.strictEqual(toObservedNumber('not-a-number'), null);
   assert.strictEqual(toObservedNumber(0), 0);
   assert.strictEqual(toObservedNumber('0'), 0);
+  // Number('   ') coerces to 0 in JavaScript -- a whitespace-only source
+  // cell must stay null (missing), not become a fabricated observed zero.
+  assert.strictEqual(toObservedNumber('   '), null, 'Whitespace-only string must stay null, not become observed zero');
+  assert.strictEqual(toObservedNumber('\t'), null);
+  assert.strictEqual(toObservedNumber('\n'), null);
+  assert.strictEqual(toObservedNumber(' 5 '), 5, 'A padded real number must still be preserved');
   assert.strictEqual(monthlySearchVolumeFromViews24h(null), null);
   assert.strictEqual(monthlySearchVolumeFromViews24h('0'), 0);
 
@@ -302,8 +309,21 @@ async function main() {
   assert.ok(!benchSrc.includes('pinterestGiftIntent'));
   assert.ok(!benchSrc.includes('growth || 15'));
 
+  // GAP 8: Staff-facing measurement-window labels must match the actual
+  // query/formula. The service requests a 12-month interestOverTime window
+  // and computes momentum from the last ~4 weeks vs the prior ~4 weeks --
+  // it is neither "real-time" nor a "90-day"/"30d" measurement.
+  assert.ok(!benchSrc.includes('trong 90 ngày'), 'Benchmark reasons must not claim a 90-day window the formula does not measure');
+  const gtWidgetSrc = fs.readFileSync(path.resolve(__dirname, '../src/components/GoogleTrendsWidget.jsx'), 'utf8');
+  const benchWidgetSrc = fs.readFileSync(path.resolve(__dirname, '../src/components/MarketBenchmarkWidget.jsx'), 'utf8');
+  assert.ok(!gtWidgetSrc.includes('US Real-Time Data'), 'Historical interestOverTime data must not be labeled real-time');
+  assert.ok(!gtWidgetSrc.includes('(30d)'), 'Growth label must not claim a calendar 30-day window the formula does not measure');
+  assert.ok(!benchWidgetSrc.includes('90 ngày'), 'Benchmark widget must not claim a 90-day Google Trends window');
+  assert.ok(!benchWidgetSrc.includes('Google Trends 90D'), 'Benchmark widget card must not claim a 90-day Google Trends window');
+  console.log('🟢 GAP 8: Staff-facing measurement-window labels match the actual 12-month query / 4-week momentum formula.');
+
   console.log('\n================================================================');
-  console.log('  🟢 P0.5-C SEVEN-GAP HARDENING SUITE PASSED');
+  console.log('  🟢 P0.5-C EIGHT-GAP HARDENING SUITE PASSED');
   console.log('================================================================');
 }
 

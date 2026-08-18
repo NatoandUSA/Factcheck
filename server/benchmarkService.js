@@ -107,7 +107,7 @@ async function getMarketBenchmark(
   const gtStatus = googleData.summary.status;
   if (gtGrowth > 20 || gtStatus.includes('TĂNG') || gtStatus.includes('ĐỘT PHÁ')) {
     score += 25;
-    reasons.push(`Google Trends ghi nhận xu hướng tăng trưởng +${gtGrowth}% trong 90 ngày.`);
+    reasons.push(`Google Trends ghi nhận xu hướng tăng trưởng +${gtGrowth}% trong 4 tuần gần nhất.`);
   } else if (gtGrowth < -10) {
     score -= 15;
     reasons.push(`Google Trends ghi nhận sự suy giảm nhu cầu -${Math.abs(gtGrowth)}%.`);

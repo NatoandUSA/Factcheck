@@ -63,7 +63,7 @@ export default function MarketBenchmarkWidget({ seedPhrase, category, onSelectNi
               </span>
             </div>
             <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
-              Đối chiếu tự động Google Trends 90 ngày và Gợi ý mua sắm thời gian thực từ Amazon US A9.
+              Đối chiếu tự động Google Trends 12 tháng và Gợi ý mua sắm thời gian thực từ Amazon US A9.
             </div>
           </div>
         </div>
@@ -131,11 +131,11 @@ export default function MarketBenchmarkWidget({ seedPhrase, category, onSelectNi
       {data && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '12px' }}>
           
-          {/* Card 1: Google Trends 90-Day Velocity */}
+          {/* Card 1: Google Trends 12-Month Velocity */}
           <div style={{ background: 'var(--bg-subtle)', borderRadius: '10px', padding: '12px 16px', border: '1px solid var(--border-subtle)', display: 'flex', flexDirection: 'column', gap: '6px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span style={{ fontSize: '0.75rem', fontWeight: 800, color: '#0369a1', textTransform: 'uppercase' }}>
-                📈 1. Google Trends 90D
+                📈 1. Google Trends (12 Tháng)
               </span>
               {data.sources.googleTrends?.evidenceState === 'OBSERVED' && (
                 <span style={{ fontSize: '0.75rem', fontWeight: 700, color: data.sources.googleTrends.growth >= 0 ? '#16a34a' : '#dc2626' }}>

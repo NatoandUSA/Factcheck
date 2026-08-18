@@ -66,7 +66,7 @@ export default function GoogleTrendsWidget({ seedPhrase, onShowToast }) {
               </span>
               {trendsData?.success && (
                 <span style={{ fontSize: '0.75rem', background: 'rgba(59, 130, 246, 0.25)', color: '#93c5fd', padding: '2px 8px', borderRadius: '6px', border: '1px solid rgba(59, 130, 246, 0.4)' }}>
-                  US Real-Time Data
+                  US 12-Month Trend Data
                 </span>
               )}
             </div>
@@ -137,7 +137,7 @@ export default function GoogleTrendsWidget({ seedPhrase, onShowToast }) {
             </div>
 
             <div style={{ background: 'rgba(255, 255, 255, 0.05)', padding: '12px 14px', borderRadius: '10px', border: '1px solid rgba(255, 255, 255, 0.08)' }}>
-              <div style={{ fontSize: '0.75rem', color: '#94a3b8' }}>Tốc Độ Tăng Trưởng (30d)</div>
+              <div style={{ fontSize: '0.75rem', color: '#94a3b8' }}>Tốc Độ Tăng Trưởng (4 Tuần Gần Nhất)</div>
               <div style={{ fontSize: '1.4rem', fontWeight: 800, color: trendsData.momentumPercent >= 0 ? '#4ade80' : '#f87171', marginTop: '2px' }}>
                 {trendsData.momentumPercent >= 0 ? `+${trendsData.momentumPercent}%` : `${trendsData.momentumPercent}%`}
               </div>

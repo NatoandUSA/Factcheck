@@ -1,15 +1,17 @@
 name: P0.5-B Temporary Source Patch
 
 on:
-  push:
+  pull_request:
     branches:
-      - fix/p0.5-b-etsy-truth-semantics
+      - main
+    types: [opened]
 
 permissions:
   contents: write
 
 jobs:
   patch-test-commit:
+    if: github.head_ref == 'fix/p0.5-b-etsy-truth-semantics'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

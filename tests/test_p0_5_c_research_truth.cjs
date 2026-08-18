@@ -40,47 +40,69 @@ async function main() {
   assert.strictEqual(realMetrics[0].searchVolume, 5000);
   assert.strictEqual(realMetrics[0].opportunityScore !== null, true, 'Real volume evidence must produce a real computed score');
   assert.strictEqual(realMetrics[0].scoringState, 'SCORED');
-  console.log('🟢 rankKeywords: real metrics produce a real SCORED opportunityScore (positive case).');
+  console.log('🟢 rankKeywords: full real metrics produce a real SCORED opportunityScore (positive case).');
 
-  // --- 2. server.js HTML ingestion: no 1200/350/2 fabricated defaults remain ---
+  const partialMetrics = rankKeywords([{ keyword: 'gift necklace for mom', searchVolume: 5000 }], 'Jewelry', 'gift necklace');
+  assert.strictEqual(partialMetrics[0].searchVolume, 5000);
+  assert.strictEqual(partialMetrics[0].opportunityScore !== null, true, 'Volume-only evidence must still produce a usable ranking score');
+  assert.strictEqual(partialMetrics[0].scoringState, 'PARTIAL_EVIDENCE', 'Volume-only must not claim the same confidence as fully-observed SCORED');
+  console.log('🟢 rankKeywords: volume-only evidence is labeled PARTIAL_EVIDENCE, not fabricated as fully SCORED.');
+
+  // --- 2. server.js HTML ingestion: no 1200/350/2 fabricated defaults remain,
+  // and an explicit source zero (views24h: 0) must survive as 0, not collapse
+  // into the same null used for a genuinely missing field ---
   const serverSrc = fs.readFileSync(path.resolve(__dirname, '../server/server.js'), 'utf8');
   assert.ok(!serverSrc.includes("'Search Volume': kw.views24h ? kw.views24h * 30 : 1200"), 'HTML ingestion must not default Search Volume to 1200');
+  assert.ok(!serverSrc.includes("'Search Volume': kw.views24h ? kw.views24h * 30 : null"), 'HTML Search Volume must use a presence check, not a truthiness check, so an explicit 0 is not treated as missing');
+  assert.ok(serverSrc.includes("(kw.views24h !== undefined && kw.views24h !== null) ? kw.views24h * 30 : null"), 'HTML Search Volume must explicitly preserve an observed zero');
   assert.ok(!serverSrc.includes("'Competing Products': kw.listings || 350"), 'HTML ingestion must not default Competing Products to 350');
   assert.ok(!serverSrc.includes("'Title Density': 2"), 'HTML ingestion must not hardcode Title Density to 2');
   assert.ok(!serverSrc.includes('opportunityScore = 50;'), 'Generic keyword evaluation must not default opportunityScore to 50');
-  console.log('🟢 server.js HTML/generic keyword ingestion no longer fabricates missing metrics.');
+  // /api/master-keywords must not re-expose rankKeywords' internal sort-only
+  // heuristic (built on hidden 100/10/8 defaults) as if it were the real
+  // opportunityScore whenever the real one is null -- this is the same
+  // fabrication class as the rankKeywords fix, just one layer up in the API.
+  assert.ok(!serverSrc.includes('kwItem.opportunityScore ?? kwItem.score ?? null'), 'master-keywords must not fall back to the internal sort-only score when opportunityScore is null');
+  console.log('🟢 server.js HTML/generic keyword ingestion and master-keywords API no longer fabricate missing metrics.');
 
-  // --- 3. googleTrendsService.js: no synthetic simulation fallback remains ---
+  // --- 3. googleTrendsService.js: no synthetic simulation fallback remains,
+  // and an empty/unusable timeline cannot present itself as OBSERVED with
+  // fabricated 50/100 defaults ---
   const gtSrc = fs.readFileSync(path.resolve(__dirname, '../server/googleTrendsService.js'), 'utf8');
   assert.ok(!gtSrc.includes('momentumPercent: 28'), 'Provider failure must not return a fabricated momentum value');
   assert.ok(!gtSrc.includes("geo: 'US (Reference Estimate)'"), 'Provider failure must not present a simulated timeline as real geography data');
   assert.ok(!gtSrc.includes('Generating algorithmic simulation model'), 'Provider failure must not generate a simulated timeline at all');
-  console.log('🟢 googleTrendsService.js no longer fabricates a synthetic timeline/momentum on provider failure.');
+  assert.ok(!gtSrc.includes('points.length > 0 ? points[points.length - 1].value : 50'), 'An empty timeline must not default currentScore to a fabricated 50');
+  assert.ok(!gtSrc.includes('map(p => p.value), 100)'), 'peakScore must not be floored at a fabricated 100');
+  console.log('🟢 googleTrendsService.js no longer fabricates a synthetic timeline/momentum on provider failure or on an empty/unusable timeline.');
 
   // --- 4. benchmarkService.js: no fabricated Amazon suggestions, no default
-  // growth/intent, no fake third "Pinterest" source ---
+  // growth/intent, no fake third "Pinterest" source, and the computed
+  // score/verdict is labeled as a modeled decision, not raw observed evidence ---
   const benchSrc = fs.readFileSync(path.resolve(__dirname, '../server/benchmarkService.js'), 'utf8');
   assert.ok(!benchSrc.includes('collar de plata'), 'Benchmark must not fabricate Amazon suggestion strings when the live fetch is empty');
   assert.ok(!benchSrc.includes('etsyIntentScore'), 'Unused fabricated etsyIntentScore must be removed');
   assert.ok(!benchSrc.includes('pinterestGiftIntent'), 'Benchmark must not present a non-existent Pinterest source as real evidence');
   assert.ok(!benchSrc.includes('growth || 15'), 'Missing Google Trends growth must not default to 15');
-  console.log('🟢 benchmarkService.js no longer fabricates Amazon suggestions, default growth, or a fake third source.');
+  assert.ok(benchSrc.includes("decisionState: 'MODELED'"), 'A computed opportunity score/verdict must be labeled MODELED, distinct from raw OBSERVED source evidence');
+  console.log('🟢 benchmarkService.js no longer fabricates Amazon suggestions, default growth, or a fake third source, and labels its computed verdict MODELED.');
 
   // --- 5. Live behavioral check: fetchGoogleTrends must return a
-  // well-formed OBSERVED result on success, or a clean SOURCE_ERROR with NO
+  // well-formed OBSERVED result (with a real non-empty timeline) on success,
+  // or a clean SOURCE_ERROR/INSUFFICIENT_EVIDENCE with NO
   // timeline/momentum/relatedQueries on failure -- whichever actually
   // happens in this environment, it must never be a hybrid of the two ---
   const gtResult = await fetchGoogleTrends('test seed phrase');
   if (gtResult.success) {
     assert.strictEqual(gtResult.evidenceState, 'OBSERVED');
-    assert.ok(Array.isArray(gtResult.timeline), 'A successful result must include a real timeline');
-    console.log('🟢 fetchGoogleTrends: live call succeeded, returned as OBSERVED with a real timeline.');
+    assert.ok(Array.isArray(gtResult.timeline) && gtResult.timeline.length > 0, 'A successful result must include a real, non-empty timeline');
+    console.log('🟢 fetchGoogleTrends: live call succeeded, returned as OBSERVED with a real non-empty timeline.');
   } else {
-    assert.strictEqual(gtResult.evidenceState, 'SOURCE_ERROR');
+    assert.ok(['SOURCE_ERROR', 'INSUFFICIENT_EVIDENCE'].includes(gtResult.evidenceState), 'A failed/empty result must be SOURCE_ERROR or INSUFFICIENT_EVIDENCE, never a hybrid');
     assert.strictEqual(gtResult.timeline, undefined, 'A failed result must not include a fabricated timeline');
     assert.strictEqual(gtResult.momentumPercent, undefined, 'A failed result must not include a fabricated momentum value');
     assert.strictEqual(gtResult.relatedQueries, undefined, 'A failed result must not include fabricated related queries');
-    console.log('🟢 fetchGoogleTrends: live call failed, returned as clean SOURCE_ERROR with no fabricated fields (no network in this environment, or provider unreachable).');
+    console.log(`🟢 fetchGoogleTrends: live call returned ${gtResult.evidenceState} with no fabricated fields (no usable data in this environment, or provider unreachable).`);
   }
 
   // --- 6. Live behavioral check: getMarketBenchmark must never emit a
@@ -93,9 +115,10 @@ async function main() {
     console.log('🟢 getMarketBenchmark: a source was unavailable, correctly returned INSUFFICIENT_EVIDENCE with no decision-grade verdict.');
   } else {
     assert.strictEqual(benchResult.evidenceState, 'OBSERVED');
+    assert.strictEqual(benchResult.decisionState, 'MODELED', 'A computed verdict must be labeled MODELED even when built from real observed sources');
     assert.ok(['GO', 'NICHE_DOWN', 'AVOID'].includes(benchResult.verdict), 'A fully-observed benchmark must produce a real verdict');
     assert.strictEqual(benchResult.sources.pinterestGiftIntent, undefined, 'The fake third source must not reappear');
-    console.log('🟢 getMarketBenchmark: both sources were available, produced a real decision-grade verdict with no fake third source.');
+    console.log('🟢 getMarketBenchmark: both sources were available, produced a real MODELED decision-grade verdict with no fake third source.');
   }
 
   console.log('\n================================================================');

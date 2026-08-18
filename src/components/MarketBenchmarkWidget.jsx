@@ -59,11 +59,11 @@ export default function MarketBenchmarkWidget({ seedPhrase, category, onSelectNi
             <div style={{ fontWeight: 800, fontSize: '1rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
               <span>Cổng Thẩm Định Thị Trường & Ra Quyết Định (Go / No-Go Gate)</span>
               <span style={{ fontSize: '0.7rem', background: '#ccfbf1', color: '#0f766e', padding: '2px 8px', borderRadius: '6px', fontWeight: 700 }}>
-                Live Benchmark 3 Nguồn
+                Live Benchmark 2 Nguồn
               </span>
             </div>
             <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
-              Đối chiếu tự động Google Trends 90 ngày, Gợi ý mua sắm thời gian thực từ Amazon US A9, và Độ sâu ngách quà tặng.
+              Đối chiếu tự động Google Trends 90 ngày và Gợi ý mua sắm thời gian thực từ Amazon US A9.
             </div>
           </div>
         </div>

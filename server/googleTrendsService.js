@@ -24,11 +24,29 @@ async function fetchGoogleTrends(seedKeyword) {
     const parsedData = JSON.parse(trendResults);
     const timelineData = parsedData?.default?.timelineData || [];
 
-    // Format chart points
-    const points = timelineData.map(pt => ({
-      date: pt.formattedAxisTime || pt.formattedTime,
-      value: pt.value ? pt.value[0] : 0
-    }));
+    // Format chart points. A point with no usable value is dropped rather
+    // than defaulted to 0 -- a missing sample is not the same observation as
+    // a measured zero (P0.5-C truth fix).
+    const points = timelineData
+      .map(pt => ({
+        date: pt.formattedAxisTime || pt.formattedTime,
+        value: Array.isArray(pt.value) && pt.value.length > 0 ? pt.value[0] : null
+      }))
+      .filter(p => p.value !== null);
+
+    // An empty/unusable timeline is not a measured "stable at 50" -- it is
+    // no evidence at all. Returning OBSERVED with fabricated 50/100 defaults
+    // here would be the exact same fabrication class the outer catch below
+    // was fixed to stop doing (P0.5-C truth fix).
+    if (points.length === 0) {
+      return {
+        success: false,
+        evidenceState: 'INSUFFICIENT_EVIDENCE',
+        seed,
+        reason: 'Google Trends returned no usable timeline data points',
+        data: null
+      };
+    }
 
     // Calculate Momentum (last 4 weeks vs previous 4 weeks)
     let momentumPercent = 0;
@@ -42,8 +60,8 @@ async function fetchGoogleTrends(seedKeyword) {
       }
     }
 
-    const currentScore = points.length > 0 ? points[points.length - 1].value : 50;
-    const peakScore = Math.max(...points.map(p => p.value), 100);
+    const currentScore = points[points.length - 1].value;
+    const peakScore = Math.max(...points.map(p => p.value));
 
     // 2. Fetch Related & Breakout Queries
     let relatedQueries = [];

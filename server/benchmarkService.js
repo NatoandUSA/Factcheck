@@ -77,7 +77,7 @@ async function getMarketBenchmark({ seed = 'mom sweatshirt', category = 'Apparel
       sources: {
         googleTrends: googleTrendsAvailable
           ? { growth: googleData.summary.growth, status: googleData.summary.status, breakoutCount: (googleData.relatedQueries || []).length }
-          : { evidenceState: 'SOURCE_ERROR' },
+          : { evidenceState: gt.evidenceState || 'SOURCE_ERROR' },
         amazonLiveSuggestions: amazonSuggestionsAvailable ? amazonSuggestions.slice(0, 6) : []
       }
     };
@@ -151,6 +151,12 @@ async function getMarketBenchmark({ seed = 'mom sweatshirt', category = 'Apparel
   return {
     success: true,
     evidenceState: 'OBSERVED',
+    // opportunityScore/verdict are a formula computed from the observed
+    // sources, not themselves a raw provider observation -- keeping this
+    // distinct stops a modeled recommendation from being mistaken for
+    // measured evidence by any future hard readiness/decision gate
+    // (P0.5-C truth fix).
+    decisionState: 'MODELED',
     seed: cleanSeed,
     category,
     opportunityScore: finalScore,

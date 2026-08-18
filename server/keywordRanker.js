@@ -151,6 +151,11 @@ function rankKeywords(keywordList, contextCategory = 'Jewelry', seedPhrase = '')
     const score = baseScore * longTailMultiplier * dynamicIntentMultiplier;
 
     const hasRealMetrics = realVolume !== null;
+    // Volume alone still leans on sortDensity/sortCpr filler for the other
+    // two formula factors -- usable for ranking, but must not claim the same
+    // confidence as a result where all three inputs are real observations
+    // (P0.5-C truth fix, same class as the generic-scoring partial case).
+    const hasFullMetrics = realVolume !== null && realDensity !== null && realCpr !== null;
     return {
       keyword: kw,
       volume: realVolume,
@@ -161,7 +166,7 @@ function rankKeywords(keywordList, contextCategory = 'Jewelry', seedPhrase = '')
       cpr: realCpr,
       score, // internal sort key only -- not a claimed real business metric
       opportunityScore: hasRealMetrics ? Math.round(score) : null,
-      scoringState: hasRealMetrics ? 'SCORED' : 'INSUFFICIENT_EVIDENCE',
+      scoringState: hasRealMetrics ? (hasFullMetrics ? 'SCORED' : 'PARTIAL_EVIDENCE') : 'INSUFFICIENT_EVIDENCE',
       isLongTail: wordsCount >= 3,
       isNicheRelevant: dynamicIntentMultiplier > 0.5
     };

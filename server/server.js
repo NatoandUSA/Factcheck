@@ -1571,7 +1571,13 @@ app.get('/api/master-keywords', requireAuth(db), requireRole(['OWNER', 'MANAGER'
             cpr: kwItem.cpr ?? null,
             competingProducts: kwItem.competingProducts ?? null,
             titleDensity: kwItem.titleDensity ?? kwItem.density ?? null,
-            opportunityScore: kwItem.opportunityScore ?? kwItem.score ?? null
+            // kwItem.score is rankKeywords' internal sort-only heuristic (it
+            // uses hidden 100/10/8 defaults for missing metrics) -- it must
+            // never leak into the Staff-facing opportunityScore when the real
+            // one is null, or this API route re-fabricates exactly what
+            // rankKeywords was fixed to stop doing (P0.5-C truth fix).
+            opportunityScore: kwItem.opportunityScore ?? null,
+            scoringState: kwItem.scoringState ?? (kwItem.opportunityScore != null ? 'SCORED' : 'INSUFFICIENT_EVIDENCE')
           });
         }
       });
@@ -1619,7 +1625,10 @@ const handleReportUpload = async (req, res) => {
       // actual parsed HTML (P0.5-C truth fix).
       rawRows = (parsedKeywords || []).map(kw => ({
         Keyword: kw.keyword || kw,
-        'Search Volume': kw.views24h ? kw.views24h * 30 : null,
+        // Presence check, not truthiness: views24h:0 is a real observed zero
+        // and must survive as 0, not collapse into the same null used for a
+        // genuinely missing field (P0.5-C truth fix).
+        'Search Volume': (kw.views24h !== undefined && kw.views24h !== null) ? kw.views24h * 30 : null,
         'Competing Products': (kw.listings !== undefined && kw.listings !== null) ? kw.listings : null,
         'Title Density': null
       }));
@@ -1738,16 +1747,21 @@ const handleReportUpload = async (req, res) => {
 
       // No scoring without sufficient evidence: missing volume/IQ must not
       // become a plausible-looking "average" score of 50 (P0.5-C truth fix).
+      // When volume is real but competition/title-density are not, the score
+      // still leans on filler values for the missing factors -- that result
+      // is usable for ranking but must say PARTIAL_EVIDENCE, not claim the
+      // same confidence as a fully-observed SCORED result.
       let opportunityScore = null;
       let scoringState = 'INSUFFICIENT_EVIDENCE';
       if (rawIq !== null && rawIq > 0) {
         opportunityScore = rawIq;
         scoringState = 'SCORED';
       } else if (searchVolume !== null && searchVolume > 0) {
-        const compFactor = Math.sqrt((competingProducts || 0) + 10);
+        const hasFullMetrics = competingProducts !== null && titleDensity !== null;
+        const compFactor = Math.sqrt((competingProducts ?? 0) + 10);
         const tdFactor = (titleDensity !== null && titleDensity >= 0) ? (titleDensity + 1) : 4;
         opportunityScore = Math.round((searchVolume / (compFactor * tdFactor)) * 100);
-        scoringState = 'SCORED';
+        scoringState = hasFullMetrics ? 'SCORED' : 'PARTIAL_EVIDENCE';
       }
 
       evaluatedKeywords.push({

@@ -25,7 +25,8 @@ function runAllTests() {
     'tests/test_listing_truth_boundary.cjs',
     'tests/test_malicious_model_outputs.cjs',
     'tests/test_adversarial_control_plane.cjs',
-    'tests/test_p0_5_c_research_truth.cjs'
+    'tests/test_p0_5_c_research_truth.cjs',
+    'tests/test_ytrends_unknown_defaults.cjs'
   ];
 
   let passedCount = 0;

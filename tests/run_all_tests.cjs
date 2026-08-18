@@ -21,7 +21,8 @@ function runAllTests() {
     'tests/test_etsy_scanner_evidence_ui.cjs',
     'tests/test_strict_keyword_sanitizer.cjs',
     'tests/test_full_cerebro_mkl_flow.cjs',
-    'tests/test_white_screen_failsafe.cjs'
+    'tests/test_white_screen_failsafe.cjs',
+    'tests/test_listing_truth_boundary.cjs'
   ];
 
   let passedCount = 0;

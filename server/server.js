@@ -609,7 +609,11 @@ app.post('/api/listings', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SEL
     categoryName,
     amazonSearchTerms: searchTerms,
     etsyTags: etsyTags,
-    amazonDescription: payload.amazonDescription || `<p><b>High Quality ${categoryName}</b></p><p>Crafted with premium materials and attention to detail. Perfect gift for family and loved ones on birthdays, anniversaries, and holidays.</p><p><b>Features:</b></p><ul><li>Durable & Long-lasting</li><li>Personalized Customization</li><li>Easy Care & Maintenance</li></ul>`,
+    // No fallback description text: an empty description must stay empty so
+    // the Publish Gate can catch it, rather than silently asserting unverified
+    // material/quality claims that a manager could approve without noticing
+    // they were never real (GPT/Manus P0.5 audit, listing truth boundary).
+    amazonDescription: payload.amazonDescription || '',
     ipVerdict: ipResult.verdict,
     ipHits: ipResult.hits,
     opportunityScore: oppResult.overallScore,

@@ -61,6 +61,16 @@ function evaluatePublishGate(listing) {
     }
   }
 
+  // 2b. Product Truth Check: a listing cannot reach PUBLISH_READY with no real
+  // description content. This is what actually stops a manager from approving
+  // unverified/fabricated material or quality claims -- upstream fixes now
+  // leave a missing description empty instead of injecting boilerplate, so an
+  // empty description here means nobody has written real product facts yet.
+  const description = listing.amazonDescription || listing.etsyDescription || '';
+  if (!description || description.trim().length === 0) {
+    issues.push('Missing product description -- write real product details before publishing (no auto-generated placeholder is used).');
+  }
+
   // 3. Fail-Closed Status Determination (Ported from 22etsy-agent Truth Discipline)
   let final_status = 'INSUFFICIENT_DATA';
   let canExport = false;

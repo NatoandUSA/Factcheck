@@ -42,7 +42,10 @@ export default function SingleListingGenerator({ onGenerate, isGenerating }) {
       occasion: selectedOccasion,
       tone: selectedTone,
       productBrief: productBrief.trim(),
-      materials: selectedCategory.defaultMaterials,
+      // Category presets are unverified suggestions for staff reference, not
+      // confirmed facts about this specific product -- never sent to the AI
+      // as real materials unless staff typed them into productBrief.
+      materials: [],
       imageBase64: imagePreview
     });
   };
@@ -210,7 +213,7 @@ export default function SingleListingGenerator({ onGenerate, isGenerating }) {
       {/* Materials Badges */}
       <div style={{ marginBottom: '20px' }}>
         <div style={{ fontSize: '0.75rem', fontWeight: '600', color: 'var(--text-muted)', marginBottom: '6px' }}>
-          DEFAULT SPECS INCLUDED:
+          SUGGESTED SPECS (reference only -- verify before publishing):
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
           {selectedCategory.defaultMaterials.map((mat, idx) => (

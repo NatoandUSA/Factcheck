@@ -277,7 +277,8 @@ async function runAuthFoundationTests() {
         payload: {
           ipVerdict: 'ALLOW',
           ipHits: [],
-          etsyTags: Array.from({ length: 13 }, (_, index) => `test tag ${index + 1}`)
+          etsyTags: Array.from({ length: 13 }, (_, index) => `test tag ${index + 1}`),
+          amazonDescription: 'Real test fixture description: personalized embroidered sweatshirt, cotton-poly blend.'
         }
       })
     });
@@ -407,7 +408,8 @@ async function runAuthFoundationTests() {
         payload: {
           ipVerdict: 'ALLOW',
           ipHits: [],
-          etsyTags: Array.from({ length: 13 }, (_, index) => `scope tag ${index + 1}`)
+          etsyTags: Array.from({ length: 13 }, (_, index) => `scope tag ${index + 1}`),
+          amazonDescription: 'Real test fixture description: embroidered gift item, cotton blend, machine washable.'
         }
       })
     });

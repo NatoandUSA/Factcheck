@@ -22,7 +22,7 @@ const asinBatcher = require('./asinBatcher');
 const { fetchGoogleTrends } = require('./googleTrendsService');
 const { callLLM } = require('./llmService');
 const { learnFromListing } = require('./learningService');
-const { parseEtsySearchResults, synthesizeEtsyBatchLearnings } = require('./competitorBatchLearner');
+const { parseEtsySearchResults, sanitizeStaffManualAssertions, synthesizeEtsyBatchLearnings } = require('./competitorBatchLearner');
 const benchmarkService = require('./benchmarkService');
 const publishGate = require('./publishGate');
 const { hashPassword, verifyPassword } = require('./security/scrypt');
@@ -1238,9 +1238,32 @@ app.post('/api/etsy/batch-learn', requireAuth(db), requireRole(['OWNER', 'MANAGE
   if (req.user.marketplace !== 'ETSY') {
     return res.status(403).json({ success: false, error: 'MARKETPLACE_MISMATCH', message: 'This endpoint requires an Etsy workspace session.' });
   }
-  const { seedPhrase = 'nurse sweatshirt', category = 'Apparel: Sweatshirt', sellers = [] } = req.body;
-  if (!Array.isArray(sellers) || sellers.filter(s => s && s.selected !== false).length < 3) {
-    return res.status(422).json({ success: false, error: 'INSUFFICIENT_EVIDENCE', message: 'Select at least 3 seller/listing evidence rows.' });
+
+  const {
+    seedPhrase = 'nurse sweatshirt',
+    category = 'Apparel: Sweatshirt',
+    sellers = [],
+    htmlContent = '',
+    csvRows = []
+  } = req.body || {};
+
+  // Provenance authority lives on the server:
+  // 1) Raw HTML/CSV is parsed here, so those rows may retain source-observed labels.
+  // 2) Browser-supplied seller objects are always downgraded to attributable
+  //    STAFF_MANUAL_ASSERTION rows, regardless of any evidenceSource sent by the client.
+  const parsedEvidence = parseEtsySearchResults({ htmlContent, csvRows })
+    .map(row => ({ ...row, selected: true }));
+  const assertedAt = new Date().toISOString();
+  const evidenceRows = parsedEvidence.length > 0
+    ? parsedEvidence
+    : sanitizeStaffManualAssertions(sellers, req.user.userId, assertedAt);
+
+  if (evidenceRows.length < 3) {
+    return res.status(422).json({
+      success: false,
+      error: 'INSUFFICIENT_EVIDENCE',
+      message: 'Provide at least 3 server-parsed source rows or explicit Staff manual assertions.'
+    });
   }
 
   readWorkspaceLlmSettings(req.user, async (settingsErr, keys) => {
@@ -1249,7 +1272,7 @@ app.post('/api/etsy/batch-learn', requireAuth(db), requireRole(['OWNER', 'MANAGE
       const provider = keys.active_llm_provider || 'GEMINI';
       const result = await synthesizeEtsyBatchLearnings({
         seedPhrase,
-        sellers,
+        sellers: evidenceRows,
         category,
         llmConfig: {
           provider,

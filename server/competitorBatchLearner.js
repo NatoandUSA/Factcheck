@@ -43,6 +43,8 @@ function makeSeller({
   rating,
   url,
   evidenceSource,
+  assertedBy = null,
+  assertedAt = null,
   selected
 }) {
   return {
@@ -58,6 +60,8 @@ function makeSeller({
     rating: nullableText(rating),
     url: normalizeUrl(url),
     evidenceSource,
+    assertedBy: assertedBy ?? null,
+    assertedAt: assertedAt ?? null,
     isSynthetic: false,
     selected: Boolean(selected)
   };
@@ -161,6 +165,36 @@ function displayEvidence(value) {
   return value === undefined || value === null || value === '' ? 'UNKNOWN' : String(value);
 }
 
+/**
+ * Client seller objects are never allowed to self-assert an observed source.
+ * The authenticated server converts them into explicit Staff assertions and
+ * binds actor + timestamp. Raw HTML/CSV can retain observed provenance only
+ * when the server parses that raw source itself.
+ */
+function sanitizeStaffManualAssertions(sellers, actorId, assertedAt = new Date().toISOString()) {
+  return (Array.isArray(sellers) ? sellers : [])
+    .filter(s => s && s.selected !== false)
+    .slice(0, 30)
+    .map((seller, index) => makeSeller({
+      id: seller.id || `staff-assertion-${index + 1}`,
+      title: seller.title,
+      shopName: seller.shopName,
+      country: seller.country,
+      listingAge: seller.listingAge,
+      views24h: seller.views24h,
+      favorites: seller.favorites,
+      sold24h: seller.sold24h,
+      price: seller.price,
+      rating: seller.rating,
+      url: seller.url,
+      evidenceSource: 'STAFF_MANUAL_ASSERTION',
+      assertedBy: actorId,
+      assertedAt,
+      selected: true
+    }))
+    .filter(s => s.title && s.title.length > 5);
+}
+
 function normalizeSelectedSeller(seller, index) {
   return makeSeller({
     id: seller.id || `seller-evidence-${index + 1}`,
@@ -175,6 +209,8 @@ function normalizeSelectedSeller(seller, index) {
     rating: seller.rating,
     url: seller.url,
     evidenceSource: seller.evidenceSource,
+    assertedBy: seller.assertedBy,
+    assertedAt: seller.assertedAt,
     selected: true
   });
 }
@@ -311,7 +347,15 @@ Never return materials, shipping promises, product specifications, care instruct
       observedPriceCount,
       observedSoldCount,
       observedViewsCount,
-      sources: [...new Set(selectedSellers.map(s => s.evidenceSource))]
+      sources: [...new Set(selectedSellers.map(s => s.evidenceSource))],
+      manualAssertions: selectedSellers
+        .filter(s => s.evidenceSource === 'STAFF_MANUAL_ASSERTION')
+        .map(s => ({
+          title: s.title,
+          url: s.url,
+          assertedBy: s.assertedBy,
+          assertedAt: s.assertedAt
+        }))
     },
     synthesizedListing: synthesized
   };
@@ -321,5 +365,6 @@ module.exports = {
   ACCEPTED_EVIDENCE_SOURCES,
   nullableInteger,
   parseEtsySearchResults,
+  sanitizeStaffManualAssertions,
   synthesizeEtsyBatchLearnings
 };

@@ -12,11 +12,15 @@ async function getMarketBenchmark({ seed = 'mom sweatshirt', category = 'Apparel
 
   let googleData = null;
   let amazonSuggestions = [];
-  let etsyIntentScore = 75;
+  let amazonSuggestionsAvailable = false;
 
-  // 1. Fetch Google Trends Data
-  try {
-    const gt = await googleTrends.fetchGoogleTrends(cleanSeed);
+  // 1. Fetch Google Trends Data. fetchGoogleTrends now fails closed
+  // (success:false, no synthetic timeline/momentum) rather than throwing, so
+  // this must check gt.success explicitly -- a failed/unavailable source
+  // must not silently read as "stable, +15% growth" (P0.5-C truth fix).
+  const gt = await googleTrends.fetchGoogleTrends(cleanSeed);
+  const googleTrendsAvailable = Boolean(gt.success);
+  if (googleTrendsAvailable) {
     googleData = {
       summary: {
         growth: gt.momentumPercent,
@@ -24,11 +28,13 @@ async function getMarketBenchmark({ seed = 'mom sweatshirt', category = 'Apparel
       },
       relatedQueries: gt.relatedQueries
     };
-  } catch (gtErr) {
-    console.warn('Google Trends fetch in benchmark warning:', gtErr.message);
   }
 
-  // 2. Fetch Live Amazon A9 Search Suggestions (Public & Free Endpoint)
+  // 2. Fetch Live Amazon A9 Search Suggestions (Public & Free Endpoint). No
+  // fallback: a blocked/rate-limited/empty response means this source is
+  // unavailable, not a cue to fabricate plausible-looking suggestions
+  // (P0.5-C truth fix -- the previous fallback presented invented strings as
+  // if they were real live Amazon buyer search data).
   try {
     const amzUrl = `https://completion.amazon.com/api/2017/suggestions?prefix=${encodeURIComponent(cleanSeed)}&alias=aps&mid=ATVPDKIKX0DER`;
     const amzRes = await fetch(amzUrl, {
@@ -41,41 +47,50 @@ async function getMarketBenchmark({ seed = 'mom sweatshirt', category = 'Apparel
       const amzJson = await amzRes.json();
       if (Array.isArray(amzJson.suggestions)) {
         amazonSuggestions = amzJson.suggestions.map(s => s.value).filter(Boolean);
+        amazonSuggestionsAvailable = amazonSuggestions.length > 0;
       }
     }
   } catch (amzErr) {
     console.warn('Amazon suggestion fetch warning:', amzErr.message);
   }
 
-  // Fallback if network blocked or rate limited
-  if (amazonSuggestions.length === 0) {
-    const isSpanish = /para|amor|vida|suegra|mama|esposa/i.test(cleanSeed);
-    if (isSpanish) {
-      amazonSuggestions = [
-        cleanSeed,
-        `${cleanSeed} collar de plata`,
-        `${cleanSeed} regalo para mujer`,
-        `${cleanSeed} joyeria personalizada`,
-        `${cleanSeed} caja de regalo`
-      ];
-    } else {
-      amazonSuggestions = [
-        cleanSeed,
-        `${cleanSeed} for women`,
-        `${cleanSeed} embroidered`,
-        `${cleanSeed} oversized crewneck`,
-        `${cleanSeed} gift`
-      ];
-    }
+  // 3. Both sources are required for a decision-grade verdict. Missing
+  // evidence must produce an explicit INSUFFICIENT_EVIDENCE state, never a
+  // computed GO/NICHE_DOWN/AVOID built on defaults for the missing source
+  // (P0.5-C truth fix, same class as the Listing Truth Boundary work).
+  if (!googleTrendsAvailable || !amazonSuggestionsAvailable) {
+    const missing = [];
+    if (!googleTrendsAvailable) missing.push('Google Trends');
+    if (!amazonSuggestionsAvailable) missing.push('Amazon US Live Suggestions');
+    return {
+      success: true,
+      evidenceState: 'INSUFFICIENT_EVIDENCE',
+      seed: cleanSeed,
+      category,
+      opportunityScore: null,
+      verdict: 'INSUFFICIENT_EVIDENCE',
+      verdictBadge: '⚪ CHƯA ĐỦ DỮ LIỆU (INSUFFICIENT EVIDENCE)',
+      verdictColor: '#64748b',
+      verdictBg: '#f1f5f9',
+      staffAdvice: `Không thể đánh giá: thiếu dữ liệu từ ${missing.join(', ')}. Vui lòng thử lại hoặc thu thập bằng chứng thủ công trước khi quyết định.`,
+      keyFindings: missing.map(source => `${source} hiện không khả dụng -- không dùng số liệu giả định.`),
+      sources: {
+        googleTrends: googleTrendsAvailable
+          ? { growth: googleData.summary.growth, status: googleData.summary.status, breakoutCount: (googleData.relatedQueries || []).length }
+          : { evidenceState: 'SOURCE_ERROR' },
+        amazonLiveSuggestions: amazonSuggestionsAvailable ? amazonSuggestions.slice(0, 6) : []
+      }
+    };
   }
 
-  // 3. Compute Multi-Dimensional Opportunity Score (0 - 100)
+  // 4. Compute Multi-Dimensional Opportunity Score (0 - 100) -- both sources
+  // are confirmed real at this point, so no defaults are needed.
   let score = 50;
   let reasons = [];
 
   // A. Google Trends Contribution (up to 40 pts)
-  const gtGrowth = googleData?.summary?.growth || 15;
-  const gtStatus = googleData?.summary?.status || 'ỔN ĐỊNH';
+  const gtGrowth = googleData.summary.growth;
+  const gtStatus = googleData.summary.status;
   if (gtGrowth > 20 || gtStatus.includes('TĂNG') || gtStatus.includes('ĐỘT PHÁ')) {
     score += 25;
     reasons.push(`Google Trends ghi nhận xu hướng tăng trưởng +${gtGrowth}% trong 90 ngày.`);
@@ -135,6 +150,7 @@ async function getMarketBenchmark({ seed = 'mom sweatshirt', category = 'Apparel
 
   return {
     success: true,
+    evidenceState: 'OBSERVED',
     seed: cleanSeed,
     category,
     opportunityScore: finalScore,
@@ -144,14 +160,16 @@ async function getMarketBenchmark({ seed = 'mom sweatshirt', category = 'Apparel
     verdictBg,
     staffAdvice,
     keyFindings: reasons,
+    // No third "Pinterest gift intent" source: there was never a real
+    // Pinterest integration behind it, just a restatement of the score
+    // itself relabeled as if it were independent evidence (P0.5-C truth fix).
     sources: {
       googleTrends: {
         growth: gtGrowth,
         status: gtStatus,
-        breakoutCount: (googleData?.relatedQueries || []).length
+        breakoutCount: (googleData.relatedQueries || []).length
       },
-      amazonLiveSuggestions: amazonSuggestions.slice(0, 6),
-      pinterestGiftIntent: finalScore >= 70 ? 'High Seasonal & Aesthetic Demand' : 'Moderate Aesthetic Interest'
+      amazonLiveSuggestions: amazonSuggestions.slice(0, 6)
     }
   };
 }

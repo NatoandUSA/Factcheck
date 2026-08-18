@@ -67,6 +67,7 @@ async function fetchGoogleTrends(seedKeyword) {
 
     return {
       success: true,
+      evidenceState: 'OBSERVED',
       seed,
       geo: 'US (United States)',
       currentScore,
@@ -78,37 +79,17 @@ async function fetchGoogleTrends(seedKeyword) {
       relatedQueries
     };
   } catch (err) {
-    console.warn(`Google Trends API error for "${seed}": ${err.message}. Generating algorithmic simulation model.`);
-    
-    // Graceful fallback simulation based on seed characters to guarantee continuous UI performance
-    const points = [];
-    const now = new Date();
-    for (let i = 23; i >= 0; i--) {
-      const d = new Date();
-      d.setDate(now.getDate() - (i * 14));
-      const monthStr = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-      const base = 40 + (Math.sin(i / 3) * 25) + ((seed.length * 7) % 20);
-      points.push({
-        date: monthStr,
-        value: Math.min(100, Math.max(10, Math.round(base)))
-      });
-    }
-
+    // Fail closed: a provider outage or parsing failure must be visible as a
+    // real failure, not silently replaced with a plausible-looking simulated
+    // timeline/momentum/related-queries that Staff could mistake for
+    // measured demand (P0.5-C, same class as the P0.5-A/B/PT truth fixes).
+    console.warn(`Google Trends API error for "${seed}": ${err.message}`);
     return {
-      success: true,
+      success: false,
+      evidenceState: 'SOURCE_ERROR',
       seed,
-      geo: 'US (Reference Estimate)',
-      currentScore: points[points.length - 1].value,
-      peakScore: Math.max(...points.map(p => p.value)),
-      momentumPercent: 28,
-      isBreakout: false,
-      statusBadge: '📈 STABLE DEMAND (REF)',
-      timeline: points,
-      relatedQueries: [
-        { query: `${seed} gift ideas`, value: '+120%', type: 'RISING' },
-        { query: `personalized ${seed}`, value: '+85%', type: 'RISING' },
-        { query: `custom ${seed}`, value: '95/100', type: 'TOP' }
-      ]
+      reason: err.message,
+      data: null
     };
   }
 }

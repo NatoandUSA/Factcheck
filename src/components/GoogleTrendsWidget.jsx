@@ -19,6 +19,14 @@ export default function GoogleTrendsWidget({ seedPhrase, onShowToast }) {
       const res = await fetch(`/api/google-trends?keyword=${encodeURIComponent(keyword.trim())}`, { credentials: 'include' });
       if (!res.ok) throw new Error('Không thể lấy dữ liệu Google Trends');
       const data = await res.json();
+      // A provider failure now returns HTTP 200 with success:false rather
+      // than a fabricated simulated timeline -- must not render it as real
+      // data (P0.5-C truth fix).
+      if (!data.success) {
+        setTrendsData(null);
+        setError(data.reason ? `Google Trends không khả dụng: ${data.reason}` : 'Google Trends không khả dụng lúc này.');
+        return;
+      }
       setTrendsData(data);
     } catch (err) {
       setError(err.message);
@@ -56,9 +64,11 @@ export default function GoogleTrendsWidget({ seedPhrase, onShowToast }) {
               <span style={{ fontWeight: 800, fontSize: '1.05rem', letterSpacing: '-0.02em' }}>
                 Google Trends Cross-Check Engine
               </span>
-              <span style={{ fontSize: '0.75rem', background: 'rgba(59, 130, 246, 0.25)', color: '#93c5fd', padding: '2px 8px', borderRadius: '6px', border: '1px solid rgba(59, 130, 246, 0.4)' }}>
-                US Real-Time Data
-              </span>
+              {trendsData?.success && (
+                <span style={{ fontSize: '0.75rem', background: 'rgba(59, 130, 246, 0.25)', color: '#93c5fd', padding: '2px 8px', borderRadius: '6px', border: '1px solid rgba(59, 130, 246, 0.4)' }}>
+                  US Real-Time Data
+                </span>
+              )}
             </div>
             <div style={{ fontSize: '0.8rem', color: '#94a3b8', marginTop: '2px' }}>
               Đối chiếu nhu cầu thị trường thực tế của Seed Phrase: <strong style={{ color: '#60a5fa' }}>"{seedPhrase}"</strong>

@@ -107,7 +107,7 @@ export default function MarketBenchmarkWidget({ seedPhrase, category, onSelectNi
                 {data.verdictBadge}
               </span>
               <span style={{ fontSize: '0.85rem', fontWeight: 800, color: 'var(--text-primary)' }}>
-                Điểm Tiềm Năng: <span style={{ color: data.verdictColor, fontSize: '1rem' }}>{data.opportunityScore}/100</span>
+                Điểm Tiềm Năng: <span style={{ color: data.verdictColor, fontSize: '1rem' }}>{data.opportunityScore !== null && data.opportunityScore !== undefined ? `${data.opportunityScore}/100` : 'Chưa đủ dữ liệu'}</span>
               </span>
             </div>
             <div style={{ fontSize: '0.85rem', color: '#1e293b', fontWeight: 600, lineHeight: 1.4 }}>
@@ -137,16 +137,26 @@ export default function MarketBenchmarkWidget({ seedPhrase, category, onSelectNi
               <span style={{ fontSize: '0.75rem', fontWeight: 800, color: '#0369a1', textTransform: 'uppercase' }}>
                 📈 1. Google Trends 90D
               </span>
-              <span style={{ fontSize: '0.75rem', fontWeight: 700, color: data.sources.googleTrends.growth >= 0 ? '#16a34a' : '#dc2626' }}>
-                {data.sources.googleTrends.growth >= 0 ? `+${data.sources.googleTrends.growth}%` : `${data.sources.googleTrends.growth}%`}
-              </span>
+              {data.sources.googleTrends?.evidenceState !== 'SOURCE_ERROR' && (
+                <span style={{ fontSize: '0.75rem', fontWeight: 700, color: data.sources.googleTrends.growth >= 0 ? '#16a34a' : '#dc2626' }}>
+                  {data.sources.googleTrends.growth >= 0 ? `+${data.sources.googleTrends.growth}%` : `${data.sources.googleTrends.growth}%`}
+                </span>
+              )}
             </div>
-            <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-primary)' }}>
-              Trạng thái: {data.sources.googleTrends.status}
-            </div>
-            <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-              Có {data.sources.googleTrends.breakoutCount || 0} cụm từ khóa đột phá liên quan.
-            </div>
+            {data.sources.googleTrends?.evidenceState === 'SOURCE_ERROR' ? (
+              <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                Không khả dụng lúc này -- không dùng số liệu giả định.
+              </div>
+            ) : (
+              <>
+                <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                  Trạng thái: {data.sources.googleTrends.status}
+                </div>
+                <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                  Có {data.sources.googleTrends.breakoutCount || 0} cụm từ khóa đột phá liên quan.
+                </div>
+              </>
+            )}
           </div>
 
           {/* Card 2: Amazon Live A9 Suggestions */}
@@ -157,43 +167,33 @@ export default function MarketBenchmarkWidget({ seedPhrase, category, onSelectNi
               </span>
               <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>Người mua đang gõ thật</span>
             </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '2px' }}>
-              {data.sources.amazonLiveSuggestions?.map((sug, i) => (
-                <span 
-                  key={i} 
-                  onClick={() => onSelectNicheKeyword && onSelectNicheKeyword(sug)}
-                  style={{
-                    background: '#fff',
-                    border: '1px solid #fed7aa',
-                    color: '#9a3412',
-                    padding: '2px 8px',
-                    borderRadius: '4px',
-                    fontSize: '0.72rem',
-                    fontWeight: 600,
-                    cursor: onSelectNicheKeyword ? 'pointer' : 'default'
-                  }}
-                  title={onSelectNicheKeyword ? 'Bấm để dùng làm từ khóa con' : sug}
-                >
-                  {sug}
-                </span>
-              ))}
-            </div>
-          </div>
-
-          {/* Card 3: Niche & Gift Buying Intent */}
-          <div style={{ background: 'var(--bg-subtle)', borderRadius: '10px', padding: '12px 16px', border: '1px solid var(--border-subtle)', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontSize: '0.75rem', fontWeight: 800, color: '#7e22ce', textTransform: 'uppercase' }}>
-                💡 3. Niche & Gift Buyer Heat
-              </span>
-              <span style={{ fontSize: '0.7rem', color: '#16a34a', fontWeight: 700 }}>Độ Sẵn Sàng Mua Cao</span>
-            </div>
-            <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-primary)' }}>
-              {data.sources.pinterestGiftIntent}
-            </div>
-            <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-              Phù hợp mô hình cá nhân hóa (Personalized POD/Jewelry).
-            </div>
+            {data.sources.amazonLiveSuggestions?.length > 0 ? (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '2px' }}>
+                {data.sources.amazonLiveSuggestions.map((sug, i) => (
+                  <span
+                    key={i}
+                    onClick={() => onSelectNicheKeyword && onSelectNicheKeyword(sug)}
+                    style={{
+                      background: '#fff',
+                      border: '1px solid #fed7aa',
+                      color: '#9a3412',
+                      padding: '2px 8px',
+                      borderRadius: '4px',
+                      fontSize: '0.72rem',
+                      fontWeight: 600,
+                      cursor: onSelectNicheKeyword ? 'pointer' : 'default'
+                    }}
+                    title={onSelectNicheKeyword ? 'Bấm để dùng làm từ khóa con' : sug}
+                  >
+                    {sug}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                Không khả dụng lúc này -- không dùng gợi ý giả định.
+              </div>
+            )}
           </div>
 
         </div>

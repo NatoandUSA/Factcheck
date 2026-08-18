@@ -104,10 +104,26 @@ function rankKeywords(keywordList, contextCategory = 'Jewelry', seedPhrase = '')
 
     if (!kw) return null;
 
-    const vol = typeof item === 'object' ? (parseFloat(item.searchVolume || item.volume || item.searches) || 100) : 100;
-    const density = typeof item === 'object' ? (parseFloat(item.titleDensity || item.density) || 10) : 10;
-    const cpr = typeof item === 'object' ? (parseFloat(item.cpr) || 8) : 8;
-    const competingProducts = (typeof item === 'object' && item.competingProducts != null) ? parseFloat(item.competingProducts) : null;
+    // Real evidence (including an explicit 0) is kept separate from the
+    // internal sort heuristic below. A keyword ranked with no real metrics
+    // (e.g. a bare keyword string, or an upload row with missing columns)
+    // must not present a defaulted 100/10/8 as if it were an observed
+    // volume/density/cpr, and must not get a fabricated opportunityScore
+    // (P0.5-C truth fix -- this function previously overwrote whatever
+    // real/null values the caller had already computed).
+    const isObj = typeof item === 'object' && item !== null;
+    const realVolume = isObj && (item.searchVolume ?? item.volume ?? item.searches) != null
+      ? parseFloat(item.searchVolume ?? item.volume ?? item.searches) : null;
+    const realDensity = isObj && (item.titleDensity ?? item.density) != null
+      ? parseFloat(item.titleDensity ?? item.density) : null;
+    const realCpr = isObj && item.cpr != null ? parseFloat(item.cpr) : null;
+    const competingProducts = isObj && item.competingProducts != null ? parseFloat(item.competingProducts) : null;
+
+    // Sort-only heuristic values -- used to produce a stable relative
+    // ordering when real metrics are absent, but never exposed as output.
+    const sortVol = realVolume ?? 100;
+    const sortDensity = realDensity ?? 10;
+    const sortCpr = realCpr ?? 8;
 
     // Long-tail Keyword Priority Multiplier
     const wordsCount = kw.split(/\s+/).length;
@@ -118,7 +134,7 @@ function rankKeywords(keywordList, contextCategory = 'Jewelry', seedPhrase = '')
       longTailMultiplier = 0.1; // Severe penalty for 1-word generic noise ("gift", "gifts")
     }
 
-    if (density < 5) {
+    if (sortDensity < 5) {
       longTailMultiplier *= 1.4; // Low competition boost
     }
 
@@ -131,19 +147,21 @@ function rankKeywords(keywordList, contextCategory = 'Jewelry', seedPhrase = '')
     }
 
     // Base Ranking Score Formula with Long-tail Priority & Dynamic Intent
-    const baseScore = (vol * Math.max(1, 100 - density)) / (cpr + 1);
+    const baseScore = (sortVol * Math.max(1, 100 - sortDensity)) / (sortCpr + 1);
     const score = baseScore * longTailMultiplier * dynamicIntentMultiplier;
 
+    const hasRealMetrics = realVolume !== null;
     return {
       keyword: kw,
-      volume: vol,
-      searchVolume: vol,
-      density,
-      titleDensity: density,
+      volume: realVolume,
+      searchVolume: realVolume,
+      density: realDensity,
+      titleDensity: realDensity,
       competingProducts,
-      cpr,
-      score,
-      opportunityScore: Math.round(score),
+      cpr: realCpr,
+      score, // internal sort key only -- not a claimed real business metric
+      opportunityScore: hasRealMetrics ? Math.round(score) : null,
+      scoringState: hasRealMetrics ? 'SCORED' : 'INSUFFICIENT_EVIDENCE',
       isLongTail: wordsCount >= 3,
       isNicheRelevant: dynamicIntentMultiplier > 0.5
     };

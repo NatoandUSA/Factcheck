@@ -150,11 +150,12 @@ function rankKeywords(keywordList, contextCategory = 'Jewelry', seedPhrase = '')
     const baseScore = (sortVol * Math.max(1, 100 - sortDensity)) / (sortCpr + 1);
     const score = baseScore * longTailMultiplier * dynamicIntentMultiplier;
 
-    const hasRealMetrics = realVolume !== null;
-    // Volume alone still leans on sortDensity/sortCpr filler for the other
-    // two formula factors -- usable for ranking, but must not claim the same
-    // confidence as a result where all three inputs are real observations
-    // (P0.5-C truth fix, same class as the generic-scoring partial case).
+    // The score formula above always runs (sortVol/sortDensity/sortCpr fill
+    // in for ranking purposes even when metrics are missing), but the
+    // exposed opportunityScore/scoringState must only claim SCORED when
+    // every input the formula used is a real observation -- volume alone is
+    // not sufficient evidence for a decision-grade score (P0.5-C truth fix,
+    // same all-or-nothing rule as researchTruth.scoreKeywordEvidence).
     const hasFullMetrics = realVolume !== null && realDensity !== null && realCpr !== null;
     return {
       keyword: kw,
@@ -165,8 +166,8 @@ function rankKeywords(keywordList, contextCategory = 'Jewelry', seedPhrase = '')
       competingProducts,
       cpr: realCpr,
       score, // internal sort key only -- not a claimed real business metric
-      opportunityScore: hasRealMetrics ? Math.round(score) : null,
-      scoringState: hasRealMetrics ? (hasFullMetrics ? 'SCORED' : 'PARTIAL_EVIDENCE') : 'INSUFFICIENT_EVIDENCE',
+      opportunityScore: hasFullMetrics ? Math.round(score) : null,
+      scoringState: hasFullMetrics ? 'SCORED' : 'INSUFFICIENT_EVIDENCE',
       isLongTail: wordsCount >= 3,
       isNicheRelevant: dynamicIntentMultiplier > 0.5
     };

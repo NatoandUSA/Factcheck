@@ -17,6 +17,7 @@ const opportunityScorer = require('./opportunityScorer');
 const ytrendsMcp = require('./ytuongMcpClient');
 const ytrendsParser = require('./ytrendsParser');
 const keywordRanker = require('./keywordRanker');
+const researchTruth = require('./researchTruth');
 const h10Mcp = require('./h10McpClient');
 const asinBatcher = require('./asinBatcher');
 const { fetchGoogleTrends } = require('./googleTrendsService');
@@ -1625,11 +1626,12 @@ const handleReportUpload = async (req, res) => {
       // actual parsed HTML (P0.5-C truth fix).
       rawRows = (parsedKeywords || []).map(kw => ({
         Keyword: kw.keyword || kw,
-        // Presence check, not truthiness: views24h:0 is a real observed zero
-        // and must survive as 0, not collapse into the same null used for a
-        // genuinely missing field (P0.5-C truth fix).
-        'Search Volume': (kw.views24h !== undefined && kw.views24h !== null) ? kw.views24h * 30 : null,
-        'Competing Products': (kw.listings !== undefined && kw.listings !== null) ? kw.listings : null,
+        // researchTruth centralizes the observed-vs-missing distinction:
+        // views24h:0 is a real observed zero and must survive as 0, not
+        // collapse into the same null used for a genuinely missing field
+        // (P0.5-C truth fix).
+        'Search Volume': researchTruth.monthlySearchVolumeFromViews24h(kw.views24h),
+        'Competing Products': researchTruth.toObservedNumber(kw.listings),
         'Title Density': null
       }));
     } else {
@@ -1732,37 +1734,24 @@ const handleReportUpload = async (req, res) => {
       // source zero ("0" in the file) is preserved as a real observation.
       // These are different facts and were previously conflated (P0.5-C
       // truth fix).
-      const readNumericOrNull = (key) => {
-        if (!key) return null;
-        const raw = r[key];
-        if (raw === undefined || raw === null || raw === '') return null;
-        const num = Number(raw);
-        return isNaN(num) ? null : num;
-      };
+      const readNumericOrNull = (key) => (key ? researchTruth.toObservedNumber(r[key]) : null);
       const searchVolume = readNumericOrNull(volKey);
       const competingProducts = readNumericOrNull(compKey);
       const titleDensity = readNumericOrNull(titleDensityKey);
       const cpr = readNumericOrNull(cprKey);
       const rawIq = readNumericOrNull(iqKey);
 
-      // No scoring without sufficient evidence: missing volume/IQ must not
-      // become a plausible-looking "average" score of 50 (P0.5-C truth fix).
-      // When volume is real but competition/title-density are not, the score
-      // still leans on filler values for the missing factors -- that result
-      // is usable for ranking but must say PARTIAL_EVIDENCE, not claim the
-      // same confidence as a fully-observed SCORED result.
-      let opportunityScore = null;
-      let scoringState = 'INSUFFICIENT_EVIDENCE';
-      if (rawIq !== null && rawIq > 0) {
-        opportunityScore = rawIq;
-        scoringState = 'SCORED';
-      } else if (searchVolume !== null && searchVolume > 0) {
-        const hasFullMetrics = competingProducts !== null && titleDensity !== null;
-        const compFactor = Math.sqrt((competingProducts ?? 0) + 10);
-        const tdFactor = (titleDensity !== null && titleDensity >= 0) ? (titleDensity + 1) : 4;
-        opportunityScore = Math.round((searchVolume / (compFactor * tdFactor)) * 100);
-        scoringState = hasFullMetrics ? 'SCORED' : 'PARTIAL_EVIDENCE';
-      }
+      // researchTruth.scoreKeywordEvidence enforces the strict rule: the
+      // local formula only runs when every input it uses (volume,
+      // competition, density) is a real observation. Missing competition/
+      // title-density is never replaced with a plausible zero/constant and
+      // then labeled SCORED (P0.5-C truth fix).
+      const { opportunityScore, scoringState } = researchTruth.scoreKeywordEvidence({
+        searchVolume,
+        competingProducts,
+        titleDensity,
+        rawIq
+      });
 
       evaluatedKeywords.push({
         keyword: sanitizedKw,

@@ -16,6 +16,7 @@ const path = require('path');
 const { fetchGoogleTrends } = require('../server/googleTrendsService');
 const { getMarketBenchmark } = require('../server/benchmarkService');
 const { rankKeywords } = require('../server/keywordRanker');
+const { toObservedNumber, monthlySearchVolumeFromViews24h, scoreKeywordEvidence } = require('../server/researchTruth');
 
 async function main() {
   console.log('================================================================');
@@ -42,11 +43,36 @@ async function main() {
   assert.strictEqual(realMetrics[0].scoringState, 'SCORED');
   console.log('🟢 rankKeywords: full real metrics produce a real SCORED opportunityScore (positive case).');
 
+  // Strict all-or-nothing rule (matches researchTruth.scoreKeywordEvidence):
+  // volume alone is not sufficient evidence for a decision-grade score --
+  // density/cpr must also be real, or the result stays null/INSUFFICIENT_EVIDENCE
+  // rather than quietly leaning on the sort-only heuristic fillers.
   const partialMetrics = rankKeywords([{ keyword: 'gift necklace for mom', searchVolume: 5000 }], 'Jewelry', 'gift necklace');
   assert.strictEqual(partialMetrics[0].searchVolume, 5000);
-  assert.strictEqual(partialMetrics[0].opportunityScore !== null, true, 'Volume-only evidence must still produce a usable ranking score');
-  assert.strictEqual(partialMetrics[0].scoringState, 'PARTIAL_EVIDENCE', 'Volume-only must not claim the same confidence as fully-observed SCORED');
-  console.log('🟢 rankKeywords: volume-only evidence is labeled PARTIAL_EVIDENCE, not fabricated as fully SCORED.');
+  assert.strictEqual(partialMetrics[0].opportunityScore, null, 'Volume-only evidence must not produce a fabricated opportunityScore built on defaulted density/cpr');
+  assert.strictEqual(partialMetrics[0].scoringState, 'INSUFFICIENT_EVIDENCE', 'Volume-only must not claim SCORED confidence');
+  console.log('🟢 rankKeywords: volume-only (missing density/cpr) stays INSUFFICIENT_EVIDENCE under the strict all-or-nothing rule.');
+
+  // --- 1b. server/researchTruth.js: the centralized scoring-evidence module
+  // directly (pure unit tests, no network) ---
+  assert.strictEqual(toObservedNumber(undefined), null);
+  assert.strictEqual(toObservedNumber(''), null);
+  assert.strictEqual(toObservedNumber(0), 0, 'An explicit 0 must be preserved as a real observation');
+  assert.strictEqual(toObservedNumber('42'), 42);
+  console.log('🟢 researchTruth.toObservedNumber: missing stays null, explicit zero and numeric strings are preserved correctly.');
+
+  assert.strictEqual(monthlySearchVolumeFromViews24h(undefined), null);
+  assert.strictEqual(monthlySearchVolumeFromViews24h(0), 0, 'views24h:0 must produce Search Volume 0, not null');
+  assert.strictEqual(monthlySearchVolumeFromViews24h(10), 300);
+  console.log('🟢 researchTruth.monthlySearchVolumeFromViews24h: missing stays null, explicit zero survives as 0.');
+
+  const missingInput = scoreKeywordEvidence({ searchVolume: 5000, competingProducts: null, titleDensity: 3, rawIq: null });
+  assert.strictEqual(missingInput.opportunityScore, null, 'A missing formula input must block scoring entirely, not fall back to a default');
+  assert.strictEqual(missingInput.scoringState, 'INSUFFICIENT_EVIDENCE');
+  const observedIqZero = scoreKeywordEvidence({ searchVolume: null, competingProducts: null, titleDensity: null, rawIq: 0 });
+  assert.strictEqual(observedIqZero.opportunityScore, 0, 'An explicit observed IQ score of 0 must be preserved, not treated as missing');
+  assert.strictEqual(observedIqZero.scoringState, 'SCORED');
+  console.log('🟢 researchTruth.scoreKeywordEvidence: missing formula input blocks scoring; an observed IQ of 0 is still SCORED.');
 
   // --- 2. server.js HTML ingestion: no 1200/350/2 fabricated defaults remain,
   // and an explicit source zero (views24h: 0) must survive as 0, not collapse
@@ -54,7 +80,7 @@ async function main() {
   const serverSrc = fs.readFileSync(path.resolve(__dirname, '../server/server.js'), 'utf8');
   assert.ok(!serverSrc.includes("'Search Volume': kw.views24h ? kw.views24h * 30 : 1200"), 'HTML ingestion must not default Search Volume to 1200');
   assert.ok(!serverSrc.includes("'Search Volume': kw.views24h ? kw.views24h * 30 : null"), 'HTML Search Volume must use a presence check, not a truthiness check, so an explicit 0 is not treated as missing');
-  assert.ok(serverSrc.includes("(kw.views24h !== undefined && kw.views24h !== null) ? kw.views24h * 30 : null"), 'HTML Search Volume must explicitly preserve an observed zero');
+  assert.ok(serverSrc.includes('researchTruth.monthlySearchVolumeFromViews24h(kw.views24h)'), 'HTML Search Volume must delegate to researchTruth so an observed zero is preserved');
   assert.ok(!serverSrc.includes("'Competing Products': kw.listings || 350"), 'HTML ingestion must not default Competing Products to 350');
   assert.ok(!serverSrc.includes("'Title Density': 2"), 'HTML ingestion must not hardcode Title Density to 2');
   assert.ok(!serverSrc.includes('opportunityScore = 50;'), 'Generic keyword evaluation must not default opportunityScore to 50');
@@ -63,6 +89,7 @@ async function main() {
   // opportunityScore whenever the real one is null -- this is the same
   // fabrication class as the rankKeywords fix, just one layer up in the API.
   assert.ok(!serverSrc.includes('kwItem.opportunityScore ?? kwItem.score ?? null'), 'master-keywords must not fall back to the internal sort-only score when opportunityScore is null');
+  assert.ok(serverSrc.includes("require('./researchTruth')"), 'server.js must delegate scoring/observed-number truth rules to the centralized researchTruth module');
   console.log('🟢 server.js HTML/generic keyword ingestion and master-keywords API no longer fabricate missing metrics.');
 
   // --- 3. googleTrendsService.js: no synthetic simulation fallback remains,

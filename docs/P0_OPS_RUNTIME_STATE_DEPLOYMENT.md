@@ -23,14 +23,29 @@ Example layout only (verify service-user ownership/permissions before using):
 
 Do not assume these paths are writable on the VPS. Confirm the actual systemd service user first.
 
+## Repository safety invariant
+
+Runtime state is not source code and must not be tracked by Git.
+
+Before any production cutover or release, verify:
+
+```bash
+git ls-files -- server/app.db data/imports
+```
+
+The command must return **no paths**. `server/app.db` and `data/imports/` must remain ignored.
+
+Do **not** treat a repo-local symlink as the safety boundary. If Git still tracks descendants under a symlinked path, a future `git reset --hard`, checkout, or similar worktree rewrite can remove the symlink and recreate tracked files/directories. The external path configured through `OMNI_DB_PATH` / `OMNI_IMPORTS_DIR` is the canonical state location; any repo-local symlink is only a backward-compatibility convenience.
+
 ## Preflight — no destructive Git command yet
 
 1. Record repository, branch, exact target SHA, current VPS SHA, service unit, service user, repo root, current DB path, and current imports path.
 2. Confirm the target SHA has exact-head CI evidence.
-3. Confirm a maintenance window and the ability to **stop** `omniseller-web`. A SIGTERM is not sufficient if `Restart=always` immediately restarts it.
-4. Verify free disk space for at least two DB copies plus imports.
-5. Create the external state/config directories with least-privilege ownership and permissions.
-6. Prepare rollback locations before stopping the service.
+3. Confirm `git ls-files -- server/app.db data/imports` returns no tracked runtime state.
+4. Confirm a maintenance window and the ability to **stop** `omniseller-web`. A SIGTERM is not sufficient if `Restart=always` immediately restarts it.
+5. Verify free disk space for at least two DB copies plus imports.
+6. Create the external state/config directories with least-privilege ownership and permissions.
+7. Prepare rollback locations before stopping the service.
 
 ## Safe cutover order
 
@@ -40,7 +55,7 @@ Do not assume these paths are writable on the VPS. Confirm the actual systemd se
 4. Copy/move mutable imports to the external imports directory; preserve ownership and permissions.
 5. Copy the production `.env` to the external secrets path with restrictive permissions. Do not print secret contents into logs.
 6. Configure the service environment/drop-in with `NODE_ENV=production`, `OMNI_DB_PATH`, `OMNI_IMPORTS_DIR`, and `DOTENV_PATH`.
-7. Optional backward-compatibility safety: create repo-local symlinks from the historical DB/import paths to the external state. The symlink may be deleted by a future clean/reset, but the external target remains safe. Recreate the symlink during rollback to old code if needed.
+7. Optional backward-compatibility convenience: create repo-local symlinks from the historical DB/import paths to the external state **only after the repository safety invariant above is satisfied**. Never rely on these symlinks to protect the external target. They may be removed by a future clean/reset and should be recreated only when old code genuinely requires them.
 8. Only now fetch/checkout/reset to the exact reviewed code SHA. Verify `git rev-parse HEAD` equals the intended SHA.
 9. Start the service. A startup failure is a BLOCK, not a reason to fall back to repo-local state.
 
@@ -57,6 +72,7 @@ Verify all of the following before calling runtime acceptance complete:
 - workspace/marketplace isolation smoke passes;
 - one safe upload writes into the external imports directory;
 - repository HEAD matches the exact deployed SHA;
+- `git ls-files -- server/app.db data/imports` returns no tracked runtime state;
 - no mutable production state was recreated as a regular file under the repo worktree.
 
 ## Rollback
@@ -66,12 +82,13 @@ If the new release fails:
 1. Stop the service and keep it stopped.
 2. Preserve the external DB; do **not** copy an older backup over it unless a database rollback is explicitly required and approved.
 3. Roll back code to the previously accepted SHA.
-4. If the old code expects `server/app.db` / `data/imports`, recreate repo-local symlinks pointing to the external state rather than moving production data back into the worktree.
+4. If the old code expects `server/app.db` / `data/imports`, recreate repo-local symlinks pointing to the external state rather than moving production data back into the worktree. Confirm the rollback SHA will not restore tracked runtime descendants over those symlinks.
 5. Start the old release and run the same DB/service/auth smoke checks.
 
 ## Hard prohibitions
 
 - Do not use `git clean -fdx`, `git reset --hard`, checkout, or release-directory replacement before production state is external and verified.
-- Do not interpret `.gitignore` as a runtime-state boundary.
+- Do not interpret `.gitignore` alone as a runtime-state boundary; the Git index must also contain no tracked runtime state.
+- Do not rely on repo-local symlinks as the protection mechanism for production state.
 - Do not start production with missing P0-OPS environment variables and then manually copy data into repo-local fallback paths.
 - Do not deploy a different SHA than the one reviewed/CI-verified without a new acceptance cycle.

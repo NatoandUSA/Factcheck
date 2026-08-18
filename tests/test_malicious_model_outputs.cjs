@@ -166,7 +166,11 @@ function assertSkuEmpty(listing, label) {
 }
 
 function assertTitleNotUnconditionallyPersonalized(listing, label) {
-  assert.ok(!/^personalized\b/i.test(String(listing.amazonTitle || '')), `${label}: unconditional Personalized title reached the response`);
+  // Checks BOTH title fields, not just amazonTitle: an earlier round of this
+  // fix stripped the claim from amazonTitle only, leaving etsyTitle with the
+  // identical unfiltered gap (independent probe finding, round 6).
+  assert.ok(!/^(personalized|custom)\b/i.test(String(listing.amazonTitle || '')), `${label}: unconditional Personalized/Custom Amazon title reached the response`);
+  assert.ok(!/^(personalized|custom)\b/i.test(String(listing.etsyTitle || '')), `${label}: unconditional Personalized/Custom Etsy title reached the response`);
 }
 
 async function main() {
@@ -217,6 +221,13 @@ async function main() {
       assertPersonalizationEmpty(payload.listing, 'Quick Draft');
       assertSkuEmpty(payload.listing, 'Quick Draft');
       assert.strictEqual(payload.listing.variations?.length || 0, 0, 'Quick Draft must not fabricate child variations');
+      // Quick Draft's title/highlights are built deterministically by
+      // keywordRanker, not the mocked model -- this is the app's OWN code
+      // fabricating capability claims, a different bug than untrusted model
+      // output (independent re-audit finding, round 6).
+      assertTitleNotUnconditionallyPersonalized(payload.listing, 'Quick Draft');
+      assert.ok(!/custom handmade gift/i.test(payload.listing.etsyTitle || ''), 'Quick Draft etsyTitle must not fabricate a "Custom Handmade Gift" claim');
+      assert.ok(!/multiple colors & sizes available/i.test(payload.listing.itemHighlights || ''), 'Quick Draft itemHighlights must not fabricate a variation-availability claim');
     });
 
     let trendDraftId = null;

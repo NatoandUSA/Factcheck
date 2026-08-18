@@ -163,10 +163,14 @@ function rankKeywords(keywordList, contextCategory = 'Jewelry', seedPhrase = '')
 function buildAmazonTitle75(keywordList, categoryName = 'Gift') {
   const ranked = rankKeywords(keywordList);
   const topKw = ranked.length > 0 ? ranked[0].keyword : categoryName;
-  
+
   const toTitleCase = (str) => str.replace(/\w\S*/g, (txt) => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase());
-  
-  let baseTitle = `Personalized ${toTitleCase(topKw)}`;
+
+  // No unconditional "Personalized" prefix: this is called from keyword-only
+  // routes with no real personalization-capability evidence (GPT PR-12
+  // re-audit: same class as the trend-draft/Quick Draft AI-output fix, but
+  // this one is the app's own deterministic code, not untrusted model output).
+  let baseTitle = toTitleCase(topKw);
   if (baseTitle.length > 75) {
     baseTitle = baseTitle.substring(0, 75).trim();
   } else if (ranked.length > 1) {
@@ -187,10 +191,13 @@ function buildAmazonItemHighlights125(keywordList, categoryName = 'Gift') {
   const ranked = rankKeywords(keywordList);
   const toTitleCase = (str) => str.replace(/\w\S*/g, (txt) => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase());
 
+  // No "Custom ... with personalized details" or "Multiple colors & sizes
+  // available": both assert unverified product capabilities from a keyword
+  // alone (GPT PR-12 re-audit). Keep only generic, capability-neutral
+  // gifting sentiment.
   const highlights = [];
-  highlights.push(`Custom ${toTitleCase(categoryName)} with personalized details`);
+  highlights.push(`${toTitleCase(categoryName)} makes a thoughtful gift`);
   highlights.push(`Heartfelt gift for family & loved ones`);
-  highlights.push(`Multiple colors & sizes available`);
 
   let text = highlights.join(' • ');
   if (text.length > 125) {
@@ -207,9 +214,11 @@ function buildEtsyTitleClean(keywordList, categoryName = 'Handmade Gift') {
   const toTitleCase = (str) => str.replace(/\w\S*/g, (txt) => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase());
 
   const coreKw = ranked.length > 0 ? toTitleCase(ranked[0].keyword) : categoryName;
-  const secondaryKw = ranked.length > 1 ? toTitleCase(ranked[1].keyword) : 'Custom Handmade Gift';
-
-  let title = `Personalized ${coreKw} - ${secondaryKw}`;
+  // No "Personalized" prefix and no "Custom Handmade Gift" fallback
+  // secondary keyword: both assert unverified capabilities from a keyword
+  // alone (GPT PR-12 re-audit). Without a real second keyword, just use the
+  // core keyword alone rather than padding with a fabricated claim.
+  let title = ranked.length > 1 ? `${coreKw} - ${toTitleCase(ranked[1].keyword)}` : coreKw;
   if (title.length > 140) {
     title = title.substring(0, 140).trim();
   }

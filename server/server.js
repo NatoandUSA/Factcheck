@@ -1162,6 +1162,15 @@ function safeJsonParse(str, fallback = {}) {
   }
 }
 
+// A non-compliant model can return any JSON shape it wants for a field the
+// prompt asked to be an array (e.g. a comma-separated string instead of a
+// real array). Calling .slice()/.map() directly on that would 500 the whole
+// route -- normalize defensively instead of trusting the model's type
+// (independent adversarial-test finding: wrong-type model JSON).
+function safeStringArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
 // API: Get all learned templates
 app.get('/api/learning/templates', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
   db.all(
@@ -1451,11 +1460,11 @@ Return ONLY raw JSON without markdown code fences:
               parentSku: '',
               amazonTitle: title75,
               itemHighlights: highlights125,
-              amazonBullets: aiData.amazonBullets || [],
+              amazonBullets: safeStringArray(aiData.amazonBullets),
               amazonSearchTerms: aiData.amazonSearchTerms || '',
               amazonDescription: aiData.amazonDescription || '',
               amazonAPlusContent: aiData.amazonAPlusContent || null,
-              amazonAPlusPoints: aiData.amazonAPlusPoints || [],
+              amazonAPlusPoints: safeStringArray(aiData.amazonAPlusPoints),
               // No fabricated Gold/Silver/Rose-Gold child variations: nobody
               // has verified this product actually comes in those finishes.
               // Real variations must be entered from real product data, not
@@ -1463,7 +1472,7 @@ Return ONLY raw JSON without markdown code fences:
               variations: [],
               etsyTitle: keywordRanker.buildEtsyTitleClean([cleanSeed], category),
               etsyDescription: aiData.etsyDescription || '',
-              etsyTags: (aiData.etsyTags || []).slice(0, 13).map(t => String(t).substring(0, 20)),
+              etsyTags: safeStringArray(aiData.etsyTags).slice(0, 13).map(t => String(t).substring(0, 20)),
               // Hard-coded empty, not aiData-derived, for both fields: a seed
               // keyword is no evidence of real materials or personalization
               // capability, so the model's output is never trusted here no
@@ -2001,14 +2010,19 @@ Return ONLY a valid raw JSON object without markdown code fences:
             text = text.split('```')[1].split('```')[0].trim();
           }
           const aiData = safeJsonParse(text, {});
-          // Strip a leading "Personalized" claim from the model's own title
-          // output, not just the fallback: this route has no real
-          // personalization-capability evidence, so the model asserting it
-          // directly is the same unverified claim regardless of whether it
-          // came from the fallback or the model itself (independent
-          // integration-test finding, round 5).
-          const trendTitleRaw = (aiData.amazonTitle || '').trim();
-          const trendTitleSafe = trendTitleRaw.replace(/^personalized\s+/i, '').trim();
+          // Strip a leading "Personalized"/"Custom" claim from BOTH the
+          // Amazon and Etsy title fields the model returns -- not just the
+          // empty-output fallback, and not just amazonTitle. This route has
+          // no real personalization-capability evidence, so the model
+          // asserting it directly is the same unverified claim regardless of
+          // which title field it appears in (independent integration-test
+          // finding: round 5 only stripped amazonTitle, missing the
+          // identical gap in etsyTitle -- fixed with one shared helper this
+          // time instead of a second field-specific patch).
+          const stripUnverifiedCapabilityClaim = (title) =>
+            String(title || '').trim().replace(/^(personalized|custom)\s+/i, '').trim();
+          const trendAmazonTitle = stripUnverifiedCapabilityClaim(aiData.amazonTitle);
+          const trendEtsyTitle = stripUnverifiedCapabilityClaim(aiData.etsyTitle);
 
         const payload = {
           // No auto-generated SKU (same reasoning as Quick Draft: the Staff
@@ -2018,17 +2032,15 @@ Return ONLY a valid raw JSON object without markdown code fences:
           // invented to fill the UI (GPT PR-10 re-audit).
           parentSku: '',
           variations: [],
-          amazonTitle: trendTitleSafe || trend.category,
-          amazonBullets: aiData.amazonBullets || [],
+          amazonTitle: trendAmazonTitle || trend.category,
+          amazonBullets: safeStringArray(aiData.amazonBullets),
           amazonSearchTerms: aiData.amazonSearchTerms || '',
           amazonDescription: aiData.amazonDescription || '',
           amazonAPlusContent: aiData.amazonAPlusContent || null,
-          amazonAPlusPoints: aiData.amazonAPlusPoints || [],
-          // No "Custom" claim in the fallback: implies a customization
-          // capability with no evidence, same reasoning as the Amazon title.
-          etsyTitle: aiData.etsyTitle || trend.category,
+          amazonAPlusPoints: safeStringArray(aiData.amazonAPlusPoints),
+          etsyTitle: trendEtsyTitle || trend.category,
           etsyDescription: aiData.etsyDescription || '',
-          etsyTags: (aiData.etsyTags || []).slice(0, 13).map(t => String(t).substring(0, 20)),
+          etsyTags: safeStringArray(aiData.etsyTags).slice(0, 13).map(t => String(t).substring(0, 20)),
           // Hard-coded empty, not aiData-derived, for both fields: trending
           // keywords are no evidence of real materials or personalization
           // capability, so the model's output is never trusted here no

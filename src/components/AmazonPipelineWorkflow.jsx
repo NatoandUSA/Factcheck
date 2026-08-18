@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import MasterKeywordTable from './MasterKeywordTable';
 import { parseJsonResponse } from '../utils/apiResponse';
+import { deriveXrayUploadOutcome } from '../utils/xrayUploadOutcome.cjs';
 
 export default function AmazonPipelineWorkflow({ seedPhrase, selectedCategory, onShowToast, onSelectListing }) {
   // Step 1: Feed Xray State
@@ -12,6 +13,7 @@ export default function AmazonPipelineWorkflow({ seedPhrase, selectedCategory, o
   const [xrayAsinsInput, setXrayAsinsInput] = useState('');
   const [xraySellers, setXraySellers] = useState([]);
   const [xrayLoading, setXrayLoading] = useState(false);
+  const [xrayError, setXrayError] = useState(null);
   const [isXrayDragging, setIsXrayDragging] = useState(false);
   const xrayInputRef = useRef(null);
 
@@ -31,132 +33,44 @@ export default function AmazonPipelineWorkflow({ seedPhrase, selectedCategory, o
   const [drafting, setDrafting] = useState(false);
   const [draftedListing, setDraftedListing] = useState(null);
 
-  // B1: Handle Feed Xray
+  // B1: Handle Feed Xray — fail-closed: never invents ASINs/price/sales, and
+  // a failed upload must never look like a success (see xrayUploadOutcome.cjs).
   const handleXrayUpload = async (file) => {
     if (!file) return;
     setXrayLoading(true);
     setXrayFile(file);
+    setXrayError(null);
 
     const formData = new FormData();
     formData.append('reportFile', file);
     formData.append('category', selectedCategory);
     formData.append('marketplace', 'AMAZON');
 
+    let outcome;
     try {
       const res = await fetch('/api/upload-h10', {
         method: 'POST',
         credentials: 'include',
         body: formData
       });
-      const text = await res.text();
-      let data;
-      try { data = JSON.parse(text); } catch (e) { throw new Error('Server returned invalid JSON'); }
-      if (!res.ok) throw new Error(data.error || 'Upload failed');
-
-      // 30 Real Active Amazon US Child ASINs parsed from real search results
-      const realChildAsinPool = [
-        { asin: 'B0DV4DSJ63', title: 'Para El Amor De Mi Vida Collar Heart Pendant Regalo Esposa Novia', price: '$29.99', revenue: 45000, bsr: '#120' },
-        { asin: 'B0CPHXX2ZF', title: 'Collar Para El Amor De Mi Vida Regalo Para Esposa Soulmate Necklace', price: '$34.99', revenue: 38000, bsr: '#240' },
-        { asin: 'B0CWQVR8MM', title: 'Para Mi Esposa Corazon Amor Eterno Regalo Romantico Joyeria Fina', price: '$27.99', revenue: 41000, bsr: '#180' },
-        { asin: 'B0G5NM4HM5', title: 'Collar Corazon Para Mujer Para El Amor De Mi Vida Regalo Romantico', price: '$32.99', revenue: 32000, bsr: '#310' },
-        { asin: 'B0CPHV9JLX', title: 'Regalo para Mi Esposa Gifts for Wife in Spanish Mothers Day Gift', price: '$25.99', revenue: 29000, bsr: '#420' },
-        { asin: 'B0D1G8YB7K', title: 'Anniversary Romantic Gifts for Wife Girlfriend To My Love Keepsake', price: '$39.99', revenue: 51000, bsr: '#95' },
-        { asin: 'B0C7NYZYMP', title: 'Preserved Red Real Rose Double Heart I Love You Necklace Gift Her', price: '$42.99', revenue: 62000, bsr: '#60' },
-        { asin: 'B0B8VL9QY5', title: 'To My Mother In Law Necklace Spanish Sentiment Gift Box Set', price: '$28.99', revenue: 34000, bsr: '#280' },
-        { asin: 'B0F2788CZN', title: 'Para Mi Esposa Corazon Amor Eterno Regalo Romantico De Esposo', price: '$31.99', revenue: 39000, bsr: '#210' },
-        { asin: 'B0DKBMF3LC', title: 'Preserved Flower Gift Set Purple Rose Bouquet Anniversary Wife', price: '$49.99', revenue: 27000, bsr: '#490' },
-        { asin: 'B0FF9G91CH', title: 'Personalized Name Necklace Silver Gold Pendant Custom Gift Her', price: '$24.99', revenue: 58000, bsr: '#88' },
-        { asin: 'B0D25LRB3W', title: 'Forever Love Knot Spanish Regalos Para Mama Suegra Esposa', price: '$26.99', revenue: 43000, bsr: '#160' },
-        { asin: 'B0DB5JC1LX', title: 'Custom Initial Charm Necklace Dainty Jewelry Spanish Gift Box', price: '$22.99', revenue: 37000, bsr: '#230' },
-        { asin: 'B0D2525G6K', title: 'Interlocking Hearts Pendant Spanish Romantic Anniversary Gift', price: '$29.99', revenue: 49000, bsr: '#110' },
-        { asin: 'B0FBM1D77B', title: 'Custom Name Cuff Sweatshirt Embroidered Sleeve Gift Mom', price: '$38.99', revenue: 71000, bsr: '#45' },
-        { asin: 'B0GVYGSJ1Z', title: 'Personalized Mama Sweatshirt Embroidered Kids Names Sleeve', price: '$41.99', revenue: 83000, bsr: '#30' },
-        { asin: 'B0F5N1WCBM', title: 'Custom Dog Mom Hoodie Embroidered Pet Name Cuff Gift', price: '$36.99', revenue: 52000, bsr: '#90' },
-        { asin: 'B0GGR92NT8', title: 'Spanish Mother In Law Necklace Regalos Para Suegra Navidad', price: '$29.99', revenue: 39000, bsr: '#190' },
-        { asin: 'B0CCFYRH46', title: 'Personalized Birth Month Flower Sweatshirt Embroidered Sleeve', price: '$44.99', revenue: 67000, bsr: '#55' },
-        { asin: 'B09JZ1RT12', title: 'Forever Love Pendant Regalo Romantico Pareja Esposa Novia', price: '$28.99', revenue: 31000, bsr: '#340' },
-        { asin: 'B0CQVF4RHM', title: 'Custom Name Bar Necklace Gold Plated Personalized Gift Her', price: '$23.99', revenue: 46000, bsr: '#140' },
-        { asin: 'B0BCV9RTS3', title: 'Regalos De Aniversario Para Esposa Collar Corazon Español', price: '$34.99', revenue: 38000, bsr: '#220' },
-        { asin: 'B099Z5MK5N', title: 'Personalized Nurse Sweatshirt Custom Stethoscope Embroidery', price: '$39.99', revenue: 59000, bsr: '#75' },
-        { asin: 'B09H2DB3T7', title: 'To My Soulmate Necklace Spanish Romance Gift Box Keepsake', price: '$31.99', revenue: 42000, bsr: '#175' },
-        { asin: 'B097JF8R57', title: 'Custom Grandma Sweatshirt Embroidered Grandkids Names', price: '$42.99', revenue: 75000, bsr: '#40' },
-        { asin: 'B0D6K6WCHK', title: 'Regalos Para La Suegra El Dia De La Madre Collar Corazon', price: '$27.99', revenue: 33000, bsr: '#300' },
-        { asin: 'B0CWQVZ3C4', title: 'Personalized Teacher Sweatshirt Embroidered Classroom Gift', price: '$37.99', revenue: 61000, bsr: '#68' },
-        { asin: 'B0BBBG4QMF', title: 'Custom Birthstone Pendant Necklace Spanish Emotional Gift Box', price: '$32.99', revenue: 40000, bsr: '#200' },
-        { asin: 'B0CPHV9JLX', title: 'Regalo Para Esposa Te Amo Regalo De Cumpleaños Para Mujer', price: '$28.99', revenue: 36000, bsr: '#250' },
-        { asin: 'B0F2788CZN', title: 'Collar Corazon Amor Eterno Regalo Para Suegra Y Esposa', price: '$33.99', revenue: 44000, bsr: '#150' }
-      ];
-
-      if (data && data.isXray && Array.isArray(data.batches) && data.batches.length > 0) {
-        setBatches(data.batches.map((b, idx) => ({
-          name: b.batchName || b.name || `Batch ${idx + 1}: Top 10 Active Child ASINs`,
-          rationale: b.rationale || 'Top Child ASINs parsed from Xray',
-          asins: b.asins || [],
-          items: (b.asins || []).map((asin, i) => ({
-            asin,
-            title: `Active Child ASIN ${asin} - Competitor #${i + 1}`,
-            brand: 'Amazon Top Competitor',
-            price: `$${(24.99 + (i % 5) * 3).toFixed(2)}`,
-            revenue: Math.floor(Math.random() * 35000) + 18000,
-            bsr: `#${(i + 1) * 45}`
-          }))
-        })));
-        setXraySellers((data.batches.flatMap(b => b.asins || [])).map(asin => ({ asin, title: `Real Child ASIN ${asin}` })));
-        if (onShowToast) onShowToast(`✓ [B1] Đã nạp & bóc tách thành công file Xray "${file.name}"! Tự động tạo ${data.batchCount || 3} Batch 10 Child ASINs ở B2.`);
-        return;
-      }
-
-      // Fallback: Always generate 3 DISTINCT BATCHES from Real Active Child ASIN Catalog
-      const b1 = realChildAsinPool.slice(0, 10);
-      const b2 = realChildAsinPool.slice(10, 20);
-      const b3 = realChildAsinPool.slice(20, 30);
-
-      setBatches([
-        {
-          name: 'Batch 1: Top 10 Revenue & BSR Market Leaders (High AOV)',
-          rationale: 'Top 10 Active Child ASINs with highest store revenue and organic search rank.',
-          asins: b1.map(s => s.asin),
-          items: b1
-        },
-        {
-          name: 'Batch 2: Top 10 High 24h Sales & Conversion Velocity Leaders (Fast Movers)',
-          rationale: 'Top 10 High-velocity Child ASINs driving fast 24h sales and active add-to-carts.',
-          asins: b2.map(s => s.asin),
-          items: b2
-        },
-        {
-          name: 'Batch 3: Top 10 Niche Aesthetic & Spanish Sentiment Competitors',
-          rationale: 'Top 10 Specialized Child ASINs targeting Spanish sentiment (Regalos para Suegra/Esposa).',
-          asins: b3.map(s => s.asin),
-          items: b3
-        }
-      ]);
-      setXraySellers(realChildAsinPool);
-
-      if (onShowToast) onShowToast(`✓ [B1] Đã nạp thành công file Xray "${file.name}"! Tự động tạo 3 Batch (10 Child ASINs/Batch) ở B2.`);
+      const data = await parseJsonResponse(res);
+      outcome = deriveXrayUploadOutcome({ ok: res.ok, data });
     } catch (err) {
-      // Failsafe: even on error, populate 3 Real Child ASIN batches so UI never breaks or stays empty
-      const b1 = realChildAsinPool.slice(0, 10);
-      const b2 = realChildAsinPool.slice(10, 20);
-      const b3 = realChildAsinPool.slice(20, 30);
-      setBatches([
-        { name: 'Batch 1: Top 10 Revenue & BSR Market Leaders (High AOV)', asins: b1.map(s => s.asin), items: b1 },
-        { name: 'Batch 2: Top 10 High 24h Sales & Velocity Leaders (Fast Movers)', asins: b2.map(s => s.asin), items: b2 },
-        { name: 'Batch 3: Top 10 Niche Aesthetic & Spanish Sentiment Competitors', asins: b3.map(s => s.asin), items: b3 }
-      ]);
-      setXraySellers(realChildAsinPool);
-      if (onShowToast) onShowToast(`✓ [B1] Đã nạp Xray "${file.name}"! Tự động khởi tạo 3 Batch 10 Child ASINs ở B2.`);
-    } finally {
-      setXrayLoading(false);
+      outcome = deriveXrayUploadOutcome({ error: err });
     }
+
+    setBatches(outcome.batches);
+    setXraySellers(outcome.xraySellers);
+    setXrayError(outcome.status === 'SUCCESS' ? null : outcome.errorMessage);
+    if (onShowToast) onShowToast(outcome.toastMessage, outcome.toastType);
+    setXrayLoading(false);
   };
 
-
-  // Copy 10 Space-Separated ASINs to clipboard for 1-Click Cerebro paste
+  // Copy space-separated ASINs to clipboard for 1-Click Cerebro paste
   const handleCopy10Asins = (asinsArray) => {
     const text = (asinsArray || []).join(' ');
     navigator.clipboard.writeText(text);
-    if (onShowToast) onShowToast(`📋 Đã copy 10 Real Child ASINs (dạng dấu cách) vào Clipboard! Dán trực tiếp vào H10 Cerebro 0 lỗi.`);
+    if (onShowToast) onShowToast(`📋 Đã copy ${(asinsArray || []).length} ASINs (dạng dấu cách) vào Clipboard! Dán trực tiếp vào H10 Cerebro.`);
   };
 
 
@@ -257,7 +171,7 @@ export default function AmazonPipelineWorkflow({ seedPhrase, selectedCategory, o
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px' }}>
           {[
             { step: 'B1', title: 'Feed Xray', desc: 'Nạp file Xray 15-20 ASINs', active: true, done: xraySellers.length > 0 },
-            { step: 'B2', title: 'Xuất Batch 10 ASINs', desc: 'Lọc 10 ASINs top doanh thu', active: xraySellers.length > 0, done: batches.length > 0 },
+            { step: 'B2', title: 'Xuất Batch ASINs', desc: 'Gom nhóm ASINs theo batch 10', active: xraySellers.length > 0, done: batches.length > 0 },
             { step: 'B3', title: 'Feed Cerebro', desc: 'Nạp báo cáo Reverse ASIN', active: batches.length > 0, done: cerebroKeywords.length > 0 },
             { step: 'B4', title: 'Master KW & Listing', desc: 'Phân tầng 3 Tiers & Sinh A10', active: cerebroKeywords.length > 0, done: Boolean(draftedListing) }
           ].map((item, i) => (
@@ -356,10 +270,29 @@ export default function AmazonPipelineWorkflow({ seedPhrase, selectedCategory, o
             Hỗ trợ báo cáo Xray Market Search, Competitor Analytics, và CSV xuất từ Helium 10 Extension
           </div>
         </div>
+
+        {xrayError && (
+          <div style={{
+            marginTop: '12px',
+            padding: '12px 16px',
+            borderRadius: '10px',
+            background: '#fef2f2',
+            border: '1px solid #fecaca',
+            color: '#b91c1c',
+            fontSize: '0.85rem',
+            fontWeight: 600,
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px'
+          }}>
+            <AlertCircle size={16} />
+            <span>Không thể nạp Xray: {xrayError}</span>
+          </div>
+        )}
       </div>
 
       {/* ======================================================== */}
-      {/* BƯỚC 2: XUẤT BATCH 10 ASINS */}
+      {/* BƯỚC 2: XUẤT BATCH ASINS */}
       {/* ======================================================== */}
       {batches.length > 0 && (
         <div className="studio-panel" style={{ padding: '24px', borderLeft: '4px solid #d97706' }}>
@@ -367,10 +300,10 @@ export default function AmazonPipelineWorkflow({ seedPhrase, selectedCategory, o
             <div>
               <h3 style={{ fontSize: '1.15rem', fontWeight: 800, margin: 0, color: '#b45309', display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <Layers size={20} />
-                BƯỚC 2: Xuất Batch 10 ASINs Đối Thủ Chiến Thắng
+                BƯỚC 2: Xuất Batch ASINs Đối Thủ
               </h3>
               <p style={{ margin: '4px 0 0 0', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-                Hệ thống tự động lọc và gom nhóm đúng 10 ASINs top đầu theo Doanh thu & BSR để nạp vào Cerebro.
+                Gom nhóm các ASINs (tối đa 10/batch) để nạp vào Cerebro. Chỉ hiển thị dữ liệu có nguồn thực tế từ file Xray.
               </p>
             </div>
 
@@ -408,7 +341,7 @@ export default function AmazonPipelineWorkflow({ seedPhrase, selectedCategory, o
             ))}
           </div>
 
-          {/* 10 ASINs Table */}
+          {/* ASINs Table — unknown fields render as "—", never a plausible-looking fake value */}
           {activeBatch && (
             <div style={{ overflowX: 'auto', borderRadius: '10px', border: '1px solid #fde68a' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem', textAlign: 'left' }}>
@@ -416,29 +349,25 @@ export default function AmazonPipelineWorkflow({ seedPhrase, selectedCategory, o
                   <tr style={{ background: '#fffbeb', borderBottom: '2px solid #fde68a', color: '#92400e' }}>
                     <th style={{ padding: '8px 12px' }}>STT</th>
                     <th style={{ padding: '8px 12px' }}>ASIN</th>
-                    <th style={{ padding: '8px 12px' }}>Tiêu Đề Listing Đối Thủ</th>
-                    <th style={{ padding: '8px 12px' }}>Brand</th>
-                    <th style={{ padding: '8px 12px' }}>Giá</th>
-                    <th style={{ padding: '8px 12px' }}>Doanh Thu/Tháng</th>
-                    <th style={{ padding: '8px 12px' }}>BSR</th>
+                    <th style={{ padding: '8px 12px' }}>Tiêu Đề (Nếu Có Trong File)</th>
+                    <th style={{ padding: '8px 12px' }}>Giá (Nếu Có)</th>
+                    <th style={{ padding: '8px 12px' }}>Sales (Nếu Có)</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {(activeBatch?.items && Array.isArray(activeBatch.items) ? activeBatch.items : (activeBatch?.asins || []).map(asin => ({ asin, title: `Active Child ASIN ${asin}` }))).map((item, i) => (
+                  {(Array.isArray(activeBatch?.items) ? activeBatch.items : (activeBatch?.asins || []).map(asin => ({ asin, title: null, price: null, sales: null }))).map((item, i) => (
                     <tr key={i} style={{ borderBottom: '1px solid #fef3c7', background: i % 2 === 0 ? '#fff' : '#fffdf5' }}>
-
                       <td style={{ padding: '8px 12px', fontWeight: 700, color: '#92400e' }}>#{i + 1}</td>
                       <td style={{ padding: '8px 12px', fontFamily: 'monospace', fontWeight: 800, color: '#0369a1' }}>
-                        {item?.asin || 'ASIN'}
+                        {item?.asin || '—'}
                       </td>
-                      <td style={{ padding: '8px 12px', fontWeight: 600, color: '#1e293b' }}>{item?.title || 'Competitor Active Child ASIN'}</td>
-                      <td style={{ padding: '8px 12px', color: '#64748b' }}>{item?.brand || 'Gildan / Comfort Colors'}</td>
-                      <td style={{ padding: '8px 12px', fontWeight: 700, color: '#16a34a' }}>{item?.price || '$29.99'}</td>
+                      <td style={{ padding: '8px 12px', fontWeight: 600, color: '#1e293b' }}>{item?.title || '—'}</td>
+                      <td style={{ padding: '8px 12px', fontWeight: 700, color: '#16a34a' }}>
+                        {typeof item?.price === 'number' ? `$${item.price.toFixed(2)}` : '—'}
+                      </td>
                       <td style={{ padding: '8px 12px', fontWeight: 800, color: '#0284c7' }}>
-                        ${typeof item?.revenue === 'number' ? item.revenue.toLocaleString() : (item?.revenue || '35,400')}
+                        {typeof item?.sales === 'number' ? item.sales.toLocaleString() : '—'}
                       </td>
-                      <td style={{ padding: '8px 12px', color: '#64748b' }}>{item?.bsr || '#120'}</td>
-
                     </tr>
                   ))}
                 </tbody>

@@ -1853,6 +1853,15 @@ const handleReportUpload = async (req, res) => {
       const seedKeyword = req.body.seedPhrase || req.body.seedKeyword || targetCategory || 'Custom Product';
       const batchResult = asinBatcher.filterAndBatchXrayAsins(rawRows, seedKeyword);
 
+      if (!batchResult.success) {
+        return res.status(422).json({
+          success: false,
+          isXray: true,
+          error: batchResult.error,
+          code: batchResult.code || 'INSUFFICIENT_EVIDENCE'
+        });
+      }
+
       return res.json({
         success: true,
         isXray: true,
@@ -2025,6 +2034,9 @@ app.post('/api/asins/batch', requireAuth(db), requireRole(['OWNER', 'MANAGER', '
   }
   try {
     const batchResult = asinBatcher.filterAndBatchXrayAsins(asins, seedKeyword || 'Custom Product');
+    if (!batchResult.success) {
+      return res.status(422).json({ success: false, error: batchResult.error, code: batchResult.code || 'INSUFFICIENT_EVIDENCE' });
+    }
     res.json({ success: true, ...batchResult });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });

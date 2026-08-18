@@ -1,58 +1,82 @@
 const assert = require('assert');
+const { deriveXrayUploadOutcome } = require('../src/utils/xrayUploadOutcome.cjs');
 
-function transformXrayDataSafely(resData) {
-  if (!resData || typeof resData !== 'object') {
-    return {
-      batchCount: 1,
-      batches: [{
-        batchNumber: 1,
-        batchName: 'Default Batch 1',
-        items: []
-      }]
-    };
-  }
-
-  const rawBatches = Array.isArray(resData.batches) ? resData.batches : [];
-  if (rawBatches.length === 0) {
-    return {
-      batchCount: 1,
-      batches: [{
-        batchNumber: 1,
-        batchName: 'Fallback Batch 1',
-        items: Array.isArray(resData.items) ? resData.items : []
-      }]
-    };
-  }
-
-  return {
-    batchCount: rawBatches.length,
-    batches: rawBatches
-  };
-}
-
-function testWhiteScreenFailsafe() {
+// This exercises the REAL decision function AmazonPipelineWorkflow.jsx imports
+// for its B1 Xray upload step (not a shadow reimplementation), so a passing
+// test here reflects the actual frontend behavior.
+function testXrayUploadOutcomeFailClosed() {
   console.log('================================================================');
-  console.log('  TESTING ZERO-CRASH FAILSAFE FOR AMAZON PIPELINE WORKFLOW');
+  console.log('  TESTING XRAY UPLOAD OUTCOME: FAIL-CLOSED, NON-CRASHING, NO FABRICATION');
   console.log('================================================================\n');
 
-  const testCases = [
-    { name: 'Case 1: Full Valid Xray Data', input: { batches: [{ batchNumber: 1, items: [{ asin: 'B0DV4DSJ63' }] }] } },
-    { name: 'Case 2: Empty Batches Array', input: { batches: [] } },
-    { name: 'Case 3: Non-Xray Response', input: { items: [{ asin: 'B0CPHXX2ZF' }] } },
-    { name: 'Case 4: Malformed Data (null/undefined)', input: null },
-    { name: 'Case 5: Server HTML Error String', input: '<html>500 Internal Error</html>' }
-  ];
-
-  testCases.forEach((tc) => {
-    const output = transformXrayDataSafely(tc.input);
-    assert.ok(output && typeof output === 'object', `${tc.name} failed: Output must be object`);
-    assert.ok(Array.isArray(output.batches), `${tc.name} failed: Batches must be array`);
-    console.log(`  🟢 ${tc.name}: PASSED (0 Crashes, Batches Output: ${output.batches.length})`);
+  // Case 1: Real success with full source-provided item metadata — values pass through untouched.
+  const c1 = deriveXrayUploadOutcome({
+    ok: true,
+    data: {
+      success: true,
+      isXray: true,
+      batches: [{ batchName: 'Batch 1: 2 ASINs', asins: ['B0DV4DSJ63', 'B0CPHXX2ZF'], items: [
+        { asin: 'B0DV4DSJ63', title: 'Real Title', price: 29.99, sales: 450 },
+        { asin: 'B0CPHXX2ZF', title: null, price: null, sales: null }
+      ] }]
+    }
   });
+  assert.strictEqual(c1.status, 'SUCCESS');
+  assert.strictEqual(c1.toastType, 'success');
+  assert.strictEqual(c1.batches[0].items[0].price, 29.99, 'source-provided price must pass through unchanged');
+  assert.strictEqual(c1.batches[0].items[1].price, null, 'missing source price must stay null, never fabricated');
+  console.log('  🟢 Case 1 (Real Xray success): source fields preserved, no invented values. PASSED');
+
+  // Case 2: Success response with ASIN-only batches (no items) — must NOT invent title/price/revenue/BSR.
+  const c2 = deriveXrayUploadOutcome({
+    ok: true,
+    data: { success: true, isXray: true, batches: [{ batchName: 'Batch 1', asins: ['B0X1', 'B0X2'] }] }
+  });
+  assert.strictEqual(c2.status, 'SUCCESS');
+  c2.batches[0].items.forEach(item => {
+    assert.strictEqual(item.title, null);
+    assert.strictEqual(item.price, null);
+    assert.strictEqual(item.sales, null);
+  });
+  console.log('  🟢 Case 2 (ASIN-only success): no Math.random/formula metadata invented. PASSED');
+
+  // Case 3: Empty batches array — insufficient evidence, not a synthetic batch.
+  const c3 = deriveXrayUploadOutcome({ ok: true, data: { success: true, isXray: true, batches: [] } });
+  assert.strictEqual(c3.status, 'INSUFFICIENT_EVIDENCE');
+  assert.deepStrictEqual(c3.batches, []);
+  assert.strictEqual(c3.toastType, 'error');
+  console.log('  🟢 Case 3 (empty batches): INSUFFICIENT_EVIDENCE, empty batches, error toast. PASSED');
+
+  // Case 4: Non-Xray response shape — must not be treated as success.
+  const c4 = deriveXrayUploadOutcome({ ok: true, data: { success: true, items: [{ asin: 'B0CPHXX2ZF' }] } });
+  assert.strictEqual(c4.status, 'INSUFFICIENT_EVIDENCE');
+  assert.deepStrictEqual(c4.batches, []);
+  console.log('  🟢 Case 4 (non-Xray response): rejected, no invented batches. PASSED');
+
+  // Case 5: Malformed/null data — must not crash and must not fabricate.
+  const c5 = deriveXrayUploadOutcome({ ok: true, data: null });
+  assert.strictEqual(c5.status, 'INSUFFICIENT_EVIDENCE');
+  assert.deepStrictEqual(c5.batches, []);
+  console.log('  🟢 Case 5 (null/malformed data): 0 crashes, no fabricated batches. PASSED');
+
+  // Case 6: Server explicitly returned success:false (e.g. INSUFFICIENT_EVIDENCE from the batcher).
+  const c6 = deriveXrayUploadOutcome({ ok: false, data: { success: false, error: 'No ASIN evidence supplied.', code: 'INSUFFICIENT_EVIDENCE' } });
+  assert.strictEqual(c6.status, 'INSUFFICIENT_EVIDENCE');
+  assert.deepStrictEqual(c6.batches, []);
+  assert.ok(c6.toastMessage.includes('No ASIN evidence supplied.'), 'real server error reason must reach the user');
+  console.log('  🟢 Case 6 (server success:false): surfaced as rejection with real reason, no fabrication. PASSED');
+
+  // Case 7: Network/parse failure (fetch throws, or HTML error page breaks JSON.parse upstream) —
+  // must render an explicit ERROR state, NOT a fabricated success toast.
+  const c7 = deriveXrayUploadOutcome({ error: new Error('Server returned an unexpected response (status 500). <html>500 Internal Error</html>') });
+  assert.strictEqual(c7.status, 'ERROR');
+  assert.deepStrictEqual(c7.batches, []);
+  assert.strictEqual(c7.toastType, 'error', 'a real failure must never produce a success toast');
+  console.log('  🟢 Case 7 (network/HTML error): ERROR state, error toast — failure is visible, not hidden. PASSED');
 
   console.log('\n================================================================');
-  console.log('  🟢 ZERO-CRASH FAILSAFE VERIFIED 100% OPERATIONAL!');
+  console.log('  🟢 ALL FAIL-CLOSED XRAY UPLOAD OUTCOME CASES PASSED!');
   console.log('================================================================\n');
 }
 
-testWhiteScreenFailsafe();
+testXrayUploadOutcomeFailClosed();

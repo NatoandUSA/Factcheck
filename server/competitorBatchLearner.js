@@ -161,9 +161,9 @@ function displayEvidence(value) {
   return value === undefined || value === null || value === '' ? 'UNKNOWN' : String(value);
 }
 
-function normalizeSelectedSeller(seller) {
+function normalizeSelectedSeller(seller, index) {
   return makeSeller({
-    id: seller.id || `seller-${Math.random().toString(36).slice(2)}`,
+    id: seller.id || `seller-evidence-${index + 1}`,
     title: seller.title,
     shopName: seller.shopName,
     country: seller.country,
@@ -197,7 +197,7 @@ async function synthesizeEtsyBatchLearnings({ seedPhrase, sellers = [], category
   }
 
   const selectedSellers = requested
-    .map(normalizeSelectedSeller)
+    .map((seller, index) => normalizeSelectedSeller(seller, index))
     .filter(s => s.title && s.title.length > 5);
 
   if (selectedSellers.length < 3) {

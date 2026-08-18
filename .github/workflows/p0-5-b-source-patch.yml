@@ -9,6 +9,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: p0-5-b-source-patch-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   patch-test-commit:
     if: github.head_ref == 'fix/p0.5-b-etsy-truth-semantics'
@@ -28,14 +32,22 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Apply exact-marker server route patch
-        run: node scripts/apply_p0_5_b_server_only_wrapper.cjs
+      - name: Apply base Etsy route patch if still needed
+        run: |
+          if grep -q "API: One-Click Auto-Pull LIVE Etsy Trends" server/server.js; then
+            echo "Base Etsy truth patch already present."
+          else
+            node scripts/apply_p0_5_b_server_only_wrapper.cjs
+          fi
+
+      - name: Apply server-authoritative provenance patch
+        run: node scripts/apply_p0_5_b_provenance_patch.cjs
 
       - name: Apply exact-marker Etsy workspace patch
         run: node scripts/apply_p0_5_b_workspace_patch.cjs
 
       - name: Show scoped diff
-        run: git diff -- server/server.js src/components/EtsyWorkspace.jsx
+        run: git diff -- server/server.js server/competitorBatchLearner.js src/components/EtsyWorkspace.jsx
 
       - name: Run canonical assertion suite
         run: npm test
@@ -43,14 +55,16 @@ jobs:
       - name: Build application
         run: npm run build
 
-      - name: Commit patched source only
+      - name: Commit and rebase patched source
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add server/server.js src/components/EtsyWorkspace.jsx
+          git add server/server.js server/competitorBatchLearner.js src/components/EtsyWorkspace.jsx
           if git diff --cached --quiet; then
             echo "No source changes to commit."
-          else
-            git commit -m "fix(etsy-truth): fail closed on missing seller and MCP evidence"
-            git push origin HEAD:fix/p0.5-b-etsy-truth-semantics
+            exit 0
           fi
+          git commit -m "fix(etsy-truth): make server authoritative for Etsy evidence provenance"
+          git fetch origin fix/p0.5-b-etsy-truth-semantics
+          git rebase origin/fix/p0.5-b-etsy-truth-semantics
+          git push origin HEAD:fix/p0.5-b-etsy-truth-semantics

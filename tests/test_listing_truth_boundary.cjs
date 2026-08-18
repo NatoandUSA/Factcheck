@@ -98,6 +98,16 @@ function run() {
   assert.ok(!serverSrc.includes('`Personalized ${trend.category}`'), 'trend-draft must not unconditionally claim "Personalized" as a verified product capability');
   console.log('🟢 server.js /api/chat no longer mandates fabricated materials/personalization, and no path auto-generates a fake parentSku or unconditional Personalized claim.');
 
+  // --- 5d. server.js: Quick Draft / trend-draft must never trust the AI's
+  // own judgment on personalization capability -- a seed keyword is not
+  // evidence, so these fields are hard-coded empty regardless of model
+  // output, and the "Custom" title fallback (implying customization
+  // capability) is gone too (GPT PR-10 4th re-audit) ---
+  assert.ok(!serverSrc.includes('`Custom ${trend.category}`'), 'trend-draft etsyTitle fallback must not imply a "Custom" capability with no evidence');
+  const personalizationHardcodedCount = (serverSrc.match(/etsyPersonalizationInstructions: '',/g) || []).length;
+  assert.ok(personalizationHardcodedCount >= 2, 'Quick Draft and trend-draft must both hard-code etsyPersonalizationInstructions empty, not trust AI inference from keywords');
+  console.log('🟢 server.js Quick Draft / trend-draft never trust AI-inferred personalization capability, and the "Custom" title fallback is gone.');
+
   // --- 6. geminiService.js: sanitizer no longer injects fabricated A+ module
   // claims or category defaultMaterials as if they were confirmed facts ---
   const geminiSrc = fs.readFileSync(path.resolve(__dirname, '../src/services/geminiService.js'), 'utf8');
@@ -115,6 +125,16 @@ function run() {
   const generatorSrc = fs.readFileSync(path.resolve(__dirname, '../src/components/SingleListingGenerator.jsx'), 'utf8');
   assert.ok(!generatorSrc.includes('materials: selectedCategory.defaultMaterials'), 'category defaultMaterials must not be auto-asserted as real product facts');
   console.log('🟢 SingleListingGenerator.jsx no longer auto-asserts category presets as real materials.');
+
+  // --- 7b. SingleListingGenerator.jsx / geminiService.js: category example
+  // text (sampleBrief) must never auto-become the submitted/factual product
+  // brief -- it's fictional example content ("luxury gift box", "LED wooden
+  // light base"), not evidence about the real product (GPT PR-10 4th
+  // re-audit) ---
+  assert.ok(!generatorSrc.includes('useState(CATEGORIES[0].sampleBrief)'), 'productBrief must not be pre-filled with fabricated category example text');
+  assert.ok(!generatorSrc.includes('setProductBrief(category.sampleBrief)') && !generatorSrc.includes('setProductBrief(selectedCategory.sampleBrief)'), 'category selection / reset must not inject example text as the real submitted brief');
+  assert.ok(!geminiSrc.includes('|| category?.sampleBrief'), 'geminiService.js prompt must not fall back to category example text as if it were a real product brief');
+  console.log('🟢 SingleListingGenerator.jsx / geminiService.js no longer let category example text become the submitted factual product brief.');
 
   // --- 8. App.jsx: a failed/rejected backend listing save must not show a
   // success toast or get added to the saved catalog history, and approval

@@ -1465,7 +1465,11 @@ Return ONLY raw JSON without markdown code fences:
               etsyDescription: aiData.etsyDescription || '',
               etsyTags: (aiData.etsyTags || []).slice(0, 13).map(t => String(t).substring(0, 20)),
               etsyMaterials: aiData.etsyMaterials || [],
-              etsyPersonalizationInstructions: aiData.etsyPersonalizationInstructions || '',
+              // Hard-coded empty, not aiData-derived: a seed keyword is not
+              // evidence this product actually supports personalization, so
+              // the model's inference is never trusted here regardless of
+              // what it returns (GPT PR-10 4th re-audit).
+              etsyPersonalizationInstructions: '',
               categoryName: category,
               generatedAt: new Date().toISOString(),
               status: 'NEEDS_QA'
@@ -2012,11 +2016,16 @@ Return ONLY a valid raw JSON object without markdown code fences:
           amazonDescription: aiData.amazonDescription || '',
           amazonAPlusContent: aiData.amazonAPlusContent || null,
           amazonAPlusPoints: aiData.amazonAPlusPoints || [],
-          etsyTitle: aiData.etsyTitle || `Custom ${trend.category}`,
+          // No "Custom" claim in the fallback: implies a customization
+          // capability with no evidence, same reasoning as the Amazon title.
+          etsyTitle: aiData.etsyTitle || trend.category,
           etsyDescription: aiData.etsyDescription || '',
           etsyTags: (aiData.etsyTags || []).slice(0, 13).map(t => String(t).substring(0, 20)),
           etsyMaterials: aiData.etsyMaterials || [],
-          etsyPersonalizationInstructions: aiData.etsyPersonalizationInstructions || '',
+          // Hard-coded empty, not aiData-derived: trending keywords are not
+          // evidence this product actually supports personalization (GPT
+          // PR-10 4th re-audit).
+          etsyPersonalizationInstructions: '',
           categoryName: trend.category,
           generatedAt: new Date().toISOString(),
           status: 'NEEDS_QA'

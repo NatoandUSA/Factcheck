@@ -93,9 +93,20 @@ function filterAndBatchXrayAsins(xrayData, seedKeyword = 'Custom Gift') {
   const rejectedAsins = [];
   const seenAsins = new Set();
 
-  rawRows.forEach((row, idx) => {
+  rawRows.forEach((row) => {
     const asin = String(row.ASIN || row.asin || row['ASIN'] || row['Asin'] || '').trim().toUpperCase();
-    if (!asin || asin.length < 8 || seenAsins.has(asin)) return;
+    if (!ASIN_FORMAT.test(asin)) {
+      rejectedAsins.push({
+        asin: asin || null,
+        title: null,
+        reason: 'Invalid ASIN format (expected exactly 10 alphanumeric characters)'
+      });
+      return;
+    }
+    if (seenAsins.has(asin)) {
+      rejectedAsins.push({ asin, title: null, reason: 'Duplicate ASIN in source input' });
+      return;
+    }
 
     const rawTitle = firstDefined(row, ['Title', 'title', 'Product Details', 'Product Title']);
     const title = rawTitle !== undefined ? String(rawTitle).trim() : null;
@@ -173,7 +184,7 @@ function filterAndBatchXrayAsins(xrayData, seedKeyword = 'Custom Gift') {
     const pool = cleanAsins.slice(start, start + 10);
     const batchNumber = batches.length + 1;
     const rationale = hasAnySourceMetadata
-      ? `${pool.length} ASINs for "${seedKeyword}", sorted by source-reported relevance/sales where available. Fields not present in the source are unknown.`
+      ? `${pool.length} ASINs for "${seedKeyword}". Order uses a derived title-relevance heuristic; source-reported sales breaks ties only when both rows contain sales. Fields not present in the source remain unknown.`
       : `${pool.length} manually supplied ASIN identifiers only. No price, sales, or ranking data was provided — order reflects input order, not verified performance.`;
 
     batches.push({

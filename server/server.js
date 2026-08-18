@@ -6,7 +6,11 @@ const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
 const crypto = require('crypto');
-require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
+// DOTENV_PATH lets production point at a secrets file outside the Git
+// worktree (e.g. via a systemd EnvironmentFile= entry); local dev/test is
+// unaffected since it must come from the real process environment, not
+// from the .env file this line is about to load.
+require('dotenv').config({ path: process.env.DOTENV_PATH || path.resolve(__dirname, '../.env') });
 
 const ipGuard = require('./ipGuard');
 const opportunityScorer = require('./opportunityScorer');
@@ -29,6 +33,7 @@ const { encryptSecret, decryptSecret, maskSecret } = require('./security/secretB
 const { approvalHash } = require('./security/approval');
 const { readFirstWorksheet } = require('./services/spreadsheetReader');
 const { UrlGuardError } = require('./security/urlGuard');
+const { resolveRuntimePaths } = require('./config/paths');
 
 // Make crashes visible instead of dying silently with no trace (systemd will
 // still restart the process via Restart=always; this just ensures the cause
@@ -47,12 +52,10 @@ app.use(cors(corsOptionsDelegate));
 app.use(express.json({ limit: '100kb' }));
 app.use(requireCsrfOrigin);
 
-// Ensure data/imports directory exists (Isolated in test mode)
-const importsDir = process.env.TEST_IMPORTS_DIR
-  ? process.env.TEST_IMPORTS_DIR
-  : (process.env.NODE_ENV === 'test'
-      ? path.resolve(__dirname, '../data/test_imports')
-      : path.resolve(__dirname, '../data/imports'));
+// Runtime state paths (DB + uploaded-report imports dir): single source of
+// truth in config/paths.js. OMNI_DB_PATH / OMNI_IMPORTS_DIR let production
+// relocate both outside the Git worktree; dev/test defaults are unchanged.
+const { dbPath, importsDir } = resolveRuntimePaths();
 
 if (!fs.existsSync(importsDir)) {
   fs.mkdirSync(importsDir, { recursive: true });
@@ -78,9 +81,6 @@ const upload = multer({
   }
 });
 
-const dbPath = process.env.NODE_ENV === 'test'
-  ? ':memory:'
-  : path.resolve(__dirname, 'app.db');
 const db = new sqlite3.Database(dbPath);
 
 
@@ -2454,12 +2454,10 @@ const backgroundAgentTimer = setInterval(() => {
     onlineAgents.forEach(async agent => {
       // Agent 1: Trend Scout (Role: RESEARCHER - Real Data Engine)
       if (agent.role === 'RESEARCHER') {
-        const fs = require('fs');
-        const importsDir = path.resolve(__dirname, '../data/imports');
-        if (!fs.existsSync(importsDir)) {
-          fs.mkdirSync(importsDir, { recursive: true });
-        }
-
+        // Reuses the module-level importsDir (config/paths.js) instead of
+        // re-resolving its own path — the prior inline resolution here
+        // ignored TEST_IMPORTS_DIR/OMNI_IMPORTS_DIR entirely, a second,
+        // inconsistent source of truth for the same directory.
         const files = fs.readdirSync(importsDir).filter(f => f.endsWith('.csv') || f.endsWith('.xlsx') || f.endsWith('.html') || f.endsWith('.htm'));
         
         if (files.length > 0) {

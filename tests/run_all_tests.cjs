@@ -16,12 +16,11 @@ function runAllTests() {
     'tests/p0_route_security.test.cjs',
     'tests/test_real_child_asin_batcher.cjs',
     'tests/test_runtime_paths.cjs',
+    'tests/test_etsy_truth_semantics.cjs',
     'tests/test_strict_keyword_sanitizer.cjs',
     'tests/test_full_cerebro_mkl_flow.cjs',
     'tests/test_white_screen_failsafe.cjs'
   ];
-
-
 
   let passedCount = 0;
 

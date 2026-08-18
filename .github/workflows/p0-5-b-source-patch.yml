@@ -46,8 +46,11 @@ jobs:
       - name: Apply exact-marker Etsy workspace patch
         run: node scripts/apply_p0_5_b_workspace_patch.cjs
 
+      - name: Remove unusable source-less seller scan action
+        run: node scripts/apply_p0_5_b_scanner_cleanup.cjs
+
       - name: Show scoped diff
-        run: git diff -- server/server.js server/competitorBatchLearner.js src/components/EtsyWorkspace.jsx
+        run: git diff -- server/server.js server/competitorBatchLearner.js src/components/EtsyWorkspace.jsx src/components/EtsyMultiSellerScanner.jsx
 
       - name: Run canonical assertion suite
         run: npm test
@@ -59,12 +62,12 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add server/server.js server/competitorBatchLearner.js src/components/EtsyWorkspace.jsx
+          git add server/server.js server/competitorBatchLearner.js src/components/EtsyWorkspace.jsx src/components/EtsyMultiSellerScanner.jsx
           if git diff --cached --quiet; then
             echo "No source changes to commit."
             exit 0
           fi
-          git commit -m "fix(etsy-truth): make server authoritative for Etsy evidence provenance"
+          git commit -m "fix(etsy-truth): make Etsy evidence provenance and Staff UI fail closed"
           git fetch origin fix/p0.5-b-etsy-truth-semantics
           git rebase origin/fix/p0.5-b-etsy-truth-semantics
           git push origin HEAD:fix/p0.5-b-etsy-truth-semantics

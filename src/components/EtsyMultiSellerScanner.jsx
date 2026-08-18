@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Users, Sparkles, CheckSquare, Square, Zap, ExternalLink,
-  RefreshCw, Plus, History, AlertTriangle, ShieldCheck
+  Plus, History, AlertTriangle, ShieldCheck
 } from 'lucide-react';
 
 const emptyManualSeller = {
@@ -27,13 +27,12 @@ function displayValue(value, formatter = v => String(v)) {
 
 export default function EtsyMultiSellerScanner({ seedPhrase, category, onShowToast, onSellersUpdated, onViewHistory }) {
   const [sellers, setSellers] = useState([]);
-  const [loading, setLoading] = useState(false);
   const [learning, setLearning] = useState(false);
   const [synthesizedResult, setSynthesizedResult] = useState(null);
   const [showManualAdd, setShowManualAdd] = useState(false);
   const [manualSeller, setManualSeller] = useState(emptyManualSeller);
   const [evidenceMessage, setEvidenceMessage] = useState(
-    'Chưa có seller evidence. Chỉ dùng dữ liệu import có nguồn hoặc Staff nhập tay từ listing đã kiểm tra.'
+    'Chưa có seller evidence. Live seller connector chưa được chứng minh; hiện dùng Staff manual assertion hoặc raw source qua server API.'
   );
 
   useEffect(() => {
@@ -55,49 +54,6 @@ export default function EtsyMultiSellerScanner({ seedPhrase, category, onShowToa
     });
     return counts;
   }, [sellers]);
-
-  const scanSellers = async () => {
-    setLoading(true);
-    setSynthesizedResult(null);
-    try {
-      const res = await fetch('/api/etsy/scan-search', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ seedPhrase: seedPhrase || 'nurse sweatshirt' })
-      });
-      const data = await res.json();
-
-      // Old/backend synthetic fallback must never become Staff evidence.
-      if (data.isSynthetic || data.dataBadge === 'DEMO_SYNTHETIC') {
-        setSellers([]);
-        setEvidenceMessage('BLOCK: server chỉ trả dữ liệu DEMO_SYNTHETIC. Không dùng dữ liệu này để học hoặc tạo listing.');
-        if (onShowToast) onShowToast('BLOCK: không có seller evidence thật; synthetic demo đã bị loại.');
-        return;
-      }
-
-      if (!res.ok || data.success === false) {
-        throw new Error(data.message || data.error || 'INSUFFICIENT_EVIDENCE');
-      }
-
-      const observed = Array.isArray(data.sellers)
-        ? data.sellers.filter(s => s && s.evidenceSource && !s.isSynthetic)
-        : [];
-      setSellers(observed);
-      setEvidenceMessage(
-        observed.length > 0
-          ? `Đã nạp ${observed.length} seller/listing evidence có source. Missing fields giữ UNKNOWN.`
-          : 'Không có seller evidence hợp lệ trong response.'
-      );
-      if (onShowToast) onShowToast(`Đã nạp ${observed.length} seller evidence có nguồn.`);
-    } catch (e) {
-      setSellers([]);
-      setEvidenceMessage(`INSUFFICIENT_EVIDENCE: ${e.message}`);
-      if (onShowToast) onShowToast(`Seller evidence chưa sẵn sàng: ${e.message}`);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const toggleSeller = (id) => {
     setSellers(prev => prev.map(s => s.id === id ? { ...s, selected: !s.selected } : s));
@@ -172,14 +128,10 @@ export default function EtsyMultiSellerScanner({ seedPhrase, category, onShowToa
             </h3>
           </div>
           <p style={{ margin: '4px 0 0', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-            Chỉ học từ evidence có nguồn hoặc Staff assertion. UNKNOWN không bị đổi thành 0 và hệ thống không tự tạo “Top Seller”.
+            Chỉ học từ evidence có nguồn hoặc Staff assertion. UNKNOWN không bị đổi thành 0. Auto seller scan chưa có nguồn live được chứng minh nên không hiển thị nút giả.
           </p>
         </div>
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-          <button onClick={scanSellers} disabled={loading} className="btn btn-secondary btn-sm" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <RefreshCw size={14} className={loading ? 'spinner' : ''} />
-            <span>{loading ? 'Đang kiểm tra...' : 'Kiểm Tra Seller Evidence'}</span>
-          </button>
           <button onClick={() => setShowManualAdd(v => !v)} className="btn btn-secondary btn-sm" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <Plus size={14} /> Thêm Seller Đã Kiểm Tra
           </button>

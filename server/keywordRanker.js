@@ -1,4 +1,5 @@
 const ipGuard = require('./ipGuard');
+const { toObservedNumber } = require('./researchTruth');
 
 /**
  * Master Keyword Selection & Ranking Engine (Updated for Aug 15, 2026 Policy Standards)
@@ -7,228 +8,158 @@ const ipGuard = require('./ipGuard');
  */
 
 const GARBAGE_PATTERNS = [
-  /^b0[a-z0-9]{8}$/i,        // ASIN code like b0gl7dyp9r
-  /^[a-z0-9]{10}$/i,          // 10-char alphanumeric code like b0h19x4t7d
-  /^\d+[\.\)]?$/,            // Line numbers like 10., 11., 12.
-  /^\d+$/,                    // Pure numbers like 10, 11
-  /^[\W_]+$/,                 // Punctuation junk
-  /\bgif\b/i                  // Typo "my gif", "gif for"
+  /^b0[a-z0-9]{8}$/i,
+  /^[a-z0-9]{10}$/i,
+  /^\d+[\.\)]?$/,
+  /^\d+$/,
+  /^[\W_]+$/,
+  /\bgif\b/i
 ];
 
-
 const BANNED_DELIVERY_TERMS = [
-  'same day', 'sameday', 'overnight', 'overnight delivery', 'delivery gifts', 
-  'delivery items', 'express delivery', 'express shipping', '24h shipping', 
+  'same day', 'sameday', 'overnight', 'overnight delivery', 'delivery gifts',
+  'delivery items', 'express delivery', 'express shipping', '24h shipping',
   'fresh flowers', 'flowers', 'fast shipping', 'next day'
 ];
 
 const BANNED_IRRELEVANT_TERMS = [
-  'abused', 'abuse', 'girlfriend abused', 'chucky', 'chucky doll', 'horror', 
+  'abused', 'abuse', 'girlfriend abused', 'chucky', 'chucky doll', 'horror',
   'dog toy', 'cat toy', 'phone case', 'keychain', 'sticker', 'plastic', 'cheap'
 ];
 
 function sanitizeKeyword(rawKw) {
   if (!rawKw || typeof rawKw !== 'string') return null;
   let kw = rawKw.trim().toLowerCase();
-
-  // 1. Minimum length check
   if (kw.length < 4) return null;
-
-  // 2. Pattern check (ASINs, Line Numbers)
-  for (const pat of GARBAGE_PATTERNS) {
-    if (pat.test(kw)) return null;
-  }
-
-  // 3. Delivery & speed term blacklist
-  for (const bad of BANNED_DELIVERY_TERMS) {
-    if (kw.includes(bad)) return null;
-  }
-
-  // 4. Irrelevant / offensive blacklist
-  for (const bad of BANNED_IRRELEVANT_TERMS) {
-    if (kw.includes(bad)) return null;
-  }
-
-  // 5. Trademark / IP Check
+  for (const pat of GARBAGE_PATTERNS) if (pat.test(kw)) return null;
+  for (const bad of BANNED_DELIVERY_TERMS) if (kw.includes(bad)) return null;
+  for (const bad of BANNED_IRRELEVANT_TERMS) if (kw.includes(bad)) return null;
   const ipCheck = ipGuard.screenText(kw);
   if (ipCheck.verdict === 'BLOCK') return null;
-
   return kw;
 }
 
-/**
- * Dynamic Seed Relevance & Concept Intent Matcher (Zero Hardcoded Niche Blacklists)
- * If seedPhrase is "housewarming gift", "housewarming" is boosted 3.0x!
- * If seedPhrase is "para el amor de mi vida", Spanish romantic terms are boosted 3.5x!
- */
 function computeDynamicSeedRelevance(keyword, seedPhrase) {
   if (!seedPhrase || typeof seedPhrase !== 'string') return 1.0;
-  
   const seedLower = seedPhrase.toLowerCase().trim();
   const kwLower = keyword.toLowerCase().trim();
-  
   const seedTokens = seedLower.split(/\s+/).filter(t => t.length > 2);
   const kwTokens = kwLower.split(/\s+/).filter(t => t.length > 2);
-
   if (seedTokens.length === 0 || kwTokens.length === 0) return 1.0;
 
-  // Language Detection: Spanish vs English
   const isSpanishSeed = /para|el|la|amor|vida|esposa|novia|regalo|suegra|mama|madre|aniversario|con|de|mi/i.test(seedLower);
   const isSpanishKw = /regalo|regalos|amor|vida|esposa|novia|esposo|para|suegra|collar|corazon|aniversario|san valentin|detalles|pareja|cumpleaños/i.test(kwLower);
-
   let langMultiplier = 1.0;
-  if (isSpanishSeed) {
-    langMultiplier = isSpanishKw ? 3.0 : 0.3; // High boost for Spanish terms matching Spanish seed, penalty for English mismatch
-  }
+  if (isSpanishSeed) langMultiplier = isSpanishKw ? 3.0 : 0.3;
 
-  // Dynamic Token Overlap & Concept Matching
   let matchingTokensCount = 0;
   seedTokens.forEach(st => {
-    if (kwTokens.some(kt => kt.includes(st) || st.includes(kt))) {
-      matchingTokensCount++;
-    }
+    if (kwTokens.some(kt => kt.includes(st) || st.includes(kt))) matchingTokensCount++;
   });
-
   const overlapRatio = matchingTokensCount / seedTokens.length;
-  const tokenMatchMultiplier = 1.0 + (overlapRatio * 2.5); // Dynamic boost up to 3.5x based on active seed concept match
-
-  return langMultiplier * tokenMatchMultiplier;
+  return langMultiplier * (1.0 + (overlapRatio * 2.5));
 }
 
 function rankKeywords(keywordList, contextCategory = 'Jewelry', seedPhrase = '') {
   if (!Array.isArray(keywordList)) return [];
 
   const scoredList = keywordList.map(item => {
-    let rawKw = typeof item === 'string' ? item : item.keyword || item.phrase || item.searchQuery || '';
+    const rawKw = typeof item === 'string' ? item : item.keyword || item.phrase || item.searchQuery || '';
     const kw = sanitizeKeyword(rawKw);
-
     if (!kw) return null;
 
-    const vol = typeof item === 'object' ? (parseFloat(item.searchVolume || item.volume || item.searches) || 100) : 100;
-    const density = typeof item === 'object' ? (parseFloat(item.titleDensity || item.density) || 10) : 10;
-    const cpr = typeof item === 'object' ? (parseFloat(item.cpr) || 8) : 8;
-    const competingProducts = (typeof item === 'object' && item.competingProducts != null) ? parseFloat(item.competingProducts) : null;
+    const isObj = typeof item === 'object' && item !== null;
+    const realVolume = isObj ? toObservedNumber(item.searchVolume ?? item.volume ?? item.searches) : null;
+    const realDensity = isObj ? toObservedNumber(item.titleDensity ?? item.density) : null;
+    const realCpr = isObj ? toObservedNumber(item.cpr) : null;
+    const competingProducts = isObj ? toObservedNumber(item.competingProducts) : null;
 
-    // Long-tail Keyword Priority Multiplier
+    // Stable ranking may use private heuristic defaults, but exposed business
+    // metrics must never be computed from those defaults.
+    const sortVol = realVolume ?? 100;
+    const sortDensity = realDensity ?? 10;
+    const sortCpr = realCpr ?? 8;
+
     const wordsCount = kw.split(/\s+/).length;
     let longTailMultiplier = 1.0;
-    if (wordsCount >= 3) {
-      longTailMultiplier = 2.5; // Strong boost for long-tail buyer intent
-    } else if (wordsCount === 1) {
-      longTailMultiplier = 0.1; // Severe penalty for 1-word generic noise ("gift", "gifts")
-    }
+    if (wordsCount >= 3) longTailMultiplier = 2.5;
+    else if (wordsCount === 1) longTailMultiplier = 0.1;
+    if (sortDensity < 5) longTailMultiplier *= 1.4;
 
-    if (density < 5) {
-      longTailMultiplier *= 1.4; // Low competition boost
-    }
-
-    // Dynamic Concept Intent Matcher (Adapts to ANY active seed phrase dynamically!)
     const dynamicIntentMultiplier = computeDynamicSeedRelevance(kw, seedPhrase);
-
-    // Broad generic penalty ("gift for women", "gifts for her")
     if (/^(gift for women|gifts for women|gifts for her|gift for her|gifts for wife|husband birthday gift)$/i.test(kw)) {
       longTailMultiplier *= 0.3;
     }
 
-    // Base Ranking Score Formula with Long-tail Priority & Dynamic Intent
-    const baseScore = (vol * Math.max(1, 100 - density)) / (cpr + 1);
-    const score = baseScore * longTailMultiplier * dynamicIntentMultiplier;
+    const baseSortScore = (sortVol * Math.max(1, 100 - sortDensity)) / (sortCpr + 1);
+    const sortScore = baseSortScore * longTailMultiplier * dynamicIntentMultiplier;
+
+    // Hardening rule: a decision/exposed score is allowed only when the full
+    // research metric set expected by the upload pipeline is observed. This
+    // deliberately includes competingProducts even though the historical
+    // rank formula does not use it directly; otherwise a row with missing
+    // competition could arrive from server.js with a hidden default and be
+    // re-labeled SCORED downstream.
+    const completeScoreEvidence = [realVolume, realDensity, realCpr, competingProducts]
+      .every(value => value !== null && value >= 0);
+    const exposedScore = completeScoreEvidence ? sortScore : null;
 
     return {
       keyword: kw,
-      volume: vol,
-      searchVolume: vol,
-      density,
-      titleDensity: density,
+      volume: realVolume,
+      searchVolume: realVolume,
+      density: realDensity,
+      titleDensity: realDensity,
       competingProducts,
-      cpr,
-      score,
-      opportunityScore: Math.round(score),
+      cpr: realCpr,
+      score: exposedScore,
+      opportunityScore: completeScoreEvidence ? Math.round(exposedScore) : null,
+      scoringState: completeScoreEvidence ? 'SCORED' : 'INSUFFICIENT_EVIDENCE',
       isLongTail: wordsCount >= 3,
-      isNicheRelevant: dynamicIntentMultiplier > 0.5
+      isNicheRelevant: dynamicIntentMultiplier > 0.5,
+      _sortScore: sortScore
     };
   }).filter(Boolean);
 
-  // Sort descending by opportunity score
-  return scoredList.sort((a, b) => b.score - a.score);
+  return scoredList
+    .sort((a, b) => b._sortScore - a._sortScore)
+    .map(({ _sortScore, ...item }) => item);
 }
 
-
-
-
-
-/**
- * Build Amazon Title (Strictly <= 75 characters per July 27, 2026 Amazon Policy)
- */
 function buildAmazonTitle75(keywordList, categoryName = 'Gift') {
   const ranked = rankKeywords(keywordList);
   const topKw = ranked.length > 0 ? ranked[0].keyword : categoryName;
-
   const toTitleCase = (str) => str.replace(/\w\S*/g, (txt) => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase());
-
-  // No unconditional "Personalized" prefix: this is called from keyword-only
-  // routes with no real personalization-capability evidence (GPT PR-12
-  // re-audit: same class as the trend-draft/Quick Draft AI-output fix, but
-  // this one is the app's own deterministic code, not untrusted model output).
   let baseTitle = toTitleCase(topKw);
   if (baseTitle.length > 75) {
     baseTitle = baseTitle.substring(0, 75).trim();
   } else if (ranked.length > 1) {
     const secKw = toTitleCase(ranked[1].keyword);
-    if ((baseTitle + `, ${secKw}`).length <= 75) {
-      baseTitle += `, ${secKw}`;
-    }
+    if ((baseTitle + `, ${secKw}`).length <= 75) baseTitle += `, ${secKw}`;
   }
-
   return baseTitle.substring(0, 75);
 }
 
-/**
- * Build Amazon Item Highlights (Strictly <= 125 characters per July 27, 2026 Amazon Policy)
- * Separated by bullet dots •
- */
 function buildAmazonItemHighlights125(keywordList, categoryName = 'Gift') {
   const ranked = rankKeywords(keywordList);
   const toTitleCase = (str) => str.replace(/\w\S*/g, (txt) => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase());
-
-  // No "Custom ... with personalized details" or "Multiple colors & sizes
-  // available": both assert unverified product capabilities from a keyword
-  // alone (GPT PR-12 re-audit). Keep only generic, capability-neutral
-  // gifting sentiment.
   const highlights = [];
   highlights.push(`${toTitleCase(categoryName)} makes a thoughtful gift`);
-  highlights.push(`Heartfelt gift for family & loved ones`);
-
+  highlights.push('Heartfelt gift for family & loved ones');
   let text = highlights.join(' • ');
-  if (text.length > 125) {
-    text = text.substring(0, 122) + '...';
-  }
+  if (text.length > 125) text = text.substring(0, 122) + '...';
   return text.substring(0, 125);
 }
 
-/**
- * Build Etsy Title (Buyer-friendly, non-stuffed, Max 140 chars, optimal 70-100 chars per 2026 Etsy Policy)
- */
 function buildEtsyTitleClean(keywordList, categoryName = 'Handmade Gift') {
   const ranked = rankKeywords(keywordList);
   const toTitleCase = (str) => str.replace(/\w\S*/g, (txt) => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase());
-
   const coreKw = ranked.length > 0 ? toTitleCase(ranked[0].keyword) : categoryName;
-  // No "Personalized" prefix and no "Custom Handmade Gift" fallback
-  // secondary keyword: both assert unverified capabilities from a keyword
-  // alone (GPT PR-12 re-audit). Without a real second keyword, just use the
-  // core keyword alone rather than padding with a fabricated claim.
   let title = ranked.length > 1 ? `${coreKw} - ${toTitleCase(ranked[1].keyword)}` : coreKw;
-  if (title.length > 140) {
-    title = title.substring(0, 140).trim();
-  }
-
+  if (title.length > 140) title = title.substring(0, 140).trim();
   return title;
 }
 
-/**
- * Build Amazon Backend Search Terms (Max 249 Bytes, deduplicated words)
- */
 function buildAmazonSearchTerms(keywordList) {
   const ranked = rankKeywords(keywordList);
   const wordsSet = new Set();
@@ -240,86 +171,67 @@ function buildAmazonSearchTerms(keywordList) {
     for (let word of words) {
       word = word.toLowerCase().replace(/[^a-z0-9]/g, '').trim();
       if (!word || word.length < 2) continue;
-
-      // Skip common filler words or trademarked words
       const ipCheck = ipGuard.screenText(word);
       if (ipCheck.verdict === 'BLOCK') continue;
-
       if (!wordsSet.has(word)) {
         const wordBytes = Buffer.byteLength(word, 'utf8');
-        const addedBytes = resultWords.length > 0 ? wordBytes + 1 : wordBytes; // 1 space
-
+        const addedBytes = resultWords.length > 0 ? wordBytes + 1 : wordBytes;
         if (currentBytes + addedBytes <= 249) {
           wordsSet.add(word);
           resultWords.push(word);
           currentBytes += addedBytes;
-        } else {
-          break;
-        }
+        } else break;
       }
     }
     if (currentBytes >= 240) break;
   }
 
-  // Fallback relevant terms to fill up to 249 bytes if needed
   const fallbackTerms = [
-    'gifts', 'gift', 'women', 'mom', 'spanish', 'birthday', 'wedding', 'anniversary', 
-    'personalized', 'custom', 'handmade', 'unique', 'keepsake', 'mother', 'daughter', 
+    'gifts', 'gift', 'women', 'mom', 'spanish', 'birthday', 'wedding', 'anniversary',
+    'personalized', 'custom', 'handmade', 'unique', 'keepsake', 'mother', 'daughter',
     'regalos', 'para', 'mujer', 'esposa', 'novia', 'navidad', 'cumpleanos', 'collar'
   ];
-
   if (currentBytes < 220) {
     for (let word of fallbackTerms) {
       word = word.toLowerCase().replace(/[^a-z0-9]/g, '').trim();
       if (!word || wordsSet.has(word)) continue;
-
       const ipCheck = ipGuard.screenText(word);
       if (ipCheck.verdict === 'BLOCK') continue;
-
       const wordBytes = Buffer.byteLength(word, 'utf8');
       const addedBytes = resultWords.length > 0 ? wordBytes + 1 : wordBytes;
-
       if (currentBytes + addedBytes <= 249) {
         wordsSet.add(word);
         resultWords.push(word);
         currentBytes += addedBytes;
-      } else {
-        break;
-      }
+      } else break;
     }
   }
-
   return resultWords.join(' ');
 }
 
-/**
- * Build Etsy 13 Tags (Max 20 chars per tag, exactly 13 non-repetitive tags)
- */
 function buildEtsyTags(keywordList, categoryName = 'Gift') {
   const ranked = rankKeywords(keywordList);
   const tagsSet = new Set();
   const resultTags = [];
-
   const defaultTags = [
     `custom ${categoryName.toLowerCase()}`,
-    `personalized gift`,
-    `milestone keepsake`,
-    `gift for her`,
-    `gift for mom`,
-    `unique keepsake`,
-    `birthday gift`,
-    `anniversary gift`,
-    `custom name gift`,
-    `aesthetic gift`,
-    `trending gift`,
-    `handicraft decor`,
-    `handmade gift`
+    'personalized gift',
+    'milestone keepsake',
+    'gift for her',
+    'gift for mom',
+    'unique keepsake',
+    'birthday gift',
+    'anniversary gift',
+    'custom name gift',
+    'aesthetic gift',
+    'trending gift',
+    'handicraft decor',
+    'handmade gift'
   ];
 
   for (const item of ranked) {
     let tag = item.keyword.toLowerCase().trim();
     tag = tag.replace(/[^a-z0-9\s]/g, '').trim();
-
     if (tag && tag.length <= 20 && !tagsSet.has(tag)) {
       tagsSet.add(tag);
       resultTags.push(tag);
@@ -337,7 +249,6 @@ function buildEtsyTags(keywordList, categoryName = 'Gift') {
       if (resultTags.length >= 13) break;
     }
   }
-
   return resultTags.slice(0, 13);
 }
 
@@ -350,4 +261,3 @@ module.exports = {
   buildEtsyTitleClean,
   buildEtsyTags
 };
-

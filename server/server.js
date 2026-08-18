@@ -17,6 +17,7 @@ const opportunityScorer = require('./opportunityScorer');
 const ytrendsMcp = require('./ytuongMcpClient');
 const ytrendsParser = require('./ytrendsParser');
 const keywordRanker = require('./keywordRanker');
+const researchTruth = require('./researchTruth');
 const h10Mcp = require('./h10McpClient');
 const asinBatcher = require('./asinBatcher');
 const { fetchGoogleTrends } = require('./googleTrendsService');
@@ -1571,7 +1572,13 @@ app.get('/api/master-keywords', requireAuth(db), requireRole(['OWNER', 'MANAGER'
             cpr: kwItem.cpr ?? null,
             competingProducts: kwItem.competingProducts ?? null,
             titleDensity: kwItem.titleDensity ?? kwItem.density ?? null,
-            opportunityScore: kwItem.opportunityScore ?? kwItem.score ?? null
+            // kwItem.score is rankKeywords' internal sort-only heuristic (it
+            // uses hidden 100/10/8 defaults for missing metrics) -- it must
+            // never leak into the Staff-facing opportunityScore when the real
+            // one is null, or this API route re-fabricates exactly what
+            // rankKeywords was fixed to stop doing (P0.5-C truth fix).
+            opportunityScore: kwItem.opportunityScore ?? null,
+            scoringState: kwItem.scoringState ?? (kwItem.opportunityScore != null ? 'SCORED' : 'INSUFFICIENT_EVIDENCE')
           });
         }
       });
@@ -1614,11 +1621,18 @@ const handleReportUpload = async (req, res) => {
     if (/\.html?$/i.test(fileName)) {
       const htmlContent = fs.readFileSync(filePath, 'utf8');
       const parsedKeywords = ytrendsParser.parseYTrendsHtml(htmlContent);
+      // Missing metrics stay null/UNKNOWN rather than a plausible-looking
+      // guess -- 1200/350/2 were invented defaults with no basis in the
+      // actual parsed HTML (P0.5-C truth fix).
       rawRows = (parsedKeywords || []).map(kw => ({
         Keyword: kw.keyword || kw,
-        'Search Volume': kw.views24h ? kw.views24h * 30 : 1200,
-        'Competing Products': kw.listings || 350,
-        'Title Density': 2
+        // researchTruth centralizes the observed-vs-missing distinction:
+        // views24h:0 is a real observed zero and must survive as 0, not
+        // collapse into the same null used for a genuinely missing field
+        // (P0.5-C truth fix).
+        'Search Volume': researchTruth.monthlySearchVolumeFromViews24h(kw.views24h),
+        'Competing Products': researchTruth.toObservedNumber(kw.listings),
+        'Title Density': null
       }));
     } else {
       // 2. Handle Excel & CSV through ExcelJS (SheetJS/xlsx removed after security audit).
@@ -1716,22 +1730,28 @@ const handleReportUpload = async (req, res) => {
       seenKeywordsSet.add(lower);
 
 
-      const searchVolume = volKey && Number(r[volKey]) ? Number(r[volKey]) : 0;
-      const competingProducts = compKey && Number(r[compKey]) ? Number(r[compKey]) : 0;
-      const titleDensity = titleDensityKey && !isNaN(Number(r[titleDensityKey])) ? Number(r[titleDensityKey]) : null;
-      const cpr = cprKey && Number(r[cprKey]) ? Number(r[cprKey]) : null;
-      const rawIq = iqKey && Number(r[iqKey]) ? Number(r[iqKey]) : 0;
+      // A missing column/value is UNKNOWN (null), not zero. An explicit
+      // source zero ("0" in the file) is preserved as a real observation.
+      // These are different facts and were previously conflated (P0.5-C
+      // truth fix).
+      const readNumericOrNull = (key) => (key ? researchTruth.toObservedNumber(r[key]) : null);
+      const searchVolume = readNumericOrNull(volKey);
+      const competingProducts = readNumericOrNull(compKey);
+      const titleDensity = readNumericOrNull(titleDensityKey);
+      const cpr = readNumericOrNull(cprKey);
+      const rawIq = readNumericOrNull(iqKey);
 
-      let opportunityScore = 0;
-      if (rawIq > 0) {
-        opportunityScore = rawIq;
-      } else if (searchVolume > 0) {
-        const compFactor = Math.sqrt(competingProducts + 10);
-        const tdFactor = (titleDensity !== null && titleDensity >= 0) ? (titleDensity + 1) : 4;
-        opportunityScore = Math.round((searchVolume / (compFactor * tdFactor)) * 100);
-      } else {
-        opportunityScore = 50;
-      }
+      // researchTruth.scoreKeywordEvidence enforces the strict rule: the
+      // local formula only runs when every input it uses (volume,
+      // competition, density) is a real observation. Missing competition/
+      // title-density is never replaced with a plausible zero/constant and
+      // then labeled SCORED (P0.5-C truth fix).
+      const { opportunityScore, scoringState } = researchTruth.scoreKeywordEvidence({
+        searchVolume,
+        competingProducts,
+        titleDensity,
+        rawIq
+      });
 
       evaluatedKeywords.push({
         keyword: sanitizedKw,
@@ -1739,7 +1759,8 @@ const handleReportUpload = async (req, res) => {
         competingProducts,
         titleDensity,
         cpr,
-        opportunityScore
+        opportunityScore,
+        scoringState
       });
     }
 

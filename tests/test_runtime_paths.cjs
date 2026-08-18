@@ -1,6 +1,7 @@
 const assert = require('assert');
 const path = require('path');
 const fs = require('fs');
+const { execFileSync } = require('child_process');
 const {
   resolveRuntimePaths,
   isPathInsideRepo,
@@ -104,6 +105,25 @@ function testRuntimePathBoundary() {
   assert.ok(!/path\.resolve\(__dirname,\s*'\.\.\/data\/imports'\)/.test(serverSrc));
   assert.ok(/DOTENV_PATH/.test(serverSrc), 'server.js must support an external dotenv path');
   console.log('  🟢 server.js uses the shared resolver; duplicate path authorities are gone.');
+
+  // 7. Runtime state must not be tracked by Git. A symlink inside the worktree is
+  // not a safety boundary when tracked descendants exist: reset/checkout may
+  // replace the symlink with tracked files. Keep both historical runtime paths
+  // absent from the index and ignored for future additions.
+  const trackedRuntimeState = execFileSync(
+    'git',
+    ['ls-files', '--', 'server/app.db', 'data/imports'],
+    { cwd: REPO_ROOT, encoding: 'utf8' }
+  ).trim();
+  assert.strictEqual(
+    trackedRuntimeState,
+    '',
+    `Mutable runtime state must not be tracked by Git. Found:\n${trackedRuntimeState}`
+  );
+  const gitignore = fs.readFileSync(path.join(REPO_ROOT, '.gitignore'), 'utf8');
+  assert.ok(/^server\/app\.db$/m.test(gitignore), 'server/app.db must remain ignored');
+  assert.ok(/^data\/imports\/$/m.test(gitignore), 'data/imports/ must be ignored as mutable runtime state');
+  console.log('  🟢 Git index contains no mutable DB/imports state; runtime paths are ignored.');
 
   console.log('\n================================================================');
   console.log('  🟢 ALL RUNTIME PATH BOUNDARY CASES PASSED!');

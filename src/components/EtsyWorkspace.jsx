@@ -30,7 +30,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
       const trendsRes = await fetch('/api/trends', { credentials: 'include' });
       if (trendsRes.ok) {
         const trendsData = await trendsRes.json();
-        const etsyTrends = (trendsData || []).filter(t => t.marketplace === 'ETSY');
+        const etsyTrends = (trendsData || []).filter(t => t.marketplace === 'ETSY' && t.keywords_detailed);
         setTrends(etsyTrends);
       }
     } catch (e) {
@@ -123,8 +123,11 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
       const data = await parseJsonResponse(res);
       if (!res.ok) throw new Error(data.error || 'Failed to pull Etsy MCP');
 
+      if (data.source !== 'ETSY_MCP_LIVE' || data.evidenceState !== 'OBSERVED' || !Array.isArray(data.keywords) || data.keywords.length === 0) {
+        throw new Error('INSUFFICIENT_EVIDENCE: MCP response is not verified live evidence.');
+      }
       setMcpResult(data);
-      if (onShowToast) onShowToast(`✓ Đã bóc tách ${data.keywords.length} Etsy Tags cho "${data.seed}"!`);
+      if (onShowToast) onShowToast(`✓ Đã nạp ${data.keywords.length} observed Etsy tags cho "${data.seed}" (không padding).`);
       fetchData();
     } catch (err) {
       if (onShowToast) onShowToast(`Lỗi kéo MCP: ${err.message}`);
@@ -237,7 +240,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
             }}
           >
             <RefreshCw size={16} className={mcpPulling ? 'spinner' : ''} />
-            <span>{mcpPulling ? 'Đang kéo...' : '⚡ Auto-Pull 13 Tags'}</span>
+            <span>{mcpPulling ? 'Đang kéo...' : '⚡ Auto-Pull Live Tags'}</span>
           </button>
         </div>
       </div>
@@ -307,7 +310,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
                 <div>
                   <h4 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 800, color: '#c2410c' }}>
-                    🏷️ Bộ 13 Tags Độc Lập Cho "{seedPhrase}"
+                    🏷️ Observed Etsy MCP Tags Cho "{seedPhrase}"
                   </h4>
                   <p style={{ margin: '2px 0 0 0', color: 'var(--text-secondary)', fontSize: '0.8rem' }}>
                     Tuân thủ nghiêm ngặt quy định Etsy Search ($\le 20$ ký tự/tag, lọc sạch từ cấm IP).
@@ -337,7 +340,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
                 </div>
               ) : (
                 <div style={{ background: 'var(--bg-subtle)', borderRadius: '8px', padding: '16px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-                  Bấm "⚡ Auto-Pull 13 Tags" ở thanh trên cùng để tải bộ 13 tags chuẩn ngách cho "{seedPhrase}".
+                  Bấm "⚡ Auto-Pull Live Tags" ở thanh trên cùng để tải tag evidence trực tiếp từ MCP cho "{seedPhrase}".
                 </div>
               )}
             </div>
@@ -417,7 +420,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
             <button
               onClick={() => {
                 if (!trends[0]?.id) {
-                  if (onShowToast) onShowToast('Chưa có dữ liệu từ khóa Etsy nào. Hãy "⚡ Auto-Pull 13 Tags" hoặc nạp file trước.');
+                  if (onShowToast) onShowToast('Chưa có dữ liệu từ khóa Etsy nào. Hãy "⚡ Auto-Pull Live Tags" hoặc nạp file trước.');
                   return;
                 }
                 handleManualDraft(trends[0].id);

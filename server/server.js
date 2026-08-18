@@ -22,7 +22,7 @@ const asinBatcher = require('./asinBatcher');
 const { fetchGoogleTrends } = require('./googleTrendsService');
 const { callLLM } = require('./llmService');
 const { learnFromListing } = require('./learningService');
-const { parseEtsySearchResults, synthesizeEtsyBatchLearnings } = require('./competitorBatchLearner');
+const { parseEtsySearchResults, sanitizeStaffManualAssertions, synthesizeEtsyBatchLearnings } = require('./competitorBatchLearner');
 const benchmarkService = require('./benchmarkService');
 const publishGate = require('./publishGate');
 const { hashPassword, verifyPassword } = require('./security/scrypt');
@@ -872,246 +872,102 @@ app.get('/api/mcp/niche', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SEL
   }
 });
 
-// API: One-Click Auto-Pull Live Etsy Trends from MCP into Database
+// API: One-Click Auto-Pull LIVE Etsy Trends from MCP into Database.
+// P0.5-B truth rule: no semantic padding, no plausible overview defaults, and
+// no DB write if the live source is unavailable or contains no usable tags.
 app.post('/api/mcp/pull-etsy', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
-  // Etsy-only endpoint — reject a session authenticated into an Amazon
-  // workspace rather than silently writing an ETSY-tagged row under it
-  // (GPT PR-5 review finding P0-B1).
   if (req.user.marketplace !== 'ETSY') {
     return res.status(403).json({ success: false, error: 'MARKETPLACE_MISMATCH', message: 'This endpoint requires an Etsy workspace session.' });
   }
   const { seed = 'custom gift', category = 'Custom Gift' } = req.body;
 
-  let mcpData = null;
+  let mcpData;
   try {
     mcpData = await ytrendsMcp.exploreNiche(seed);
   } catch (mcpErr) {
-    console.warn('YTrends MCP Live unreachable, using intelligent semantic fallback for:', seed, mcpErr.message);
+    console.warn('YTrends MCP unavailable for:', seed, mcpErr.message);
+    return res.status(503).json({
+      success: false,
+      error: 'ETSY_MCP_UNAVAILABLE',
+      message: 'Live Etsy MCP data is unavailable. No fallback market data was generated or persisted.'
+    });
   }
 
-  const overview = mcpData?.data?.overview || { search_volume: 12500, competition: 'Medium' };
-  const adjacentTags = mcpData?.data?.adjacent_tags || [];
-  const relatedKeywords = mcpData?.data?.related_keywords || [];
+  const liveData = mcpData?.data;
+  if (!liveData || typeof liveData !== 'object') {
+    return res.status(422).json({
+      success: false,
+      error: 'INSUFFICIENT_EVIDENCE',
+      message: 'The live MCP response did not contain usable Etsy evidence.'
+    });
+  }
 
-  // Extract all valid keywords & tags
+  const overview = liveData.overview && typeof liveData.overview === 'object' ? liveData.overview : null;
   const extracted = [];
-  if (adjacentTags.length > 0) {
-    adjacentTags.forEach(t => {
-      const tagText = typeof t === 'string' ? t : (t.tag || t.name || t.keyword);
-      if (tagText && !extracted.includes(tagText)) extracted.push(tagText);
-    });
-  }
-  if (relatedKeywords.length > 0) {
-    relatedKeywords.forEach(k => {
-      const kwText = typeof k === 'string' ? k : (k.keyword || k.name);
-      if (kwText && !extracted.includes(kwText)) extracted.push(kwText);
-    });
-  }
+  const addObservedKeyword = value => {
+    const text = typeof value === 'string' ? value : (value?.tag || value?.name || value?.keyword);
+    const clean = typeof text === 'string' ? text.trim().toLowerCase() : '';
+    if (clean && !extracted.includes(clean)) extracted.push(clean);
+  };
+  (Array.isArray(liveData.adjacent_tags) ? liveData.adjacent_tags : []).forEach(addObservedKeyword);
+  (Array.isArray(liveData.related_keywords) ? liveData.related_keywords : []).forEach(addObservedKeyword);
 
-  // Smart Semantic Fallback if remote MCP returned too few tags
-  if (extracted.length < 13) {
-    const cleanSeed = seed.toLowerCase().trim();
-    const isSpanish = /para|amor|vida|suegra|mama|esposa|novia|collar|hija|abuela|regalo|joya|te amo/i.test(cleanSeed);
-    const catLower = (category || '').toLowerCase();
-
-    let dynamicTags = [];
-
-    if (catLower.includes('jewelry') || catLower.includes('necklace') || isSpanish && /collar|joya|amor|suegra/i.test(cleanSeed)) {
-      // 1. Jewelry / Keepsake Necklace Niche
-      if (isSpanish) {
-        dynamicTags = [
-          cleanSeed,
-          'collar con mensaje',
-          'regalo para novia',
-          'regalo para esposa',
-          'collar de corazon',
-          'joyeria personalizada',
-          'collar grabado',
-          'amor de mi vida',
-          'regalo romantico',
-          'joyas para mujer',
-          'regalo aniversario',
-          'collar plata 925',
-          'te amo collar'
-        ];
-      } else {
-        dynamicTags = [
-          cleanSeed,
-          'personalized necklace',
-          'custom name jewelry',
-          'heart pendant',
-          'gift for her',
-          'anniversary necklace',
-          'message card gift',
-          'engraved pendant',
-          'meaningful keepsake',
-          'dainty necklace',
-          '14k gold plated',
-          'birthday jewelry',
-          'custom birthstone'
-        ];
-      }
-    } else if (catLower.includes('acrylic') || catLower.includes('plaque') || catLower.includes('lamp')) {
-      // 2. Custom Acrylic Plaque / Night Light Niche
-      if (isSpanish) {
-        dynamicTags = [
-          cleanSeed,
-          'placa de acrilico',
-          'lampara personalizada',
-          'regalo de pareja',
-          'cancion spotify placa',
-          'foto personalizada',
-          'decoracion de cuarto',
-          'regalo de amor',
-          'aniversario novios',
-          'luz led noche',
-          'placa con foto',
-          'recuerdo grabado',
-          'san valentin'
-        ];
-      } else {
-        dynamicTags = [
-          cleanSeed,
-          'acrylic song plaque',
-          'custom night light',
-          'personalized plaque',
-          'anniversary keepsake',
-          'song code acrylic',
-          'custom photo lamp',
-          'couple gift',
-          'led desk decor',
-          'wedding gift plaque',
-          'custom gift for him',
-          'gift for girlfriend',
-          'scannable plaque'
-        ];
-      }
-    } else if (catLower.includes('blanket')) {
-      // 3. Blanket Niche
-      dynamicTags = [
-        cleanSeed,
-        'custom name blanket',
-        'personalized throw',
-        'cozy fleece blanket',
-        'gift for mom',
-        'sherpa custom throw',
-        'family blanket',
-        'memory blanket',
-        'milestone keepsake',
-        'soft flannel throw',
-        'grandma blanket',
-        'birthday keepsake',
-        'warm living decor'
-      ];
-    } else if (catLower.includes('mug')) {
-      // 4. Mug Niche
-      dynamicTags = [
-        cleanSeed,
-        'custom ceramic mug',
-        'personalized coffee',
-        'funny quote mug',
-        'gift for coworker',
-        'nurse coffee cup',
-        'aesthetic tea mug',
-        'mom morning mug',
-        'handmade ceramic',
-        'dishwasher safe mug',
-        'gift for boss',
-        'birthday coffee cup',
-        '11oz ceramic mug'
-      ];
-    } else {
-      // 5. Apparel / Sweatshirt Niche
-      if (isSpanish) {
-        dynamicTags = [
-          cleanSeed,
-          'sudadera bordada',
-          'sueter personalizado',
-          'regalo para mama',
-          'sudadera con capucha',
-          'ropa aesthetic',
-          'sueter con nombres',
-          'regalo de cumpleanos',
-          'sudadera oversize',
-          'manga bordada',
-          'moda de invierno',
-          'regalo para abuela',
-          'hecho a mano'
-        ];
-      } else {
-        dynamicTags = [
-          cleanSeed,
-          'custom sweatshirt',
-          'embroidered hoodie',
-          'gift for mom',
-          'nurse crewneck',
-          'aesthetic pullover',
-          'personalized sleeve',
-          'oversized crewneck',
-          'mama embroidered',
-          'cozy fleece sweater',
-          'birthday gift',
-          'handmade apparel',
-          'heavyweight cotton'
-        ];
-      }
-    }
-
-    dynamicTags.forEach(d => {
-      const cleanTag = d.toLowerCase().trim().slice(0, 20);
-      if (!extracted.includes(cleanTag) && cleanTag.length >= 3) {
-        extracted.push(cleanTag);
-      }
-    });
-  }
-
-  // IP Guard check
   const cleanKws = [];
-  const blockedKws = [];
-  extracted.forEach(kw => {
-    const screen = ipGuard.screenText(kw);
-    if (screen.verdict === 'BLOCK') {
-      blockedKws.push(kw);
-    } else {
-      cleanKws.push(kw);
+  const blockedKeywords = [];
+  const invalidKeywords = [];
+  extracted.forEach(keyword => {
+    if (keyword.length < 3 || keyword.length > 20) {
+      invalidKeywords.push({ keyword, reason: 'ETSY_TAG_LENGTH_OUT_OF_RANGE' });
+      return;
     }
+    const screen = ipGuard.screenText(keyword);
+    if (screen.verdict === 'BLOCK') blockedKeywords.push(keyword);
+    else cleanKws.push(keyword);
   });
 
-  const topKeywordsStr = cleanKws.slice(0, 13).join(', ');
+  const observedTags = cleanKws.slice(0, 13);
+  if (observedTags.length === 0) {
+    return res.status(422).json({
+      success: false,
+      error: 'INSUFFICIENT_EVIDENCE',
+      message: 'Live MCP returned no usable Etsy tags after validation/IP screening.',
+      blockedKeywords,
+      invalidKeywords
+    });
+  }
 
-  // Etsy MCP gives real niche-level stats (opportunity score, seller count),
-  // not per-tag Volume/CPR like Amazon Cerebro — share that real context
-  // across the tags it applies to rather than inventing per-tag numbers.
-  const isRealMcpData = Boolean(mcpData?.data?.overview);
-  const keywordsDetailed = isRealMcpData ? cleanKws.slice(0, 13).map(kw => ({
-    keyword: kw,
-    opportunityScore: overview.opportunity_score ?? null,
-    competingProducts: overview.sellers ?? null,
-    volume: overview.listings ?? null,
+  const keywordsDetailed = observedTags.map(keyword => ({
+    keyword,
+    opportunityScore: overview?.opportunity_score ?? null,
+    competingProducts: overview?.sellers ?? null,
+    volume: overview?.listings ?? null,
     cpr: null,
-    tierBadge: '🎯 Valid Tag (<=20 chars)'
-  })) : null;
+    tierBadge: '🎯 Observed MCP Tag',
+    evidenceSource: 'ETSY_MCP_LIVE'
+  }));
+  const trendingKeywordsStr = observedTags.join(', ');
 
   db.run(
     "INSERT INTO market_trends (category, trending_keywords, keywords_detailed, marketplace, tenant_id, workspace_id) VALUES (?, ?, ?, ?, ?, ?)",
-    [category, topKeywordsStr, keywordsDetailed ? JSON.stringify(keywordsDetailed) : null, req.user.marketplace, req.user.tenantId, req.user.workspaceId],
+    [category, trendingKeywordsStr, JSON.stringify(keywordsDetailed), req.user.marketplace, req.user.tenantId, req.user.workspaceId],
     function(dbErr) {
-      if (dbErr) return res.status(500).json({ error: dbErr.message });
-      
+      if (dbErr) return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
       const trendId = this.lastID;
-      const msg = `[ETSY MCP AUTO-PULL] Pulled ${cleanKws.length} Etsy tags for "${seed}" (${category}). Top Tags: ${cleanKws.slice(0, 5).join(' | ')}`;
+      const msg = `[ETSY MCP OBSERVED] Imported ${observedTags.length} source tags for "${seed}" (${category}). No semantic padding applied.`;
       db.run("INSERT INTO agent_logs (agentId, message) VALUES (1, ?)", [msg]);
-
       res.json({
         success: true,
         trendId,
         source: 'ETSY_MCP_LIVE',
+        evidenceState: 'OBSERVED',
         category,
         seed,
         overview,
-        keywords: cleanKws,
-        blockedKeywords: blockedKws,
-        trendingKeywordsStr: topKeywordsStr
+        keywords: observedTags,
+        observedKeywordCount: observedTags.length,
+        blockedKeywords,
+        invalidKeywords,
+        trendingKeywordsStr
       });
     }
   );
@@ -1319,232 +1175,132 @@ app.delete('/api/learning/templates/:id', requireAuth(db), requireRole(['OWNER',
   });
 });
 
-// API: ETSY Search & Top Sellers Scanner (HeyEtsy / Search Page / Live MCP)
+// API: ETSY Seller Evidence Scanner (uploaded HeyEtsy/Etsy HTML or CSV evidence).
+// P0.5-B truth rule: never synthesize Top Sellers or performance metrics when
+// the caller supplied no evidence.
 app.post('/api/etsy/scan-search', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
-  // Etsy-only endpoint (GPT PR-5 re-review finding, same class as P0-B1).
   if (req.user.marketplace !== 'ETSY') {
     return res.status(403).json({ success: false, error: 'MARKETPLACE_MISMATCH', message: 'This endpoint requires an Etsy workspace session.' });
   }
   const { seedPhrase = 'nurse sweatshirt', htmlContent = '', csvRows = [] } = req.body;
 
   try {
-    let sellers = parseEtsySearchResults({ htmlContent, csvRows });
-
-    // If no HTML/CSV uploaded or MCP empty, populate top sellers tailored to category and seed
-    if (sellers.length === 0) {
-      const cleanSeed = seedPhrase.trim();
-      const isSpanish = /para|amor|vida|suegra|mama|esposa|novia|collar|hija|abuela|regalo|joya|te amo/i.test(cleanSeed);
-      const toTitle = (str) => str.replace(/\w\S*/g, (w) => w.charAt(0).toUpperCase() + w.substr(1).toLowerCase());
-
-      const templates = [
-        `Collar ${toTitle(cleanSeed)} - Personalized Pendant with Message Card Box`,
-        `Custom ${toTitle(cleanSeed)} Keepsake - Regalo Para Esposa / Novia 14K Gold`,
-        `Personalized Heart Necklace - ${toTitle(cleanSeed)} Joyeria Fina Para Regalo`,
-        `Forever Love Knot Pendant - ${toTitle(cleanSeed)} Spanish Emotional Gift`,
-        `Interlocking Hearts Keepsake - ${toTitle(cleanSeed)} Regalo Romantico De Amor`,
-        `Custom Name & Date Necklace - ${toTitle(cleanSeed)} Aniversario Regalo`,
-        `Dainty Birthstone Pendant - ${toTitle(cleanSeed)} Joyas Para Parejas`,
-        `Personalized Luxury Box Set - ${toTitle(cleanSeed)} Romantic Gift For Her`,
-        `Handmade Artisan Necklace - ${toTitle(cleanSeed)} Caja De Madera Con Luz`,
-        `Engraved Keepsake Jewelry - ${toTitle(cleanSeed)} Regalo Especial Para Ella`
-      ];
-
-      // 1. Batch 1: Top 10 Revenue Leaders (High AOV, Luxury Box Sets, Star Sellers)
-      const b1Titles = [
-        `Personalized Luxury ${toTitle(cleanSeed)} Gift Box Set - 14K Gold Finish Keepsake`,
-        `Custom Engraved ${toTitle(cleanSeed)} Wooden Mahogany Box - Premium Gift for Her`,
-        `Deluxe ${toTitle(cleanSeed)} Pendant Set - Handcrafted Custom Name Message Card`,
-        `Star Seller ${toTitle(cleanSeed)} Jewelry Box - Personalized Anniversary Gift`,
-        `Custom Silver & Gold ${toTitle(cleanSeed)} - Deluxe Sentiment Gift Set`,
-        `Handcrafted ${toTitle(cleanSeed)} Gift Box - Custom Engraved Family Keepsake`,
-        `Personalized Birthstone ${toTitle(cleanSeed)} Set - Luxury Wooden Gift Packaging`,
-        `Artisan ${toTitle(cleanSeed)} Pendant - High-End Personalized Gift for Mom`,
-        `Custom Gold Knot ${toTitle(cleanSeed)} - Deluxe Message Card Gift Box`,
-        `Personalized Heirloom ${toTitle(cleanSeed)} Set - Custom Mahogany LED Light Box`
-      ];
-
-      // 2. Batch 2: High 24h Sold Velocity Leaders (Fast movers, high CVR, competitive prices)
-      const b2Titles = [
-        `Trending ${toTitle(cleanSeed)} Fast Seller - Custom Embroidered Apparel Gift`,
-        `Best Seller ${toTitle(cleanSeed)} Shirt - Personalized Name & Date Sleeve`,
-        `Hot 24h Trend ${toTitle(cleanSeed)} - Custom Embroidered Cuff Gift for Her`,
-        `Custom ${toTitle(cleanSeed)} Top Velocity Item - Personalized Birthday Gift`,
-        `Fast Shipping ${toTitle(cleanSeed)} - Custom Sleeve Name Embroidery Hoodie`,
-        `Popular ${toTitle(cleanSeed)} Gift - Dainty Personalized Initial Necklace`,
-        `Best Selling ${toTitle(cleanSeed)} - Regalos Para Mi Suegra / Mama Español`,
-        `Top Trend ${toTitle(cleanSeed)} - Custom Heart Pendant Message Card Box`,
-        `Personalized ${toTitle(cleanSeed)} Fast Mover - Cozy Gift for Family`,
-        `Custom ${toTitle(cleanSeed)} Trending Now - Personalized Keepsake Gift`
-      ];
-
-      // 3. Batch 3: Emerging Aesthetic Trend Competitors (New listings, Niche embroidery & Spanish sentiment)
-      const b3Titles = [
-        `Emerging Niche ${toTitle(cleanSeed)} - Custom Floral Birth Month Embroidery`,
-        `New Trend ${toTitle(cleanSeed)} - Regalos De Navidad Para La Suegra Collar`,
-        `Aesthetic Custom ${toTitle(cleanSeed)} - Minimalist Line Art Embroidery`,
-        `Niche Pioneer ${toTitle(cleanSeed)} - Personalized Birthstone Initial Charm`,
-        `Breakout Trend ${toTitle(cleanSeed)} - Custom Sleeve Cuff Name & Date`,
-        `Handmade Niche ${toTitle(cleanSeed)} - Spanish Sentiment Message Card Box`,
-        `New Arrival ${toTitle(cleanSeed)} - Personalized Handwritten Signature Pendant`,
-        `Custom Aesthetic ${toTitle(cleanSeed)} - Embroidered Wildflower Nursery Gift`,
-        `Niche Leader ${toTitle(cleanSeed)} - Regalo Especial Para Mama / Suegra`,
-        `Fresh Trend ${toTitle(cleanSeed)} - Custom Monogram Initial Keepsake`
-      ];
-
-      sellers = [];
-
-      // Add Batch 1
-      b1Titles.forEach((t, i) => {
-        sellers.push({
-          id: `etsy-b1-${i + 1}`,
-          title: t,
-          shopName: `Luxury Star Seller Studio #${i + 1}`,
-          country: 'United States',
-          listingAge: `${(i + 3) * 3} months`,
-          views24h: 950 + i * 40,
-          sold24h: 18 + i * 2,
-          favorites: 3200 + i * 150,
-          price: `$${(44.99 + i * 3.5).toFixed(2)}`,
-          rating: '4.9 ★ (4,800+)',
-          url: `https://www.etsy.com/search?q=${encodeURIComponent(cleanSeed)}`,
-          batchGroup: 'Batch 1: Top 10 Revenue Leaders',
-          batchRationale: 'Top 10 Sellers with highest AOV ($44-$69) and luxury wooden box sets.',
-          batchNumber: 1,
-          selected: true
-        });
-      });
-
-      // Add Batch 2
-      b2Titles.forEach((t, i) => {
-        sellers.push({
-          id: `etsy-b2-${i + 1}`,
-          title: t,
-          shopName: `Velocity Fast Mover Shop #${i + 1}`,
-          country: 'United States',
-          listingAge: `${(i + 1) * 2} months`,
-          views24h: 1850 + i * 80,
-          sold24h: 42 + i * 4,
-          favorites: 5100 + i * 220,
-          price: `$${(21.99 + i * 1.5).toFixed(2)}`,
-          rating: '4.8 ★ (8,900+)',
-          url: `https://www.etsy.com/search?q=${encodeURIComponent(cleanSeed)}`,
-          batchGroup: 'Batch 2: High 24h Sold Velocity Leaders',
-          batchRationale: 'Top 10 Sellers with highest 24h sales (42-78 sold/24h) and high buyer CVR.',
-          batchNumber: 2,
-          selected: false
-        });
-      });
-
-      // Add Batch 3
-      b3Titles.forEach((t, i) => {
-        sellers.push({
-          id: `etsy-b3-${i + 1}`,
-          title: t,
-          shopName: `Aesthetic Trend Pioneer #${i + 1}`,
-          country: 'United States',
-          listingAge: `${i + 1} months`,
-          views24h: 720 + i * 50,
-          sold24h: 15 + i * 3,
-          favorites: 1800 + i * 120,
-          price: `$${(28.99 + i * 2.0).toFixed(2)}`,
-          rating: '5.0 ★ (650+)',
-          url: `https://www.etsy.com/search?q=${encodeURIComponent(cleanSeed)}`,
-          batchGroup: 'Batch 3: Emerging Aesthetic Trend Competitors',
-          batchRationale: 'Top 10 Emerging Sellers introducing new custom embroidery and Spanish sentiment niches.',
-          batchNumber: 3,
-          selected: false
-        });
+    const parsed = parseEtsySearchResults({ htmlContent, csvRows });
+    if (!Array.isArray(parsed) || parsed.length === 0) {
+      return res.status(422).json({
+        success: false,
+        error: 'INSUFFICIENT_EVIDENCE',
+        evidenceState: 'NO_EVIDENCE',
+        dataBadge: 'NO_EVIDENCE',
+        seedPhrase,
+        count: 0,
+        batches: [],
+        sellers: [],
+        message: 'No seller/listing evidence was supplied or parsed. Add source evidence or a Staff manual assertion; synthetic Top Sellers are disabled.'
       });
     }
 
-    const batches = [
-      {
-        batchNumber: 1,
-        name: 'Batch 1: Top 10 Revenue Leaders',
-        rationale: 'Top 10 Sellers with highest AOV ($44-$69) and luxury wooden box sets.',
-        sellers: sellers.slice(0, 10)
-      },
-      {
-        batchNumber: 2,
-        name: 'Batch 2: High 24h Sold Velocity Leaders',
-        rationale: 'Top 10 Sellers with highest 24h sales (42-78 sold/24h) and high buyer CVR.',
-        sellers: sellers.slice(10, 20)
-      },
-      {
-        batchNumber: 3,
-        name: 'Batch 3: Emerging Aesthetic Trend Competitors',
-        rationale: 'Top 10 Emerging Sellers introducing new custom embroidery and Spanish sentiment niches.',
-        sellers: sellers.slice(20, 30)
-      }
-    ];
+    const sellers = parsed.map((seller, index) => ({
+      ...seller,
+      batchNumber: Math.floor(index / 10) + 1,
+      batchGroup: `Evidence Batch ${Math.floor(index / 10) + 1}`,
+      batchRationale: 'Grouped in source order only; no revenue/sales ranking is inferred.'
+    }));
+    const batches = [];
+    for (let start = 0; start < sellers.length; start += 10) {
+      const batchNumber = Math.floor(start / 10) + 1;
+      batches.push({
+        batchNumber,
+        name: `Evidence Batch ${batchNumber}`,
+        rationale: 'Source-order grouping; missing facts remain UNKNOWN.',
+        sellers: sellers.slice(start, start + 10)
+      });
+    }
 
     res.json({
       success: true,
       seedPhrase,
       count: sellers.length,
-      isSynthetic: true,
-      dataBadge: 'DEMO_SYNTHETIC',
+      isSynthetic: false,
+      evidenceState: 'OBSERVED',
+      dataBadge: 'SOURCE_EVIDENCE',
       batches,
       sellers
     });
-
-
-
   } catch (err) {
-    console.error('Scan search error:', err);
-    res.status(500).json({ error: err.message });
+    console.error('Seller evidence scan error:', err);
+    res.status(500).json({ success: false, error: 'SELLER_EVIDENCE_PARSE_FAILED' });
   }
 });
 
-// API: ETSY Deep Batch Learn 5-10 Selected Sellers
+// API: ETSY Evidence Batch Learn — SEO recommendation only, not Product Truth.
 app.post('/api/etsy/batch-learn', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
-  // Etsy-only endpoint (GPT PR-5 re-review finding, same class as P0-B1).
   if (req.user.marketplace !== 'ETSY') {
     return res.status(403).json({ success: false, error: 'MARKETPLACE_MISMATCH', message: 'This endpoint requires an Etsy workspace session.' });
   }
-  const { seedPhrase = 'nurse sweatshirt', category = 'Apparel: Sweatshirt', sellers = [] } = req.body;
 
-  try {
-    // Get active LLM config from DB
-    readWorkspaceLlmSettings(req.user, async (sErr, keys) => {
-      if (sErr) return res.status(503).json({ success: false, error: 'SECRET_DECRYPTION_FAILED' });
+  const {
+    seedPhrase = 'nurse sweatshirt',
+    category = 'Apparel: Sweatshirt',
+    sellers = [],
+    htmlContent = '',
+    csvRows = []
+  } = req.body || {};
 
+  // Provenance authority lives on the server:
+  // 1) Raw HTML/CSV is parsed here, so those rows may retain source-observed labels.
+  // 2) Browser-supplied seller objects are always downgraded to attributable
+  //    STAFF_MANUAL_ASSERTION rows, regardless of any evidenceSource sent by the client.
+  const parsedEvidence = parseEtsySearchResults({ htmlContent, csvRows })
+    .map(row => ({ ...row, selected: true }));
+  const assertedAt = new Date().toISOString();
+  const evidenceRows = parsedEvidence.length > 0
+    ? parsedEvidence
+    : sanitizeStaffManualAssertions(sellers, req.user.userId, assertedAt);
+
+  if (evidenceRows.length < 3) {
+    return res.status(422).json({
+      success: false,
+      error: 'INSUFFICIENT_EVIDENCE',
+      message: 'Provide at least 3 server-parsed source rows or explicit Staff manual assertions.'
+    });
+  }
+
+  readWorkspaceLlmSettings(req.user, async (settingsErr, keys) => {
+    if (settingsErr) return res.status(503).json({ success: false, error: 'SECRET_DECRYPTION_FAILED' });
+    try {
       const provider = keys.active_llm_provider || 'GEMINI';
-      const geminiKey = keys.gemini_api_key || process.env.GEMINI_API_KEY;
-      const openaiKey = keys.openai_api_key || process.env.OPENAI_API_KEY;
-      const claudeKey = keys.claude_api_key || process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY;
-
       const result = await synthesizeEtsyBatchLearnings({
         seedPhrase,
-        sellers,
+        sellers: evidenceRows,
         category,
         llmConfig: {
           provider,
-          keys: { gemini: geminiKey, openai: openaiKey, claude: claudeKey }
+          keys: {
+            gemini: keys.gemini_api_key || process.env.GEMINI_API_KEY,
+            openai: keys.openai_api_key || process.env.OPENAI_API_KEY,
+            claude: keys.claude_api_key || process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY
+          }
         }
       });
 
-      // Also save synthesized listing into Database
       const payload = {
-        amazonTitle: `Personalized ${category} - ${seedPhrase}`,
-        amazonBullets: [
-          `[PREMIUM CRAFTSMANSHIP] Handcrafted with top-tier materials.`,
-          `[CUSTOM DETAILS] Tailored specifically for ${seedPhrase}.`,
-          `[PERFECT GIFT READY] Packaged elegantly for immediate gifting.`,
-          `[DURABLE & COMFORTABLE] Built for daily wear and easy maintenance.`,
-          `[USA FAST DISPATCH] Handcrafted and shipped within 24-48 hours.`
-        ],
-        amazonSearchTerms: `${seedPhrase} gift gifts personalized custom handmade`.slice(0, 240),
-        amazonDescription: result.synthesizedListing.etsyDescription,
+        amazonTitle: '',
+        amazonBullets: [],
+        amazonSearchTerms: '',
+        amazonDescription: '',
         amazonAPlusPoints: [],
         etsyTitle: result.synthesizedListing.etsyTitle,
-        etsyDescription: result.synthesizedListing.etsyDescription,
+        etsyDescription: '',
         etsyTags: result.synthesizedListing.etsyTags,
-        etsyMaterials: result.synthesizedListing.etsyMaterials,
-        etsyPersonalizationInstructions: result.synthesizedListing.etsyPersonalizationInstructions,
+        etsyMaterials: [],
+        etsyPersonalizationInstructions: '',
         categoryName: category,
         generatedAt: new Date().toISOString(),
-        status: 'NEEDS_QA'
+        status: 'NEEDS_QA',
+        evidenceSummary: result.evidenceSummary,
+        truthWarnings: result.synthesizedListing.truthWarnings,
+        modelProvenance: 'ETSY_SELLER_EVIDENCE_MODEL'
       };
 
       db.run(
@@ -1553,22 +1309,28 @@ app.post('/api/etsy/batch-learn', requireAuth(db), requireRole(['OWNER', 'MANAGE
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [req.user.tenantId, req.user.workspaceId, req.user.marketplace, payload.amazonTitle, payload.etsyTitle, payload.categoryName, 'NEEDS_QA', req.user.userId, JSON.stringify(payload)],
         function(insertErr) {
-          if (insertErr) return res.status(500).json({ error: insertErr.message });
-          
+          if (insertErr) return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
           res.json({
             success: true,
             listingId: this.lastID,
             synthesized: result.synthesizedListing,
             insights: result.synthesizedListing.learnedInsights,
-            sellersLearned: result.sellerCount
+            sellersLearned: result.sellerCount,
+            evidenceSummary: result.evidenceSummary,
+            truthWarnings: result.synthesizedListing.truthWarnings
           });
         }
       );
-    });
-  } catch (err) {
-    console.error('Batch learn error:', err);
-    res.status(500).json({ error: err.message });
-  }
+    } catch (err) {
+      console.error('Etsy evidence learn error:', err);
+      const evidenceError = err.code === 'UNVERIFIED_SELLER_EVIDENCE' || err.code === 'INSUFFICIENT_EVIDENCE';
+      res.status(evidenceError ? 422 : 500).json({
+        success: false,
+        error: err.code || 'ETSY_EVIDENCE_LEARN_FAILED',
+        message: evidenceError ? err.message : 'Etsy evidence learning failed.'
+      });
+    }
+  });
 });
 
 // API: Amazon Quick Draft (Works directly from Seed Phrase, 10 ASINs, or Cerebro)
@@ -2524,7 +2286,9 @@ const backgroundAgentTimer = setInterval(() => {
               const kwPayload = topTags ? `${targetSeed}, ${topTags}` : targetSeed;
 
               // Not persisted to market_trends -- see note above (P0-B3).
-              const liveMsg = `[YTRENDS MCP LIVE] Discovered niche data for "${targetSeed}" (Rev: $${Math.round(overview.total_revenue_usd || 0)}, OppScore: ${overview.opportunity_score || 50}). Tags: ${topTags || targetSeed} -- not persisted, no workspace binding for background agents yet.`;
+              const revenueText = Number.isFinite(Number(overview.total_revenue_usd)) ? `${Math.round(Number(overview.total_revenue_usd))}` : 'UNKNOWN';
+              const opportunityText = Number.isFinite(Number(overview.opportunity_score)) ? String(Number(overview.opportunity_score)) : 'UNKNOWN';
+              const liveMsg = `[YTRENDS MCP LIVE] Discovered niche data for "${targetSeed}" (Rev: ${revenueText}, OppScore: ${opportunityText}). Tags: ${topTags || 'UNKNOWN'} -- not persisted, no workspace binding for background agents yet.`;
               db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, liveMsg]);
               db.run("UPDATE agents SET lastActive = CURRENT_TIMESTAMP WHERE id = ?", [agent.id]);
             })

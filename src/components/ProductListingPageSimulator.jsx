@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import AmazonRealProductPage from './AmazonRealProductPage';
 import EtsyRealProductPage from './EtsyRealProductPage';
 import { ShoppingBag, ShoppingCart, Layers, ArrowRight, Sparkles, Copy, Check } from 'lucide-react';
@@ -29,7 +29,9 @@ function CopyField({ label, value, onShowToast }) {
   );
 }
 
-export default function ProductListingPageSimulator({ currentListing, history = [], onSelectListing, onShowToast }) {
+const emptyChildRow = () => ({ sku: '', variationAttribute: '', childTitle: '', asin: '' });
+
+export default function ProductListingPageSimulator({ currentListing, history = [], onSelectListing, onUpdateListing, onShowToast }) {
   const [platformView, setPlatformView] = useState('AMAZON'); // 'AMAZON' | 'ETSY'
   const [activeListingId, setActiveListingId] = useState(currentListing?.dbId || currentListing?.id || (history[0]?.dbId || history[0]?.id));
   const [activeAsin, setActiveAsin] = useState('parent'); // 'parent' | childIndex
@@ -37,6 +39,56 @@ export default function ProductListingPageSimulator({ currentListing, history = 
   // Determine active listing
   const activeListing = (history.find(h => (h.dbId || h.id) === activeListingId)) || currentListing || history[0] || null;
   const activeChild = activeAsin !== 'parent' ? (activeListing?.variations || []).find(v => v.childIndex === activeAsin) : null;
+
+  // Variation Plan — Staff-entered planning fields only. No SKU/ASIN is ever
+  // generated here; child rows only persist once Staff actually types a SKU,
+  // and ASIN stays blank until Amazon really assigns one (owner instruction:
+  // never fabricate a fixed 4-variant structure, only offer 4 planning slots).
+  const [planParentSku, setPlanParentSku] = useState('');
+  const [planParentAsin, setPlanParentAsin] = useState('');
+  const [planVariationTheme, setPlanVariationTheme] = useState('');
+  const [planRelationshipPlan, setPlanRelationshipPlan] = useState('');
+  const [planChildren, setPlanChildren] = useState([emptyChildRow(), emptyChildRow(), emptyChildRow(), emptyChildRow()]);
+  const [savingPlan, setSavingPlan] = useState(false);
+
+  useEffect(() => {
+    if (!activeListing) return;
+    setPlanParentSku(activeListing.parentSku || '');
+    setPlanParentAsin(activeListing.parentAsin || '');
+    setPlanVariationTheme(activeListing.variationTheme || '');
+    setPlanRelationshipPlan(activeListing.relationshipPlan || '');
+    const existing = Array.isArray(activeListing.variations) ? activeListing.variations : [];
+    setPlanChildren([1, 2, 3, 4].map((childIndex) => {
+      const found = existing.find(v => v.childIndex === childIndex);
+      return found
+        ? { sku: found.sku || '', variationAttribute: found.variationAttribute || '', childTitle: found.childTitle || '', asin: found.asin || '' }
+        : emptyChildRow();
+    }));
+  }, [activeListing?.dbId]);
+
+  const updatePlanChild = (idx, field, value) => {
+    setPlanChildren(rows => rows.map((row, i) => i === idx ? { ...row, [field]: value } : row));
+  };
+
+  const handleSaveVariationPlan = async () => {
+    if (!activeListing?.dbId || !onUpdateListing) return;
+    setSavingPlan(true);
+    try {
+      const variations = planChildren
+        .map((row, idx) => ({ childIndex: idx + 1, sku: row.sku.trim(), variationAttribute: row.variationAttribute.trim(), childTitle: row.childTitle.trim(), asin: row.asin.trim() }))
+        .filter(row => row.sku); // only rows Staff actually filled in — never pad to 4
+      await onUpdateListing({
+        ...activeListing,
+        parentSku: planParentSku.trim(),
+        parentAsin: planParentAsin.trim(),
+        variationTheme: planVariationTheme.trim(),
+        relationshipPlan: planRelationshipPlan.trim(),
+        variations
+      });
+    } finally {
+      setSavingPlan(false);
+    }
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', marginTop: '16px' }}>
@@ -117,49 +169,88 @@ export default function ProductListingPageSimulator({ currentListing, history = 
         )}
       </div>
 
-      {/* Staff-facing Multi-ASIN Variations (1 Parent + 4 Child ASINs) */}
-      {platformView === 'AMAZON' && activeListing?.parentSku && (
+      {/* Staff-facing Variation Plan — planning only, never auto-generated.
+          Offers 4 child slots as a form convenience; only rows Staff fills
+          in with a real SKU get saved, and ASIN stays blank until Amazon
+          actually assigns one (owner decision 2026-08-20). */}
+      {platformView === 'AMAZON' && activeListing && (
         <div style={{ background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: '10px', padding: '14px 18px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '10px', fontWeight: 800, color: '#0369a1', fontSize: '0.9rem' }}>
             <Layers size={18} />
-            <span>Bộ Biến Thể Amazon Multi-ASIN (1 Parent + 4 Child ASINs)</span>
+            <span>Variation Plan (Parent + tối đa 4 Child SKU) — ASIN chỉ điền khi Amazon đã thực sự assign</span>
           </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '10px', marginBottom: '12px' }}>
+            <div>
+              <label style={{ fontSize: '0.72rem', fontWeight: 800, color: '#64748b', textTransform: 'uppercase' }}>Parent SKU (draft)</label>
+              <input className="form-input" style={{ width: '100%', fontSize: '0.82rem' }} value={planParentSku} onChange={(e) => setPlanParentSku(e.target.value)} placeholder="Chưa có" />
+            </div>
+            <div>
+              <label style={{ fontSize: '0.72rem', fontWeight: 800, color: '#64748b', textTransform: 'uppercase' }}>Parent ASIN</label>
+              <input className="form-input" style={{ width: '100%', fontSize: '0.82rem' }} value={planParentAsin} onChange={(e) => setPlanParentAsin(e.target.value)} placeholder="UNKNOWN — chờ Amazon assign" />
+            </div>
+            <div>
+              <label style={{ fontSize: '0.72rem', fontWeight: 800, color: '#64748b', textTransform: 'uppercase' }}>Variation Theme</label>
+              <input className="form-input" style={{ width: '100%', fontSize: '0.82rem' }} value={planVariationTheme} onChange={(e) => setPlanVariationTheme(e.target.value)} placeholder="Vd: Size, Color" />
+            </div>
+            <div>
+              <label style={{ fontSize: '0.72rem', fontWeight: 800, color: '#64748b', textTransform: 'uppercase' }}>Relationship Plan</label>
+              <input className="form-input" style={{ width: '100%', fontSize: '0.82rem' }} value={planRelationshipPlan} onChange={(e) => setPlanRelationshipPlan(e.target.value)} placeholder="Vd: chờ Product Truth xác nhận variant thật" />
+            </div>
+          </div>
+
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem', background: '#ffffff', borderRadius: '8px', overflow: 'hidden' }}>
               <thead>
                 <tr style={{ background: '#0284c7', color: '#ffffff', textAlign: 'left' }}>
-                  <th style={{ padding: '8px 12px' }}>Loại ASIN</th>
+                  <th style={{ padding: '8px 12px' }}>#</th>
                   <th style={{ padding: '8px 12px' }}>SKU</th>
                   <th style={{ padding: '8px 12px' }}>Thuộc Tính Biến Thể</th>
                   <th style={{ padding: '8px 12px' }}>Tiêu Đề</th>
+                  <th style={{ padding: '8px 12px' }}>ASIN</th>
                 </tr>
               </thead>
               <tbody>
-                <tr
-                  onClick={() => setActiveAsin('parent')}
-                  style={{ borderBottom: '1px solid #e2e8f0', cursor: 'pointer', background: activeAsin === 'parent' ? '#e0f2fe' : 'transparent' }}
-                >
-                  <td style={{ padding: '8px 12px', fontWeight: 800, color: '#0f766e' }}>👑 PARENT</td>
-                  <td style={{ padding: '8px 12px', fontWeight: 700, fontFamily: 'monospace' }}>{activeListing.parentSku}</td>
-                  <td style={{ padding: '8px 12px', color: '#64748b' }} colSpan={2}>Parent Catalog Anchor (Non-sellable Container)</td>
-                </tr>
-                {(activeListing.variations || []).map((v) => (
+                {planChildren.map((row, idx) => (
                   <tr
-                    key={v.childIndex}
-                    onClick={() => setActiveAsin(v.childIndex)}
-                    style={{ borderBottom: '1px solid #e2e8f0', cursor: 'pointer', background: activeAsin === v.childIndex ? '#e0f2fe' : 'transparent' }}
+                    key={idx}
+                    onClick={() => setActiveAsin(idx + 1)}
+                    style={{ borderBottom: '1px solid #e2e8f0', cursor: 'pointer', background: activeAsin === idx + 1 ? '#e0f2fe' : 'transparent' }}
                   >
-                    <td style={{ padding: '8px 12px', fontWeight: 700, color: '#0284c7' }}>💎 CHILD #{v.childIndex}</td>
-                    <td style={{ padding: '8px 12px', fontWeight: 700, fontFamily: 'monospace' }}>{v.sku}</td>
-                    <td style={{ padding: '8px 12px', fontWeight: 600, color: '#1e293b' }}>{v.variationAttribute}</td>
-                    <td style={{ padding: '8px 12px', color: '#334155' }}>{v.childTitle}</td>
+                    <td style={{ padding: '6px 12px', fontWeight: 700, color: '#0284c7' }}>💎 #{idx + 1}</td>
+                    <td style={{ padding: '4px 8px' }} onClick={(e) => e.stopPropagation()}>
+                      <input className="form-input" style={{ width: '100%', fontSize: '0.8rem' }} value={row.sku} onChange={(e) => updatePlanChild(idx, 'sku', e.target.value)} placeholder="Chưa có" />
+                    </td>
+                    <td style={{ padding: '4px 8px' }} onClick={(e) => e.stopPropagation()}>
+                      <input className="form-input" style={{ width: '100%', fontSize: '0.8rem' }} value={row.variationAttribute} onChange={(e) => updatePlanChild(idx, 'variationAttribute', e.target.value)} placeholder="Vd: Size L" />
+                    </td>
+                    <td style={{ padding: '4px 8px' }} onClick={(e) => e.stopPropagation()}>
+                      <input className="form-input" style={{ width: '100%', fontSize: '0.8rem' }} value={row.childTitle} onChange={(e) => updatePlanChild(idx, 'childTitle', e.target.value)} placeholder="Chưa có" />
+                    </td>
+                    <td style={{ padding: '4px 8px' }} onClick={(e) => e.stopPropagation()}>
+                      <input className="form-input" style={{ width: '100%', fontSize: '0.8rem' }} value={row.asin} onChange={(e) => updatePlanChild(idx, 'asin', e.target.value)} placeholder="UNKNOWN" />
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
 
-          {/* Raw copy-paste panel for the selected ASIN — for pasting directly into Seller Central */}
+          <div style={{ marginTop: '10px', display: 'flex', justifyContent: 'flex-end' }}>
+            <button
+              type="button"
+              onClick={handleSaveVariationPlan}
+              disabled={savingPlan || !activeListing?.dbId}
+              className="btn btn-primary btn-sm"
+              style={{ cursor: (savingPlan || !activeListing?.dbId) ? 'not-allowed' : 'pointer' }}
+            >
+              {savingPlan ? 'Đang lưu...' : 'Lưu Variation Plan'}
+            </button>
+          </div>
+
+          {/* Raw copy-paste panel — for pasting directly into Seller Central.
+              Was previously gated behind parentSku, which no AI draft ever
+              sets, so it was unreachable for every real listing; un-gated now. */}
           <div style={{ marginTop: '14px', paddingTop: '14px', borderTop: '1px dashed #bae6fd' }}>
             <div style={{ fontSize: '0.8rem', fontWeight: 800, color: '#0369a1', marginBottom: '8px' }}>
               📋 Raw Data — {activeAsin === 'parent' ? `PARENT (${activeListing.parentSku})` : `CHILD #${activeAsin} (${activeChild?.sku})`}

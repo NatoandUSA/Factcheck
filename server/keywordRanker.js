@@ -91,8 +91,14 @@ function rankKeywords(keywordList, contextCategory = 'Jewelry', seedPhrase = '')
       longTailMultiplier *= 0.3;
     }
 
+    // Soft priority boost, not a hard eligibility gate: a keyword with
+    // observed competingProducts under 1,000 ranks higher, but a higher-
+    // competition keyword is never excluded -- it may still be worth a
+    // Tier 2 slot (owner decision 2026-08-20).
+    const competitionMultiplier = (competingProducts !== null && competingProducts < 1000) ? 1.3 : 1.0;
+
     const baseSortScore = (sortVol * Math.max(1, 100 - sortDensity)) / (sortCpr + 1);
-    const sortScore = baseSortScore * longTailMultiplier * dynamicIntentMultiplier;
+    const sortScore = baseSortScore * longTailMultiplier * dynamicIntentMultiplier * competitionMultiplier;
 
     // Hardening rule: a decision/exposed score is allowed only when the full
     // research metric set expected by the upload pipeline is observed. This

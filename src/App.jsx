@@ -193,6 +193,39 @@ export default function App() {
     }
   };
 
+  const handleUpdateListing = async (updatedListing) => {
+    if (!updatedListing?.dbId) {
+      showToast('Error: Cannot save an offline listing.');
+      return;
+    }
+    try {
+      const res = await fetch(`/api/listings/${updatedListing.dbId}`, {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          expectedVersion: updatedListing.listingVersion || updatedListing.listing_version || 1,
+          amazonTitle: updatedListing.amazonTitle,
+          etsyTitle: updatedListing.etsyTitle,
+          categoryName: updatedListing.categoryName,
+          payload: updatedListing
+        })
+      });
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        throw new Error(errBody.message || errBody.error || 'Not authorized or server error');
+      }
+      const data = await res.json();
+
+      const saved = { ...updatedListing, status: data.status, listingVersion: data.listingVersion, ipVerdict: data.ipVerdict, ipHits: data.ipHits };
+      setCurrentListing(saved);
+      handleSaveToHistory(saved, false);
+      showToast('Đã lưu Variation Plan!');
+    } catch (e) {
+      showToast(`Lưu thất bại: ${e.message}`);
+    }
+  };
+
   return (
     <div>
       <Header
@@ -239,6 +272,7 @@ export default function App() {
             currentListing={currentListing}
             history={history}
             onSelectListing={handleSelectFromHistory}
+            onUpdateListing={handleUpdateListing}
             onShowToast={showToast}
           />
         )}

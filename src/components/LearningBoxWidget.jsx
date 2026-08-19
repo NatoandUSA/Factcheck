@@ -108,7 +108,7 @@ export default function LearningBoxWidget({ platform = 'AMAZON', onShowToast, sc
             </div>
             <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
               {isAmazon 
-                ? 'Dán link Amazon / ASIN hoặc văn bản đối thủ để Omni học Title Hook 75 chars, 5 Bullets [HOOKS], Search Terms 240 bytes và A+ Content.' 
+                ? 'Dán link Amazon / ASIN hoặc văn bản đối thủ để Omni học Title Hook 75 chars, 5 Bullets [HOOKS], Search Terms 249 bytes và A+ Content.'
                 : 'Dán link Etsy / Shop text đối thủ để Omni học Title <140 chars, đúng 13 Tags <=20 chars, và Storytelling Description.'}
             </div>
           </div>

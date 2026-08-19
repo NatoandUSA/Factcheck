@@ -1,10 +1,9 @@
 import React, { useState } from 'react';
 import { 
-  Zap, ShieldCheck, Layers, Brain, Database, Sparkles, TrendingUp, RefreshCw
+  Zap, ShieldCheck, Layers, Brain, Database, TrendingUp, RefreshCw
 } from 'lucide-react';
 import GoogleTrendsWidget from './GoogleTrendsWidget';
 import LearningBoxWidget from './LearningBoxWidget';
-import { parseJsonResponse } from '../utils/apiResponse';
 import AmazonPipelineWorkflow from './AmazonPipelineWorkflow';
 import MasterKeywordTable from './MasterKeywordTable';
 import UnifiedIpGateModal from './UnifiedIpGateModal';
@@ -15,37 +14,6 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
   const [selectedCategory, setSelectedCategory] = useState('Apparel: Sweatshirt');
   const [activeStage, setActiveStage] = useState('workflow'); // 'workflow' | 'research' | 'mkl'
   const [isIpModalOpen, setIsIpModalOpen] = useState(false);
-  const [quickGenerating, setQuickGenerating] = useState(false);
-
-  const handleQuickLaunch = async () => {
-    if (!seedPhrase.trim()) {
-      if (onShowToast) onShowToast('Vui lòng nhập Từ khóa Hạt nhân.');
-      return;
-    }
-    setQuickGenerating(true);
-    try {
-      const res = await fetch('/api/amazon/quick-draft', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          seedPhrase,
-          category: selectedCategory
-        })
-      });
-      const data = await parseJsonResponse(res);
-      if (!res.ok) throw new Error(data.error || 'Quick launch failed');
-      
-      if (onShowToast) onShowToast('🚀 Đã tạo thành công Amazon Listing A10!');
-      if (onSelectListing && data.listing) {
-        onSelectListing(data.listing);
-      }
-    } catch (err) {
-      if (onShowToast) onShowToast(`Lỗi tạo listing: ${err.message}`);
-    } finally {
-      setQuickGenerating(false);
-    }
-  };
 
   return (
     <div style={{ maxWidth: '1440px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '20px' }}>
@@ -133,26 +101,6 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
             <span>🛡️ IP Gate (2-in-1)</span>
           </button>
 
-          <button
-            onClick={handleQuickLaunch}
-            disabled={quickGenerating || !seedPhrase.trim()}
-            className="btn btn-primary"
-            style={{
-              background: '#0284c7',
-              fontWeight: 800,
-              padding: '9px 18px',
-              borderRadius: '8px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px',
-              cursor: (quickGenerating || !seedPhrase.trim()) ? 'not-allowed' : 'pointer',
-              marginTop: '15px',
-              boxShadow: '0 4px 12px rgba(2, 132, 199, 0.25)'
-            }}
-          >
-            <Sparkles size={16} className={quickGenerating ? 'spinner' : ''} />
-            <span>{quickGenerating ? 'Đang tạo...' : '🚀 Tạo Nhanh Listing A10'}</span>
-          </button>
         </div>
       </div>
 

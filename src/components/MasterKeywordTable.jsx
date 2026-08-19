@@ -54,7 +54,7 @@ export default function MasterKeywordTable({ marketplace = 'AMAZON', keywords: p
           </div>
           <p style={{ margin: '4px 0 0 0', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
             {isAmazon 
-              ? 'Từ khóa phân tầng theo thuật toán Amazon A10: 👑 Tier 1 (Title <=75 chars), 💎 Tier 2 (5 Bullets [HOOKS]), 📦 Tier 3 (Backend 240 bytes).'
+              ? 'Từ khóa phân tầng theo thuật toán Amazon A10: 👑 Tier 1 (Title <=75 chars), 💎 Tier 2 (5 Bullets [HOOKS]), 📦 Tier 3 (Backend 249 bytes).'
               : 'Bộ 13 Tags độc lập tuân thủ chính sách Etsy Search: 100% cụm từ đa âm <=20 ký tự, lọc sạch từ cấm IP.'}
           </p>
         </div>

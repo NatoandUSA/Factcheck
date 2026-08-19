@@ -115,27 +115,17 @@ export default function AmazonPipelineWorkflow({ seedPhrase, selectedCategory, o
       if (onShowToast) onShowToast('Vui lòng nhập Từ khóa Hạt nhân (Seed Phrase) ở đầu trang.');
       return;
     }
+    if (!cerebroSummary?.trendId || cerebroKeywords.length === 0) {
+      if (onShowToast) onShowToast('Nạp Cerebro ở Bước 3 trước khi tạo listing.');
+      return;
+    }
 
     setDrafting(true);
     try {
-      let res;
-      if (cerebroSummary?.trendId) {
-        res = await fetch(`/api/trends/${cerebroSummary.trendId}/draft`, {
-          method: 'POST',
-          credentials: 'include'
-        });
-      } else {
-        res = await fetch(`/api/amazon/quick-draft`, {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            seedPhrase,
-            category: selectedCategory,
-            asins: activeBatch?.asins || []
-          })
-        });
-      }
+      const res = await fetch(`/api/trends/${cerebroSummary.trendId}/draft`, {
+        method: 'POST',
+        credentials: 'include'
+      });
 
       const data = await parseJsonResponse(res);
       if (!res.ok) throw new Error(data.error || 'Drafting failed');
@@ -452,7 +442,7 @@ export default function AmazonPipelineWorkflow({ seedPhrase, selectedCategory, o
 
           <button
             onClick={handleGenerateListing}
-            disabled={drafting || !seedPhrase.trim()}
+            disabled={drafting || !seedPhrase.trim() || !cerebroSummary?.trendId || cerebroKeywords.length === 0}
             className="btn btn-primary"
             style={{
               background: '#7e22ce',
@@ -462,13 +452,19 @@ export default function AmazonPipelineWorkflow({ seedPhrase, selectedCategory, o
               alignItems: 'center',
               gap: '8px',
               boxShadow: '0 4px 14px rgba(126, 34, 206, 0.25)',
-              cursor: (drafting || !seedPhrase.trim()) ? 'not-allowed' : 'pointer'
+              cursor: (drafting || !seedPhrase.trim() || !cerebroSummary?.trendId || cerebroKeywords.length === 0) ? 'not-allowed' : 'pointer'
             }}
           >
             <Zap size={16} className={drafting ? 'spinner' : ''} />
             <span>{drafting ? 'Đang tạo Amazon Listing...' : '🚀 TẠO AMAZON LISTING (A10 + A+ CONTENT)'}</span>
           </button>
         </div>
+
+        {(cerebroKeywords.length === 0 || !cerebroSummary?.trendId) && (
+          <div style={{ fontSize: '0.8rem', color: '#9a3412', background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: '8px', padding: '8px 12px', marginBottom: '12px' }}>
+            ⚠️ Nạp Cerebro ở Bước 3 trước — chưa có Master Keyword List thì chưa thể tạo listing.
+          </div>
+        )}
 
         {/* Master Keyword Table */}
         <MasterKeywordTable marketplace="AMAZON" keywords={cerebroKeywords} onShowToast={onShowToast} />

@@ -689,15 +689,27 @@ app.patch('/api/listings/:id', requireAuth(db), requireRole(['OWNER', 'MANAGER',
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
     return res.status(400).json({ success: false, error: 'INVALID_LISTING_PAYLOAD' });
   }
-  const newPayload = { ...payload, amazonTitle, etsyTitle, categoryName };
+  let screened;
+  try {
+    // Client-provided ipVerdict/ipHits are never authoritative -- re-screen the
+    // exact post-edit content before persisting so an edit cannot bypass the
+    // IP gate after a previously benign draft was created (F-AL1: this route
+    // previously persisted the client's payload as-is with no re-screen at all).
+    screened = screenListingIpOrFail({ ...payload, amazonTitle, etsyTitle, categoryName });
+  } catch (error) {
+    console.error('IP Guard failed while updating listing:', error);
+    return res.status(503).json({ success: false, error: 'IP_GUARD_UNAVAILABLE' });
+  }
+  const newPayload = screened.listing;
+  const nextStatus = screened.result.verdict === 'BLOCK' ? 'IP_RISK_BLOCKED' : 'NEEDS_QA';
   db.run(
     `UPDATE listings
-     SET amazonTitle = ?, etsyTitle = ?, categoryName = ?, payload = ?, status = 'NEEDS_QA',
+     SET amazonTitle = ?, etsyTitle = ?, categoryName = ?, payload = ?, status = ?,
          listing_version = listing_version + 1, approved_version = NULL,
          approved_hash = NULL, approved_by = NULL, approved_at = NULL, product_truth_notes = NULL
      WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?
        AND listing_version = ?`,
-    [amazonTitle, etsyTitle, categoryName, JSON.stringify(newPayload), req.params.id,
+    [newPayload.amazonTitle, newPayload.etsyTitle, newPayload.categoryName, JSON.stringify(newPayload), nextStatus, req.params.id,
       req.user.tenantId, req.user.workspaceId, req.user.marketplace, expectedVersion],
     function onUpdate(err) {
       if (err) return res.status(500).json({ success: false, error: 'LISTING_UPDATE_FAILED' });
@@ -711,7 +723,13 @@ app.patch('/api/listings/:id', requireAuth(db), requireRole(['OWNER', 'MANAGER',
           }
         );
       }
-      res.json({ success: true, listingVersion: expectedVersion + 1, status: 'NEEDS_QA' });
+      res.json({
+        success: true,
+        listingVersion: expectedVersion + 1,
+        status: nextStatus,
+        ipVerdict: newPayload.ipVerdict,
+        ipHits: newPayload.ipHits
+      });
     }
   );
 });
@@ -748,9 +766,26 @@ app.patch('/api/listings/:id/approve', requireAuth(db), requireRole(['OWNER', 'M
       return res.status(412).json({ success: false, error: 'STALE_LISTING_VERSION' });
     }
 
-    let parsedPayload = {};
-    try { parsedPayload = JSON.parse(row.payload); } catch(e) {}
-    const payloadHash = approvalHash(parsedPayload);
+    let persistedPayload = {};
+    try { persistedPayload = JSON.parse(row.payload); } catch(e) {}
+    // The approval hash stays bound to the raw persisted payload -- export
+    // re-parses row.payload directly and compares against this same hash, so
+    // hashing a re-screened copy instead would make every future export
+    // fail with APPROVAL_INVALIDATED even on a legitimate approval.
+    const payloadHash = approvalHash(persistedPayload);
+
+    // Defense-in-depth: re-screen before the gate runs, in case row.payload
+    // is a legacy/tampered row whose ipVerdict/ipHits do not reflect its
+    // actual title/tag text (F-AL1). publishGate only trusts whatever
+    // ipVerdict/ipHits are already on the object -- it does not call IP
+    // Guard itself.
+    let parsedPayload;
+    try {
+      ({ listing: parsedPayload } = screenListingIpOrFail(persistedPayload));
+    } catch (error) {
+      console.error('IP Guard failed while approving listing:', error);
+      return res.status(503).json({ success: false, error: 'IP_GUARD_UNAVAILABLE' });
+    }
 
     // C5B Fix: Evaluate via Canonical Publish Gate (Fail-Closed)
     parsedPayload.status = 'MANAGER_APPROVED';
@@ -800,6 +835,18 @@ app.get('/api/listings/:id/export', requireAuth(db), requireRole(['OWNER', 'MANA
     if (!row.approved_version || row.approved_version !== row.listing_version ||
         !row.approved_hash || row.approved_hash !== approvalHash(parsedPayload)) {
       return res.status(409).json({ success: false, error: 'APPROVAL_INVALIDATED' });
+    }
+
+    // Defense-in-depth: re-screen before the gate runs. This protects a
+    // legacy row or one mutated outside the normal PATCH path whose stored
+    // ipVerdict/ipHits may not reflect its actual content (F-AL1). The hash
+    // check above already used the unscreened parsedPayload, so this
+    // reassignment cannot affect approval-hash validity.
+    try {
+      ({ listing: parsedPayload } = screenListingIpOrFail(parsedPayload));
+    } catch (error) {
+      console.error('IP Guard failed while exporting listing:', error);
+      return res.status(503).json({ success: false, error: 'IP_GUARD_UNAVAILABLE' });
     }
     parsedPayload.status = row.status;
     parsedPayload.productTruthNotes = row.product_truth_notes || '';
@@ -1170,6 +1217,31 @@ function safeJsonParse(str, fallback = {}) {
 // (independent adversarial-test finding: wrong-type model JSON).
 function safeStringArray(value) {
   return Array.isArray(value) ? value : [];
+}
+
+// Canonical server-side IP view. A client PATCH payload may contain
+// ipVerdict/ipHits keys, but they must never be trusted: the guard's derived
+// verdict and hits always replace whatever the client sent. Callers must fail
+// closed (503) if the guard cannot execute rather than silently persisting an
+// unscreened listing (F-AL1: PATCH never re-screened content, so a protected/
+// trademarked term could reach approve/export by simply omitting or forging
+// ipVerdict in the edit payload).
+function screenListingIpOrFail(listing) {
+  const candidate = {
+    ...(listing && typeof listing === 'object' ? listing : {}),
+    amazonTitle: typeof listing?.amazonTitle === 'string' ? listing.amazonTitle : '',
+    etsyTitle: typeof listing?.etsyTitle === 'string' ? listing.etsyTitle : '',
+    categoryName: typeof listing?.categoryName === 'string' ? listing.categoryName : ''
+  };
+  const result = ipGuard.screenListing(candidate);
+  return {
+    listing: {
+      ...candidate,
+      ipVerdict: result.verdict,
+      ipHits: Array.isArray(result.hits) ? result.hits : []
+    },
+    result
+  };
 }
 
 // API: Get all learned templates

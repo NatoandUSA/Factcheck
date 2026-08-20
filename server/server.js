@@ -2516,13 +2516,15 @@ if (fs.existsSync(distDir)) {
   app.use(express.static(distDir, {
     index: false,
     setHeaders: (res, filePath) => {
-      if (/-[A-Za-z0-9_]{6,}\.(js|css)$/.test(filePath)) {
-        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-      }
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
     }
   }));
   app.get(/^(?!\/api\/).*/, (req, res) => {
-    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
     res.sendFile(path.join(distDir, 'index.html'));
   });
 }

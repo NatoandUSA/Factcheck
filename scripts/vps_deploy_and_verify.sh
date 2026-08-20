@@ -129,13 +129,23 @@ echo "🟢 systemd service 'omniseller-web' is ACTIVE."
 # --- STEP 6: LOCAL & PUBLIC CLOUDFLARE SMOKE VALIDATION ---
 echo -e "\n[Step 6/7] Validating Local & Public Cloudflare Tunnel Health Endpoints..."
 
-# 6a. Local Loopback Check
-LOCAL_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3001/api/health || echo "000")
+# 6a. Local Loopback Check with Warmup Retry Loop (5 retries x 2s)
+PORT="${PORT:-3001}"
+LOCAL_STATUS="000"
+for i in {1..5}; do
+    LOCAL_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${PORT}/api/health" || echo "000")
+    if [ "${LOCAL_STATUS}" -eq 200 ]; then
+        break
+    fi
+    echo "Waiting for server startup on port ${PORT}... (attempt ${i}/5)"
+    sleep 2
+done
+
 if [ "${LOCAL_STATUS}" -ne 200 ]; then
     echo "🔴 Local health check failed: HTTP ${LOCAL_STATUS} (expected 200)."
     rollback
 fi
-echo "🟢 Local health probe http://127.0.0.1:3001/api/health returned 200 OK."
+echo "🟢 Local health probe http://127.0.0.1:${PORT}/api/health returned 200 OK."
 
 # 6b. Public Cloudflare Domain Check
 PUBLIC_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${PUBLIC_DOMAIN}/api/health" || echo "000")

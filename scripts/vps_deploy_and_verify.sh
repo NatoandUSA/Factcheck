@@ -1,13 +1,12 @@
 #!/bin/bash
 # ==============================================================================
 # OMNISELLER STUDIO — SYSTEMD & CLOUDFLARE TUNNEL VPS DEPLOYMENT & ROLLBACK RUNBOOK
-# Authoritative Production VPS Topology: etsy@51.79.200.65
+# Authoritative Production VPS Topology: etsy@51.79.200.65 (Ubuntu 22.04 LTS)
 # ==============================================================================
 
 set -e
 
 TARGET_BRANCH="codex/audit-closeout"
-TARGET_SHA="${1:-$(git rev-parse origin/${TARGET_BRANCH} 2>/dev/null || git rev-parse HEAD)}"
 PUBLIC_DOMAIN="https://omniseller.theglobalserviceteam.site"
 
 # Production Paths for etsy@zoyckgyolinux
@@ -19,7 +18,6 @@ BACKUP_DIR="${STATE_DIR}/backups"
 
 echo "========================================================================"
 echo "  OMNISELLER STUDIO — SYSTEMD & CLOUDFLARE TUNNEL VPS DEPLOYMENT RUNBOOK"
-echo "  Target SHA: ${TARGET_SHA}"
 echo "========================================================================"
 
 # --- STEP 1: PREFLIGHT ENVIRONMENT & PATH VERIFICATION ---
@@ -43,6 +41,13 @@ echo "🟢 App Directory: ${APP_DIR}"
 echo "🟢 Database Path: ${DB_PATH}"
 echo "🟢 Env File: ${ENV_FILE}"
 
+# Fetch remote tracking branch first before resolving target SHA
+echo "Fetching origin/${TARGET_BRANCH}..."
+git fetch origin "${TARGET_BRANCH}"
+
+TARGET_SHA="${1:-$(git rev-parse origin/${TARGET_BRANCH})}"
+echo "🟢 Target Release SHA: ${TARGET_SHA}"
+
 # --- STEP 2: SAFE SERVICE STOP & WAL-SAFE DB BACKUP ---
 echo -e "\n[Step 2/7] Stopping systemd service 'omniseller-web' & creating WAL-safe backup..."
 sudo systemctl stop omniseller-web || true
@@ -62,15 +67,16 @@ else
     echo "ℹ️ No existing database file found at ${DB_PATH}."
 fi
 
-# Function for clean rollback
+# Function for clean, fail-safe rollback
 rollback() {
-    echo -e "\n🔴 DEPLOYMENT OR SMOKE TEST FAILED! INITIATING SYSTEMD ROLLBACK..."
+    echo -e "\n🔴 DEPLOYMENT OR SMOKE TEST FAILED! INITIATING FAIL-CLOSED SYSTEMD ROLLBACK..."
     sudo systemctl stop omniseller-web || true
     
     echo "Restoring baseline Git SHA ${BASELINE_SHA}..."
     cd "${APP_DIR}"
     git checkout -f "${BASELINE_SHA}"
-    npm ci --production=false
+    npm ci --build-from-source --production=false
+    node -e "require('./node_modules/sqlite3'); console.log('🟢 Native sqlite3 verified on rollback baseline.');"
     npm run build
     
     if [ -d "${BACKUP_SUBDIR}" ]; then
@@ -87,25 +93,22 @@ rollback() {
 }
 
 # --- STEP 3: CODE CHECKOUT TO TARGET SHA ---
-echo -e "\n[Step 3/7] Fetching & checking out target SHA ${TARGET_SHA}..."
-git fetch origin "${TARGET_BRANCH}"
+echo -e "\n[Step 3/7] Checking out exact target SHA ${TARGET_SHA}..."
 git checkout -f "${TARGET_SHA}" || { rollback; }
 
 DEPLOYED_SHA=$(git rev-parse HEAD)
+if [ "${DEPLOYED_SHA}" != "${TARGET_SHA}" ]; then
+    echo "🔴 ERROR: Git checkout failed. Worktree at ${DEPLOYED_SHA}, expected ${TARGET_SHA}."
+    rollback
+fi
 echo "🟢 Verified checkout on exact SHA: ${DEPLOYED_SHA}"
 
-# --- STEP 4: DEPENDENCY INSTALL, NATIVE REBUILD & VITE BUILD ---
-echo -e "\n[Step 4/7] Installing dependencies & rebuilding native modules for Ubuntu 22.04 GLIBC..."
-npm ci --production=false || { rollback; }
-
-echo "Rebuilding native SQLite addon from source for host OS GLIBC compatibility..."
-(cd server && npm rebuild sqlite3 --build-from-source) || (npm rebuild sqlite3 --build-from-source) || { rollback; }
+# --- STEP 4: DEPENDENCY INSTALL, NATIVE BUILD FROM SOURCE & VITE BUILD ---
+echo -e "\n[Step 4/7] Installing dependencies & building native modules from source (GLIBC_2.35)..."
+npm ci --build-from-source --production=false || { rollback; }
 
 echo "Verifying native module loading compatibility..."
-node -e "require('./server/node_modules/sqlite3'); console.log('🟢 Native sqlite3 module loaded cleanly.');" || {
-    echo "🔴 Native module check failed. Retrying force rebuild from source..."
-    npm rebuild sqlite3 --build-from-source --force || { rollback; }
-}
+node -e "require('./node_modules/sqlite3'); console.log('🟢 Native sqlite3 module verified.');" || { rollback; }
 
 echo "Building Vite production bundle..."
 npm run build || { rollback; }
@@ -137,17 +140,16 @@ echo "🟢 Local health probe http://127.0.0.1:3001/api/health returned 200 OK."
 # 6b. Public Cloudflare Domain Check
 PUBLIC_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${PUBLIC_DOMAIN}/api/health" || echo "000")
 if [ "${PUBLIC_STATUS}" -ne 200 ]; then
-    echo "⚠️ Warning: Public Cloudflare health check returned HTTP ${PUBLIC_STATUS}."
-    echo "Retrying in 5 seconds for Cloudflare Tunnel resolution..."
+    echo "⚠️ Public Cloudflare health check returned HTTP ${PUBLIC_STATUS}. Retrying in 5s..."
     sleep 5
     PUBLIC_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${PUBLIC_DOMAIN}/api/health" || echo "000")
 fi
 
-if [ "${PUBLIC_STATUS}" -eq 200 ]; then
-    echo "🟢 Public Cloudflare health probe ${PUBLIC_DOMAIN}/api/health returned 200 OK."
-else
-    echo "⚠️ Public Cloudflare Tunnel returned HTTP ${PUBLIC_STATUS} (local 3001 passed)."
+if [ "${PUBLIC_STATUS}" -ne 200 ]; then
+    echo "🔴 Public Cloudflare health check failed: HTTP ${PUBLIC_STATUS} (expected 200)."
+    rollback
 fi
+echo "🟢 Public Cloudflare health probe ${PUBLIC_DOMAIN}/api/health returned 200 OK."
 
 # --- STEP 7: DEPLOYMENT SUCCESS DECLARATION ---
 echo -e "\n========================================================================"

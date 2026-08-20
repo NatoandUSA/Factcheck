@@ -8,7 +8,7 @@ on:
 
 jobs:
   test-and-build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
 
     strategy:
       matrix:
@@ -24,13 +24,11 @@ jobs:
           node-version: ${{ matrix.node-version }}
           cache: 'npm'
 
-      - name: Install Dependencies & Rebuild Native Addons
-        run: |
-          npm ci
-          cd server && npm rebuild sqlite3 --build-from-source && cd ..
+      - name: Install Dependencies & Build Native Addons From Source
+        run: npm ci --build-from-source
 
       - name: Verify Native SQLite Addon Loading
-        run: node -e "require('./server/node_modules/sqlite3'); console.log('🟢 Native sqlite3 addon verified in CI');"
+        run: node -e "require('./node_modules/sqlite3'); console.log('🟢 Native sqlite3 addon verified in CI');"
 
       - name: Run Canonical Test Suite (23/23 Test Files)
         run: npm test

@@ -1076,15 +1076,16 @@ app.get('/api/mcp/niche', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SEL
 // no DB write if the live source is unavailable or contains no usable tags.
 app.post('/api/mcp/pull-etsy', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
   if (req.user.marketplace !== 'ETSY') {
-    return res.status(403).json({ success: false, error: 'MARKETPLACE_MISMATCH', message: 'This endpoint requires an Etsy workspace session.' });
+    return res.status(403).json({ success: false, error: 'MARKETPLACE_MISMATCH', message: 'Tác vụ này yêu cầu Session Workspace Etsy. Vui lòng chuyển Workspace phiên làm việc sang Etsy.' });
   }
   const { seed = 'custom gift', category = 'Custom Gift' } = req.body;
+  const cleanSeed = String(seed).trim().toLowerCase();
 
   let mcpData;
   try {
-    mcpData = await ytrendsMcp.exploreNiche(seed);
+    mcpData = await ytrendsMcp.exploreNiche(cleanSeed);
   } catch (mcpErr) {
-    console.warn('YTrends MCP unavailable for:', seed, mcpErr.message);
+    console.warn('YTrends MCP unavailable for:', cleanSeed, mcpErr.message);
     return res.status(503).json({
       success: false,
       error: 'ETSY_MCP_UNAVAILABLE',
@@ -1094,10 +1095,10 @@ app.post('/api/mcp/pull-etsy', requireAuth(db), requireRole(['OWNER', 'MANAGER',
 
   const liveData = mcpData?.data;
   if (!liveData || typeof liveData !== 'object') {
-    return res.status(422).json({
+    return res.status(503).json({
       success: false,
-      error: 'INSUFFICIENT_EVIDENCE',
-      message: 'The live MCP response did not contain usable Etsy evidence.'
+      error: 'ETSY_MCP_UNAVAILABLE',
+      message: 'Live Etsy MCP data is unavailable. No fallback market data was generated or persisted.'
     });
   }
 
@@ -1108,6 +1109,7 @@ app.post('/api/mcp/pull-etsy', requireAuth(db), requireRole(['OWNER', 'MANAGER',
     const clean = typeof text === 'string' ? text.trim().toLowerCase() : '';
     if (clean && !extracted.includes(clean)) extracted.push(clean);
   };
+
   (Array.isArray(liveData.adjacent_tags) ? liveData.adjacent_tags : []).forEach(addObservedKeyword);
   (Array.isArray(liveData.related_keywords) ? liveData.related_keywords : []).forEach(addObservedKeyword);
 
@@ -1148,7 +1150,7 @@ app.post('/api/mcp/pull-etsy', requireAuth(db), requireRole(['OWNER', 'MANAGER',
 
   db.run(
     "INSERT INTO market_trends (category, trending_keywords, keywords_detailed, marketplace, tenant_id, workspace_id) VALUES (?, ?, ?, ?, ?, ?)",
-    [category, trendingKeywordsStr, JSON.stringify(keywordsDetailed), req.user.marketplace, req.user.tenantId, req.user.workspaceId],
+    [category, trendingKeywordsStr, JSON.stringify(keywordsDetailed), 'ETSY', req.user.tenantId, req.user.workspaceId],
     function(dbErr) {
       if (dbErr) return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
       const trendId = this.lastID;
@@ -1729,9 +1731,7 @@ Return ONLY raw JSON without markdown code fences:
 
 // API: Get Master Keyword List Across Processed Files (Marketplace-specific separation)
 app.get('/api/master-keywords', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
-  // Marketplace is server-derived from the authenticated session — a query
-  // parameter must never be able to select a different marketplace's data
-  // (GPT PR-5 review finding P0-B1).
+  // Marketplace is server-derived from the authenticated session
   const targetMarket = req.user.marketplace;
 
   db.all(

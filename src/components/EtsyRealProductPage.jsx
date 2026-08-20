@@ -156,42 +156,27 @@ export default function EtsyRealProductPage({ listing, onShowToast }) {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div>
                 <div style={{ fontSize: '0.85rem', color: '#595959', textDecoration: 'underline', cursor: 'pointer' }}>
-                  ArtisanCraftStudioUS
+                  {listing.shopName || '[Shop Name: Unset]'}
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '2px' }}>
-                  <div style={{ display: 'flex', color: '#222' }}>
-                    <Star size={14} fill="#222" />
-                    <Star size={14} fill="#222" />
-                    <Star size={14} fill="#222" />
-                    <Star size={14} fill="#222" />
-                    <Star size={14} fill="#222" />
-                  </div>
-                  <span style={{ fontSize: '0.8rem', color: '#595959' }}>(12,482 sales)</span>
+                  <span style={{ background: '#f1f5f9', color: '#64748b', fontSize: '0.7rem', padding: '2px 6px', borderRadius: '4px', fontWeight: 700 }}>
+                    SIMULATION ONLY (No live Etsy sales data)
+                  </span>
                 </div>
-              </div>
-
-              <div style={{ display: 'flex', alignItems: 'center', gap: '4px', background: '#f5eaec', color: '#a61a30', padding: '4px 8px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: 700 }}>
-                <Award size={14} />
-                <span>Star Seller</span>
               </div>
             </div>
 
             {/* Title */}
             <h1 style={{ fontSize: '1.2rem', fontWeight: 400, lineHeight: 1.4, margin: '0', color: '#222' }}>
-              {listing.etsyTitle || 'Personalized Gift for Loved Ones'}
+              {listing.etsyTitle || '[Etsy Title Pending Generation]'}
             </h1>
 
             {/* Price & Cart Urgency */}
             <div style={{ borderBottom: '1px solid #e1e3df', paddingBottom: '12px' }}>
               <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
-                <span style={{ fontSize: '1.6rem', fontWeight: 700, color: '#222' }}>$24.99</span>
-                <span style={{ fontSize: '0.9rem', color: '#595959', textDecoration: 'line-through' }}>$34.99</span>
-                <span style={{ background: '#d4e9d7', color: '#10662e', fontSize: '0.75rem', fontWeight: 700, padding: '2px 6px', borderRadius: '4px' }}>
-                  28% OFF sale
+                <span style={{ fontSize: '0.9rem', color: '#64748b', fontStyle: 'italic' }}>
+                  Price: [NOT SET — PENDING ETSY LISTING EXPORT]
                 </span>
-              </div>
-              <div style={{ fontSize: '0.8rem', color: '#a61a30', fontWeight: 600, marginTop: '4px' }}>
-                🔥 In demand. 24 people bought this in the last 24 hours.
               </div>
             </div>
 

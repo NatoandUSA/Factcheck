@@ -13,6 +13,7 @@
  * must be justified per-route, not a default.
  */
 const ROUTES = [
+  { method: 'GET', path: '/api/health', public: true, note: 'health check endpoint for monitoring and reverse proxy probes' },
   { method: 'POST', path: '/api/auth/login', public: true, note: 'login must be reachable unauthenticated' },
   { method: 'POST', path: '/api/auth/logout', public: true, note: 'clears cookie regardless of session validity' },
   { method: 'GET', path: '/api/auth/me', public: false },

@@ -75,9 +75,15 @@ async function learnFromListing({ url = '', rawText = '', category = 'Custom Gif
     }
   }
 
-  // Fallback defaults if title is still empty
+  // Fails closed if no valid title or raw text could be extracted
   if (!title) {
-    title = `Top Selling ${category} Best Seller Sample`;
+    return {
+      success: false,
+      code: 'INSUFFICIENT_EVIDENCE',
+      error: 'Could not extract listing DNA from provided URL or text. Valid listing text or accessible URL required.',
+      marketplace: resolvedMarketplace,
+      category
+    };
   }
 
   // 3. Extract Marketplace Specific Structural DNA
@@ -90,10 +96,11 @@ async function learnFromListing({ url = '', rawText = '', category = 'Custom Gif
 
     styleDna = {
       marketplace: 'AMAZON',
+      provenance: 'MODELED_STRUCTURAL_DNA',
       titleFrontLoadedHook: title.slice(0, 75),
       titleCharLength: title.length,
-      bulletHookPatterns: bulletHooks.length > 0 ? bulletHooks : ['[EMOTIONAL HOOK]', '[PREMIUM MATERIALS]', '[PERFECT FIT/SIZE]', '[GIFT READY BOX]', '[CARE INSTRUCTIONS]'],
-      searchTermsRule: '240 Bytes, Space-separated generic terms, No commas, No duplicate title keywords',
+      bulletHookPatterns: bulletHooks.length > 0 ? bulletHooks : ['[FEATURE HOOK]'],
+      searchTermsRule: '249 Bytes, Space-separated generic terms, No commas, No duplicate title keywords',
       aPlusModulesRequired: ['Hero Banner Story', 'Three Feature Highlights', 'Specifications & Unboxing'],
       recommendedTone: 'Direct, Feature-Rich, Hook-Driven Amazon A10 Format'
     };
@@ -111,9 +118,10 @@ async function learnFromListing({ url = '', rawText = '', category = 'Custom Gif
 
     styleDna = {
       marketplace: 'ETSY',
+      provenance: 'MODELED_STRUCTURAL_DNA',
       titleFormat: 'Under 140 Chars, Multi-phrase Long-tail Keywords',
       exact13Tags: tags.slice(0, 13),
-      descriptionSections: ['✨ ITEM DETAILS', '✦ SPECIFICATIONS & SIZING', '✦ HOW TO ORDER & PERSONALIZATION', '✦ CARE INSTRUCTIONS', '✦ US WORKSHOP PROMISE'],
+      descriptionSections: ['✨ ITEM DETAILS', '✦ SPECIFICATIONS & SIZING', '✦ HOW TO ORDER & PERSONALIZATION', '✦ CARE INSTRUCTIONS', '✦ WORKSHOP DETAILS'],
       personalizationGuidance: 'Clear Buyer Instructions (Names, Dates, Custom Options)',
       recommendedTone: 'Handmade, Artisan, Emotional Storytelling'
     };
@@ -121,6 +129,7 @@ async function learnFromListing({ url = '', rawText = '', category = 'Custom Gif
 
   return {
     success: true,
+    provenance: 'MODELED_STRUCTURAL_DNA',
     url: extractedUrl || 'Raw Text Input',
     marketplace: resolvedMarketplace,
     category,
@@ -130,8 +139,8 @@ async function learnFromListing({ url = '', rawText = '', category = 'Custom Gif
     description: description.slice(0, 1000),
     styleDna,
     learnedRulesSummary: resolvedMarketplace === 'AMAZON'
-      ? `Đã học DNA Amazon: Title Hook (${title.slice(0, 75)}), 5 Bullet Hooks, và A+ Content Model.`
-      : `Đã học DNA Etsy: Title (<140 chars), ${tags.length || 13} Tags chuẩn <=20 chars, và Story Structure.`
+      ? `Đã phân tích cấu trúc Amazon (Modeled): Title Hook (${title.slice(0, 75)}), Bullet Hooks, và A+ Content Format.`
+      : `Đã phân tích cấu trúc Etsy (Modeled): Title (<140 chars), ${tags.length || 13} Tags chuẩn <=20 chars, và Story Structure.`
   };
 }
 

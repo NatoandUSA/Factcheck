@@ -172,30 +172,21 @@ export default function AmazonRealProductPage({ listing, onShowToast }) {
               
               <div style={{ display: 'flex', alignItems: 'center', gap: '14px', borderBottom: '1px solid #e7e7e7', paddingBottom: '10px', marginBottom: '10px' }}>
                 <div style={{ color: '#007185', fontSize: '0.85rem', cursor: 'pointer', fontWeight: 500 }}>Brand: {listing.categoryName || 'Custom Store'}</div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '2px', color: '#de7921' }}>
-                  <Star size={15} fill="currentColor" />
-                  <Star size={15} fill="currentColor" />
-                  <Star size={15} fill="currentColor" />
-                  <Star size={15} fill="currentColor" />
-                  <Star size={15} fill="currentColor" />
-                  <span style={{ color: '#007185', marginLeft: '4px', fontSize: '0.85rem' }}><ChevronDown size={12}/> 4,892 ratings</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <span style={{ background: '#f1f5f9', color: '#64748b', fontSize: '0.7rem', padding: '2px 6px', borderRadius: '4px', fontWeight: 700 }}>
+                    SIMULATION ONLY (No live review data)
+                  </span>
                 </div>
-                <span style={{ background: '#232f3e', color: '#fff', fontSize: '0.7rem', padding: '2px 6px', borderRadius: '3px', fontWeight: 700 }}>
-                  Amazon's <span style={{ color: '#f59e0b' }}>Choice</span>
-                </span>
               </div>
 
               {/* Price & Deal */}
               <div style={{ display: 'flex', alignItems: 'baseline', gap: '4px', marginBottom: '12px' }}>
-                <span style={{ fontSize: '0.8rem', position: 'relative', top: '-0.5em' }}>$</span>
-                <span style={{ fontSize: '1.75rem', fontWeight: '500' }}>29</span>
-                <span style={{ fontSize: '0.8rem', position: 'relative', top: '-0.5em' }}>99</span>
-                <span style={{ fontSize: '0.85rem', color: '#565959', marginLeft: '8px' }}>List Price: <span style={{ textDecoration: 'line-through' }}>$39.99</span> (25% off)</span>
+                <span style={{ fontSize: '0.85rem', color: '#64748b', fontStyle: 'italic' }}>Price: [NOT SET — PENDING LISTING EXPORT]</span>
               </div>
 
-              {/* Prime Banner */}
-              <div style={{ background: '#f6f6f6', padding: '8px 12px', borderRadius: '4px', marginBottom: '14px', fontSize: '0.85rem' }}>
-                <span style={{ fontWeight: 'bold' }}>Prime</span> <span style={{ color: '#007185' }}>FREE delivery</span> Tomorrow by 8 AM
+              {/* Fulfillment & Delivery Note */}
+              <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', padding: '8px 12px', borderRadius: '4px', marginBottom: '14px', fontSize: '0.8rem', color: '#64748b' }}>
+                ℹ️ Fulfillment & shipping options will be calculated by Amazon Seller Central upon upload.
               </div>
 
               {/* 5 Feature Bullets */}
@@ -206,7 +197,7 @@ export default function AmazonRealProductPage({ listing, onShowToast }) {
                     <li key={idx} style={{ marginBottom: '8px' }}>{bullet}</li>
                   ))}
                   {(!listing.amazonBullets || listing.amazonBullets.length === 0) && (
-                    <li>5 Bullet Points will appear here.</li>
+                    <li style={{ color: '#94a3b8', fontStyle: 'italic' }}>5 Bullet Points will appear here once generated.</li>
                   )}
                 </ul>
               </div>
@@ -214,18 +205,14 @@ export default function AmazonRealProductPage({ listing, onShowToast }) {
 
             {/* 3. Right Buy Box Column */}
             <div style={{ flex: '0 0 210px', border: '1px solid #d5d9d9', borderRadius: '8px', padding: '16px', height: 'fit-content', background: '#fafafa' }}>
-              <div style={{ fontSize: '1.25rem', fontWeight: 'bold', marginBottom: '6px', color: '#b12704' }}>$29.99</div>
-              <div style={{ color: '#007185', fontSize: '0.85rem', marginBottom: '8px' }}>FREE Returns</div>
-              <div style={{ color: '#007600', fontSize: '1rem', fontWeight: 600, marginBottom: '12px' }}>In Stock</div>
-              <div style={{ fontSize: '0.8rem', color: '#565959', marginBottom: '12px' }}>
-                Ships from: <strong>Amazon</strong><br/>
-                Sold by: <strong>USA Custom Workshop</strong>
-              </div>
-              <button style={{ width: '100%', background: '#ffd814', border: '1px solid #fcd200', borderRadius: '100px', padding: '8px', cursor: 'pointer', marginBottom: '8px', fontWeight: 600, fontSize: '0.85rem' }}>
-                Add to Cart
+              <div style={{ fontSize: '0.75rem', fontWeight: 800, color: '#64748b', textTransform: 'uppercase', marginBottom: '8px' }}>Buy Box Preview</div>
+              <div style={{ fontSize: '0.85rem', color: '#64748b', marginBottom: '8px', fontStyle: 'italic' }}>Price & Shipping set on Amazon</div>
+              <div style={{ color: '#007600', fontSize: '0.85rem', fontWeight: 600, marginBottom: '12px' }}>Draft Ready for Export</div>
+              <button disabled style={{ width: '100%', background: '#e2e8f0', border: '1px solid #cbd5e1', borderRadius: '100px', padding: '8px', color: '#94a3b8', fontSize: '0.85rem', fontWeight: 600, cursor: 'not-allowed', marginBottom: '8px' }}>
+                Add to Cart (Preview)
               </button>
-              <button style={{ width: '100%', background: '#ffa41c', border: '1px solid #ff8f00', borderRadius: '100px', padding: '8px', cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem' }}>
-                Buy Now
+              <button disabled style={{ width: '100%', background: '#e2e8f0', border: '1px solid #cbd5e1', borderRadius: '100px', padding: '8px', color: '#94a3b8', fontSize: '0.85rem', fontWeight: 600, cursor: 'not-allowed' }}>
+                Buy Now (Preview)
               </button>
             </div>
           </div>
@@ -249,32 +236,32 @@ export default function AmazonRealProductPage({ listing, onShowToast }) {
             {/* Brand Hero Story Banner */}
             <div style={{ background: 'linear-gradient(135deg, #1e293b, #0f172a)', color: '#fff', padding: '32px 24px', borderRadius: '8px', marginBottom: '20px', textAlign: 'center' }}>
               <div style={{ fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '2px', color: '#f59e0b', fontWeight: 800, marginBottom: '6px' }}>
-                Artisan Heritage & Dedication
+                [A+ Brand Story Section]
               </div>
               <h3 style={{ fontSize: '1.4rem', fontWeight: 800, color: '#fff', margin: '0 0 10px 0' }}>
-                {listing.amazonAPlusContent?.brandStoryHeadline || 'Crafting Unforgettable Milestone Keepsakes'}
+                {listing.amazonAPlusContent?.brandStoryHeadline || '[A+ Brand Story Headline: Unset]'}
               </h3>
               <p style={{ fontSize: '0.9rem', color: '#cbd5e1', maxWidth: '750px', margin: '0 auto', lineHeight: 1.6 }}>
-                {listing.amazonAPlusContent?.brandStoryBody || 'Every personalized piece is handmade in the USA with precision optical laser clarity and solid sustainable timber.'}
+                {listing.amazonAPlusContent?.brandStoryBody || '[A+ Brand Story Body: Unset — Generates from verified Product Truth grounding.]'}
               </p>
             </div>
 
-            {/* 3-Feature Cards */}
+            {/* A+ Feature Modules (Layout Preview) */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '16px', marginBottom: '20px' }}>
               <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', padding: '18px', borderRadius: '8px', textAlign: 'center' }}>
                 <ShieldCheck size={26} style={{ color: '#059669', margin: '0 auto 8px auto' }} />
-                <h4 style={{ fontSize: '0.95rem', fontWeight: 700, margin: '0 0 4px 0' }}>100% Optical Acrylic</h4>
-                <p style={{ fontSize: '0.8rem', color: '#64748b', margin: 0 }}>Crystal clear, shatterproof & scratch-resistant.</p>
+                <h4 style={{ fontSize: '0.95rem', fontWeight: 700, margin: '0 0 4px 0' }}>A+ Module 1: Material & Specs</h4>
+                <p style={{ fontSize: '0.8rem', color: '#64748b', margin: 0 }}>Grounding facts populate this card upon generation.</p>
               </div>
               <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', padding: '18px', borderRadius: '8px', textAlign: 'center' }}>
                 <Heart size={26} style={{ color: '#e11d48', margin: '0 auto 8px auto' }} />
-                <h4 style={{ fontSize: '0.95rem', fontWeight: 700, margin: '0 0 4px 0' }}>Heartfelt Gift Packaging</h4>
-                <p style={{ fontSize: '0.8rem', color: '#64748b', margin: 0 }}>Packaged in an elegant foil embossed presentation box.</p>
+                <h4 style={{ fontSize: '0.95rem', fontWeight: 700, margin: '0 0 4px 0' }}>A+ Module 2: Gift & Occasion</h4>
+                <p style={{ fontSize: '0.8rem', color: '#64748b', margin: 0 }}>Gift/occasion positioning populates here.</p>
               </div>
               <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', padding: '18px', borderRadius: '8px', textAlign: 'center' }}>
                 <Award size={26} style={{ color: '#d97706', margin: '0 auto 8px auto' }} />
-                <h4 style={{ fontSize: '0.95rem', fontWeight: 700, margin: '0 0 4px 0' }}>Fade-Proof Laser Detail</h4>
-                <p style={{ fontSize: '0.8rem', color: '#64748b', margin: 0 }}>High definition laser depth that lasts a lifetime.</p>
+                <h4 style={{ fontSize: '0.95rem', fontWeight: 700, margin: '0 0 4px 0' }}>A+ Module 3: Craftsmanship</h4>
+                <p style={{ fontSize: '0.8rem', color: '#64748b', margin: 0 }}>Process and origin details populate here.</p>
               </div>
             </div>
           </div>

@@ -202,12 +202,12 @@ async function runMigrations(db) {
     }
   }
 
-  const productTruthApplied = await all(db, 'SELECT id FROM schema_migrations WHERE id = ?', [PRODUCT_TRUTH_ATTESTATION_MIGRATION]);
-  if (productTruthApplied.length === 0) {
+  const agentScopeApplied = await all(db, 'SELECT id FROM schema_migrations WHERE id = ?', [AGENT_WORKSPACE_SCOPE_MIGRATION]);
+  if (agentScopeApplied.length === 0) {
     await run(db, 'BEGIN IMMEDIATE');
     try {
-      await migrateProductTruthAttestation(db);
-      await run(db, 'INSERT INTO schema_migrations (id) VALUES (?)', [PRODUCT_TRUTH_ATTESTATION_MIGRATION]);
+      await migrateAgentWorkspaceScope(db);
+      await run(db, 'INSERT INTO schema_migrations (id) VALUES (?)', [AGENT_WORKSPACE_SCOPE_MIGRATION]);
       await run(db, 'COMMIT');
     } catch (error) {
       try { await run(db, 'ROLLBACK'); } catch (_) {}
@@ -216,6 +216,34 @@ async function runMigrations(db) {
   }
 }
 
+async function migrateAgentWorkspaceScope(db) {
+  const tableExists = async (name) => (await all(db, "SELECT name FROM sqlite_master WHERE type='table' AND name=?", [name])).length > 0;
+
+  if (await tableExists('agents')) {
+    const agentsCols = await all(db, 'PRAGMA table_info(agents)');
+    if (!agentsCols.some(c => c.name === 'tenant_id')) {
+      await run(db, 'ALTER TABLE agents ADD COLUMN tenant_id TEXT');
+    }
+    if (!agentsCols.some(c => c.name === 'workspace_id')) {
+      await run(db, 'ALTER TABLE agents ADD COLUMN workspace_id INTEGER');
+    }
+    await run(db, `UPDATE agents SET tenant_id = 'default', workspace_id = 1 WHERE tenant_id IS NULL OR workspace_id IS NULL`);
+  }
+
+  if (await tableExists('agent_logs')) {
+    const agentLogsCols = await all(db, 'PRAGMA table_info(agent_logs)');
+    if (!agentLogsCols.some(c => c.name === 'tenant_id')) {
+      await run(db, 'ALTER TABLE agent_logs ADD COLUMN tenant_id TEXT');
+    }
+    if (!agentLogsCols.some(c => c.name === 'workspace_id')) {
+      await run(db, 'ALTER TABLE agent_logs ADD COLUMN workspace_id INTEGER');
+    }
+    await run(db, `UPDATE agent_logs SET tenant_id = 'default', workspace_id = 1 WHERE tenant_id IS NULL OR workspace_id IS NULL`);
+  }
+}
+
+const AGENT_WORKSPACE_SCOPE_MIGRATION = '2026-08-20_agent_workspace_scope';
+
 module.exports = {
   LISTING_SCOPE_MIGRATION,
   SECURITY_CONTROLS_MIGRATION,
@@ -223,5 +251,6 @@ module.exports = {
   MARKET_TRENDS_MARKETPLACE_MIGRATION,
   WORKSPACE_OWNERSHIP_MIGRATION,
   PRODUCT_TRUTH_ATTESTATION_MIGRATION,
+  AGENT_WORKSPACE_SCOPE_MIGRATION,
   runMigrations
 };

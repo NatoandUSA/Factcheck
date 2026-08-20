@@ -125,7 +125,7 @@ export default function ProductListingPageSimulator({ currentListing, history = 
             }}
           >
             <ShoppingCart size={18} color={platformView === 'AMAZON' ? '#0284c7' : 'currentColor'} />
-            <span>🔵 Amazon Product Page (100% Clone)</span>
+            <span>🔵 Amazon Product Page (Simulation Preview)</span>
           </button>
 
           <button
@@ -145,7 +145,7 @@ export default function ProductListingPageSimulator({ currentListing, history = 
             }}
           >
             <ShoppingBag size={18} color={platformView === 'ETSY' ? '#ea580c' : 'currentColor'} />
-            <span>🟠 Etsy Shop Page (100% Clone)</span>
+            <span>🟠 Etsy Shop Page (Simulation Preview)</span>
           </button>
         </div>
 

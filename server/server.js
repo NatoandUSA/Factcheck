@@ -88,16 +88,11 @@ const db = new sqlite3.Database(dbPath);
 // Initialize DB schema
 db.serialize(() => {
   db.run("PRAGMA foreign_keys = ON;");
-
-  db.run(`
-    CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      email TEXT UNIQUE NOT NULL,
-      password_hash TEXT,
-      name TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
+  if (process.env.NODE_ENV !== 'test') {
+    db.run("PRAGMA journal_mode = WAL;");
+    db.run("PRAGMA synchronous = NORMAL;");
+    db.run("PRAGMA busy_timeout = 5000;");
+  }
 
   db.run(`
     CREATE TABLE IF NOT EXISTS workspaces (
@@ -158,9 +153,11 @@ db.serialize(() => {
   db.run(`
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      email TEXT UNIQUE,
+      email TEXT UNIQUE NOT NULL,
+      password_hash TEXT,
       role TEXT,
-      name TEXT
+      name TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `);
 
@@ -176,6 +173,12 @@ db.serialize(() => {
       status TEXT,
       generatedAt DATETIME DEFAULT CURRENT_TIMESTAMP,
       authorId INTEGER,
+      listing_version INTEGER DEFAULT 1,
+      approved_version INTEGER,
+      approved_hash TEXT,
+      approved_by INTEGER,
+      approved_at DATETIME,
+      product_truth_notes TEXT,
       payload TEXT
     )
   `);
@@ -196,6 +199,8 @@ db.serialize(() => {
   db.run(`
     CREATE TABLE IF NOT EXISTS agents (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id TEXT,
+      workspace_id INTEGER,
       name TEXT UNIQUE,
       role TEXT,
       status TEXT DEFAULT 'OFFLINE',
@@ -206,6 +211,8 @@ db.serialize(() => {
   db.run(`
     CREATE TABLE IF NOT EXISTS agent_logs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id TEXT,
+      workspace_id INTEGER,
       agentId INTEGER,
       message TEXT,
       timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -303,9 +310,9 @@ db.serialize(() => {
   db.get("SELECT COUNT(*) as count FROM agents", (err, row) => {
     if (row && row.count === 0) {
       console.log('Seeding initial agents...');
-      const stmt = db.prepare("INSERT INTO agents (name, role, status) VALUES (?, ?, ?)");
-      stmt.run('Trend Scout', 'RESEARCHER', 'OFFLINE');
-      stmt.run('AI Drafter', 'DRAFTER', 'OFFLINE');
+      const stmt = db.prepare("INSERT INTO agents (tenant_id, workspace_id, name, role, status) VALUES (?, ?, ?, ?, ?)");
+      stmt.run('default', 1, 'Trend Scout', 'RESEARCHER', 'OFFLINE');
+      stmt.run('default', 1, 'AI Drafter', 'DRAFTER', 'OFFLINE');
       stmt.finalize();
     }
   });
@@ -515,8 +522,29 @@ app.post('/api/auth/logout', (req, res) => {
 });
 
 
+// GET /api/health (Server & DB Health Check for Monitoring / Reverse Proxies)
+app.get('/api/health', (req, res) => {
+  db.get("SELECT 1", (err) => {
+    if (err) {
+      console.error('Health check DB error:', err.message);
+      return res.status(500).json({
+        status: 'ERROR',
+        database: 'DISCONNECTED',
+        timestamp: new Date().toISOString()
+      });
+    }
+    res.json({
+      status: 'OK',
+      database: 'CONNECTED',
+      uptime: process.uptime(),
+      timestamp: new Date().toISOString()
+    });
+  });
+});
+
 // GET /api/auth/me
 app.get('/api/auth/me', requireAuth(db), (req, res) => {
+
   res.json({
     success: true,
     authenticated: true,
@@ -790,6 +818,7 @@ app.patch('/api/listings/:id/approve', requireAuth(db), requireRole(['OWNER', 'M
     // C5B Fix: Evaluate via Canonical Publish Gate (Fail-Closed)
     parsedPayload.status = 'MANAGER_APPROVED';
     parsedPayload.productTruthNotes = truthNotes;
+    parsedPayload.marketplace = row.marketplace;
     const gateRes = publishGate.evaluatePublishGate(parsedPayload);
 
     // Strictly reject any status other than PUBLISH_READY
@@ -850,6 +879,7 @@ app.get('/api/listings/:id/export', requireAuth(db), requireRole(['OWNER', 'MANA
     }
     parsedPayload.status = row.status;
     parsedPayload.productTruthNotes = row.product_truth_notes || '';
+    parsedPayload.marketplace = row.marketplace;
 
     const gateRes = publishGate.evaluatePublishGate(parsedPayload);
     if (!gateRes.canExport) {
@@ -1474,7 +1504,7 @@ the exact product, and leave fact fields empty for a human to fill in later.
 CRITICAL RULES:
 1. "amazonTitle": Strictly 75-80 characters max. Title Case. Front-load the exact seed phrase "${cleanSeed}" in the first 75 characters. Zero prohibited claims (no "best seller", "free shipping", "guarantee", "perfect gift").
 2. "amazonBullets": EXACTLY 5 bullet points (150-200 chars each). Each MUST start with a [CAPITALIZED HOOK]. Use only generic, non-material-specific benefit language (e.g. gifting occasion, ease of use) -- no invented material/construction claims.
-3. "amazonSearchTerms": Space-separated generic terms strictly under 240 UTF-8 bytes. NO COMMAS.
+3. "amazonSearchTerms": Space-separated generic terms strictly under 249 UTF-8 bytes. NO COMMAS.
 4. "amazonDescription": High-converting HTML formatted product description (<p>, <ul>, <strong>) using only the seed phrase/category -- no invented specs, materials, or care instructions.
 5. "amazonAPlusContent": Structured A+ package with Hero Banner and 3 Feature Cards using generic gifting/benefit language only -- no Specifications module, since no real specs exist yet.
 6. "etsyTitle": Under 140 chars, first 40 chars hook.
@@ -1555,6 +1585,8 @@ Return ONLY raw JSON without markdown code fences:
               etsyMaterials: [],
               etsyPersonalizationInstructions: '',
               categoryName: category,
+              evidenceState: 'DRAFT_WITH_LIMITED_EVIDENCE',
+              provenance: 'AI_SEO_QUICK_DRAFT',
               generatedAt: new Date().toISOString(),
               status: 'NEEDS_QA'
             };
@@ -2143,6 +2175,8 @@ Return ONLY a valid raw JSON object without markdown code fences:
           etsyMaterials: [],
           etsyPersonalizationInstructions: '',
           categoryName: trend.category,
+          evidenceState: 'DRAFT_WITH_LIMITED_EVIDENCE',
+          provenance: 'AI_SEO_TREND_DRAFT',
           generatedAt: new Date().toISOString(),
           status: 'NEEDS_QA'
         };
@@ -2214,7 +2248,7 @@ The JSON block MUST contain ALL of these fields:
 {
   "amazonTitle": "Concise (75-80 chars max), Title Case, mobile-first front-loaded",
   "amazonBullets": ["5 bullets, each starting with [CAPITALIZED HOOK], using only facts the user actually gave you"],
-  "amazonSearchTerms": "space-separated backend keywords under 240 bytes",
+  "amazonSearchTerms": "space-separated backend keywords under 249 UTF-8 bytes",
   "amazonDescription": "<p>HTML formatted product description, no invented materials/specs/care</p>",
   "amazonAPlusPoints": ["3 highlight story blurbs, generic benefit language only if no real facts given"],
   "etsyTitle": "Under 140 chars, front-loaded keywords",
@@ -2297,36 +2331,40 @@ app.get('/api/analytics', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SEL
 // MULTI-AGENT AUTOMATION (BACKGROUND WORKERS)
 // -----------------------------------------------------
 
-// API: Get Agents
+// API: Get Agents (Workspace-Isolated)
 app.get('/api/agents', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
-  db.all("SELECT * FROM agents", [], (err, rows) => {
+  db.all("SELECT * FROM agents WHERE tenant_id = ? AND workspace_id = ?", [req.user.tenantId, req.user.workspaceId], (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
     res.json(rows);
   });
 });
 
-// API: Get Agent Logs
+// API: Get Agent Logs (Workspace-Isolated)
 app.get('/api/agents/logs', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
   db.all(`
     SELECT l.*, a.name as agentName 
     FROM agent_logs l 
     JOIN agents a ON l.agentId = a.id 
+    WHERE l.tenant_id = ? AND l.workspace_id = ?
     ORDER BY l.timestamp DESC LIMIT 50
-  `, [], (err, rows) => {
+  `, [req.user.tenantId, req.user.workspaceId], (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
     res.json(rows);
   });
 });
 
-// API: Toggle Agent Status (controls background outbound network agents — OWNER/MANAGER only)
+// API: Toggle Agent Status (Workspace-Isolated)
 app.post('/api/agents/:id/toggle', requireAuth(db), requireRole(['OWNER', 'MANAGER']), (req, res) => {
   const { id } = req.params;
   const { status } = req.body; // 'ONLINE' or 'OFFLINE'
-  db.run("UPDATE agents SET status = ?, lastActive = CURRENT_TIMESTAMP WHERE id = ?", [status, id], function(err) {
+  db.run("UPDATE agents SET status = ?, lastActive = CURRENT_TIMESTAMP WHERE id = ? AND tenant_id = ? AND workspace_id = ?", [status, id, req.user.tenantId, req.user.workspaceId], function(err) {
     if (err) return res.status(500).json({ error: err.message });
+    if (this.changes === 0) {
+      return res.status(404).json({ error: 'Agent not found or workspace unauthorized' });
+    }
     
     // Log the action
-    db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [id, `System commanded agent to go ${status}`]);
+    db.run("INSERT INTO agent_logs (agentId, tenant_id, workspace_id, message) VALUES (?, ?, ?, ?)", [id, req.user.tenantId, req.user.workspaceId, `System commanded agent to go ${status}`]);
     res.json({ success: true, status });
   });
 });

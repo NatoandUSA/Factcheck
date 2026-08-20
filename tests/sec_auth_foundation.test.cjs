@@ -275,8 +275,17 @@ async function runAuthFoundationTests() {
         etsyTitle: 'Personalized Embroidered Test Sweatshirt',
         categoryName: 'Embroidery',
         payload: {
-          ipVerdict: 'ALLOW',
+          ipVerdict: 'OK',
           ipHits: [],
+          amazonTitle: 'Personalized Embroidered Test Sweatshirt',
+          amazonBullets: [
+            '[ELEGANT DESIGN] Crafted for everyday milestone elegance.',
+            '[CUSTOM ENGRAVING] Precision laser engraved with your name or date.',
+            '[PERFECT GIFT] Packaged for birthdays, anniversaries, and holidays.',
+            '[DURABLE QUALITY] Premium grade finish built for daily wear.',
+            '[SATISFACTION GUARANTEED] Dedicated customer support for every order.'
+          ],
+          amazonSearchTerms: 'personalized sweatshirt custom embroidered gift',
           etsyTags: Array.from({ length: 13 }, (_, index) => `test tag ${index + 1}`),
           amazonDescription: 'Real test fixture description: personalized embroidered sweatshirt, cotton-poly blend.'
         }
@@ -406,8 +415,16 @@ async function runAuthFoundationTests() {
         etsyTitle: 'Amazon Workspace Private Listing',
         categoryName: 'Embroidery',
         payload: {
-          ipVerdict: 'ALLOW',
+          ipVerdict: 'OK',
           ipHits: [],
+          amazonBullets: [
+            '[ELEGANT DESIGN] Crafted for everyday milestone elegance.',
+            '[CUSTOM ENGRAVING] Precision laser engraved with your name or date.',
+            '[PERFECT GIFT] Packaged for birthdays, anniversaries, and holidays.',
+            '[DURABLE QUALITY] Premium grade finish built for daily wear.',
+            '[SATISFACTION GUARANTEED] Dedicated customer support for every order.'
+          ],
+          amazonSearchTerms: 'amazon private listing embroidered gift sweatshirt',
           etsyTags: Array.from({ length: 13 }, (_, index) => `scope tag ${index + 1}`),
           amazonDescription: 'Real test fixture description: embroidered gift item, cotton blend, machine washable.'
         }
@@ -503,10 +520,35 @@ async function runAuthFoundationTests() {
     assert.strictEqual(goodReset.status, 200);
     const nonceReplay = await fetch(`http://127.0.0.1:${port}/api/reset-database`, { method: 'DELETE', headers: resetHeaders, body: JSON.stringify({ confirmation: `RESET ${amazonWorkspace.workspace_id}` }) });
     assert.strictEqual(nonceReplay.status, 403);
-    console.log('  🟢 Test 17 (Recent Auth, Typed Confirmation & Nonce Replay Denial): PASSED');
+    // Test 18: Agent Workspace Scope Security (F-AL2)
+    console.log('\nTest 18: Agent Workspace Scope Isolation & Toggle Security...');
+    const unauthAgents = await fetch(`http://127.0.0.1:${port}/api/agents`);
+    assert.strictEqual(unauthAgents.status, 401, 'Unauthenticated GET /api/agents must return 401');
+
+    const amzAgentsRes = await fetch(`http://127.0.0.1:${port}/api/agents`, { headers: { Cookie: amzCookie } });
+    assert.strictEqual(amzAgentsRes.status, 200);
+    const amzAgents = await amzAgentsRes.json();
+    assert.ok(Array.isArray(amzAgents));
+
+    // Seller role attempting agent toggle (must fail with 403)
+    const sellerToggleRes = await fetch(`http://127.0.0.1:${port}/api/agents/1/toggle`, {
+      method: 'POST',
+      headers: { Cookie: sellerCookie, Origin: `http://127.0.0.1:${port}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'ONLINE' })
+    });
+    assert.strictEqual(sellerToggleRes.status, 403, 'Seller role must not be permitted to toggle agent status');
+
+    // Cross-workspace agent toggle attempt (IDOR check)
+    const crossToggleRes = await fetch(`http://127.0.0.1:${port}/api/agents/99999/toggle`, {
+      method: 'POST',
+      headers: { Cookie: etsyCookie, Origin: `http://127.0.0.1:${port}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'ONLINE' })
+    });
+    assert.strictEqual(crossToggleRes.status, 404, 'Toggling non-existent or cross-workspace agent must return 404');
+    console.log('  🟢 Test 18 (Agent Workspace Scope Isolation, Role Checks & IDOR 404): PASSED');
 
     console.log('\n================================================================');
-    console.log('  🟢 ALL 17 PR-2B/PR-2C SECURITY FOUNDATION TESTS PASSED!');
+    console.log('  🟢 ALL 18 SECURITY & WORKSPACE ISOLATION TESTS PASSED!');
     console.log('================================================================\n');
 
   } finally {

@@ -10,5 +10,16 @@ export default defineConfig({
     proxy: {
       '/api': 'http://localhost:3001'
     }
+  },
+  build: {
+    chunkSizeWarningLimit: 1000,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'charts-vendor': ['recharts'],
+          'icons-vendor': ['lucide-react']
+        }
+      }
+    }
   }
 });

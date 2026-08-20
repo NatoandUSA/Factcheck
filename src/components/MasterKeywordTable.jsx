@@ -115,19 +115,25 @@ export default function MasterKeywordTable({ marketplace = 'AMAZON', keywords: p
             <tbody>
               {filtered.map((item, idx) => {
                 const len = (item.keyword || '').length;
-                let tierBadge = item.tierBadge || '📦 Tier 3 (Backend)';
-                let tierColor = '#64748b';
+
+                // Server-Authoritative Tier Badge
+                let tierBadge = item.tierBadge || item.tier || '—';
+                let tierColor = 'var(--text-secondary)';
                 let tierBg = '#f1f5f9';
 
                 if (isAmazon) {
-                  if (tierBadge.includes('Tier 1') || idx < 10) {
+                  if (tierBadge.includes('Tier 1')) {
                     tierBadge = '👑 Tier 1 (Title Hook)';
                     tierColor = '#0369a1';
                     tierBg = '#e0f2fe';
-                  } else if (tierBadge.includes('Tier 2') || idx < 35) {
+                  } else if (tierBadge.includes('Tier 2')) {
                     tierBadge = '💎 Tier 2 (5 Bullets)';
                     tierColor = '#7e22ce';
                     tierBg = '#f3e8ff';
+                  } else if (tierBadge.includes('Tier 3')) {
+                    tierBadge = '📦 Tier 3 (Search Terms)';
+                    tierColor = '#475569';
+                    tierBg = '#f1f5f9';
                   }
                 } else {
                   if (len <= 20) {
@@ -141,10 +147,22 @@ export default function MasterKeywordTable({ marketplace = 'AMAZON', keywords: p
                   }
                 }
 
+                // Single Contract Resolver for IP Verdict
+                const verdict = item.ipVerdict ? String(item.ipVerdict).toUpperCase() : null;
+                const hasHits = Array.isArray(item.ipHits) && item.ipHits.length > 0;
+                let ipDisplay = { label: '⚪ UNSCREENED / UNKNOWN', color: '#64748b', bg: '#f1f5f9' };
 
-                const isBlocked = item.ipVerdict === 'BLOCK' || (item.ipHits && item.ipHits.length > 0 && item.ipVerdict !== 'OK');
-                const isReview = item.ipVerdict === 'REVIEW';
-                const isClean = !isBlocked && !isReview;
+                if (verdict === 'BLOCK' || (hasHits && verdict !== 'OK')) {
+                  ipDisplay = { label: '🔴 BLOCKED', color: '#dc2626', bg: '#fef2f2' };
+                } else if (verdict === 'REVIEW') {
+                  ipDisplay = { label: '⚠️ REVIEW REQUIRED', color: '#d97706', bg: '#fffbe6' };
+                } else if (verdict === 'OK') {
+                  ipDisplay = { label: '✓ CLEAN (An Toàn)', color: '#16a34a', bg: '#f0fdf4' };
+                } else if (!verdict || verdict === 'UNSCREENED') {
+                  ipDisplay = { label: '⚪ UNSCREENED', color: '#64748b', bg: '#f1f5f9' };
+                } else {
+                  ipDisplay = { label: '⚪ UNKNOWN', color: '#64748b', bg: '#f1f5f9' };
+                }
 
                 return (
                   <tr key={idx} style={{ borderBottom: '1px solid var(--border-subtle, #f1f5f9)', background: idx % 2 === 0 ? 'transparent' : 'var(--bg-subtle)' }}>
@@ -153,7 +171,7 @@ export default function MasterKeywordTable({ marketplace = 'AMAZON', keywords: p
                       {item.keyword}
                     </td>
                     <td style={{ padding: '10px 14px', color: 'var(--text-secondary)' }}>
-                      {item.category || 'Apparel: Sweatshirt'}
+                      {item.category || '—'}
                     </td>
                     <td style={{ padding: '10px 14px', color: 'var(--text-secondary)', fontWeight: 600 }}>
                       {item.volume != null ? item.volume.toLocaleString() : '—'}
@@ -173,21 +191,9 @@ export default function MasterKeywordTable({ marketplace = 'AMAZON', keywords: p
                       </span>
                     </td>
                     <td style={{ padding: '10px 14px' }}>
-                      {isClean && (
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: '#16a34a', fontWeight: 700, fontSize: '0.75rem' }}>
-                          <ShieldCheck size={14} /> ✓ Clean (An Toàn)
-                        </span>
-                      )}
-                      {isReview && (
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: '#d97706', fontWeight: 700, fontSize: '0.75rem' }}>
-                          <ShieldAlert size={14} /> ⚠️ Xem xét: {item.ipHits?.join(', ')}
-                        </span>
-                      )}
-                      {isBlocked && (
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: '#dc2626', fontWeight: 700, fontSize: '0.75rem' }}>
-                          <ShieldAlert size={14} /> 🚫 Blocked: {item.ipHits?.join(', ')}
-                        </span>
-                      )}
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: ipDisplay.color, background: ipDisplay.bg, fontWeight: 700, fontSize: '0.75rem', padding: '4px 8px', borderRadius: '4px' }}>
+                        {ipDisplay.label}
+                      </span>
                     </td>
                     <td style={{ padding: '10px 14px', color: len > 20 && !isAmazon ? '#dc2626' : 'var(--text-secondary)', fontWeight: 600, fontSize: '0.8rem' }}>
                       {len} chars

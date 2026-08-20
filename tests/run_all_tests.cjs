@@ -27,7 +27,9 @@ function runAllTests() {
     'tests/test_adversarial_control_plane.cjs',
     'tests/test_p0_5_c_research_truth.cjs',
     'tests/test_ytrends_unknown_defaults.cjs',
-    'tests/test_listing_ip_rescreen.cjs'
+    'tests/test_listing_ip_rescreen.cjs',
+    'tests/spec_simulator_and_mkl_truth.test.cjs',
+    'tests/spec_publish_gate_contracts.test.cjs'
   ];
 
   let passedCount = 0;

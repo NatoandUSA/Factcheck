@@ -42,8 +42,8 @@ function testRuntimePathBoundary() {
     DOTENV_PATH: '/etc/omniseller/omniseller.env'
   };
   const prodPaths = resolveRuntimePaths(prodEnv);
-  assert.strictEqual(prodPaths.dbPath, '/var/lib/omniseller/app.db');
-  assert.strictEqual(prodPaths.importsDir, '/var/lib/omniseller/imports');
+  assert.strictEqual(prodPaths.dbPath, path.resolve('/var/lib/omniseller/app.db'));
+  assert.strictEqual(prodPaths.importsDir, path.resolve('/var/lib/omniseller/imports'));
   assert.strictEqual(isPathInsideRepo(prodPaths.dbPath), false);
   assert.strictEqual(isPathInsideRepo(prodPaths.importsDir), false);
   console.log('  🟢 Production accepts explicit absolute state paths outside the worktree.');

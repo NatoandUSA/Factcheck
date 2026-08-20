@@ -4,6 +4,10 @@ server/node_modules/
 dist/
 .DS_Store
 server/app.db
+server/app.db-wal
+server/app.db-shm
+server/*.bak*
+Mautheutest/
 *.xlsx
 !tests/fixtures/*.xlsx
 

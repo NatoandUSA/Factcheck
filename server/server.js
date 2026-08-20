@@ -531,14 +531,25 @@ app.post('/api/auth/logout', (req, res) => {
 
 
 const { execSync } = require('child_process');
-let SERVER_REVISION = process.env.GIT_REVISION || 'UNKNOWN';
-if (SERVER_REVISION === 'UNKNOWN') {
-  try {
-    SERVER_REVISION = execSync('git rev-parse HEAD', { cwd: __dirname, encoding: 'utf8' }).trim();
-  } catch (_) {
-    SERVER_REVISION = 'UNKNOWN';
+
+function resolveServerRevision() {
+  if (process.env.GIT_REVISION && process.env.GIT_REVISION.trim() && process.env.GIT_REVISION !== 'UNKNOWN') {
+    return process.env.GIT_REVISION.trim();
   }
+  const revisionFilePath = path.resolve(__dirname, '../REVISION');
+  if (fs.existsSync(revisionFilePath)) {
+    try {
+      const content = fs.readFileSync(revisionFilePath, 'utf8').trim();
+      if (content) return content;
+    } catch (_) {}
+  }
+  try {
+    return execSync('git rev-parse HEAD', { cwd: __dirname, encoding: 'utf8' }).trim();
+  } catch (_) {}
+  return 'UNKNOWN';
 }
+
+const SERVER_REVISION = resolveServerRevision();
 
 // GET /api/health (Server & DB Health Check for Monitoring / Reverse Proxies)
 app.get('/api/health', (req, res) => {

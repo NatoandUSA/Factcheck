@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==============================================================================
 # OMNISELLER STUDIO — IMMUTABLE SYMLINK RELEASE & ROLLBACK RUNBOOK
-# Authoritative Target Topology: etsy@51.79.200.65 (Ubuntu 22.04 LTS)
+# Authoritative Production VPS Topology: etsy@51.79.200.65 (Ubuntu 22.04 LTS)
 # ==============================================================================
 
 set -e
@@ -67,15 +67,24 @@ if [ ! -d "${BASELINE_RELEASE_DIR}" ]; then
     echo "Preparing baseline release directory ${BASELINE_RELEASE_DIR}..."
     mkdir -p "${BASELINE_RELEASE_DIR}"
     cp -rp "${WORKTREE_REPO}/." "${BASELINE_RELEASE_DIR}/"
+    echo "${BASELINE_SHA}" > "${BASELINE_RELEASE_DIR}/REVISION"
 fi
+
+# Function for Atomic Symlink Swap
+atomic_symlink_switch() {
+    local target_dir="$1"
+    local symlink_tmp="${BASE_DIR}/omniseller-current-tmp"
+    ln -snf "${target_dir}" "${symlink_tmp}"
+    mv -Tf "${symlink_tmp}" "${CURRENT_SYMLINK}"
+}
 
 # Function for Fail-Closed Rollback
 rollback() {
     echo -e "\n🔴 DEPLOYMENT OR HEALTH VALIDATION FAILED! INITIATING FAIL-CLOSED ROLLBACK..."
     sudo systemctl stop omniseller-web || true
     
-    echo "Restoring active symlink to baseline release ${BASELINE_RELEASE_DIR}..."
-    ln -sfn "${BASELINE_RELEASE_DIR}" "${CURRENT_SYMLINK}"
+    echo "Restoring active symlink atomically to baseline release ${BASELINE_RELEASE_DIR}..."
+    atomic_symlink_switch "${BASELINE_RELEASE_DIR}"
     
     if [ -d "${BACKUP_SUBDIR}" ]; then
         echo "Restoring WAL-safe database backup from ${BACKUP_SUBDIR}..."
@@ -105,6 +114,7 @@ if [ ! -d "${TARGET_RELEASE_DIR}" ]; then
     git -C "${WORKTREE_REPO}" archive "${TARGET_SHA}" | tar -x -C "${TARGET_RELEASE_DIR}"
 fi
 
+echo "${TARGET_SHA}" > "${TARGET_RELEASE_DIR}/REVISION"
 cd "${TARGET_RELEASE_DIR}"
 
 echo "Installing production dependencies & building native addons from source (Ubuntu 22.04 LTS)..."
@@ -155,9 +165,9 @@ if [ -f "${DB_PATH}" ]; then
 fi
 
 # --- STEP 4: ATOMIC SYMLINK SWITCH ---
-echo -e "\n[Step 4/7] Updating active symlink /home/etsy/omniseller-current -> ${TARGET_RELEASE_DIR}..."
-ln -sfn "${TARGET_RELEASE_DIR}" "${CURRENT_SYMLINK}"
-echo "🟢 Symlink updated atomically."
+echo -e "\n[Step 4/7] Atomic symlink switch /home/etsy/omniseller-current -> ${TARGET_RELEASE_DIR}..."
+atomic_symlink_switch "${TARGET_RELEASE_DIR}"
+echo "🟢 Symlink updated atomically with mv -Tf."
 
 # --- STEP 5: RESTART SYSTEMD SERVICE ---
 echo -e "\n[Step 5/7] Starting systemd service 'omniseller-web'..."

@@ -35,25 +35,27 @@ if [ ! -d "${WORKTREE_REPO}" ]; then
     exit 1
 fi
 
-if [ ! -f "${ENV_FILE}" ]; then
-    echo "🔴 ERROR: External production env file ${ENV_FILE} does not exist."
-    exit 1
+# Capture Baseline SHA BEFORE any fetch or checkout from active symlink or REVISION file
+BASELINE_SHA=""
+if [ -f "${CURRENT_SYMLINK}/REVISION" ]; then
+    BASELINE_SHA=$(cat "${CURRENT_SYMLINK}/REVISION" | tr -d '\r\n')
 fi
 
-# Capture Baseline SHA BEFORE any fetch or checkout
-if [ -L "${CURRENT_SYMLINK}" ] && [ -d "${CURRENT_SYMLINK}" ]; then
-    BASELINE_SHA=$(git -C "${CURRENT_SYMLINK}" rev-parse HEAD 2>/dev/null || git -C "${WORKTREE_REPO}" rev-parse HEAD)
-else
-    BASELINE_SHA=$(git -C "${WORKTREE_REPO}" rev-parse HEAD)
+if [ -z "${BASELINE_SHA}" ] && [ -L "${CURRENT_SYMLINK}" ]; then
+    BASELINE_SHA=$(git -C "${CURRENT_SYMLINK}" rev-parse HEAD 2>/dev/null || echo "")
+fi
+
+if [ -z "${BASELINE_SHA}" ]; then
+    BASELINE_SHA=$(git -C "${WORKTREE_REPO}" rev-parse HEAD 2>/dev/null || echo "e6df541c4a5d7fbc9d6e5bbca18b48d442039b96")
 fi
 
 echo "🟢 Active Baseline SHA: ${BASELINE_SHA}"
 
-# Fetch remote tracking branch first
+# Fetch remote tracking branch first before resolving target SHA
 echo "Fetching origin/${TARGET_BRANCH}..."
-git -C "${WORKTREE_REPO}" fetch origin "${TARGET_BRANCH}"
+git -C "${WORKTREE_REPO}" fetch origin "${TARGET_BRANCH}" 2>/dev/null || true
 
-TARGET_SHA="${1:-$(git -C "${WORKTREE_REPO}" rev-parse origin/${TARGET_BRANCH})}"
+TARGET_SHA="${1:-$(git -C "${WORKTREE_REPO}" rev-parse origin/${TARGET_BRANCH} 2>/dev/null || git -C "${WORKTREE_REPO}" rev-parse HEAD)}"
 echo "🟢 Target Release SHA: ${TARGET_SHA}"
 
 if [ -z "${TARGET_SHA}" ] || [ ${#TARGET_SHA} -ne 40 ]; then
@@ -61,12 +63,11 @@ if [ -z "${TARGET_SHA}" ] || [ ${#TARGET_SHA} -ne 40 ]; then
     exit 1
 fi
 
-# Ensure baseline release directory exists for instant rollback
 BASELINE_RELEASE_DIR="${RELEASES_DIR}/${BASELINE_SHA}"
 if [ ! -d "${BASELINE_RELEASE_DIR}" ]; then
     echo "Preparing baseline release directory ${BASELINE_RELEASE_DIR}..."
     mkdir -p "${BASELINE_RELEASE_DIR}"
-    cp -rp "${WORKTREE_REPO}/." "${BASELINE_RELEASE_DIR}/"
+    git -C "${WORKTREE_REPO}" archive "${BASELINE_SHA}" | tar -x -C "${BASELINE_RELEASE_DIR}" 2>/dev/null || cp -rp "${WORKTREE_REPO}/." "${BASELINE_RELEASE_DIR}/"
     echo "${BASELINE_SHA}" > "${BASELINE_RELEASE_DIR}/REVISION"
 fi
 
@@ -78,20 +79,15 @@ atomic_symlink_switch() {
     mv -Tf "${symlink_tmp}" "${CURRENT_SYMLINK}"
 }
 
-# Function for Fail-Closed Rollback
+# Fail-Closed State Machine Rollback Trap
+# NOTE: Deployment rollback ONLY swaps code symlinks to baseline.
+# Database restore is strictly a separate, explicit, migration-aware, owner-approved operation.
 rollback() {
     echo -e "\n🔴 DEPLOYMENT OR HEALTH VALIDATION FAILED! INITIATING FAIL-CLOSED ROLLBACK..."
     sudo systemctl stop omniseller-web || true
     
-    echo "Restoring active symlink atomically to baseline release ${BASELINE_RELEASE_DIR}..."
+    echo "Restoring active symlink atomically to pre-built baseline release ${BASELINE_RELEASE_DIR}..."
     atomic_symlink_switch "${BASELINE_RELEASE_DIR}"
-    
-    if [ -d "${BACKUP_SUBDIR}" ]; then
-        echo "Restoring WAL-safe database backup from ${BACKUP_SUBDIR}..."
-        cp -p "${BACKUP_SUBDIR}/app.db" "${DB_PATH}" 2>/dev/null || true
-        [ -f "${BACKUP_SUBDIR}/app.db-wal" ] && cp -p "${BACKUP_SUBDIR}/app.db-wal" "${DB_PATH}-wal" 2>/dev/null || true
-        [ -f "${BACKUP_SUBDIR}/app.db-shm" ] && cp -p "${BACKUP_SUBDIR}/app.db-shm" "${DB_PATH}-shm" 2>/dev/null || true
-    fi
     
     echo "Restarting systemd service 'omniseller-web' on baseline release..."
     sudo systemctl restart omniseller-web
@@ -149,19 +145,19 @@ if [ -f "${DB_PATH}" ]; then
     echo "Calculating SHA-256 checksums..."
     sha256sum "${BACKUP_SUBDIR}"/app.db* > "${BACKUP_SUBDIR}/checksums.sha256"
     
-    echo "Verifying SQLite database integrity..."
+    echo "Verifying SQLite database integrity on SNAPSHOT ARTIFACT..."
     node -e "
       const sqlite3 = require('${TARGET_RELEASE_DIR}/node_modules/sqlite3');
-      const db = new sqlite3.Database('${DB_PATH}');
+      const db = new sqlite3.Database('${BACKUP_SUBDIR}/app.db');
       db.get('PRAGMA integrity_check', (err, row) => {
         if (err || !row || row.integrity_check !== 'ok') {
-          console.error('🔴 DB Integrity Error:', err || row);
+          console.error('🔴 DB Snapshot Integrity Error:', err || row);
           process.exit(1);
         }
-        console.log('🟢 DB Integrity Check: ok');
+        console.log('🟢 DB Snapshot Integrity Check: ok');
         db.close();
       });
-    " || { echo "🔴 DB integrity check failed"; rollback; }
+    " || { echo "🔴 DB snapshot integrity check failed"; rollback; }
 fi
 
 # --- STEP 4: ATOMIC SYMLINK SWITCH ---

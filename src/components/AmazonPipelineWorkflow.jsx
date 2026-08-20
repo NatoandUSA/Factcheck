@@ -7,7 +7,7 @@ import MasterKeywordTable from './MasterKeywordTable';
 import { parseJsonResponse } from '../utils/apiResponse';
 import { deriveXrayUploadOutcome } from '../utils/xrayUploadOutcome.cjs';
 
-export default function AmazonPipelineWorkflow({ seedPhrase, selectedCategory, onShowToast, onSelectListing }) {
+export default function AmazonPipelineWorkflow({ seedPhrase, selectedCategory, onShowToast, onSelectListing, onProceedToStage }) {
   // Step 1: Feed Xray State
   const [xrayFile, setXrayFile] = useState(null);
   const [xrayAsinsInput, setXrayAsinsInput] = useState('');
@@ -433,30 +433,29 @@ export default function AmazonPipelineWorkflow({ seedPhrase, selectedCategory, o
           <div>
             <h3 style={{ fontSize: '1.15rem', fontWeight: 800, margin: 0, color: '#7e22ce', display: 'flex', alignItems: 'center', gap: '8px' }}>
               <Sparkles size={20} />
-              BƯỚC 4: Master Keyword List (MKL 3-Tier) & Sinh Listing Amazon A10
+              BƯỚC 4: Master Keyword Intelligence (MKL 3-Tier Research Pack)
             </h3>
             <p style={{ margin: '4px 0 0 0', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-              Phân bổ từ khóa tự động vào 👑 Tier 1 (Title $\le$ 75 chars), 💎 Tier 2 (5 Bullets Hooks), và 📦 Tier 3 (249 Bytes Backend).
+              Nghiên cứu từ khóa phân tầng 👑 Tier 1 (Title), 💎 Tier 2 (Bullets), 📦 Tier 3 (Backend). <i>(Không tạo listing tại Stage 1)</i>.
             </p>
           </div>
 
           <button
-            onClick={handleGenerateListing}
-            disabled={drafting || !seedPhrase.trim() || !cerebroSummary?.trendId || cerebroKeywords.length === 0}
+            onClick={() => onProceedToStage && onProceedToStage('research')}
             className="btn btn-primary"
             style={{
-              background: '#7e22ce',
+              background: '#0284c7',
               fontWeight: 800,
               padding: '10px 22px',
               display: 'flex',
               alignItems: 'center',
               gap: '8px',
-              boxShadow: '0 4px 14px rgba(126, 34, 206, 0.25)',
-              cursor: (drafting || !seedPhrase.trim() || !cerebroSummary?.trendId || cerebroKeywords.length === 0) ? 'not-allowed' : 'pointer'
+              boxShadow: '0 4px 14px rgba(2, 132, 199, 0.25)',
+              cursor: 'pointer'
             }}
           >
-            <Zap size={16} className={drafting ? 'spinner' : ''} />
-            <span>{drafting ? 'Đang tạo Amazon Listing...' : '🚀 TẠO AMAZON LISTING (A10 + A+ CONTENT)'}</span>
+            <ArrowRight size={16} />
+            <span>➡️ Chốt Evidence Stage 1 & Chuyển Sang Stage 2 (Research DNA)</span>
           </button>
         </div>
 

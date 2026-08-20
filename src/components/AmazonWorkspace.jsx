@@ -155,23 +155,59 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
           selectedCategory={selectedCategory}
           onShowToast={onShowToast}
           onSelectListing={onSelectListing}
+          onProceedToStage={(stage) => setActiveStage(stage)}
         />
       )}
 
       {/* STAGE 2: DEEP RESEARCH & DNA MIRROR (2-COLUMN GRID) */}
       {activeStage === 'research' && (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px', alignItems: 'start' }}>
-          {/* Google Trends Velocity */}
-          <GoogleTrendsWidget seedPhrase={seedPhrase} onShowToast={onShowToast} />
-          
-          {/* Amazon Learning Box */}
-          <LearningBoxWidget platform="AMAZON" onShowToast={onShowToast} />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px', alignItems: 'start' }}>
+            {/* Google Trends Velocity */}
+            <GoogleTrendsWidget seedPhrase={seedPhrase} onShowToast={onShowToast} />
+            
+            {/* Amazon Learning Box */}
+            <LearningBoxWidget platform="AMAZON" onShowToast={onShowToast} />
+          </div>
+
+          {/* Stage 2 Acceptance Gate */}
+          <div className="studio-panel" style={{ padding: '20px 24px', borderLeft: '4px solid #0284c7', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#f0f9ff', borderRadius: '12px' }}>
+            <div>
+              <div style={{ fontWeight: 800, fontSize: '1rem', color: '#0369a1' }}>
+                🧠 Stage 2: Competitor DNA & Trend Recheck Completed
+              </div>
+              <div style={{ fontSize: '0.8rem', color: '#0284c7', marginTop: '2px' }}>
+                Xác nhận từ khóa hạt nhân "{seedPhrase}" và các mẫu copywriting đối thủ đã được duyệt đưa vào MKL.
+              </div>
+            </div>
+
+            <button
+              onClick={() => setActiveStage('mkl')}
+              className="btn btn-primary"
+              style={{ background: '#0284c7', fontWeight: 800, padding: '10px 20px', borderRadius: '8px', cursor: 'pointer' }}
+            >
+              <span>➡️ Chấp Nhận Research DNA & Mở Khóa Stage 3 (MKL & Family Draft)</span>
+            </button>
+          </div>
         </div>
       )}
 
-      {/* STAGE 3: MASTER KEYWORD INTELLIGENCE */}
+      {/* STAGE 3: MASTER KEYWORD INTELLIGENCE & CONTROLLED DRAFT GENERATION */}
       {activeStage === 'mkl' && (
-        <MasterKeywordTable marketplace="AMAZON" onShowToast={onShowToast} />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+          <div className="studio-panel" style={{ padding: '20px 24px', borderLeft: '4px solid #7e22ce', background: '#faf5ff', borderRadius: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+            <div>
+              <h3 style={{ margin: 0, color: '#7e22ce', fontWeight: 800, fontSize: '1.1rem' }}>
+                📊 STAGE 3: Master Keyword Intelligence & Family Draft (1 Parent + 4 Children)
+              </h3>
+              <p style={{ margin: '4px 0 0 0', color: '#6b21a8', fontSize: '0.85rem' }}>
+                Chốt bảng MKL đã được đóng băng (Frozen MKL) và sinh bộ Amazon Listing đầy đủ 1 Parent + 4 Child Variants.
+              </p>
+            </div>
+          </div>
+
+          <MasterKeywordTable marketplace="AMAZON" onShowToast={onShowToast} />
+        </div>
       )}
 
       {/* Unified IP Gate Modal */}

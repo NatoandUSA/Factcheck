@@ -317,17 +317,13 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
                   </p>
                 </div>
 
-                {mcpResult?.trendId && (
-                  <button
-                    className="btn btn-primary btn-sm"
-                    disabled={draftingTrendId === mcpResult.trendId}
-                    onClick={() => handleManualDraft(mcpResult.trendId)}
-                    style={{ background: '#c2410c', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 800 }}
-                  >
-                    <Zap size={14} className={draftingTrendId === mcpResult.trendId ? 'spinner' : ''} />
-                    <span>{draftingTrendId === mcpResult.trendId ? 'Đang tạo...' : '🚀 Tạo Etsy Listing Ngay'}</span>
-                  </button>
-                )}
+                <button
+                  className="btn btn-primary btn-sm"
+                  onClick={() => setActiveStage('research')}
+                  style={{ background: '#c2410c', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 800, cursor: 'pointer' }}
+                >
+                  <span>➡️ Chốt Evidence Stage 1 & Chuyển Sang Stage 2 (Research DNA)</span>
+                </button>
               </div>
 
               {mcpResult ? (
@@ -394,12 +390,34 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
 
       {/* STAGE 2: DEEP RESEARCH & DNA MIRROR (2-COLUMN GRID) */}
       {activeStage === 'research' && (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px', alignItems: 'start' }}>
-          {/* Google Trends Velocity */}
-          <GoogleTrendsWidget seedPhrase={seedPhrase} onShowToast={onShowToast} />
-          
-          {/* Etsy Learning Box */}
-          <LearningBoxWidget platform="ETSY" onShowToast={onShowToast} scannedSellers={scannedSellers} />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px', alignItems: 'start' }}>
+            {/* Google Trends Velocity */}
+            <GoogleTrendsWidget seedPhrase={seedPhrase} onShowToast={onShowToast} />
+            
+            {/* Etsy Learning Box */}
+            <LearningBoxWidget platform="ETSY" onShowToast={onShowToast} scannedSellers={scannedSellers} />
+          </div>
+
+          {/* Stage 2 Acceptance Gate */}
+          <div className="studio-panel" style={{ padding: '20px 24px', borderLeft: '4px solid #ea580c', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#fff7ed', borderRadius: '12px' }}>
+            <div>
+              <div style={{ fontWeight: 800, fontSize: '1rem', color: '#c2410c' }}>
+                🧠 Stage 2: Competitor DNA & Trend Recheck Completed
+              </div>
+              <div style={{ fontSize: '0.8rem', color: '#ea580c', marginTop: '2px' }}>
+                Xác nhận từ khóa hạt nhân "{seedPhrase}" và mẫu listing Etsy từ 30 benchmark sellers đã được duyệt đưa vào MKL.
+              </div>
+            </div>
+
+            <button
+              onClick={() => setActiveStage('mkl')}
+              className="btn btn-primary"
+              style={{ background: '#ea580c', fontWeight: 800, padding: '10px 20px', borderRadius: '8px', cursor: 'pointer' }}
+            >
+              <span>➡️ Chấp Nhận Research DNA & Mở Khóa Stage 3 (MKL & Controlled Drafts)</span>
+            </button>
+          </div>
         </div>
       )}
 

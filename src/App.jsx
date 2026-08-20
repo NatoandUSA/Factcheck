@@ -6,6 +6,7 @@ import ProductListingPageSimulator from './components/ProductListingPageSimulato
 import ListingHistory from './components/ListingHistory';
 import ApiKeyModal from './components/ApiKeyModal';
 import LoginModal from './components/LoginModal';
+import UserManagementModal from './components/UserManagementModal';
 import { useAuth } from './context/AuthContext';
 
 export default function App() {
@@ -15,6 +16,7 @@ export default function App() {
   const [history, setHistory] = useState([]);
   const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState(false);
   const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
+  const [isUserManagementModalOpen, setIsUserManagementModalOpen] = useState(false);
   const [toasts, setToasts] = useState([]);
   const { user } = useAuth();
 
@@ -233,40 +235,38 @@ export default function App() {
         setActiveTab={setActiveTab}
         onOpenApiKeyModal={() => setIsApiKeyModalOpen(true)}
         onOpenLoginModal={() => setIsLoginModalOpen(true)}
+        onOpenUserManagementModal={() => setIsUserManagementModalOpen(true)}
         historyCount={history.length}
       />
 
-      <main className="app-container">
-        {/* TAB 1: 🔵 Amazon A10 Workspace */}
+      <main className="main-content">
+        {/* TAB 1: Amazon A10 Workspace */}
         {activeTab === 'amazon-workspace' && (
-          <div style={{ marginTop: '24px' }}>
-            <AmazonWorkspace 
-              onSelectListing={(item) => {
-                handleSelectFromHistory(item);
-                setActiveTab('product-page');
-              }}
-              onApproveListing={handleApproveListing}
-              onShowToast={showToast}
-            />
-          </div>
+          <AmazonWorkspace
+            onSelectListing={(item) => {
+              handleSelectFromHistory(item);
+              setActiveTab('product-page');
+            }}
+            onApproveListing={handleApproveListing}
+            onShowToast={showToast}
+            onViewHistory={() => setActiveTab('history')}
+          />
         )}
 
-        {/* TAB 2: 🟠 Etsy Contextual Workspace */}
+        {/* TAB 2: Etsy Contextual Workspace */}
         {activeTab === 'etsy-workspace' && (
-          <div style={{ marginTop: '24px' }}>
-            <EtsyWorkspace
-              onSelectListing={(item) => {
-                handleSelectFromHistory(item);
-                setActiveTab('product-page');
-              }}
-              onApproveListing={handleApproveListing}
-              onShowToast={showToast}
-              onViewHistory={() => setActiveTab('history')}
-            />
-          </div>
+          <EtsyWorkspace
+            onSelectListing={(item) => {
+              handleSelectFromHistory(item);
+              setActiveTab('product-page');
+            }}
+            onApproveListing={handleApproveListing}
+            onShowToast={showToast}
+            onViewHistory={() => setActiveTab('history')}
+          />
         )}
 
-        {/* TAB 3: 🛍️ Amazon & Etsy Product Page Simulation Preview */}
+        {/* TAB 3: Product Listing Page Simulator */}
         {activeTab === 'product-page' && (
           <ProductListingPageSimulator
             currentListing={currentListing}
@@ -306,6 +306,12 @@ export default function App() {
       <LoginModal
         isOpen={isLoginModalOpen}
         onClose={() => setIsLoginModalOpen(false)}
+      />
+
+      <UserManagementModal
+        isOpen={isUserManagementModalOpen}
+        onClose={() => setIsUserManagementModalOpen(false)}
+        onShowToast={showToast}
       />
 
       {/* Toast Notification Container */}

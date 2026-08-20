@@ -18,6 +18,8 @@ const ROUTES = [
   { method: 'POST', path: '/api/auth/logout', public: true, note: 'clears cookie regardless of session validity' },
   { method: 'GET', path: '/api/auth/me', public: false },
   { method: 'POST', path: '/api/auth/reauth', public: false },
+  { method: 'GET', path: '/api/owner/users', public: false },
+  { method: 'POST', path: '/api/owner/users', public: false },
   { method: 'DELETE', path: '/api/reset-database', public: false },
   { method: 'POST', path: '/api/login', public: true, note: 'deprecated, returns 410 Gone' },
   { method: 'POST', path: '/api/listings', public: false },

@@ -1,9 +1,9 @@
 import React from 'react';
-import { Sparkles, Key, Layers, FileSpreadsheet, History, Bot, UserCircle, LogOut, Server, Activity } from 'lucide-react';
+import { Sparkles, Key, Layers, FileSpreadsheet, History, Bot, UserCircle, LogOut, Server, Activity, Users } from 'lucide-react';
 import { getStoredApiKey } from '../services/geminiService';
 import { useAuth } from '../context/AuthContext';
 
-export default function Header({ activeTab, setActiveTab, onOpenApiKeyModal, onOpenLoginModal, historyCount = 0 }) {
+export default function Header({ activeTab, setActiveTab, onOpenApiKeyModal, onOpenLoginModal, onOpenUserManagementModal, historyCount = 0 }) {
   const hasKey = Boolean(getStoredApiKey());
   const { user, logout } = useAuth();
 
@@ -29,7 +29,7 @@ export default function Header({ activeTab, setActiveTab, onOpenApiKeyModal, onO
               borderBottom: activeTab === 'amazon-workspace' ? '2px solid #0284c7' : 'none'
             }}
           >
-            <span style={{ fontSize: '1rem' }}>🔵</span>
+            <span style={{ width: '10px', height: '10px', borderRadius: '50%', background: '#0284c7', display: 'inline-block' }}></span>
             <span>Amazon A10 Workspace</span>
           </button>
 
@@ -41,7 +41,7 @@ export default function Header({ activeTab, setActiveTab, onOpenApiKeyModal, onO
               borderBottom: activeTab === 'etsy-workspace' ? '2px solid #ea580c' : 'none'
             }}
           >
-            <span style={{ fontSize: '1rem' }}>🟠</span>
+            <span style={{ width: '10px', height: '10px', borderRadius: '50%', background: '#ea580c', display: 'inline-block' }}></span>
             <span>Etsy Contextual Workspace</span>
           </button>
 
@@ -64,7 +64,18 @@ export default function Header({ activeTab, setActiveTab, onOpenApiKeyModal, onO
 
         <div className="header-actions">
           {user ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              {user?.role === 'OWNER' && (
+                <button
+                  className="btn btn-secondary btn-sm"
+                  onClick={onOpenUserManagementModal}
+                  title="Quản Lý Nhân Viên (Owner)"
+                  style={{ border: '1px solid #bae6fd', color: '#0369a1', fontWeight: 700 }}
+                >
+                  <Users size={14} color="#0284c7" />
+                  <span>👥 Tạo Nick Staff</span>
+                </button>
+              )}
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', lineHeight: 1.2 }}>
                 <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>{user.name}</span>
                 <span style={{ fontSize: '0.7rem', color: 'var(--text-secondary)' }}>{user.role}</span>

@@ -609,6 +609,78 @@ app.post('/api/auth/reauth', requireAuth(db), requireRole(['OWNER']), (req, res)
 });
 
 
+// GET /api/owner/users - Owner user list for workspace
+app.get('/api/owner/users', requireAuth(db), requireRole(['OWNER']), (req, res) => {
+  db.all(
+    `SELECT u.id, u.email, u.name, wm.role, wm.status, u.created_at
+     FROM users u
+     JOIN workspace_memberships wm ON wm.user_id = u.id
+     WHERE wm.workspace_id = ?
+     ORDER BY u.id ASC`,
+    [req.user.workspaceId],
+    (err, rows) => {
+      if (err) return res.status(500).json({ success: false, error: err.message });
+      res.json({ success: true, users: rows || [] });
+    }
+  );
+});
+
+// POST /api/owner/users - Owner creates staff/testing user
+app.post('/api/owner/users', requireAuth(db), requireRole(['OWNER']), async (req, res) => {
+  const { email, password, name, role = 'SELLER' } = req.body || {};
+
+  if (!email || !password || !name) {
+    return res.status(400).json({ success: false, error: 'MISSING_FIELDS', message: 'Email, password, and name are required.' });
+  }
+
+  const normalizedEmail = String(email).trim().toLowerCase();
+  const cleanName = String(name).trim();
+  const targetRole = (role === 'MANAGER') ? 'MANAGER' : 'SELLER';
+
+  if (normalizedEmail.length < 3 || normalizedEmail.length > 255 || password.length < 6 || password.length > 128) {
+    return res.status(400).json({ success: false, error: 'INVALID_LENGTH', message: 'Email 3-255 chars, password 6-128 chars.' });
+  }
+
+  try {
+    const passwordHash = await hashPassword(password);
+
+    db.run(
+      `INSERT INTO users (email, password_hash, role, name, tenant_id) VALUES (?, ?, ?, ?, ?)`,
+      [normalizedEmail, passwordHash, targetRole, cleanName, req.user.tenantId],
+      function(userErr) {
+        if (userErr) {
+          if (userErr.message.includes('UNIQUE')) {
+            return res.status(400).json({ success: false, error: 'EMAIL_EXISTS', message: 'Email này đã tồn tại trên hệ thống.' });
+          }
+          return res.status(500).json({ success: false, error: userErr.message });
+        }
+        const newUserId = this.lastID;
+
+        db.run(
+          `INSERT INTO workspace_memberships (user_id, workspace_id, role, status) VALUES (?, ?, ?, 'ACTIVE')`,
+          [newUserId, req.user.workspaceId, targetRole],
+          function(wmErr) {
+            if (wmErr) return res.status(500).json({ success: false, error: wmErr.message });
+
+            res.json({
+              success: true,
+              user: {
+                id: newUserId,
+                email: normalizedEmail,
+                name: cleanName,
+                role: targetRole,
+                workspaceId: req.user.workspaceId
+              }
+            });
+          }
+        );
+      }
+    );
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // API: Full Database Reset (Wipe all old listings, trends, and templates - Protected OWNER Only)
 app.delete('/api/reset-database', requireAuth(db), requireRole(['OWNER']), (req, res) => {
   const expectedConfirmation = `RESET ${req.user.workspaceId}`;

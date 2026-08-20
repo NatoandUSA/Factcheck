@@ -70,7 +70,7 @@ const storage = multer.diskStorage({
   },
   filename: function (req, file, cb) {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    const workspacePrefix = (req.user && req.user.workspaceId) ? `${req.user.workspaceId}__` : 'global__';
+    const workspacePrefix = (req.user && req.user.workspaceId) ? `${req.user.workspaceId}__` : 'unscoped__';
     cb(null, workspacePrefix + uniqueSuffix + '-' + file.originalname);
   }
 });
@@ -2427,7 +2427,7 @@ const backgroundAgentTimer = setInterval(() => {
       if (agent.role === 'RESEARCHER') {
         const files = fs.readdirSync(importsDir).filter(f => {
           const isSupportedExt = f.endsWith('.csv') || f.endsWith('.xlsx') || f.endsWith('.html') || f.endsWith('.htm');
-          const isScopedToWorkspace = f.startsWith(`${agent.workspace_id}__`) || f.startsWith('global__');
+          const isScopedToWorkspace = f.startsWith(`${agent.workspace_id}__`);
           return isSupportedExt && isScopedToWorkspace;
         });
         

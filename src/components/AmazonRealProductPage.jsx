@@ -72,7 +72,7 @@ export default function AmazonRealProductPage({ listing, onShowToast }) {
               cursor: 'pointer'
             }}
           >
-            🛒 Live Amazon Page View
+            🛒 Amazon Simulation View
           </button>
           <button
             onClick={() => setActiveSubTab('image-prompts')}

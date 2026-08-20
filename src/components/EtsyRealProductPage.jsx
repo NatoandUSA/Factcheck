@@ -72,7 +72,7 @@ export default function EtsyRealProductPage({ listing, onShowToast }) {
               cursor: 'pointer'
             }}
           >
-            🛍️ Live Etsy Shop Page
+            🛍️ Etsy Simulation View
           </button>
           <button
             onClick={() => setActiveSubTab('image-prompts')}

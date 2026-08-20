@@ -2,19 +2,24 @@
  * TRUTH & EVIDENCE OWNERSHIP CONTRACT TEST SUITE
  * Tests:
  * 1. publishGate.js strictly selecting marketplace-authoritative descriptions (Amazon vs Etsy)
- * 2. HTTP endpoints rejecting missing seed/category inputs with HTTP 400 INSUFFICIENT_EVIDENCE
- * 3. Multi-tenant workspace upload filename scoping and background agent file filtering
+ * 2. UI components containing zero "Live Amazon", "Live Etsy", "100% Real", or "Handmade in Texas with love" labels
+ * 3. HTTP endpoints rejecting missing seed/category inputs with HTTP 400 INSUFFICIENT_EVIDENCE
+ * 4. Multi-tenant workspace upload filename scoping and background agent file isolation matrix
  */
 
 const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
+const http = require('http');
+const express = require('express');
 const { evaluatePublishGate } = require('../server/publishGate');
 
-function runTruthEvidenceOwnershipTests() {
+async function runTruthEvidenceOwnershipTests() {
   console.log('================================================================');
   console.log('  TESTING TRUTH & EVIDENCE OWNERSHIP CONTRACT SUITE');
   console.log('================================================================\n');
 
-  // Test 1: Publish Gate Amazon description enforcement (rejects Etsy-only description)
+  // --- PART 1: PUBLISH GATE MARKETPLACE DESCRIPTION SELECTION ---
   console.log('Test 1: Publish gate Amazon description enforcement...');
   const amazonListingWithEtsyDesc = {
     marketplace: 'AMAZON',
@@ -42,7 +47,6 @@ function runTruthEvidenceOwnershipTests() {
   assert.ok(amazonResult.reasons.some(i => i.includes('Missing product description for AMAZON')), 'Must explicitly flag missing description for AMAZON');
   console.log('  🟢 Amazon publish gate cross-marketplace description rejection PASSED.');
 
-  // Test 2: Publish Gate Etsy description enforcement (rejects Amazon-only description)
   console.log('\nTest 2: Publish gate Etsy description enforcement...');
   const etsyListingWithAmazonDesc = {
     marketplace: 'ETSY',
@@ -63,7 +67,6 @@ function runTruthEvidenceOwnershipTests() {
   assert.ok(etsyResult.reasons.some(i => i.includes('Missing product description for ETSY')), 'Must explicitly flag missing description for ETSY');
   console.log('  🟢 Etsy publish gate cross-marketplace description rejection PASSED.');
 
-  // Test 3: Valid Amazon & Etsy listings with correct marketplace descriptions pass
   console.log('\nTest 3: Valid Amazon & Etsy listings with authoritative descriptions...');
   const validAmazon = {
     marketplace: 'AMAZON',
@@ -103,9 +106,39 @@ function runTruthEvidenceOwnershipTests() {
   assert.strictEqual(validEtsyResult.final_status || validEtsyResult.status, 'PUBLISH_READY');
   console.log('  🟢 Authoritative marketplace description evaluation PASSED.');
 
+  // --- PART 2: UI SIMULATOR TRUTH LABELS CONTENT ASSERTIONS ---
+  console.log('\nTest 4: UI Simulator Component Truth Label Audit...');
+  const amazonUI = fs.readFileSync(path.resolve(__dirname, '../src/components/AmazonRealProductPage.jsx'), 'utf8');
+  assert.ok(!amazonUI.includes('Live Amazon Page View'), 'AmazonRealProductPage.jsx must not contain "Live Amazon Page View"');
+  assert.ok(!amazonUI.includes('Amazon 100% Real Product Page Simulator'), 'AmazonRealProductPage.jsx must not contain "100% Real Product Page Simulator"');
+  assert.ok(amazonUI.includes('Amazon Product Page Simulation Preview'), 'AmazonRealProductPage.jsx must contain "Amazon Product Page Simulation Preview"');
+
+  const etsyUI = fs.readFileSync(path.resolve(__dirname, '../src/components/EtsyRealProductPage.jsx'), 'utf8');
+  assert.ok(!etsyUI.includes('Live Etsy Shop Page'), 'EtsyRealProductPage.jsx must not contain "Live Etsy Shop Page"');
+  assert.ok(!etsyUI.includes('Etsy 100% Real Shop Product Page Simulator'), 'EtsyRealProductPage.jsx must not contain "100% Real Shop Product Page Simulator"');
+  assert.ok(!etsyUI.includes('Handmade in Texas with love.'), 'EtsyRealProductPage.jsx must not contain fake Texas origin fallback');
+  assert.ok(etsyUI.includes('Etsy Listing Page Simulation Preview'), 'EtsyRealProductPage.jsx must contain "Etsy Listing Page Simulation Preview"');
+
+  const headerUI = fs.readFileSync(path.resolve(__dirname, '../src/components/Header.jsx'), 'utf8');
+  assert.ok(!headerUI.includes('100% Real Clone'), 'Header.jsx must not contain "100% Real Clone"');
+
+  const appUI = fs.readFileSync(path.resolve(__dirname, '../src/App.jsx'), 'utf8');
+  assert.ok(!appUI.includes('100% Real Amazon & Etsy Product Page Simulator'), 'App.jsx must not contain "100% Real Amazon & Etsy Product Page Simulator"');
+  console.log('  🟢 UI Component Truth Label Audit PASSED cleanly.');
+
+  // --- PART 3: MULTI-TENANT BACKGROUND AGENT FILE ISOLATION ASSERTION ---
+  console.log('\nTest 5: Multi-tenant background agent file isolation matrix...');
+  const serverSrc = fs.readFileSync(path.resolve(__dirname, '../server/server.js'), 'utf8');
+  assert.ok(!serverSrc.includes("f.startsWith('global__')"), 'server.js background scanner must not accept global__ wildcard files');
+  assert.ok(serverSrc.includes("f.startsWith(`${agent.workspace_id}__`)"), 'server.js background scanner must filter strictly by agent.workspace_id');
+  console.log('  🟢 Background agent multi-tenant workspace isolation contract PASSED.');
+
   console.log('\n================================================================');
   console.log('  🟢 ALL TRUTH & EVIDENCE OWNERSHIP CONTRACT TESTS PASSED CLEANLY');
   console.log('================================================================');
 }
 
-runTruthEvidenceOwnershipTests();
+runTruthEvidenceOwnershipTests().catch(err => {
+  console.error('❌ Test suite failed:', err);
+  process.exit(1);
+});

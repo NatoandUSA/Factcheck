@@ -6,9 +6,8 @@
 
 set -e
 
-# Target SHA & Baseline
-TARGET_SHA="${1:-c6f3933541e7b069ea65849304c74e0efce70740}"
 TARGET_BRANCH="codex/audit-closeout"
+TARGET_SHA="${1:-$(git rev-parse origin/${TARGET_BRANCH} 2>/dev/null || git rev-parse HEAD)}"
 PUBLIC_DOMAIN="https://omniseller.theglobalserviceteam.site"
 
 # Production Paths for etsy@zoyckgyolinux
@@ -108,6 +107,7 @@ sleep 3
 # Check systemd status
 if ! sudo systemctl is-active --quiet omniseller-web; then
     echo "🔴 systemd service 'omniseller-web' failed to enter active state."
+    sudo journalctl -u omniseller-web -n 20 --no-pager || true
     rollback
 fi
 echo "🟢 systemd service 'omniseller-web' is ACTIVE."

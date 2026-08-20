@@ -5,7 +5,7 @@
 # Target VPS Host: etsy@51.79.200.65 (Ubuntu 22.04 LTS)
 # ==============================================================================
 
-set -e
+set -Eeuo pipefail
 
 BASE_DIR="/home/etsy"
 WORKTREE_REPO="${BASE_DIR}/omniseller"
@@ -16,7 +16,6 @@ STATE_DIR="${BASE_DIR}/omniseller-state"
 SYSTEMD_UNIT_PATH="/etc/systemd/system/omniseller-web.service"
 SYSTEMD_BAK_PATH="/etc/systemd/system/omniseller-web.service.bak"
 
-# Explicit SHA parameters (Pre-configured with proven live baseline e6df541)
 BASELINE_SHA="${1:-e6df541c4a5d7fbc9d6e5bbca18b48d442039b96}"
 
 echo "========================================================================"
@@ -32,9 +31,15 @@ if [ ! -d "${WORKTREE_REPO}" ]; then
     exit 1
 fi
 
+# Validate Baseline Commit Object exists
+git -C "${WORKTREE_REPO}" cat-file -e "${BASELINE_SHA}^{commit}" || {
+    echo "🔴 ERROR: Commit object ${BASELINE_SHA} does not exist in git history."
+    exit 1
+}
+
 mkdir -p "${RELEASES_DIR}" "${STATE_DIR}/db" "${STATE_DIR}/imports" "${STATE_DIR}/backups"
 
-# Dynamically extract EnvironmentFile from active systemd unit
+# Dynamically extract EnvironmentFile from active systemd unit & drop-ins
 DETECTED_ENV=""
 if [ -f "${SYSTEMD_UNIT_PATH}" ]; then
     DETECTED_ENV=$(grep -E "^EnvironmentFile=" "${SYSTEMD_UNIT_PATH}" 2>/dev/null | cut -d'=' -f2 | tr -d '\r' || echo "")
@@ -50,9 +55,14 @@ if [ -z "${DETECTED_ENV}" ] || [ ! -f "${DETECTED_ENV}" ]; then
     fi
 fi
 
-echo "🟢 Preserving Active Environment File: ${DETECTED_ENV}"
+if [ -z "${DETECTED_ENV}" ] || [ ! -f "${DETECTED_ENV}" ]; then
+    echo "🔴 ERROR: Could not resolve a valid non-empty EnvironmentFile."
+    exit 1
+fi
 
-# Idempotency Guard for Unit Backup
+echo "🟢 Preserved Active Environment File: ${DETECTED_ENV}"
+
+# Idempotency Guard for Unit Backup (never overwrite initial .bak)
 if [ -f "${SYSTEMD_UNIT_PATH}" ] && [ ! -f "${SYSTEMD_BAK_PATH}" ]; then
     echo "Backing up original systemd unit to ${SYSTEMD_BAK_PATH} (Idempotent Guard Active)..."
     sudo cp -p "${SYSTEMD_UNIT_PATH}" "${SYSTEMD_BAK_PATH}"
@@ -62,25 +72,34 @@ fi
 BASELINE_RELEASE_DIR="${RELEASES_DIR}/${BASELINE_SHA}"
 echo -e "\n[Step 2/5] Building Baseline Release Directory at ${BASELINE_RELEASE_DIR}..."
 
-if [ ! -d "${BASELINE_RELEASE_DIR}" ]; then
+MANIFEST_FILE="${BASELINE_RELEASE_DIR}/MANIFEST.json"
+
+if [ ! -f "${MANIFEST_FILE}" ]; then
     mkdir -p "${BASELINE_RELEASE_DIR}"
-    git -C "${WORKTREE_REPO}" archive "${BASELINE_SHA}" | tar -x -C "${BASELINE_RELEASE_DIR}" || {
-        echo "Fallback to copying worktree files for baseline..."
-        cp -rp "${WORKTREE_REPO}/." "${BASELINE_RELEASE_DIR}/"
-    }
+    git -C "${WORKTREE_REPO}" archive "${BASELINE_SHA}" | tar -x -C "${BASELINE_RELEASE_DIR}"
+    
+    echo "${BASELINE_SHA}" > "${BASELINE_RELEASE_DIR}/REVISION"
+    cd "${BASELINE_RELEASE_DIR}"
+
+    echo "Installing production dependencies & building native addons from source..."
+    npm ci --build-from-source --production=false
+
+    echo "Verifying native sqlite3 addon loading..."
+    node -e "require('./node_modules/sqlite3'); console.log('🟢 Native sqlite3 verified in baseline release.');"
+
+    echo "Building Vite production bundle..."
+    npm run build
+
+    # Write Atomic Completion Manifest
+    cat << EOF > "${MANIFEST_FILE}"
+{
+  "sha": "${BASELINE_SHA}",
+  "built_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "status": "COMPLETE"
+}
+EOF
+    echo "🟢 Atomic completion manifest written."
 fi
-
-echo "${BASELINE_SHA}" > "${BASELINE_RELEASE_DIR}/REVISION"
-cd "${BASELINE_RELEASE_DIR}"
-
-echo "Installing production dependencies & building native addons from source..."
-npm ci --build-from-source --production=false
-
-echo "Verifying native sqlite3 addon loading..."
-node -e "require('./node_modules/sqlite3'); console.log('🟢 Native sqlite3 verified in baseline release.');"
-
-echo "Building Vite production bundle..."
-npm run build
 
 # Step 3: Atomic Symlink Initialization
 echo -e "\n[Step 3/5] Initializing active symlink /home/etsy/omniseller-current..."
@@ -116,13 +135,17 @@ sudo chown root:root "${SYSTEMD_UNIT_PATH}"
 sudo chmod 644 "${SYSTEMD_UNIT_PATH}"
 rm -f /tmp/omniseller-web.service.new
 
+if command -v systemd-analyze >/dev/null 2>&1; then
+    systemd-analyze verify "${SYSTEMD_UNIT_PATH}" || echo "⚠️ systemd-analyze warning"
+fi
+
 echo "Executing systemctl daemon-reload & restarting baseline service..."
 sudo systemctl daemon-reload
 sudo systemctl restart omniseller-web
 
 sleep 3
 
-# Step 5: Fail-Closed Baseline Health Probe & Revision Verification
+# Step 5: Fail-Closed Baseline Health Probe & Strict Revision Verification
 echo -e "\n[Step 5/5] Validating Baseline Service Status & Local Health Probe..."
 
 if ! sudo systemctl is-active --quiet omniseller-web; then
@@ -142,7 +165,7 @@ for i in {1..5}; do
     if [ -n "${RESPONSE}" ]; then
         LOCAL_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${PORT}/api/health" || echo "000")
         LOCAL_REVISION=$(node -e "try { console.log(JSON.parse(process.argv[1]).revision || ''); } catch(_) {}" "${RESPONSE}")
-        if [ "${LOCAL_STATUS}" -eq 200 ] && [ -n "${LOCAL_REVISION}" ]; then
+        if [ "${LOCAL_STATUS}" -eq 200 ] && [ "${LOCAL_REVISION}" = "${BASELINE_SHA}" ]; then
             break
         fi
     fi
@@ -150,8 +173,8 @@ for i in {1..5}; do
     sleep 2
 done
 
-if [ "${LOCAL_STATUS}" -ne 200 ]; then
-    echo "🔴 ERROR: Baseline health probe failed (HTTP ${LOCAL_STATUS}). Restoring original unit..."
+if [ "${LOCAL_STATUS}" -ne 200 ] || [ "${LOCAL_REVISION}" != "${BASELINE_SHA}" ]; then
+    echo "🔴 ERROR: Baseline health/revision check failed (HTTP ${LOCAL_STATUS}, Revision ${LOCAL_REVISION}). Restoring original unit..."
     [ -f "${SYSTEMD_BAK_PATH}" ] && sudo cp -p "${SYSTEMD_BAK_PATH}" "${SYSTEMD_UNIT_PATH}"
     sudo systemctl daemon-reload
     sudo systemctl restart omniseller-web || true
@@ -159,7 +182,7 @@ if [ "${LOCAL_STATUS}" -ne 200 ]; then
 fi
 
 echo "🟢 systemd service 'omniseller-web' is ACTIVE."
-echo "🟢 Local Health Probe HTTP 200 OK (Baseline Revision: ${LOCAL_REVISION})."
+echo "🟢 Local Health Probe HTTP 200 OK (Strict Revision Verified: ${LOCAL_REVISION})."
 
 echo -e "\n========================================================================"
 echo "  🟢 ONE-TIME SYSTEMD PLATFORM MIGRATION PASSED CLEANLY!"

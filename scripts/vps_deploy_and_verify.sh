@@ -4,7 +4,7 @@
 # Authoritative Production VPS Topology: etsy@51.79.200.65 (Ubuntu 22.04 LTS)
 # ==============================================================================
 
-set -e
+set -Eeuo pipefail
 
 TARGET_BRANCH="codex/audit-closeout"
 PUBLIC_DOMAIN="https://omniseller.theglobalserviceteam.site"
@@ -16,8 +16,9 @@ RELEASES_DIR="${BASE_DIR}/omniseller-releases"
 CURRENT_SYMLINK="${BASE_DIR}/omniseller-current"
 STATE_DIR="${BASE_DIR}/omniseller-state"
 
-DB_PATH="${STATE_DIR}/db/app.db"
-ENV_FILE="${STATE_DIR}/env/omniseller.env"
+# Dynamically resolve DB Path matching server/config/paths.js contract
+DB_PATH="${OMNI_DB_PATH:-${STATE_DIR}/db/app.db}"
+ENV_FILE="${DOTENV_PATH:-${STATE_DIR}/env/omniseller.env}"
 [ ! -f "${ENV_FILE}" ] && ENV_FILE="${STATE_DIR}/omniseller.env"
 BACKUP_DIR="${STATE_DIR}/backups"
 
@@ -35,7 +36,7 @@ if [ ! -d "${WORKTREE_REPO}" ]; then
     exit 1
 fi
 
-# Capture Baseline SHA BEFORE any fetch or checkout from active symlink or REVISION file
+# Capture Baseline SHA BEFORE any fetch or checkout from active symlink REVISION file
 BASELINE_SHA=""
 if [ -f "${CURRENT_SYMLINK}/REVISION" ]; then
     BASELINE_SHA=$(cat "${CURRENT_SYMLINK}/REVISION" | tr -d '\r\n')
@@ -63,12 +64,25 @@ if [ -z "${TARGET_SHA}" ] || [ ${#TARGET_SHA} -ne 40 ]; then
     exit 1
 fi
 
+# Validate Target Commit Object exists in git history
+git -C "${WORKTREE_REPO}" cat-file -e "${TARGET_SHA}^{commit}" || {
+    echo "🔴 ERROR: Commit object ${TARGET_SHA} does not exist in git history."
+    exit 1
+}
+
 BASELINE_RELEASE_DIR="${RELEASES_DIR}/${BASELINE_SHA}"
-if [ ! -d "${BASELINE_RELEASE_DIR}" ]; then
+if [ ! -d "${BASELINE_RELEASE_DIR}" ] || [ ! -f "${BASELINE_RELEASE_DIR}/MANIFEST.json" ]; then
     echo "Preparing baseline release directory ${BASELINE_RELEASE_DIR}..."
     mkdir -p "${BASELINE_RELEASE_DIR}"
-    git -C "${WORKTREE_REPO}" archive "${BASELINE_SHA}" | tar -x -C "${BASELINE_RELEASE_DIR}" 2>/dev/null || cp -rp "${WORKTREE_REPO}/." "${BASELINE_RELEASE_DIR}/"
+    git -C "${WORKTREE_REPO}" archive "${BASELINE_SHA}" | tar -x -C "${BASELINE_RELEASE_DIR}"
     echo "${BASELINE_SHA}" > "${BASELINE_RELEASE_DIR}/REVISION"
+    cat << EOF > "${BASELINE_RELEASE_DIR}/MANIFEST.json"
+{
+  "sha": "${BASELINE_SHA}",
+  "built_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "status": "COMPLETE"
+}
+EOF
 fi
 
 # Function for Atomic Symlink Swap
@@ -83,7 +97,7 @@ atomic_symlink_switch() {
 # NOTE: Deployment rollback ONLY swaps code symlinks to baseline.
 # Database restore is strictly a separate, explicit, migration-aware, owner-approved operation.
 rollback() {
-    echo -e "\n🔴 DEPLOYMENT OR HEALTH VALIDATION FAILED! INITIATING FAIL-CLOSED ROLLBACK..."
+    echo -e "\n🔴 DEPLOYMENT OR LOCAL HEALTH VALIDATION FAILED! INITIATING FAIL-CLOSED ROLLBACK..."
     sudo systemctl stop omniseller-web || true
     
     echo "Restoring active symlink atomically to pre-built baseline release ${BASELINE_RELEASE_DIR}..."
@@ -103,24 +117,36 @@ rollback() {
 
 # --- STEP 2: ISOLATED RELEASE BUILDING (0s Downtime) ---
 TARGET_RELEASE_DIR="${RELEASES_DIR}/${TARGET_SHA}"
+MANIFEST_FILE="${TARGET_RELEASE_DIR}/MANIFEST.json"
+
 echo -e "\n[Step 2/7] Preparing isolated release directory at ${TARGET_RELEASE_DIR}..."
 
-if [ ! -d "${TARGET_RELEASE_DIR}" ]; then
+if [ ! -f "${MANIFEST_FILE}" ]; then
     mkdir -p "${TARGET_RELEASE_DIR}"
     git -C "${WORKTREE_REPO}" archive "${TARGET_SHA}" | tar -x -C "${TARGET_RELEASE_DIR}"
+    
+    echo "${TARGET_SHA}" > "${TARGET_RELEASE_DIR}/REVISION"
+    cd "${TARGET_RELEASE_DIR}"
+
+    echo "Installing production dependencies & building native addons from source (Ubuntu 22.04 LTS)..."
+    npm ci --build-from-source --production=false || { rollback; }
+
+    echo "Verifying native SQLite addon loading..."
+    node -e "require('./node_modules/sqlite3'); console.log('🟢 Native sqlite3 addon verified in release directory.');" || { rollback; }
+
+    echo "Building Vite production bundle inside release directory..."
+    npm run build || { rollback; }
+
+    # Write Atomic Completion Manifest
+    cat << EOF > "${MANIFEST_FILE}"
+{
+  "sha": "${TARGET_SHA}",
+  "built_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "status": "COMPLETE"
+}
+EOF
+    echo "🟢 Atomic completion manifest written."
 fi
-
-echo "${TARGET_SHA}" > "${TARGET_RELEASE_DIR}/REVISION"
-cd "${TARGET_RELEASE_DIR}"
-
-echo "Installing production dependencies & building native addons from source (Ubuntu 22.04 LTS)..."
-npm ci --build-from-source --production=false || { rollback; }
-
-echo "Verifying native SQLite addon loading..."
-node -e "require('./node_modules/sqlite3'); console.log('🟢 Native sqlite3 addon verified in release directory.');" || { rollback; }
-
-echo "Building Vite production bundle inside release directory..."
-npm run build || { rollback; }
 
 # --- STEP 3: SAFE SERVICE STOP & WAL-SAFE DB BACKUP ---
 echo -e "\n[Step 3/7] Stopping systemd service 'omniseller-web' & snapshotting database..."
@@ -190,7 +216,7 @@ for i in {1..5}; do
     if [ -n "${RESPONSE}" ]; then
         LOCAL_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${PORT}/api/health" || echo "000")
         LOCAL_REVISION=$(node -e "try { console.log(JSON.parse(process.argv[1]).revision || ''); } catch(_) {}" "${RESPONSE}")
-        if [ "${LOCAL_STATUS}" -eq 200 ] && [ -n "${LOCAL_REVISION}" ]; then
+        if [ "${LOCAL_STATUS}" -eq 200 ] && [ "${LOCAL_REVISION}" = "${TARGET_SHA}" ]; then
             break
         fi
     fi
@@ -202,16 +228,15 @@ if [ "${LOCAL_STATUS}" -ne 200 ]; then
     echo "🔴 Local health check failed: HTTP ${LOCAL_STATUS} (expected 200)."
     rollback
 fi
-echo "🟢 Local health probe http://127.0.0.1:${PORT}/api/health returned 200 OK (Revision: ${LOCAL_REVISION})."
 
-# Check revision match
-if [[ "${TARGET_SHA}" != "${LOCAL_REVISION}"* ]] && [[ "${LOCAL_REVISION}" != "${TARGET_SHA}"* ]]; then
+# Strict 40-character SHA equality check
+if [ "${LOCAL_REVISION}" != "${TARGET_SHA}" ]; then
     echo "🔴 Revision Mismatch: Target SHA is ${TARGET_SHA}, but local server reported revision ${LOCAL_REVISION}."
     rollback
 fi
-echo "🟢 Local Revision Provenance Verified: matches Target SHA ${TARGET_SHA}."
+echo "🟢 Local Revision Provenance Verified: 100% exact match with Target SHA ${TARGET_SHA}."
 
-# 6b. Public Cloudflare Domain Check
+# 6b. Public Cloudflare Domain Observation (Decoupled Operator Alert)
 PUBLIC_RESPONSE=$(curl -s "${PUBLIC_DOMAIN}/api/health" || echo "")
 PUBLIC_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${PUBLIC_DOMAIN}/api/health" || echo "000")
 
@@ -222,19 +247,13 @@ if [ "${PUBLIC_STATUS}" -ne 200 ]; then
     PUBLIC_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${PUBLIC_DOMAIN}/api/health" || echo "000")
 fi
 
-if [ "${PUBLIC_STATUS}" -ne 200 ]; then
-    echo "🔴 Public Cloudflare health check failed: HTTP ${PUBLIC_STATUS} (expected 200)."
-    rollback
-fi
-
 PUBLIC_REVISION=$(node -e "try { console.log(JSON.parse(process.argv[1]).revision || ''); } catch(_) {}" "${PUBLIC_RESPONSE}")
-echo "🟢 Public Cloudflare health probe ${PUBLIC_DOMAIN}/api/health returned 200 OK (Revision: ${PUBLIC_REVISION})."
 
-if [[ "${TARGET_SHA}" != "${PUBLIC_REVISION}"* ]] && [[ "${PUBLIC_REVISION}" != "${TARGET_SHA}"* ]]; then
-    echo "🔴 Public Revision Mismatch: Target SHA is ${TARGET_SHA}, but public endpoint reported ${PUBLIC_REVISION}."
-    rollback
+if [ "${PUBLIC_STATUS}" -eq 200 ] && [ "${PUBLIC_REVISION}" = "${TARGET_SHA}" ]; then
+    echo "🟢 Public Cloudflare health probe ${PUBLIC_DOMAIN}/api/health returned 200 OK (Revision: ${PUBLIC_REVISION})."
+else
+    echo "⚠️ OPERATIONAL WARNING: Public Cloudflare health check returned HTTP ${PUBLIC_STATUS} (Revision: ${PUBLIC_REVISION}). Local origin is HEALTHY on target ${TARGET_SHA}. Inspect Cloudflare Tunnel routing."
 fi
-echo "🟢 Public Revision Provenance Verified: matches Target SHA ${TARGET_SHA}."
 
 # --- STEP 7: DEPLOYMENT SUCCESS DECLARATION ---
 echo -e "\n========================================================================"

@@ -29,7 +29,9 @@ function runAllTests() {
     'tests/test_ytrends_unknown_defaults.cjs',
     'tests/test_listing_ip_rescreen.cjs',
     'tests/spec_simulator_and_mkl_truth.test.cjs',
-    'tests/spec_publish_gate_contracts.test.cjs'
+    'tests/spec_publish_gate_contracts.test.cjs',
+    'tests/server_revision.test.cjs',
+    'tests/vps_platform_scripts.test.cjs'
   ];
 
   let passedCount = 0;

@@ -1,0 +1,15 @@
+[Unit]
+Description=OmniSeller Studio Web Service
+After=network.target
+
+[Service]
+Type=simple
+User=etsy
+WorkingDirectory=/home/etsy/omniseller-current/server
+EnvironmentFile=/home/etsy/omniseller-state/env/omniseller.env
+ExecStart=/home/etsy/.nvm/versions/node/v22.23.2/bin/node /home/etsy/omniseller-current/server/server.js
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

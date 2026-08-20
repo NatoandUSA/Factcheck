@@ -52,9 +52,11 @@ fi
 
 echo "🟢 Active Baseline SHA: ${BASELINE_SHA}"
 
-# Fetch remote tracking branch first before resolving target SHA
+# Fetch remote tracking branch first before resolving target SHA (Fail-Closed)
 echo "Fetching origin/${TARGET_BRANCH}..."
-git -C "${WORKTREE_REPO}" fetch origin "${TARGET_BRANCH}" 2>/dev/null || true
+git -C "${WORKTREE_REPO}" fetch origin "${TARGET_BRANCH}" || {
+    echo "⚠️ Warning: git fetch origin ${TARGET_BRANCH} failed. Proceeding with local object check for target SHA..."
+}
 
 TARGET_SHA="${1:-$(git -C "${WORKTREE_REPO}" rev-parse origin/${TARGET_BRANCH} 2>/dev/null || git -C "${WORKTREE_REPO}" rev-parse HEAD)}"
 echo "🟢 Target Release SHA: ${TARGET_SHA}"
@@ -97,7 +99,7 @@ atomic_symlink_switch() {
 # NOTE: Deployment rollback ONLY swaps code symlinks to baseline.
 # Database restore is strictly a separate, explicit, migration-aware, owner-approved operation.
 rollback() {
-    echo -e "\n🔴 DEPLOYMENT OR LOCAL HEALTH VALIDATION FAILED! INITIATING FAIL-CLOSED ROLLBACK..."
+    echo -e "\n🔴 DEPLOYMENT OR LOCAL/PUBLIC HEALTH VALIDATION FAILED! INITIATING FAIL-CLOSED ROLLBACK..."
     sudo systemctl stop omniseller-web || true
     
     echo "Restoring active symlink atomically to pre-built baseline release ${BASELINE_RELEASE_DIR}..."
@@ -236,7 +238,7 @@ if [ "${LOCAL_REVISION}" != "${TARGET_SHA}" ]; then
 fi
 echo "🟢 Local Revision Provenance Verified: 100% exact match with Target SHA ${TARGET_SHA}."
 
-# 6b. Public Cloudflare Domain Observation (Decoupled Operator Alert)
+# 6b. Public Cloudflare Domain Verification (FAIL-CLOSED Contract)
 PUBLIC_RESPONSE=$(curl -s "${PUBLIC_DOMAIN}/api/health" || echo "")
 PUBLIC_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${PUBLIC_DOMAIN}/api/health" || echo "000")
 
@@ -249,11 +251,13 @@ fi
 
 PUBLIC_REVISION=$(node -e "try { console.log(JSON.parse(process.argv[1]).revision || ''); } catch(_) {}" "${PUBLIC_RESPONSE}")
 
-if [ "${PUBLIC_STATUS}" -eq 200 ] && [ "${PUBLIC_REVISION}" = "${TARGET_SHA}" ]; then
-    echo "🟢 Public Cloudflare health probe ${PUBLIC_DOMAIN}/api/health returned 200 OK (Revision: ${PUBLIC_REVISION})."
-else
-    echo "⚠️ OPERATIONAL WARNING: Public Cloudflare health check returned HTTP ${PUBLIC_STATUS} (Revision: ${PUBLIC_REVISION}). Local origin is HEALTHY on target ${TARGET_SHA}. Inspect Cloudflare Tunnel routing."
+if [ "${PUBLIC_STATUS}" -ne 200 ] || [ "${PUBLIC_REVISION}" != "${TARGET_SHA}" ]; then
+    echo "🔴 FAIL-CLOSED DEPLOYMENT ERROR: Public Cloudflare health check failed or revision mismatched."
+    echo "    Expected HTTP 200 and Revision ${TARGET_SHA}, but got HTTP ${PUBLIC_STATUS} and Revision ${PUBLIC_REVISION}."
+    rollback
 fi
+
+echo "🟢 Public Cloudflare health probe ${PUBLIC_DOMAIN}/api/health returned 200 OK (Revision: ${PUBLIC_REVISION})."
 
 # --- STEP 7: DEPLOYMENT SUCCESS DECLARATION ---
 echo -e "\n========================================================================"

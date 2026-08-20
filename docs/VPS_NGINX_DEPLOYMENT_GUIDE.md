@@ -1,10 +1,16 @@
-# 🚀 HƯỚNG DẪN TRIỂN KHAI & CẤU HÌNH HẠ TẦNG VPS (OMNISELLER STUDIO)
+# ⚠️ [SUPERSEDED / DEPRECATED] HƯỚNG DẪN TRIỂN KHAI VPS CŨ (PM2 & NGINX)
 
-Tài liệu này hướng dẫn từng bước cấu hình máy chủ VPS (Ubuntu / Debian / Linux) để vận hành hệ thống **OmniSeller Studio** với hiệu năng tối đa, tải trang siêu tốc, bảo mật HTTPS SSL, và không bị gián đoạn dịch vụ 24/7.
+> **IMPORTANT / DEPRECATED NOTICE**:
+> Tài liệu này mô tả hạ tầng cũ (PM2 + Nginx). Hệ thống OmniSeller Studio hiện tại đã chuyển sang **Mô Hình Systemd Service + Cloudflare Tunnel + Immutable Symlink Release Model** chuẩn hóa:
+> - **Systemd Installer**: [`scripts/vps_migrate_and_setup_platform.sh`](file:///d:/Claude/Factcheck/scripts/vps_migrate_and_setup_platform.sh)
+> - **Immutable Deployment Runbook**: [`scripts/vps_deploy_and_verify.sh`](file:///d:/Claude/Factcheck/scripts/vps_deploy_and_verify.sh)
+> - **Systemd Service Unit**: [`deploy/omniseller-web.service.template`](file:///d:/Claude/Factcheck/deploy/omniseller-web.service.template)
+>
+> Không sử dụng PM2 hay Nginx thủ công cho các bản phát hành mới.
 
 ---
 
-## 1. YÊU CẦU PHẦN CỨNG & MÔI TRƯỜNG VPS
+## 1. YÊU CẦU PHẦN CỨNG & MÔI TRƯỜNG VPS (THÔNG TIN THAM KHẢO LỊCH SỬ)
 
 - **Hệ điều hành**: Ubuntu 22.04 LTS / Ubuntu 24.04 LTS / Debian 12
 - **Cấu hình tối thiểu**: 2 CPU Cores, 2GB RAM, 20GB SSD

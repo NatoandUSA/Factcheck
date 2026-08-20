@@ -31,7 +31,8 @@ function runAllTests() {
     'tests/spec_simulator_and_mkl_truth.test.cjs',
     'tests/spec_publish_gate_contracts.test.cjs',
     'tests/server_revision.test.cjs',
-    'tests/vps_platform_scripts.test.cjs'
+    'tests/vps_platform_scripts.test.cjs',
+    'tests/test_opportunity_truth_boundary.cjs'
   ];
 
   let passedCount = 0;

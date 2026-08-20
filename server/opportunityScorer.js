@@ -3,33 +3,40 @@
  * Ported directly from 22etsy-agent opportunity_score.py
  */
 
-function calculateOpportunityScore(item) {
-  const category = item.categoryName || item.category || 'General';
-  const kw = item.amazonTitle || item.etsyTitle || '';
+function calculateOpportunityScore(item = {}) {
+  const hasObservedDemand = typeof item.searchVolume === 'number' || typeof item.demandScore === 'number';
+  const hasObservedComp = typeof item.competitorCount === 'number' || typeof item.competitionIndex === 'number';
+
+  // If real observed market evidence is absent, return UNSCORED with explicit provenance
+  if (!hasObservedDemand || !hasObservedComp) {
+    return {
+      overallScore: null,
+      verdict: 'UNSCORED',
+      provenance: {
+        status: 'INSUFFICIENT_MARKET_EVIDENCE',
+        note: 'Requires real observed search volume and competitor count data'
+      },
+      metrics: {
+        demandScore: null,
+        competitionIndex: null,
+        seoScore: null,
+        designPotential: null
+      }
+    };
+  }
+
+  const demandScore = Math.min(100.0, Math.max(0.0, item.demandScore ?? (item.searchVolume ? Math.min(100, item.searchVolume / 100) : 0)));
+  const competitionIndex = Math.min(100.0, Math.max(0.0, item.competitionIndex ?? (item.competitorCount ? Math.max(0, 100 - item.competitorCount / 50) : 0)));
   
-  // 1. Demand Score (0-100): Based on keyword search volume / length & intent
-  let demandScore = 75.0;
-  if (kw.length > 50) demandScore += 10.0;
-  if (/personalized|custom|engraved|embroidered/i.test(kw)) demandScore += 10.0;
-  demandScore = Math.min(100.0, Math.max(20.0, demandScore));
-
-  // 2. Competition Index (0-100): Lower saturation = better score
-  let competitionIndex = 68.0;
-  if (category === 'Jewelry') competitionIndex = 45.0; // High competition
-  else if (category === 'Embroidery') competitionIndex = 82.0; // Low competition
-  else if (category === 'Blanket') competitionIndex = 72.0;
-
-  // 3. SEO Score (0-100): Graded by phrase length and front-loaded keywords
-  const wordCount = kw.trim().split(/\s+/).length;
-  let seoScore = 60.0;
-  if (wordCount >= 5 && wordCount <= 12) seoScore = 90.0; // Ideal buyer long-tail
+  const kw = item.amazonTitle || item.etsyTitle || '';
+  const wordCount = kw.trim().split(/\s+/).filter(Boolean).length;
+  let seoScore = 50.0;
+  if (wordCount >= 5 && wordCount <= 12) seoScore = 90.0;
   else if (wordCount > 12) seoScore = 80.0;
-  else if (wordCount < 4) seoScore = 50.0;
+  else if (wordCount >= 1) seoScore = 60.0;
 
-  // 4. Design Potential (0-100): Higher in less saturated niches
-  let designPotential = Math.min(95.0, Math.max(30.0, competitionIndex + 10.0));
+  const designPotential = Math.min(100.0, Math.max(0.0, competitionIndex));
 
-  // Overall Weighted Score: Market (35%), Competition (30%), SEO (20%), Design (15%)
   const overallScore = Math.round(
     demandScore * 0.35 +
     competitionIndex * 0.30 +
@@ -37,8 +44,7 @@ function calculateOpportunityScore(item) {
     designPotential * 0.15
   );
 
-  // Verdict Determination
-  let verdict = 'GO';
+  let verdict = 'UNSCORED';
   if (overallScore >= 80) verdict = 'GO';
   else if (overallScore >= 65) verdict = 'CONDITIONAL';
   else if (overallScore >= 50) verdict = 'WATCH';
@@ -47,6 +53,10 @@ function calculateOpportunityScore(item) {
   return {
     overallScore,
     verdict,
+    provenance: {
+      status: 'OBSERVED_EVIDENCE_SCORED',
+      note: 'Scored against real observed market search volume and competitor metrics'
+    },
     metrics: {
       demandScore: Math.round(demandScore),
       competitionIndex: Math.round(competitionIndex),

@@ -544,6 +544,7 @@ app.get('/api/health', (req, res) => {
     res.json({
       status: 'OK',
       database: 'CONNECTED',
+      revision: process.env.GIT_REVISION || 'e6df541c4a5d7fbc9d6e5bbca18b48d442039b96',
       uptime: process.uptime(),
       timestamp: new Date().toISOString()
     });

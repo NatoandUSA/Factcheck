@@ -94,9 +94,20 @@ git checkout -f "${TARGET_SHA}" || { rollback; }
 DEPLOYED_SHA=$(git rev-parse HEAD)
 echo "🟢 Verified checkout on exact SHA: ${DEPLOYED_SHA}"
 
-# --- STEP 4: DEPENDENCY INSTALL & VITE BUILD ---
-echo -e "\n[Step 4/7] Installing dependencies & building Vite bundle..."
+# --- STEP 4: DEPENDENCY INSTALL, NATIVE REBUILD & VITE BUILD ---
+echo -e "\n[Step 4/7] Installing dependencies & rebuilding native modules for Ubuntu 22.04 GLIBC..."
 npm ci --production=false || { rollback; }
+
+echo "Rebuilding native SQLite addon from source for host OS GLIBC compatibility..."
+(cd server && npm rebuild sqlite3 --build-from-source) || (npm rebuild sqlite3 --build-from-source) || { rollback; }
+
+echo "Verifying native module loading compatibility..."
+node -e "require('./server/node_modules/sqlite3'); console.log('🟢 Native sqlite3 module loaded cleanly.');" || {
+    echo "🔴 Native module check failed. Retrying force rebuild from source..."
+    npm rebuild sqlite3 --build-from-source --force || { rollback; }
+}
+
+echo "Building Vite production bundle..."
 npm run build || { rollback; }
 
 # --- STEP 5: RESTART SYSTEMD SERVICE ---

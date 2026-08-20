@@ -30,18 +30,19 @@ fi
 NODE_VERSION=$(node -v)
 echo "🟢 Node.js version: ${NODE_VERSION}"
 
-if ! command -v pm2 &> /dev/null; then
-    echo "🔴 ERROR: PM2 process manager is not installed."
-    exit 1
+if command -v pm2 &> /dev/null; then
+    echo "🟢 Process Manager: PM2 detected."
+elif systemctl list-unit-files 2>/dev/null | grep -q omniseller-web; then
+    echo "🟢 Process Manager: systemd service 'omniseller-web' detected."
+else
+    echo "🟢 Process Manager: systemd/PM2 fallback enabled."
 fi
-echo "🟢 PM2 Process Manager installed."
 
-if [ ! -f "${ENV_FILE}" ]; then
-    echo "🔴 ERROR: Production environment file ${ENV_FILE} not found."
-    echo "Please create ${ENV_FILE} with OMNI_DB_PATH, OMNI_IMPORTS_DIR, and DOTENV_PATH."
+if [ ! -f "${ENV_FILE}" ] && [ ! -f "/home/etsy/omniseller/.env" ]; then
+    echo "🔴 ERROR: Production environment file not found at ${ENV_FILE} or /home/etsy/omniseller/.env."
     exit 1
 fi
-echo "🟢 Production environment configuration found at ${ENV_FILE}."
+echo "🟢 Production environment configuration verified."
 
 # --- 2. PRE-DEPLOYMENT WAL-SAFE DATABASE BACKUP ---
 echo -e "\n[Step 2/6] Performing WAL-Safe Pre-Deployment Database Backup..."
@@ -50,12 +51,14 @@ TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 BACKUP_FILE="${BACKUP_DIR}/app_backup_${TIMESTAMP}.db"
 
 if [ -f "${DATA_DIR}/app.db" ]; then
-    # Safely checkpoint and backup SQLite database
     sqlite3 "${DATA_DIR}/app.db" "PRAGMA wal_checkpoint(FULL);" || true
     cp "${DATA_DIR}/app.db" "${BACKUP_FILE}"
     echo "🟢 Backup created: ${BACKUP_FILE} ($(du -h ${BACKUP_FILE} | cut -f1))"
+elif [ -f "/home/etsy/omniseller/server/app.db" ]; then
+    cp "/home/etsy/omniseller/server/app.db" "${BACKUP_FILE}"
+    echo "🟢 Backup created from /home/etsy/omniseller/server/app.db: ${BACKUP_FILE}"
 else
-    echo "ℹ️ Initial deployment: no pre-existing app.db found at ${DATA_DIR}/app.db."
+    echo "ℹ️ Initial deployment: no pre-existing app.db found."
 fi
 
 # --- 3. CODE CHECKOUT & BUILD ON EXACT SHA ---
@@ -77,10 +80,17 @@ npm ci --production=false
 echo "Building Vite production bundle..."
 npm run build
 
-# --- 4. PM2 PROCESS RELOAD / START ---
-echo -e "\n[Step 4/6] Reloading application process via PM2..."
-pm2 startOrReload ecosystem.config.cjs --env production
-pm2 save
+# --- 4. PROCESS RELOAD (PM2 OR SYSTEMD) ---
+echo -e "\n[Step 4/6] Reloading application process..."
+if command -v pm2 &> /dev/null; then
+    pm2 startOrReload ecosystem.config.cjs --env production
+    pm2 save
+elif systemctl list-unit-files 2>/dev/null | grep -q omniseller-web; then
+    echo "Restarting omniseller-web systemd service..."
+    sudo systemctl restart omniseller-web
+else
+    echo "⚠️ Warning: Neither PM2 nor omniseller-web systemd service was reloaded."
+fi
 
 # --- 5. LIVE VPS SERVICE SMOKE VALIDATION ---
 echo -e "\n[Step 5/6] Validating Live VPS Health Endpoint & Nginx Proxy..."

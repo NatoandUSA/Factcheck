@@ -48,11 +48,11 @@ export default function EtsyRealProductPage({ listing, onShowToast }) {
             <Sparkles size={20} color="#fff" />
           </div>
           <div>
-            <div style={{ fontWeight: 800, fontSize: '1rem' }}>
-              Etsy 100% Real Shop Product Page Simulator
+            <div style={{ fontWeight: 800, fontSize: '1rem', color: '#f59e0b' }}>
+              Etsy Listing Page Simulation Preview — Not Live — Not Submission Ready
             </div>
             <div style={{ fontSize: '0.75rem', color: '#fed7aa' }}>
-              Mô phỏng chân thực giao diện Etsy với <strong>12 Listing Photos</strong> & <strong>13 Search Tags Pool</strong>
+              Mô phỏng xem trước giao diện Etsy (Simulation Preview) với <strong>12 Listing Photos</strong> & <strong>13 Search Tags Pool</strong>
             </div>
           </div>
         </div>
@@ -241,7 +241,7 @@ export default function EtsyRealProductPage({ listing, onShowToast }) {
             <div style={{ borderTop: '1px solid #e1e3df', paddingTop: '14px' }}>
               <h3 style={{ fontSize: '0.95rem', fontWeight: 700, marginBottom: '8px' }}>Item Details & Story</h3>
               <div style={{ fontSize: '0.85rem', lineHeight: 1.6, color: '#333', whiteSpace: 'pre-line' }}>
-                {listing.etsyDescription || 'Handmade in Texas with love.'}
+                {listing.etsyDescription || 'No description provided.'}
               </div>
             </div>
 

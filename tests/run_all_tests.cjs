@@ -32,7 +32,8 @@ function runAllTests() {
     'tests/spec_publish_gate_contracts.test.cjs',
     'tests/server_revision.test.cjs',
     'tests/vps_platform_scripts.test.cjs',
-    'tests/test_opportunity_truth_boundary.cjs'
+    'tests/test_opportunity_truth_boundary.cjs',
+    'tests/test_truth_evidence_ownership.test.cjs'
   ];
 
   let passedCount = 0;

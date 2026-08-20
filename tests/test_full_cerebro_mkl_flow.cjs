@@ -54,6 +54,8 @@ function httpPostMultipart(port, filePath, cookie) {
       `--${boundary}\r\n` +
       `Content-Disposition: form-data; name="seedPhrase"\r\n\r\npara el amor de mi vida\r\n` +
       `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="category"\r\n\r\nJewelry\r\n` +
+      `--${boundary}\r\n` +
       `Content-Disposition: form-data; name="reportFile"; filename="${path.basename(filePath)}"\r\n` +
       `Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet\r\n\r\n`
     );

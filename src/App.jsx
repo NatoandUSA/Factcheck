@@ -266,7 +266,7 @@ export default function App() {
           </div>
         )}
 
-        {/* TAB 3: 🛍️ 100% Real Amazon & Etsy Product Page Simulator */}
+        {/* TAB 3: 🛍️ Amazon & Etsy Product Page Simulation Preview */}
         {activeTab === 'product-page' && (
           <ProductListingPageSimulator
             currentListing={currentListing}

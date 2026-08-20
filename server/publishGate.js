@@ -197,9 +197,17 @@ function evaluatePublishGate(listing) {
   // with no real description content. Upstream fixes leave a missing
   // description empty instead of injecting boilerplate, so an empty
   // description here means nobody has written real product facts yet.
-  const description = listing.amazonDescription || listing.etsyDescription || '';
+  let description = '';
+  if (contract.marketplace === 'AMAZON') {
+    description = listing.amazonDescription || '';
+  } else if (contract.marketplace === 'ETSY') {
+    description = listing.etsyDescription || '';
+  } else {
+    description = listing.amazonDescription || listing.etsyDescription || '';
+  }
+
   if (!description || description.trim().length === 0) {
-    issues.push('Missing product description -- write real product details before publishing (no auto-generated placeholder is used).');
+    issues.push(`Missing product description for ${contract.marketplace} -- write real product details before publishing (no cross-marketplace description fallback).`);
   }
 
   // 2c. Product Truth Check, part 2: a non-empty description is necessary

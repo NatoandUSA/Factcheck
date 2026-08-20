@@ -70,7 +70,8 @@ const storage = multer.diskStorage({
   },
   filename: function (req, file, cb) {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, uniqueSuffix + '-' + file.originalname);
+    const workspacePrefix = (req.user && req.user.workspaceId) ? `${req.user.workspaceId}__` : 'global__';
+    cb(null, workspacePrefix + uniqueSuffix + '-' + file.originalname);
   }
 });
 const upload = multer({
@@ -1498,7 +1499,11 @@ app.post('/api/amazon/quick-draft', requireAuth(db), requireRole(['OWNER', 'MANA
   if (req.user.marketplace !== 'AMAZON') {
     return res.status(403).json({ success: false, error: 'MARKETPLACE_MISMATCH' });
   }
-  const { seedPhrase = 'mom sweatshirt', category = 'Apparel: Sweatshirt', asins = [] } = req.body;
+  const { seedPhrase, category, asins = [] } = req.body;
+
+  if (!seedPhrase || !String(seedPhrase).trim() || !category || !String(category).trim()) {
+    return res.status(400).json({ success: false, error: 'INSUFFICIENT_EVIDENCE', message: 'seedPhrase and category are required' });
+  }
 
   try {
     const cleanSeed = seedPhrase.trim();
@@ -1725,9 +1730,12 @@ app.get('/api/master-keywords', requireAuth(db), requireRole(['OWNER', 'MANAGER'
 
 // API: Multi-Source Market Benchmark & Go/No-Go Decision Engine
 app.get('/api/benchmark/validate', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
-  const { seed = 'mom sweatshirt', category = 'Apparel: Sweatshirt' } = req.query;
+  const { seed, category } = req.query;
+  if (!seed || !String(seed).trim() || !category || !String(category).trim()) {
+    return res.status(400).json({ success: false, error: 'INSUFFICIENT_EVIDENCE', message: 'seed and category query parameters are required' });
+  }
   try {
-    const data = await benchmarkService.getMarketBenchmark({ seed, category });
+    const data = await benchmarkService.getMarketBenchmark({ seed: String(seed).trim(), category: String(category).trim() });
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1741,9 +1749,13 @@ const handleReportUpload = async (req, res) => {
     return res.status(400).json({ error: 'No file uploaded. Please select a .xlsx, .csv, or .html file.' });
   }
 
+  const targetCategory = req.body.category;
+  if (!targetCategory || !String(targetCategory).trim()) {
+    return res.status(400).json({ success: false, error: 'INSUFFICIENT_EVIDENCE', message: 'category parameter is required' });
+  }
+
   const filePath = file.path;
   const fileName = file.originalname;
-  const targetCategory = req.body.category || 'Apparel: Sweatshirt';
   // Marketplace is server-derived from the authenticated session, never
   // trusted from the client body (GPT PR-5 review finding P0-B1).
   const targetMarketplace = req.user.marketplace;
@@ -2413,7 +2425,11 @@ const backgroundAgentTimer = setInterval(() => {
     onlineAgents.forEach(async agent => {
       // Agent 1: Trend Scout (Role: RESEARCHER - Real Data Engine)
       if (agent.role === 'RESEARCHER') {
-        const files = fs.readdirSync(importsDir).filter(f => f.endsWith('.csv') || f.endsWith('.xlsx') || f.endsWith('.html') || f.endsWith('.htm'));
+        const files = fs.readdirSync(importsDir).filter(f => {
+          const isSupportedExt = f.endsWith('.csv') || f.endsWith('.xlsx') || f.endsWith('.html') || f.endsWith('.htm');
+          const isScopedToWorkspace = f.startsWith(`${agent.workspace_id}__`) || f.startsWith('global__');
+          return isSupportedExt && isScopedToWorkspace;
+        });
         
         if (files.length > 0) {
           const fileToProcess = files[0];

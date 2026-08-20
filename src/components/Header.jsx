@@ -50,7 +50,7 @@ export default function Header({ activeTab, setActiveTab, onOpenApiKeyModal, onO
             onClick={() => setActiveTab('product-page')}
           >
             <Sparkles size={16} />
-            <span>Product Page (100% Real Clone)</span>
+            <span>Simulation Preview</span>
           </button>
 
           <button

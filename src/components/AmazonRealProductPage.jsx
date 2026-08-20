@@ -48,11 +48,11 @@ export default function AmazonRealProductPage({ listing, onShowToast }) {
             <Sparkles size={20} color="#fff" />
           </div>
           <div>
-            <div style={{ fontWeight: 800, fontSize: '1rem' }}>
-              Amazon 100% Real Product Page Simulator
+            <div style={{ fontWeight: 800, fontSize: '1rem', color: '#f59e0b' }}>
+              Amazon Product Page Simulation Preview — Not Live — Not Submission Ready
             </div>
             <div style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
-              Bản mô phỏng chính xác giao diện Amazon với đầy đủ <strong>10 Listing Images</strong> & <strong>10 A+ Content Modules</strong>
+              Mô phỏng xem trước giao diện Amazon (Simulation Preview) với <strong>10 Listing Images</strong> & <strong>10 A+ Content Modules</strong>
             </div>
           </div>
         </div>

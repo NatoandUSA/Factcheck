@@ -38,6 +38,11 @@ async function main() {
       '{}'
     ]);
 
+    await run(db, `CREATE TABLE agents (id INTEGER PRIMARY KEY, name TEXT)`);
+    await run(db, `CREATE TABLE agent_logs (id INTEGER PRIMARY KEY, agentId INTEGER, message TEXT)`);
+    await run(db, `INSERT INTO agents (name) VALUES ('Legacy Agent')`);
+    await run(db, `INSERT INTO agent_logs (agentId, message) VALUES (1, 'Legacy log')`);
+
     await runMigrations(db);
     await runMigrations(db); // idempotency
 
@@ -54,10 +59,18 @@ async function main() {
     assert.strictEqual(legacyRows[0].workspace_id, null, 'Legacy workspace must not be guessed');
     assert.strictEqual(legacyRows[0].marketplace, null, 'Legacy marketplace must not be guessed');
 
+    const legacyAgents = await all(db, 'SELECT * FROM agents');
+    assert.strictEqual(legacyAgents[0].tenant_id, null, 'Legacy agent tenant must not be guessed');
+    assert.strictEqual(legacyAgents[0].workspace_id, null, 'Legacy agent workspace must not be guessed');
+
+    const legacyAgentLogs = await all(db, 'SELECT * FROM agent_logs');
+    assert.strictEqual(legacyAgentLogs[0].tenant_id, null, 'Legacy agent log tenant must not be guessed');
+    assert.strictEqual(legacyAgentLogs[0].workspace_id, null, 'Legacy agent log workspace must not be guessed');
+
     const migrations = await all(db, 'SELECT id FROM schema_migrations WHERE id = ?', [LISTING_SCOPE_MIGRATION]);
     assert.strictEqual(migrations.length, 1, 'Migration marker must be applied exactly once');
 
-    console.log('🟢 LISTING SCOPE MIGRATION: legacy data preserved, scope added, idempotency passed');
+    console.log('🟢 LISTING & AGENT SCOPE MIGRATION: legacy data preserved without guessed ownership');
   } finally {
     await new Promise(resolve => db.close(resolve));
     fs.rmSync(tempDir, { recursive: true, force: true });

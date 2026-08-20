@@ -19,23 +19,28 @@ function resolvePublishContract({ marketplace, productType, listing }) {
   const hasEtsyTags = Array.isArray(listing?.etsyTags) && listing?.etsyTags.length > 0;
   const hasAmzBullets = Array.isArray(listing?.amazonBullets) && listing?.amazonBullets.length > 0;
   const resolvedMarketplace = marketplace || listing?.marketplace || (hasEtsyTags && !hasAmzBullets ? 'ETSY' : 'AMAZON');
-  const resolvedProductType = productType || listing?.productType || listing?.categoryName || 'STANDARD_PRINT_ON_DEMAND';
+  const rawProductType = (productType || listing?.productType || listing?.categoryName || 'STANDARD_PRINT_ON_DEMAND').trim();
+  const normalizedType = rawProductType.toUpperCase();
 
-  const SUPPORTED_PRODUCT_TYPES = ['STANDARD_PRINT_ON_DEMAND', 'APPAREL', 'JEWELRY', 'HOME_DECOR', 'STICKER_PACK', 'EMBROIDERY'];
+  const SUPPORTED_PRODUCT_TYPES = [
+    'STANDARD_PRINT_ON_DEMAND', 'APPAREL', 'JEWELRY', 'HOME_DECOR', 
+    'STICKER_PACK', 'EMBROIDERY', 'SWEATSHIRT', 'APPAREL: SWEATSHIRT', 
+    'T-SHIRT', 'MUG', 'POSTER', 'CANVAS'
+  ];
 
   if (resolvedMarketplace === 'AMAZON') {
-    if (resolvedProductType && !SUPPORTED_PRODUCT_TYPES.includes(resolvedProductType.toUpperCase()) && !resolvedProductType.includes('Apparel') && !resolvedProductType.includes('Jewelry') && !resolvedProductType.includes('Embroidery')) {
+    if (!SUPPORTED_PRODUCT_TYPES.includes(normalizedType)) {
       return {
         marketplace: 'AMAZON',
-        productType: resolvedProductType,
+        productType: rawProductType,
         contractStatus: 'UNKNOWN_CONTRACT',
-        reasons: [`Unrecognized product type contract: "${resolvedProductType}". Manager review required.`]
+        reasons: [`Unrecognized product type contract: "${rawProductType}". Manager review required.`]
       };
     }
 
     return {
       marketplace: 'AMAZON',
-      productType: resolvedProductType,
+      productType: rawProductType,
       contractStatus: 'VALID_CONTRACT',
       requiredBulletsCount: 5,
       maxSearchTermsBytes: 249,
@@ -46,9 +51,18 @@ function resolvePublishContract({ marketplace, productType, listing }) {
   }
 
   if (resolvedMarketplace === 'ETSY') {
+    if (!SUPPORTED_PRODUCT_TYPES.includes(normalizedType)) {
+      return {
+        marketplace: 'ETSY',
+        productType: rawProductType,
+        contractStatus: 'UNKNOWN_CONTRACT',
+        reasons: [`Unrecognized product type contract: "${rawProductType}". Manager review required.`]
+      };
+    }
+
     return {
       marketplace: 'ETSY',
-      productType: resolvedProductType,
+      productType: rawProductType,
       contractStatus: 'VALID_CONTRACT',
       requiredTagsCount: 13,
       maxTagChars: 20,
@@ -59,7 +73,7 @@ function resolvePublishContract({ marketplace, productType, listing }) {
 
   return {
     marketplace: resolvedMarketplace,
-    productType: resolvedProductType,
+    productType: rawProductType,
     contractStatus: 'UNKNOWN_CONTRACT',
     reasons: [`Unsupported marketplace authority: "${resolvedMarketplace}".`]
   };
@@ -107,7 +121,10 @@ function evaluatePublishGate(listing) {
     contract.reasons.forEach(r => issues.push(r));
   }
 
-  const title = listing.amazonTitle || listing.etsyTitle || listing.title || '';
+  // Marketplace-authoritative title selection (Etsy uses etsyTitle first; Amazon uses amazonTitle first)
+  const title = contract.marketplace === 'ETSY'
+    ? (listing.etsyTitle || listing.title || listing.amazonTitle || '')
+    : (listing.amazonTitle || listing.title || listing.etsyTitle || '');
   if (title.length > contract.maxTitleChars) {
     issues.push(`Title exceeds ${contract.maxTitleChars} character limit (${title.length} chars)`);
   }

@@ -70,8 +70,12 @@ async function readWorksheetWithSignature(filePath, options = {}) {
         rows: []
       };
     } else {
-      selectedWorksheet = worksheets[0];
-      selectedSheetName = selectedWorksheet.name;
+      return {
+        success: false,
+        code: 'UNSUPPORTED_REPORT',
+        error: `Multi-sheet workbook contains ${worksheets.length} sheets, but none match a recognized report signature. Please specify targetSheetName or upload a valid report file.`,
+        rows: []
+      };
     }
   }
 

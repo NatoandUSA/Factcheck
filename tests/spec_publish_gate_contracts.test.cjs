@@ -95,6 +95,54 @@ async function runPublishGateContractSuite() {
   assert.ok(result5.reasons.some(r => r.includes('below the required $6.00 floor')));
   console.log('  🟢 Financial Floor: Rejects net profit below $6.00 floor.');
 
+  // Unrecognized Product Type test (Fail-closed contract)
+  const unknownTypeListing = { ...validAmazonListing, productType: 'INVALID_SURPRISE_PRODUCT_TYPE' };
+  const resultUnknown = evaluatePublishGate(unknownTypeListing);
+  assert.strictEqual(resultUnknown.final_status, 'NEEDS_REVIEW');
+  assert.ok(resultUnknown.reasons.some(r => r.includes('Unrecognized product type contract')));
+  console.log('  🟢 Unrecognized Product Type: NEEDS_REVIEW caught unclassified product type contract.');
+
+  // Etsy Title Authority (Dual title payload uses etsyTitle first for Etsy marketplace contract)
+  const etsyDualListing = {
+    marketplace: 'ETSY',
+    productType: 'APPAREL',
+    status: 'MANAGER_APPROVED',
+    amazonTitle: 'a'.repeat(205), // > 200 chars on Amazon title, but Etsy title is valid
+    etsyTitle: 'Valid Etsy Title Under 200 Chars',
+    etsyTags: Array.from({ length: 13 }, (_, i) => `etsytag${i + 1}`),
+    etsyDescription: 'Valid Etsy description text.',
+    productTruthNotes: 'Verified Etsy product details.',
+    ipVerdict: 'OK',
+    ipHits: []
+  };
+  const resultEtsyTitle = evaluatePublishGate(etsyDualListing);
+  assert.strictEqual(resultEtsyTitle.final_status, 'PUBLISH_READY', 'Etsy contract must evaluate etsyTitle over amazonTitle');
+  console.log('  🟢 Marketplace Title Selection: Etsy contract evaluated etsyTitle over amazonTitle.');
+
+  // Multi-Sheet Zero Signature Fail-Closed Test
+  const ExcelJS = require('exceljs');
+  const path = require('path');
+  const fs = require('fs');
+  const os = require('os');
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'multisheet-test-'));
+  const testFile = path.join(tempDir, 'zero_signature.xlsx');
+  const wb = new ExcelJS.Workbook();
+  const ws1 = wb.addWorksheet('Sheet1');
+  ws1.addRow(['Unrelated Header A', 'Unrelated Header B']);
+  ws1.addRow(['val1', 'val2']);
+  const ws2 = wb.addWorksheet('Sheet2');
+  ws2.addRow(['Unrelated Header C', 'Unrelated Header D']);
+  ws2.addRow(['val3', 'val4']);
+  await wb.xlsx.writeFile(testFile);
+
+  const { readWorksheetWithSignature } = require('../server/services/spreadsheetReader');
+  const multiSheetRes = await readWorksheetWithSignature(testFile);
+  assert.strictEqual(multiSheetRes.success, false);
+  assert.strictEqual(multiSheetRes.code, 'UNSUPPORTED_REPORT');
+  assert.ok(multiSheetRes.error.includes('none match a recognized report signature'));
+  fs.rmSync(tempDir, { recursive: true, force: true });
+  console.log('  🟢 Multi-Sheet Fail-Closed: Multi-sheet workbook with zero signature matches returned UNSUPPORTED_REPORT.');
+
   // --- PART 2: HTTP SERVER ROW AUTHORITY & INTEGRATION MATRIX ---
   await databaseReady;
   const workspaces = await waitForOwnerWorkspaces();

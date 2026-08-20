@@ -330,6 +330,14 @@ function secretContext(user, key) {
   return `${user.tenantId}:${user.workspaceId}:${key}`;
 }
 
+function logAgentAction(db, { agentId, tenantId = null, workspaceId = null, message }) {
+  if (!agentId || !message) return;
+  db.run(
+    "INSERT INTO agent_logs (agentId, tenant_id, workspace_id, message) VALUES (?, ?, ?, ?)",
+    [agentId, tenantId, workspaceId, message]
+  );
+}
+
 function readWorkspaceLlmSettings(user, callback) {
   db.all(
     `SELECT key, encrypted_value FROM llm_settings
@@ -1050,7 +1058,7 @@ app.post('/api/mcp/pull-etsy', requireAuth(db), requireRole(['OWNER', 'MANAGER',
       if (dbErr) return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
       const trendId = this.lastID;
       const msg = `[ETSY MCP OBSERVED] Imported ${observedTags.length} source tags for "${seed}" (${category}). No semantic padding applied.`;
-      db.run("INSERT INTO agent_logs (agentId, message) VALUES (1, ?)", [msg]);
+      logAgentAction(db, { agentId: 1, tenantId: req.user.tenantId, workspaceId: req.user.workspaceId, message: msg });
       res.json({
         success: true,
         trendId,
@@ -1913,9 +1921,7 @@ const handleReportUpload = async (req, res) => {
         
         const trendId = this.lastID;
         const msg = `[H10 MKL ENGINE] Scored & imported ${keywords.length} keywords from "${fileName}" for ${targetCategory}. Top Opportunity: "${keywords[0]}" (Score: ${topKeywordsDetailed[0].opportunityScore})`;
-        
-        // Log to Agent 1 if exists
-        db.run("INSERT INTO agent_logs (agentId, message) VALUES (1, ?)", [msg]);
+        logAgentAction(db, { agentId: 1, tenantId: req.user.tenantId, workspaceId: req.user.workspaceId, message: msg });
 
         res.json({
           success: true,
@@ -2191,7 +2197,7 @@ Return ONLY a valid raw JSON object without markdown code fences:
             
             // Mark trend as processed
             db.run("UPDATE market_trends SET processed = 1 WHERE id = ?", [trend.id]);
-            db.run("INSERT INTO agent_logs (agentId, message) VALUES (2, ?)", [`Manually triggered draft generated for ${trend.category} (Listing ID: ${this.lastID})`]);
+            logAgentAction(db, { agentId: 2, tenantId: req.user.tenantId, workspaceId: req.user.workspaceId, message: `Manually triggered draft generated for ${trend.category} (Listing ID: ${this.lastID})` });
 
             res.json({
               success: true,
@@ -2379,16 +2385,12 @@ const backgroundAgentTimer = setInterval(() => {
   // rather than trying to track every completion path.
   setTimeout(() => { backgroundAgentTickRunning = false; }, 15000);
 
-  db.all("SELECT * FROM agents WHERE status = 'ONLINE'", [], (err, onlineAgents) => {
+  db.all("SELECT * FROM agents WHERE status = 'ONLINE' AND tenant_id IS NOT NULL AND workspace_id IS NOT NULL", [], (err, onlineAgents) => {
     if (err || !onlineAgents) return;
 
     onlineAgents.forEach(async agent => {
       // Agent 1: Trend Scout (Role: RESEARCHER - Real Data Engine)
       if (agent.role === 'RESEARCHER') {
-        // Reuses the module-level importsDir (config/paths.js) instead of
-        // re-resolving its own path — the prior inline resolution here
-        // ignored TEST_IMPORTS_DIR/OMNI_IMPORTS_DIR entirely, a second,
-        // inconsistent source of truth for the same directory.
         const files = fs.readdirSync(importsDir).filter(f => f.endsWith('.csv') || f.endsWith('.xlsx') || f.endsWith('.html') || f.endsWith('.htm'));
         
         if (files.length > 0) {
@@ -2401,16 +2403,8 @@ const backgroundAgentTimer = setInterval(() => {
               const parsedItems = ytrendsParser.parseYTrendsFile(fullPath);
               if (parsedItems.length > 0) {
                 const topKw = parsedItems[0];
-                const category = topKw.keyword.includes('necklace') || topKw.keyword.includes('jewelry') ? 'Jewelry' :
-                                 topKw.keyword.includes('embroidery') ? 'Embroidery' :
-                                 topKw.keyword.includes('blanket') ? 'Blanket' : 'Acrylic';
-
-                // market_trends is workspace-owned; a background agent has no
-                // request context to derive a workspace from, so it logs the
-                // discovery for staff instead of writing an orphaned,
-                // permanently-invisible row (GPT PR-5 review finding P0-B3).
-                const msg = `[YTRENDS HTML IMPORT] Discovered keyword "${topKw.keyword}" (Sold24h: ${topKw.sold24h}, Conv: ${topKw.conversion}) from HTML file: ${fileToProcess} -- not persisted, no workspace binding for background agents yet.`;
-                db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, msg]);
+                const msg = `[YTRENDS HTML IMPORT] Discovered keyword "${topKw.keyword}" (Sold24h: ${topKw.sold24h}, Conv: ${topKw.conversion}) from HTML file: ${fileToProcess}.`;
+                logAgentAction(db, { agentId: agent.id, tenantId: agent.tenant_id, workspaceId: agent.workspace_id, message: msg });
                 db.run("UPDATE agents SET lastActive = CURRENT_TIMESTAMP WHERE id = ?", [agent.id]);
               }
             } else {
@@ -2421,13 +2415,9 @@ const backgroundAgentTimer = setInterval(() => {
                 const sampleRow = rows[0];
                 const kwKey = Object.keys(sampleRow).find(k => /keyword|query|search/i.test(k)) || Object.keys(sampleRow)[0];
                 const realKw = String(sampleRow[kwKey] || 'Custom Gift').trim();
-                const category = fileToProcess.toLowerCase().includes('jewelry') ? 'Jewelry' :
-                                 fileToProcess.toLowerCase().includes('embroidery') ? 'Embroidery' :
-                                 fileToProcess.toLowerCase().includes('blanket') ? 'Blanket' : 'Acrylic';
 
-                // Not persisted to market_trends -- see note above (P0-B3).
-                const h10Msg = `[AMAZON H10 IMPORT] Discovered top keyword "${realKw}" from file: ${fileToProcess} -- not persisted, no workspace binding for background agents yet.`;
-                db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, h10Msg]);
+                const h10Msg = `[AMAZON H10 IMPORT] Discovered top keyword "${realKw}" from file: ${fileToProcess}.`;
+                logAgentAction(db, { agentId: agent.id, tenantId: agent.tenant_id, workspaceId: agent.workspace_id, message: h10Msg });
                 db.run("UPDATE agents SET lastActive = CURRENT_TIMESTAMP WHERE id = ?", [agent.id]);
               }
             }
@@ -2435,7 +2425,7 @@ const backgroundAgentTimer = setInterval(() => {
             const archivedPath = path.join(importsDir, `processed_${Date.now()}_${fileToProcess}`);
             fs.renameSync(fullPath, archivedPath);
           } catch (parseErr) {
-            db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, `Error parsing data file ${fileToProcess}: ${parseErr.message}`]);
+            logAgentAction(db, { agentId: agent.id, tenantId: agent.tenant_id, workspaceId: agent.workspace_id, message: `Error parsing data file ${fileToProcess}: ${parseErr.message}` });
           }
         } else {
 
@@ -2448,41 +2438,30 @@ const backgroundAgentTimer = setInterval(() => {
               const overview = mcpData?.data?.overview || {};
               const adjacentTags = mcpData?.data?.adjacent_tags || [];
               const topTags = adjacentTags.slice(0, 3).map(t => t.tag).join(', ');
-              const category = targetSeed.includes('necklace') ? 'Jewelry' :
-                               targetSeed.includes('sweatshirt') || targetSeed.includes('embroidered') ? 'Embroidery' :
-                               targetSeed.includes('blanket') ? 'Blanket' : 'Acrylic';
-
-              const kwPayload = topTags ? `${targetSeed}, ${topTags}` : targetSeed;
-
-              // Not persisted to market_trends -- see note above (P0-B3).
               const revenueText = Number.isFinite(Number(overview.total_revenue_usd)) ? `${Math.round(Number(overview.total_revenue_usd))}` : 'UNKNOWN';
               const opportunityText = Number.isFinite(Number(overview.opportunity_score)) ? String(Number(overview.opportunity_score)) : 'UNKNOWN';
-              const liveMsg = `[YTRENDS MCP LIVE] Discovered niche data for "${targetSeed}" (Rev: ${revenueText}, OppScore: ${opportunityText}). Tags: ${topTags || 'UNKNOWN'} -- not persisted, no workspace binding for background agents yet.`;
-              db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, liveMsg]);
+              const liveMsg = `[YTRENDS MCP LIVE] Discovered niche data for "${targetSeed}" (Rev: ${revenueText}, OppScore: ${opportunityText}). Tags: ${topTags || 'UNKNOWN'}.`;
+              logAgentAction(db, { agentId: agent.id, tenantId: agent.tenant_id, workspaceId: agent.workspace_id, message: liveMsg });
               db.run("UPDATE agents SET lastActive = CURRENT_TIMESTAMP WHERE id = ?", [agent.id]);
             })
             .catch(mcpErr => {
               const msg = `[REAL DATA ENGINE] Standing by... Drop .csv/.xlsx report files into data/imports/. YTrends MCP error: ${mcpErr.message}`;
-              db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [agent.id, msg]);
+              logAgentAction(db, { agentId: agent.id, tenantId: agent.tenant_id, workspaceId: agent.workspace_id, message: msg });
               db.run("UPDATE agents SET lastActive = CURRENT_TIMESTAMP WHERE id = ?", [agent.id]);
             });
         }
       }
 
-
       // Agent 2: AI Drafter (Role: DRAFTER)
       if (agent.role === 'DRAFTER') {
-        db.get("SELECT * FROM market_trends WHERE processed = 0 ORDER BY discoveredAt ASC LIMIT 1", (err, trend) => {
-          // Fail-closed unconditionally: this background loop has no
-          // authenticated workspace principal, so even a properly
-          // scoped trend must not be read, marked processed, or sent
-          // to an external LLM. Re-enable only once a real per-workspace
-          // service principal exists for background agents.
+        db.get("SELECT * FROM market_trends WHERE processed = 0 AND tenant_id = ? AND workspace_id = ? ORDER BY discoveredAt ASC LIMIT 1", [agent.tenant_id, agent.workspace_id], (err, trend) => {
           if (!err && trend) {
-            db.run("INSERT INTO agent_logs (agentId, message) VALUES (?, ?)", [
-              agent.id,
-              `[SCOPE_REQUIRED] Trend ${trend.id} not processed -- background AI Drafter has no workspace principal.`
-            ]);
+            logAgentAction(db, {
+              agentId: agent.id,
+              tenantId: agent.tenant_id,
+              workspaceId: agent.workspace_id,
+              message: `[SCOPED_DRAFT] Trend ${trend.id} found for category ${trend.category}.`
+            });
           }
         });
       }

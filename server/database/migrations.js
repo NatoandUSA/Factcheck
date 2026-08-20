@@ -227,7 +227,7 @@ async function migrateAgentWorkspaceScope(db) {
     if (!agentsCols.some(c => c.name === 'workspace_id')) {
       await run(db, 'ALTER TABLE agents ADD COLUMN workspace_id INTEGER');
     }
-    await run(db, `UPDATE agents SET tenant_id = 'default', workspace_id = 1 WHERE tenant_id IS NULL OR workspace_id IS NULL`);
+    // Legacy unassigned rows remain NULL (unscoped) so they do not leak into workspace 1.
   }
 
   if (await tableExists('agent_logs')) {
@@ -238,7 +238,7 @@ async function migrateAgentWorkspaceScope(db) {
     if (!agentLogsCols.some(c => c.name === 'workspace_id')) {
       await run(db, 'ALTER TABLE agent_logs ADD COLUMN workspace_id INTEGER');
     }
-    await run(db, `UPDATE agent_logs SET tenant_id = 'default', workspace_id = 1 WHERE tenant_id IS NULL OR workspace_id IS NULL`);
+    // Legacy unassigned rows remain NULL (unscoped) so they do not leak into workspace 1.
   }
 }
 

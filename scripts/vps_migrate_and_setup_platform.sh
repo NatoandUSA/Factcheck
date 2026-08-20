@@ -114,17 +114,19 @@ echo -e "\n[Step 4/5] Updating Systemd service unit omniseller-web.service..."
 
 sudo cat << EOF > /tmp/omniseller-web.service.new
 [Unit]
-Description=OmniSeller Studio Web Service
-After=network.target
+Description=OmniSeller Studio backend (Amazon/Etsy listing workflow)
+After=network-online.target
+Wants=network-online.target
 
 [Service]
-Type=simple
 User=etsy
 WorkingDirectory=/home/etsy/omniseller-current/server
 EnvironmentFile=${DETECTED_ENV}
 ExecStart=/home/etsy/.nvm/versions/node/v22.23.2/bin/node /home/etsy/omniseller-current/server/server.js
-Restart=on-failure
-RestartSec=5s
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
 
 [Install]
 WantedBy=multi-user.target

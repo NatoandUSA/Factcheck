@@ -530,6 +530,16 @@ app.post('/api/auth/logout', (req, res) => {
 });
 
 
+const { execSync } = require('child_process');
+let SERVER_REVISION = process.env.GIT_REVISION || 'UNKNOWN';
+if (SERVER_REVISION === 'UNKNOWN') {
+  try {
+    SERVER_REVISION = execSync('git rev-parse HEAD', { cwd: __dirname, encoding: 'utf8' }).trim();
+  } catch (_) {
+    SERVER_REVISION = 'UNKNOWN';
+  }
+}
+
 // GET /api/health (Server & DB Health Check for Monitoring / Reverse Proxies)
 app.get('/api/health', (req, res) => {
   db.get("SELECT 1", (err) => {
@@ -544,7 +554,7 @@ app.get('/api/health', (req, res) => {
     res.json({
       status: 'OK',
       database: 'CONNECTED',
-      revision: process.env.GIT_REVISION || 'e6df541c4a5d7fbc9d6e5bbca18b48d442039b96',
+      revision: SERVER_REVISION,
       uptime: process.uptime(),
       timestamp: new Date().toISOString()
     });

@@ -28,11 +28,41 @@ function firstDefined(row, keys) {
   return undefined;
 }
 
+function firstDefinedEntry(row, keys) {
+  for (const key of keys) {
+    const value = row[key];
+    if (value !== undefined && value !== null && value !== '') return { key, value };
+  }
+  return { key: null, value: undefined };
+}
+
 function parseNumericField(row, keys) {
   const raw = firstDefined(row, keys);
   if (raw === undefined) return null;
   const parsed = parseFloat(String(raw).replace(/[^0-9.]/g, ''));
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+// Xray exports encode flags inconsistently. Only explicit positive values
+// may become true; explicit negative values become false and all other
+// values remain UNKNOWN/null. This prevents strings such as "No" from being
+// truthy in a staff-facing badge.
+function parseObservedBoolean(row, keys) {
+  const raw = firstDefined(row, keys);
+  if (raw === undefined) return null;
+  if (raw === true || raw === 1) return true;
+  if (raw === false || raw === 0) return false;
+  const normalized = String(raw).trim().toLowerCase();
+  if (['true', 'yes', 'y', '1'].includes(normalized)) return true;
+  if (['false', 'no', 'n', '0'].includes(normalized)) return false;
+  return null;
+}
+
+function sourceField(entry, value) {
+  return {
+    state: value === null || value === undefined ? 'UNKNOWN' : 'SOURCE_REPORTED',
+    sourceHeader: entry.key
+  };
 }
 
 function filterAndBatchXrayAsins(xrayData, seedKeyword = 'Custom Gift') {
@@ -113,17 +143,28 @@ function filterAndBatchXrayAsins(xrayData, seedKeyword = 'Custom Gift') {
     const titleLower = (title || '').toLowerCase();
 
     const price = parseNumericField(row, ['Price', 'price', 'Price  $', 'Price $']);
+    const parentSalesEntry = firstDefinedEntry(row, ['Parent Level Sales', 'Parent Sales', 'parent sales']);
+    const asinSalesEntry = firstDefinedEntry(row, ['ASIN Sales', 'asin sales', 'Sales', 'sales']);
     const parentSales = parseNumericField(row, ['Parent Level Sales', 'Parent Sales', 'parent sales']);
     const asinSales = parseNumericField(row, ['ASIN Sales', 'asin sales', 'Sales', 'sales']);
-    const sales = asinSales !== null ? asinSales : parentSales;
+    // Parent metrics are not per-ASIN metrics. Preserve both columns, but
+    // never silently substitute parent performance for an individual ASIN.
+    const sales = asinSales;
 
+    const parentRevenueEntry = firstDefinedEntry(row, ['Parent Level Revenue', 'Parent Revenue']);
+    const asinRevenueEntry = firstDefinedEntry(row, ['ASIN Revenue', 'Revenue', 'revenue', 'Monthly Revenue']);
     const parentRevenue = parseNumericField(row, ['Parent Level Revenue', 'Parent Revenue']);
     const asinRevenue = parseNumericField(row, ['ASIN Revenue', 'Revenue', 'revenue', 'Monthly Revenue']);
-    const revenue = asinRevenue !== null ? asinRevenue : parentRevenue;
+    const revenue = asinRevenue;
 
-    const brand = firstDefined(row, ['Brand', 'brand']) || null;
+    const brandEntry = firstDefinedEntry(row, ['Brand', 'brand']);
+    const brand = brandEntry.value !== undefined ? String(brandEntry.value).trim() || null : null;
+    const rankEntry = firstDefinedEntry(row, ['BSR', 'bsr', 'Rank']);
     const bsr = parseNumericField(row, ['BSR', 'bsr', 'Rank']);
-    const ratings = parseNumericField(row, ['Ratings', 'Rating', 'ratings', 'rating']);
+    const ratingValueEntry = firstDefinedEntry(row, ['Rating', 'rating']);
+    const ratingCountEntry = firstDefinedEntry(row, ['Ratings', 'ratings']);
+    const ratingValue = parseNumericField(row, ['Rating', 'rating']);
+    const ratingCount = parseNumericField(row, ['Ratings', 'ratings']);
     const reviewCount = parseNumericField(row, ['Review Count', 'Reviews', 'review count']);
     const reviewVelocity = parseNumericField(row, ['Review velocity', 'Review Velocity']);
     const buyBox = firstDefined(row, ['Buy Box', 'buy box', 'Buy Box Winner']) || null;
@@ -134,11 +175,13 @@ function filterAndBatchXrayAsins(xrayData, seedKeyword = 'Custom Gift') {
     const sellerAge = parseNumericField(row, ['Seller Age (mo)', 'Seller Age']);
     const creationDate = firstDefined(row, ['Creation Date', 'Creation date', 'Date First Available']) || null;
     const abaMostClicked = firstDefined(row, ['ABA Most Clicked', 'ABA']) || null;
-    const isBestSeller = firstDefined(row, ['Best Seller', 'best seller', 'Badge']) || null;
-    const isSponsored = firstDefined(row, ['Sponsored', 'sponsored']) || null;
+    const isBestSeller = parseObservedBoolean(row, ['Best Seller', 'best seller']);
+    const isSponsored = parseObservedBoolean(row, ['Sponsored', 'sponsored']);
     const imageUrl = firstDefined(row, ['Image URL', 'Image', 'image url', 'imageUrl', 'Thumbnail']) || null;
     const fees = parseNumericField(row, ['Fees $', 'Fees', 'fees']);
-    const titleCharCount = parseNumericField(row, ['Title Char. Count', 'Title Length']) || (title ? title.length : null);
+    // Keep the observed export column only. A calculated length would need
+    // its own derived provenance before it could be shown as evidence.
+    const titleCharCount = parseNumericField(row, ['Title Char. Count', 'Title Length']);
     const activeSellers = parseNumericField(row, ['Active Sellers', 'Sellers']);
 
     // 1. Filter by configured price floor/ceiling. Only applies when a real
@@ -170,6 +213,12 @@ function filterAndBatchXrayAsins(xrayData, seedKeyword = 'Custom Gift') {
       if (/necklace|collar|gift|regalo|sweatshirt/.test(titleLower)) relevanceScore += 20;
     }
 
+    const hasSourceMetadata = Boolean(
+      title || price !== null || sales !== null || parentSales !== null ||
+      revenue !== null || parentRevenue !== null || brand || bsr !== null ||
+      ratingValue !== null || ratingCount !== null || reviewCount !== null || fulfillment || seller
+    );
+
     seenAsins.add(asin);
     cleanAsins.push({
       asin,
@@ -178,10 +227,17 @@ function filterAndBatchXrayAsins(xrayData, seedKeyword = 'Custom Gift') {
       price,
       sales,
       parentSales,
+      salesScope: asinSales !== null ? 'ASIN' : 'UNKNOWN',
+      parentSalesScope: parentSales !== null ? 'PARENT' : 'UNKNOWN',
       revenue,
       parentRevenue,
+      revenueScope: asinRevenue !== null ? 'ASIN' : 'UNKNOWN',
+      parentRevenueScope: parentRevenue !== null ? 'PARENT' : 'UNKNOWN',
       bsr,
-      ratings,
+      rankSourceHeader: rankEntry.key,
+      ratingValue,
+      ratingCount,
+      ratings: ratingValue,
       reviewCount,
       reviewVelocity,
       buyBox,
@@ -199,7 +255,18 @@ function filterAndBatchXrayAsins(xrayData, seedKeyword = 'Custom Gift') {
       titleCharCount,
       activeSellers,
       relevanceScore,
-      hasMetadata: Boolean(title || price !== null || sales !== null)
+      evidenceState: hasSourceMetadata ? 'SOURCE_REPORTED' : 'MANUAL_ASSERTION',
+      fieldProvenance: {
+        brand: sourceField(brandEntry, brand),
+        sales: sourceField(asinSalesEntry, sales),
+        parentSales: sourceField(parentSalesEntry, parentSales),
+        revenue: sourceField(asinRevenueEntry, revenue),
+        parentRevenue: sourceField(parentRevenueEntry, parentRevenue),
+        rank: sourceField(rankEntry, bsr),
+        ratingValue: sourceField(ratingValueEntry, ratingValue),
+        ratingCount: sourceField(ratingCountEntry, ratingCount)
+      },
+      hasMetadata: hasSourceMetadata
     });
   });
 
@@ -248,9 +315,16 @@ function filterAndBatchXrayAsins(xrayData, seedKeyword = 'Custom Gift') {
         price: i.price,
         sales: i.sales,
         parentSales: i.parentSales,
+        salesScope: i.salesScope,
+        parentSalesScope: i.parentSalesScope,
         revenue: i.revenue,
         parentRevenue: i.parentRevenue,
+        revenueScope: i.revenueScope,
+        parentRevenueScope: i.parentRevenueScope,
         bsr: i.bsr,
+        rankSourceHeader: i.rankSourceHeader,
+        ratingValue: i.ratingValue,
+        ratingCount: i.ratingCount,
         ratings: i.ratings,
         reviewCount: i.reviewCount,
         reviewVelocity: i.reviewVelocity,
@@ -268,6 +342,8 @@ function filterAndBatchXrayAsins(xrayData, seedKeyword = 'Custom Gift') {
         fees: i.fees,
         titleCharCount: i.titleCharCount,
         activeSellers: i.activeSellers,
+        evidenceState: i.evidenceState,
+        fieldProvenance: i.fieldProvenance,
         url: `https://www.amazon.com/dp/${i.asin}`
       })),
       cerebroCommand: pool.map(i => i.asin).join(' ')

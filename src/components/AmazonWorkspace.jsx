@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { 
   Zap, ShieldCheck, Layers, Brain, Database, TrendingUp, RefreshCw
 } from 'lucide-react';
@@ -17,28 +17,23 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
   const [activeProject, setActiveProject] = useState(null);
 
   // Workflow Evidence State shared across Stages
-  const [xraySellers, setXraySellers] = useState(() => {
-    try {
-      const cached = sessionStorage.getItem('omni_amazon_xray_sellers');
-      if (cached) {
-        const parsed = JSON.parse(cached);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-      }
-    } catch (e) {}
-    return [];
-  });
+  // Xray data is held only in the active workspace React state. Browser-wide
+  // storage is not an authority for research evidence because it cannot bind
+  // a record to the active tenant, workspace, project, or seed.
+  const [xraySellers, setXraySellers] = useState([]);
   const [cerebroKeywords, setCerebroKeywords] = useState([]);
   const [cerebroSummary, setCerebroSummary] = useState(null);
   const [drafting, setDrafting] = useState(false);
 
   const handleUpdateXraySellers = React.useCallback((sellers) => {
-    if (Array.isArray(sellers) && sellers.length > 0) {
-      setXraySellers(sellers);
-      try {
-        sessionStorage.setItem('omni_amazon_xray_sellers', JSON.stringify(sellers));
-      } catch (e) {}
-    }
+    setXraySellers(Array.isArray(sellers) ? sellers : []);
   }, []);
+
+  // Uploaded Xray rows are display-only session state. They must not survive a
+  // project context change or become an authority for Learning Box/publish flow.
+  useEffect(() => {
+    setXraySellers([]);
+  }, [activeProject?.id]);
 
   const fetchProjects = React.useCallback(async () => {
     try {
@@ -307,10 +302,10 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
             {/* Google Trends Velocity */}
             <GoogleTrendsWidget seedPhrase={seedPhrase} onShowToast={onShowToast} />
             
-            {/* Amazon Learning Box with Scanned ASINs passed from Stage 1 */}
+            {/* Amazon Learning Box accepts URL/text only until project-bound server evidence exists. */}
             <LearningBoxWidget 
               platform="AMAZON" 
-              scannedSellers={xraySellers} 
+              scannedSellers={[]}
               onShowToast={onShowToast} 
             />
           </div>

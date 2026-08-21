@@ -12,6 +12,7 @@ async function learnFromListing({ url = '', rawText = '', category = 'Custom Gif
   let description = '';
   let materials = [];
   let extractedUrl = url.trim();
+  let sourceEvidenceState = rawText && rawText.trim() ? 'MANUAL_ASSERTION' : 'UNKNOWN';
 
   // The authenticated session marketplace is the sole authority — never
   // inferred from URL text, which a caller fully controls (GPT PR-5 final
@@ -46,6 +47,9 @@ async function learnFromListing({ url = '', rawText = '', category = 'Custom Gif
           }
         });
       }
+      if (title || bullets.length > 0 || tags.length > 0 || description) {
+        sourceEvidenceState = 'SOURCE_REPORTED';
+      }
     } catch (fetchErr) {
       // A blocked URL must be a real, visible failure — not silently
       // papered over with fallback placeholder text pretending to be
@@ -73,30 +77,13 @@ async function learnFromListing({ url = '', rawText = '', category = 'Custom Gif
     if (!description && lines.length > 2) {
       description = lines.slice(1).join('\n');
     }
+    if (sourceEvidenceState !== 'SOURCE_REPORTED') sourceEvidenceState = 'MANUAL_ASSERTION';
   }
 
-  // 3. Fallback extraction from URL query params or ASIN slug if scraping blocked
-  if (!title && extractedUrl) {
-    try {
-      const parsedU = new URL(extractedUrl);
-      const searchK = parsedU.searchParams.get('k');
-      if (searchK) {
-        title = decodeURIComponent(searchK).replace(/\+/g, ' ').trim();
-      } else {
-        const asinMatch = parsedU.pathname.match(/\/(?:dp|gp\/product|d)\/([A-Z0-9]{10})/i);
-        if (asinMatch) {
-          title = `${category || 'Amazon Product'} (ASIN: ${asinMatch[1]})`;
-        } else if (parsedU.pathname.length > 2) {
-          const slug = parsedU.pathname.split('/').filter(Boolean)[0];
-          if (slug && !['s', 'dp', 'gp', 'd'].includes(slug.toLowerCase())) {
-            title = decodeURIComponent(slug).replace(/[-_+]/g, ' ');
-          }
-        }
-      }
-    } catch (e) {}
-  }
-
-  // Fails closed if no valid title or raw text could be extracted
+  // A URL query, ASIN, or path slug is only a reference; it is never
+  // listing evidence. If the fetch did not yield content, keep the failure
+  // visible rather than converting the reference into a fictional title.
+  // Fails closed if no valid title or raw text could be extracted.
   if (!title) {
     return {
       success: false,
@@ -107,14 +94,16 @@ async function learnFromListing({ url = '', rawText = '', category = 'Custom Gif
     };
   }
 
+  // Amazon DNA requires at least one observed bullet. Title-only input is
+  // insufficient structural evidence and must not trigger synthetic padding.
   if (resolvedMarketplace === 'AMAZON' && bullets.length === 0) {
-    bullets = [
-      `[PREMIUM QUALITY] Crafted with high-grade materials ensuring long-lasting durability for daily use`,
-      `[PERFECT GIFT IDEA] Thoughtful and memorable present for family, friends, and special occasions`,
-      `[ERGONOMIC DESIGN] Designed for maximum comfort, versatility, and stylish modern aesthetics`,
-      `[CARE & SPECIFICATIONS] Easy maintenance, accurate dimensions, and reliable performance`,
-      `[100% SATISFACTION] Backed by our dedicated customer support and quality guarantee`
-    ];
+    return {
+      success: false,
+      code: 'INSUFFICIENT_EVIDENCE',
+      error: 'Amazon DNA requires an accessible listing or staff-supplied text containing at least one observed bullet.',
+      marketplace: resolvedMarketplace,
+      category
+    };
   }
 
   // 4. Extract Marketplace Specific Structural DNA
@@ -128,12 +117,18 @@ async function learnFromListing({ url = '', rawText = '', category = 'Custom Gif
     styleDna = {
       marketplace: 'AMAZON',
       provenance: 'MODELED_STRUCTURAL_DNA',
+      evidence: {
+        state: sourceEvidenceState,
+        sourceKind: sourceEvidenceState === 'SOURCE_REPORTED' ? 'FETCHED_MARKETPLACE_LISTING' : 'STAFF_MANUAL_ASSERTION',
+        captureTime: new Date().toISOString(),
+        sourceUrl: extractedUrl || null
+      },
       titleFrontLoadedHook: title.slice(0, 75),
       titleCharLength: title.length,
       titleHookExplanation: '👑 Tier 1: Từ khóa hạt nhân + Target Recipient được đưa lên 75 ký tự đầu (Zero mobile truncation trên Amazon App).',
       itemHighlights125: title.length > 125 ? title.slice(0, 122) + '...' : title,
       itemHighlightsExplanation: '💡 Tier 3: Điểm nhấn sản phẩm tóm tắt <= 125 ký tự hiển thị đầu tiên trên giao diện điện thoại.',
-      bulletHookPatterns: bulletHooks.length > 0 ? bulletHooks : ['[PREMIUM CRAFTSMANSHIP]', '[PERFECT GIFT]', '[DURABLE QUALITY]', '[COMFORT FIT]', '[CUSTOMER CARE]'],
+      bulletHookPatterns: bulletHooks,
       bulletHooksExplanation: '💎 Tier 4: 5 Bullet Points mở đầu bằng [UPPERCASE HOOK] giải quyết nỗi đau & thông số kỹ thuật (150-200 chars/bullet).',
       searchTermsRule: '249 Bytes, Space-separated generic terms, No commas, No duplicate title keywords',
       searchTermsExplanation: '📦 Tier 2: Backend Search Terms tối đa 249 UTF-8 bytes, không dùng dấu phẩy, không lặp từ trong Title.',
@@ -156,6 +151,12 @@ async function learnFromListing({ url = '', rawText = '', category = 'Custom Gif
     styleDna = {
       marketplace: 'ETSY',
       provenance: 'MODELED_STRUCTURAL_DNA',
+      evidence: {
+        state: sourceEvidenceState,
+        sourceKind: sourceEvidenceState === 'SOURCE_REPORTED' ? 'FETCHED_MARKETPLACE_LISTING' : 'STAFF_MANUAL_ASSERTION',
+        captureTime: new Date().toISOString(),
+        sourceUrl: extractedUrl || null
+      },
       titleFormat: 'Under 140 Chars, Multi-phrase Long-tail Keywords',
       titleExplanation: 'Tiêu đề < 140 ký tự, 40 ký tự đầu chứa cụm từ khóa chính mang tính cảm xúc/quà tặng.',
       exact13Tags: tags.slice(0, 13),
@@ -169,6 +170,9 @@ async function learnFromListing({ url = '', rawText = '', category = 'Custom Gif
   return {
     success: true,
     provenance: 'MODELED_STRUCTURAL_DNA',
+    evidenceState: sourceEvidenceState,
+    sourceKind: sourceEvidenceState === 'SOURCE_REPORTED' ? 'FETCHED_MARKETPLACE_LISTING' : 'STAFF_MANUAL_ASSERTION',
+    capturedAt: styleDna.evidence.captureTime,
     url: extractedUrl || 'Raw Text Input',
     marketplace: resolvedMarketplace,
     category,

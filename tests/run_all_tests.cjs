@@ -22,6 +22,7 @@ function runAllTests() {
     'tests/test_strict_keyword_sanitizer.cjs',
     'tests/test_full_cerebro_mkl_flow.cjs',
     'tests/test_white_screen_failsafe.cjs',
+    'tests/test_amazon_truth_boundary_remediation.cjs',
     'tests/test_listing_truth_boundary.cjs',
     'tests/test_malicious_model_outputs.cjs',
     'tests/test_adversarial_control_plane.cjs',

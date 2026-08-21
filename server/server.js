@@ -1424,7 +1424,10 @@ app.post('/api/listings', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SEL
       [projectId, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
       (pErr, proj) => {
         if (pErr) return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
-        if (proj && blockedStages.includes(proj.state)) {
+        if (!proj) {
+          return res.status(404).json({ success: false, error: 'PROJECT_NOT_FOUND' });
+        }
+        if (blockedStages.includes(proj.state)) {
           return res.status(409).json({
             success: false,
             error: 'STAGE_INVARIANT_VIOLATION',
@@ -2902,18 +2905,42 @@ const handleReportUpload = async (req, res) => {
         });
       }
 
+      const reportProvenance = {
+        state: 'SOURCE_REPORTED',
+        sourceKind: 'STAFF_UPLOADED_XRAY_REPORT',
+        ingestedAt: new Date().toISOString(),
+        captureTime: null,
+        tenantId: req.user.tenantId,
+        workspaceId: req.user.workspaceId,
+        // This report is not persisted as a project evidence record by this
+        // endpoint, so it must not claim a project binding from client input.
+        projectId: null,
+        projectBinding: 'NOT_PERSISTED',
+        artifacts: uploadedFiles.map(file => ({
+          fileName: file.originalname,
+          sha256: crypto.createHash('sha256').update(fs.readFileSync(file.path)).digest('hex')
+        }))
+      };
+
       // Extract rich sellers list for Learning Box & Staff Review
       const xraySellers = (batchResult.batches || []).flatMap(b => b.items || []).map((item, idx) => ({
         id: `asin_${item.asin}_${idx}`,
         asin: item.asin,
-        title: item.title || `Amazon Top Seller (${item.asin})`,
-        brand: item.brand || '—',
-        price: item.price !== null ? `$${item.price.toFixed(2)}` : '—',
-        sales: item.sales !== null ? item.sales.toLocaleString() : '—',
+        title: item.title,
+        brand: item.brand,
+        price: item.price,
+        sales: item.sales,
         parentSales: item.parentSales,
-        revenue: item.revenue !== null ? `$${item.revenue.toLocaleString()}` : '—',
+        salesScope: item.salesScope,
+        parentSalesScope: item.parentSalesScope,
+        revenue: item.revenue,
         parentRevenue: item.parentRevenue,
+        revenueScope: item.revenueScope,
+        parentRevenueScope: item.parentRevenueScope,
         bsr: item.bsr,
+        rankSourceHeader: item.rankSourceHeader,
+        ratingValue: item.ratingValue,
+        ratingCount: item.ratingCount,
         ratings: item.ratings,
         reviewCount: item.reviewCount,
         reviewVelocity: item.reviewVelocity,
@@ -2931,8 +2958,13 @@ const handleReportUpload = async (req, res) => {
         fees: item.fees,
         titleCharCount: item.titleCharCount,
         activeSellers: item.activeSellers,
+        // This is a navigation reference deterministically derived from the
+        // observed ASIN, not an observed listing URL or seller identity.
         url: `https://www.amazon.com/dp/${item.asin}`,
-        shopName: item.seller || item.brand || `ASIN: ${item.asin}`
+        urlProvenance: 'DERIVED_FROM_ASIN',
+        evidenceState: item.evidenceState,
+        fieldProvenance: item.fieldProvenance,
+        shopName: item.seller || null
       }));
 
       return res.json({
@@ -2947,7 +2979,8 @@ const handleReportUpload = async (req, res) => {
         rejectedCount: batchResult.rejectedCount,
         batchCount: batchResult.batchCount,
         batches: batchResult.batches,
-        xraySellers
+        xraySellers,
+        reportProvenance
       });
     }
 
@@ -3137,7 +3170,7 @@ app.get('/api/analytics-summary', requireAuth(db), requireRole(['OWNER', 'MANAGE
   db.get(`
     SELECT 
       COUNT(*) as totalListings,
-      SUM(CASE WHEN status = 'MANAGER_APPROVED' THEN 1 ELSE 0 END) as approvedListings,
+      SUM(CASE WHEN status IN ('PUBLISH_READY', 'MANAGER_APPROVED') THEN 1 ELSE 0 END) as approvedListings,
       SUM(CASE WHEN status = 'NEEDS_QA' THEN 1 ELSE 0 END) as pendingListings
     FROM listings
     WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ?
@@ -3228,12 +3261,12 @@ app.post('/api/trends/:id/draft', requireAuth(db), requireRole(['OWNER', 'MANAGE
         let fewShotSection = '';
         if (learnedTpl) {
           fewShotSection = `
-FEW-SHOT GOLD STANDARD WINNING TEMPLATE (LEARNED FROM BEST SELLER ${learnedTpl.marketplace}):
+STAFF-SUPPLIED STRUCTURAL STYLE REFERENCE (${learnedTpl.marketplace}; NOT PRODUCT TRUTH OR A PERFORMANCE CLAIM):
 - Sample Title Pattern: "${learnedTpl.title}"
 - Sample Bullets Style: ${learnedTpl.bullets}
 - Sample Tags Style: ${learnedTpl.tags}
 - Sample Description / Story: "${(learnedTpl.description || '').slice(0, 350)}..."
-CRITICAL: Replicate the high conversion, bullet hook style, and emotional craftsmanship of this template!`;
+Use this only as an optional structural writing reference. Do not treat it as verified marketplace, conversion, product, material, capability, policy, or performance evidence.`;
         }
 
         try {
@@ -3532,7 +3565,11 @@ app.get('/api/agents/logs', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'S
 // API: Toggle Agent Status (Workspace-Isolated)
 app.post('/api/agents/:id/toggle', requireAuth(db), requireRole(['OWNER', 'MANAGER']), (req, res) => {
   const { id } = req.params;
-  const { status } = req.body; // 'ONLINE' or 'OFFLINE'
+  const { status } = req.body;
+  const VALID_AGENT_STATUSES = ['ONLINE', 'OFFLINE'];
+  if (!VALID_AGENT_STATUSES.includes(status)) {
+    return res.status(400).json({ success: false, error: 'INVALID_STATUS', allowed: VALID_AGENT_STATUSES });
+  }
   db.run("UPDATE agents SET status = ?, lastActive = CURRENT_TIMESTAMP WHERE id = ? AND tenant_id = ? AND workspace_id = ?", [status, id, req.user.tenantId, req.user.workspaceId], function(err) {
     if (err) return res.status(500).json({ error: err.message });
     if (this.changes === 0) {

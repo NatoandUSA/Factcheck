@@ -23,6 +23,7 @@ export default function AmazonPipelineWorkflow({
   const [xrayFiles, setXrayFiles] = useState([]);
   const [xrayAsinsInput, setXrayAsinsInput] = useState('');
   const [xraySellers, setXraySellers] = useState([]);
+  const [xrayProvenance, setXrayProvenance] = useState(null);
   const [xrayLoading, setXrayLoading] = useState(false);
   const [xrayError, setXrayError] = useState(null);
   const [isXrayDragging, setIsXrayDragging] = useState(false);
@@ -76,11 +77,7 @@ export default function AmazonPipelineWorkflow({
 
     setBatches(outcome.batches);
     setXraySellers(outcome.xraySellers);
-    if (Array.isArray(outcome.xraySellers) && outcome.xraySellers.length > 0) {
-      try {
-        sessionStorage.setItem('omni_amazon_xray_sellers', JSON.stringify(outcome.xraySellers));
-      } catch (e) {}
-    }
+    setXrayProvenance(outcome.reportProvenance || null);
     if (onUpdateXraySellers && outcome.xraySellers) {
       onUpdateXraySellers(outcome.xraySellers);
     }
@@ -315,6 +312,12 @@ export default function AmazonPipelineWorkflow({
             <span>Không thể nạp Xray: {xrayError}</span>
           </div>
         )}
+
+        {xrayProvenance && (
+          <div style={{ marginTop: '12px', padding: '10px 12px', borderRadius: '8px', background: '#f8fafc', border: '1px solid #cbd5e1', color: '#475569', fontSize: '0.78rem' }}>
+            <strong>Imported Staff Xray report — snapshot, not live verified.</strong> Manual review only; this data cannot satisfy Product Truth, approval, export, or publish gates. Capture time: {xrayProvenance.captureTime || 'UNKNOWN'}.
+          </div>
+        )}
       </div>
 
       {/* ======================================================== */}
@@ -329,7 +332,7 @@ export default function AmazonPipelineWorkflow({
                 BƯỚC 2: Xuất Batch ASINs Đối Thủ ({batches.length} Batches)
               </h3>
               <p style={{ margin: '4px 0 0 0', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-                Gom nhóm các ASINs (tối đa 10/batch) từ tất cả file Xray để nạp vào Cerebro.
+                Gom nhóm ASINs (tối đa 10/batch) từ report snapshot để nạp vào Cerebro. Metadata chỉ là source-reported, không phải dữ liệu Amazon live.
               </p>
             </div>
 
@@ -378,8 +381,8 @@ export default function AmazonPipelineWorkflow({
                     <th style={{ padding: '10px 12px', fontWeight: 700, minWidth: '220px' }}>Tiêu Đề & Brand</th>
                     <th style={{ padding: '10px 12px', fontWeight: 700 }}>Giá / Fees</th>
                     <th style={{ padding: '10px 12px', fontWeight: 700 }}>Sales (ASIN / Parent)</th>
-                    <th style={{ padding: '10px 12px', fontWeight: 700 }}>Doanh Thu (Revenue)</th>
-                    <th style={{ padding: '10px 12px', fontWeight: 700 }}>BSR / Đánh Giá</th>
+                    <th style={{ padding: '10px 12px', fontWeight: 700 }}>Revenue (source snapshot)</th>
+                    <th style={{ padding: '10px 12px', fontWeight: 700 }}>Rank / Rating (source snapshot)</th>
                     <th style={{ padding: '10px 12px', fontWeight: 700 }}>Fulfillment / Seller</th>
                     <th style={{ padding: '10px 12px', fontWeight: 700 }}>Ngày Tạo / ABA</th>
                   </tr>
@@ -409,12 +412,12 @@ export default function AmazonPipelineWorkflow({
                               {item?.asin || '—'} ↗
                             </a>
                             <div style={{ display: 'flex', gap: '4px', marginTop: '2px' }}>
-                              {item?.isBestSeller && (
+                              {item?.isBestSeller === true && (
                                 <span style={{ background: '#fef08a', color: '#854d0e', fontSize: '0.65rem', padding: '1px 4px', borderRadius: '3px', fontWeight: 800 }}>
                                   #1 Best Seller
                                 </span>
                               )}
-                              {item?.isSponsored && (
+                              {item?.isSponsored === true && (
                                 <span style={{ background: '#f1f5f9', color: '#475569', fontSize: '0.65rem', padding: '1px 4px', borderRadius: '3px', fontWeight: 700 }}>
                                   Sponsored
                                 </span>
@@ -450,11 +453,12 @@ export default function AmazonPipelineWorkflow({
                       {/* Sales */}
                       <td style={{ padding: '10px 12px' }}>
                         <div style={{ fontWeight: 800, color: '#0284c7', fontSize: '0.9rem' }}>
-                          {typeof item?.sales === 'number' ? item.sales.toLocaleString() : (item?.sales || '—')}
+                          {typeof item?.sales === 'number' ? item.sales.toLocaleString() : '—'}
                         </div>
+                        {item?.salesScope && item.salesScope !== 'UNKNOWN' && <div style={{ fontSize: '0.68rem', color: '#64748b' }}>{item.salesScope} source field</div>}
                         {typeof item?.parentSales === 'number' && item?.parentSales !== item?.sales && (
                           <div style={{ fontSize: '0.72rem', color: '#64748b', marginTop: '2px' }}>
-                            Parent: {item.parentSales.toLocaleString()}
+                            Parent source: {item.parentSales.toLocaleString()}
                           </div>
                         )}
                       </td>
@@ -462,13 +466,12 @@ export default function AmazonPipelineWorkflow({
                       {/* Revenue */}
                       <td style={{ padding: '10px 12px' }}>
                         <div style={{ fontWeight: 800, color: '#0f172a' }}>
-                          {typeof item?.revenue === 'number' 
-                            ? `$${item.revenue.toLocaleString()}` 
-                            : (item?.revenue ? (item.revenue.startsWith?.('$') ? item.revenue : `$${item.revenue}`) : '—')}
+                          {typeof item?.revenue === 'number' ? `$${item.revenue.toLocaleString()}` : '—'}
                         </div>
+                        {item?.revenueScope && item.revenueScope !== 'UNKNOWN' && <div style={{ fontSize: '0.68rem', color: '#64748b' }}>{item.revenueScope} source field</div>}
                         {typeof item?.parentRevenue === 'number' && item?.parentRevenue !== item?.revenue && (
                           <div style={{ fontSize: '0.72rem', color: '#64748b', marginTop: '2px' }}>
-                            Parent: ${item.parentRevenue.toLocaleString()}
+                            Parent source: ${item.parentRevenue.toLocaleString()}
                           </div>
                         )}
                       </td>
@@ -476,11 +479,12 @@ export default function AmazonPipelineWorkflow({
                       {/* BSR & Ratings */}
                       <td style={{ padding: '10px 12px' }}>
                         <div style={{ fontWeight: 700, color: '#7e22ce' }}>
-                          {typeof item?.bsr === 'number' ? `#${item.bsr.toLocaleString()}` : (item?.bsr || '—')}
+                          {typeof item?.bsr === 'number' ? `#${item.bsr.toLocaleString()}` : '—'}
                         </div>
                         <div style={{ fontSize: '0.72rem', color: '#475569', marginTop: '2px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                          {typeof item?.ratings === 'number' && <span>⭐ {item.ratings.toFixed(1)}</span>}
-                          {typeof item?.reviewCount === 'number' && <span>({item.reviewCount.toLocaleString()})</span>}
+                          {typeof item?.ratingValue === 'number' && <span>⭐ {item.ratingValue.toFixed(1)}</span>}
+                          {typeof item?.ratingCount === 'number' && <span>({item.ratingCount.toLocaleString()} ratings)</span>}
+                          {typeof item?.reviewCount === 'number' && <span>({item.reviewCount.toLocaleString()} reviews)</span>}
                         </div>
                       </td>
 
@@ -495,7 +499,7 @@ export default function AmazonPipelineWorkflow({
                             fontWeight: 800,
                             fontSize: '0.7rem'
                           }}>
-                            {item?.fulfillment || 'FBA'}
+                            {item?.fulfillment || 'UNKNOWN'}
                           </span>
                           {item?.buyBox && (
                             <span style={{ fontSize: '0.72rem', color: '#334155', fontWeight: 600 }}>

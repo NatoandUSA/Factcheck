@@ -1517,35 +1517,6 @@ app.post('/api/mcp/pull-etsy', requireAuth(db), requireRole(['OWNER', 'MANAGER',
   let liveData = mcpData?.data || {};
   let topListings = Array.isArray(liveData.top_listings) ? [...liveData.top_listings] : [];
 
-  // Fallback to ytrends_search if top_listings or tags are empty from exploreNiche
-  if (topListings.length === 0 || (!Array.isArray(liveData.adjacent_tags) && !Array.isArray(liveData.related_keywords))) {
-    try {
-      const searchRes = await ytrendsMcp.callTool('ytrends_search', { query: cleanSeed });
-      if (Array.isArray(searchRes?.data?.results) && searchRes.data.results.length > 0) {
-        searchRes.data.results.forEach((item, idx) => {
-          let price = null;
-          let country = null;
-          if (item.snippet) {
-            const priceMatch = item.snippet.match(/\$([0-9.]+)/);
-            if (priceMatch) price = `$${priceMatch[1]}`;
-            const countryMatch = item.snippet.match(/([A-Z]{2})\s+shop/i);
-            if (countryMatch) country = countryMatch[1].toUpperCase();
-          }
-          topListings.push({
-            listing_id: item.id?.replace(/^lst:/, '') || `${idx + 1}`,
-            title: item.title,
-            url: item.url,
-            price: price,
-            shop_country: country,
-            evidenceSource: 'ETSY_MCP_LIVE'
-          });
-        });
-      }
-    } catch (searchErr) {
-      console.warn('YTrends search fallback error:', searchErr.message);
-    }
-  }
-
   const overview = liveData.overview && typeof liveData.overview === 'object' ? liveData.overview : null;
   const rawTags = [];
   const rawRelatedKws = [];
@@ -1565,7 +1536,65 @@ app.post('/api/mcp/pull-etsy', requireAuth(db), requireRole(['OWNER', 'MANAGER',
   (Array.isArray(liveData.adjacent_tags) ? liveData.adjacent_tags : []).forEach(addObservedTag);
   (Array.isArray(liveData.related_keywords) ? liveData.related_keywords : []).forEach(addRelatedKw);
 
-  // If exploreNiche yielded no tags, extract clean tags from cleanSeed and live search listing titles
+  // Fallback to deep query (search + hot listings) if topListings or tags are empty from exploreNiche
+  if (topListings.length === 0 || rawTags.length === 0) {
+    try {
+      const [searchRes, hotRes] = await Promise.allSettled([
+        ytrendsMcp.callTool('ytrends_search', { query: cleanSeed, limit: 30 }),
+        ytrendsMcp.callTool('ytrends_find_hot_listings', { search: cleanSeed, limit: 30 })
+      ]);
+
+      if (searchRes.status === 'fulfilled' && Array.isArray(searchRes.value?.data?.results)) {
+        searchRes.value.data.results.forEach((item, idx) => {
+          let price = null;
+          let country = null;
+          if (item.snippet) {
+            const priceMatch = item.snippet.match(/\$([0-9.]+)/);
+            if (priceMatch) price = `$${priceMatch[1]}`;
+            const countryMatch = item.snippet.match(/([A-Z]{2})\s+shop/i);
+            if (countryMatch) country = countryMatch[1].toUpperCase();
+          }
+          if (!topListings.some(l => l.listing_id === (item.id?.replace(/^lst:/, '') || `${idx + 1}`))) {
+            topListings.push({
+              listing_id: item.id?.replace(/^lst:/, '') || `${idx + 1}`,
+              title: item.title,
+              url: item.url,
+              price: price,
+              shop_country: country,
+              evidenceSource: 'ETSY_MCP_LIVE'
+            });
+          }
+        });
+      }
+
+      if (hotRes.status === 'fulfilled' && Array.isArray(hotRes.value?.data?.listings)) {
+        hotRes.value.data.listings.forEach((lst) => {
+          if (!topListings.some(l => l.listing_id === String(lst.listing_id))) {
+            topListings.push({
+              listing_id: String(lst.listing_id),
+              title: lst.title,
+              url: `https://www.etsy.com/listing/${lst.listing_id}`,
+              price: lst.price_usd ? `$${lst.price_usd}` : (lst.price ? `$${lst.price}` : null),
+              shop_country: lst.shop_country,
+              views24h: lst.views_24h,
+              sold24h: lst.sold_24h,
+              conversionRate: lst.conversion_rate ? Number((lst.conversion_rate * 100).toFixed(2)) : null,
+              favorites: lst.favorites,
+              evidenceSource: 'ETSY_MCP_LIVE'
+            });
+          }
+          // Extract real tags directly from hot listings
+          if (Array.isArray(lst.tags)) {
+            lst.tags.forEach(addObservedTag);
+          }
+        });
+      }
+    } catch (searchErr) {
+      console.warn('YTrends deep query fallback error:', searchErr.message);
+    }
+  }
+
+  // If still no tags, extract clean tags from cleanSeed and live search listing titles
   if (rawTags.length === 0 && rawRelatedKws.length === 0) {
     if (cleanSeed) addObservedTag(cleanSeed);
     topListings.forEach(lst => {

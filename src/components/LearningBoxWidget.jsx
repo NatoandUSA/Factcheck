@@ -9,7 +9,9 @@ export default function LearningBoxWidget({ platform = 'AMAZON', onShowToast, sc
   const [rawText, setRawText] = useState('');
   const [inputMode, setInputMode] = useState('url'); // 'url' | 'text' | 'seller'
   const [selectedSellerId, setSelectedSellerId] = useState('');
-  const [category, setCategory] = useState('Apparel: Sweatshirt');
+  // The learning source does not establish a product category. Keep the
+  // value explicit rather than silently attributing every reference to apparel.
+  const [category, setCategory] = useState('UNKNOWN');
   const [learning, setLearning] = useState(false);
   const [templates, setTemplates] = useState([]);
   const [activeTemplate, setActiveTemplate] = useState(null);
@@ -45,7 +47,7 @@ export default function LearningBoxWidget({ platform = 'AMAZON', onShowToast, sc
   const selectedSeller = effectiveSellers.find(s => s.id === selectedSellerId || s.asin === selectedSellerId);
   const sellerAsRawText = selectedSeller
     ? (isAmazon
-        ? `Title: ${selectedSeller.title}\nASIN: ${selectedSeller.asin || ''}\nPrice: ${selectedSeller.price || ''}\nMonthly Sales: ${selectedSeller.sales || ''}\nURL: https://www.amazon.com/dp/${selectedSeller.asin || ''}`
+        ? `Title: ${selectedSeller.title || ''}\nASIN: ${selectedSeller.asin || ''}\nPrice: ${selectedSeller.price ?? ''}\nMonthly Sales: ${selectedSeller.sales ?? ''}\nURL: ${selectedSeller.url || ''}`
         : `Title: ${selectedSeller.title}\nShop: ${selectedSeller.shopName || ''} (${selectedSeller.country || ''})\nPrice: ${selectedSeller.price || ''}\nViews 24h: ${selectedSeller.views24h || ''}\nSold 24h: ${selectedSeller.sold24h || ''}\nFavorites: ${selectedSeller.favorites || ''}`)
     : '';
 
@@ -113,8 +115,8 @@ export default function LearningBoxWidget({ platform = 'AMAZON', onShowToast, sc
             </div>
             <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
               {isAmazon 
-                ? 'Dán link Amazon / ASIN hoặc chọn từ Xray để Omni học Title Hook ≤ 75c, 5 Bullets [HOOKS], Search Terms 249 bytes và A+ Content.'
-                : 'Dán link Etsy / Shop text đối thủ để Omni học Title <140 chars, đúng 13 Tags ≤ 20 chars, và Storytelling Description.'}
+                ? 'Dán link Amazon có thể truy xuất hoặc văn bản nguồn. Xray snapshot không tự trở thành evidence cho Learning Box hay listing.'
+                : 'Dán link Etsy / Shop text đối thủ để tham chiếu cấu trúc; không tạo Product Truth hay bằng chứng publish.'}
             </div>
           </div>
         </div>
@@ -139,7 +141,7 @@ export default function LearningBoxWidget({ platform = 'AMAZON', onShowToast, sc
             }}
           >
             <Link2 size={14} />
-            <span>Dán Link {isAmazon ? 'Amazon/ASIN' : 'Etsy Listing'}</span>
+            <span>Dán Link {isAmazon ? 'Amazon' : 'Etsy Listing'}</span>
           </button>
 
           <button
@@ -227,7 +229,7 @@ export default function LearningBoxWidget({ platform = 'AMAZON', onShowToast, sc
               style={{ flex: 1, fontSize: '0.85rem' }}
               value={url}
               onChange={(e) => setUrl(e.target.value)}
-              placeholder={isAmazon ? 'https://www.amazon.com/dp/B0... hoặc https://amazon.com/gp/product/...' : 'https://www.etsy.com/listing/123456789/...'}
+              placeholder={isAmazon ? 'https://www.amazon.com/dp/B0... hoặc https://a.co/...' : 'https://www.etsy.com/listing/123456789/...'}
             />
             <button
               type="submit"
@@ -270,8 +272,8 @@ export default function LearningBoxWidget({ platform = 'AMAZON', onShowToast, sc
       {templates.length > 0 && (
         <div style={{ marginTop: '6px', borderTop: '1px solid var(--border-subtle)', paddingTop: '14px' }}>
           <div style={{ fontSize: '0.8rem', fontWeight: 800, color: 'var(--text-secondary)', marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span>KHO LISTING MẪU ĐÃ HỌC ({templates.length} MẪU CHO {platform}):</span>
-            <span style={{ fontSize: '0.75rem', color: themeColor }}>✓ Tự động áp dụng vào AI khi tạo listing mới</span>
+            <span>KHO THAM CHIẾU ĐÃ HỌC ({templates.length} MẪU CHO {platform}):</span>
+            <span style={{ fontSize: '0.75rem', color: themeColor }}>Style reference for drafts only — không phải Product Truth hoặc publish approval</span>
           </div>
 
           <div style={{ display: 'flex', gap: '8px', overflowX: 'auto', paddingBottom: '6px' }}>
@@ -322,7 +324,10 @@ export default function LearningBoxWidget({ platform = 'AMAZON', onShowToast, sc
         <div style={{ background: isAmazon ? '#f8fafc' : '#fffaf5', borderRadius: '10px', padding: '16px 20px', border: `1px solid ${isAmazon ? '#bae6fd' : '#fed7aa'}`, fontSize: '0.85rem' }}>
           <div style={{ fontWeight: 800, color: themeColor, marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
             <CheckCircle2 size={18} />
-            <span>DNA Đang Áp Dụng: "{activeTemplate.title}"</span>
+            <span>DNA tham chiếu đang review: "{activeTemplate.title}"</span>
+          </div>
+          <div style={{ fontSize: '0.72rem', color: '#64748b', marginBottom: '8px' }}>
+            Evidence: {activeTemplate.styleDna?.evidence?.state || activeTemplate.evidenceState || 'UNKNOWN'} • {activeTemplate.styleDna?.evidence?.sourceKind || activeTemplate.sourceKind || 'UNKNOWN SOURCE'} • Không phải Product Truth hay bằng chứng publish.
           </div>
 
           {isAmazon ? (

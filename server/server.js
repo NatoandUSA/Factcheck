@@ -2902,6 +2902,23 @@ const handleReportUpload = async (req, res) => {
         });
       }
 
+      const reportProvenance = {
+        state: 'SOURCE_REPORTED',
+        sourceKind: 'STAFF_UPLOADED_XRAY_REPORT',
+        ingestedAt: new Date().toISOString(),
+        captureTime: null,
+        tenantId: req.user.tenantId,
+        workspaceId: req.user.workspaceId,
+        // This report is not persisted as a project evidence record by this
+        // endpoint, so it must not claim a project binding from client input.
+        projectId: null,
+        projectBinding: 'NOT_PERSISTED',
+        artifacts: uploadedFiles.map(file => ({
+          fileName: file.originalname,
+          sha256: crypto.createHash('sha256').update(fs.readFileSync(file.path)).digest('hex')
+        }))
+      };
+
       // Extract rich sellers list for Learning Box & Staff Review
       const xraySellers = (batchResult.batches || []).flatMap(b => b.items || []).map((item, idx) => ({
         id: `asin_${item.asin}_${idx}`,
@@ -2911,9 +2928,16 @@ const handleReportUpload = async (req, res) => {
         price: item.price,
         sales: item.sales,
         parentSales: item.parentSales,
+        salesScope: item.salesScope,
+        parentSalesScope: item.parentSalesScope,
         revenue: item.revenue,
         parentRevenue: item.parentRevenue,
+        revenueScope: item.revenueScope,
+        parentRevenueScope: item.parentRevenueScope,
         bsr: item.bsr,
+        rankSourceHeader: item.rankSourceHeader,
+        ratingValue: item.ratingValue,
+        ratingCount: item.ratingCount,
         ratings: item.ratings,
         reviewCount: item.reviewCount,
         reviewVelocity: item.reviewVelocity,
@@ -2935,6 +2959,8 @@ const handleReportUpload = async (req, res) => {
         // observed ASIN, not an observed listing URL or seller identity.
         url: `https://www.amazon.com/dp/${item.asin}`,
         urlProvenance: 'DERIVED_FROM_ASIN',
+        evidenceState: item.evidenceState,
+        fieldProvenance: item.fieldProvenance,
         shopName: item.seller || null
       }));
 
@@ -2950,7 +2976,8 @@ const handleReportUpload = async (req, res) => {
         rejectedCount: batchResult.rejectedCount,
         batchCount: batchResult.batchCount,
         batches: batchResult.batches,
-        xraySellers
+        xraySellers,
+        reportProvenance
       });
     }
 
@@ -3231,12 +3258,12 @@ app.post('/api/trends/:id/draft', requireAuth(db), requireRole(['OWNER', 'MANAGE
         let fewShotSection = '';
         if (learnedTpl) {
           fewShotSection = `
-FEW-SHOT GOLD STANDARD WINNING TEMPLATE (LEARNED FROM BEST SELLER ${learnedTpl.marketplace}):
+STAFF-SUPPLIED STRUCTURAL STYLE REFERENCE (${learnedTpl.marketplace}; NOT PRODUCT TRUTH OR A PERFORMANCE CLAIM):
 - Sample Title Pattern: "${learnedTpl.title}"
 - Sample Bullets Style: ${learnedTpl.bullets}
 - Sample Tags Style: ${learnedTpl.tags}
 - Sample Description / Story: "${(learnedTpl.description || '').slice(0, 350)}..."
-CRITICAL: Replicate the high conversion, bullet hook style, and emotional craftsmanship of this template!`;
+Use this only as an optional structural writing reference. Do not treat it as verified marketplace, conversion, product, material, capability, policy, or performance evidence.`;
         }
 
         try {

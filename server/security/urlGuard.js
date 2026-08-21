@@ -13,6 +13,8 @@ const AMAZON_HOSTS = new Set([
   // Approved short-link host. Each redirect hop remains marketplace-pinned
   // and is revalidated by safeFetch before it is followed.
   'a.co',
+  // Existing Amazon regional storefronts remain supported. They are part of
+  // the original marketplace trust boundary, not newly approved short links.
   'amazon.co.uk', 'www.amazon.co.uk',
   'amazon.de', 'www.amazon.de',
   'amazon.fr', 'www.amazon.fr',

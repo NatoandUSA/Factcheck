@@ -12,6 +12,7 @@ async function learnFromListing({ url = '', rawText = '', category = 'Custom Gif
   let description = '';
   let materials = [];
   let extractedUrl = url.trim();
+  let sourceEvidenceState = rawText && rawText.trim() ? 'MANUAL_ASSERTION' : 'UNKNOWN';
 
   // The authenticated session marketplace is the sole authority — never
   // inferred from URL text, which a caller fully controls (GPT PR-5 final
@@ -46,6 +47,9 @@ async function learnFromListing({ url = '', rawText = '', category = 'Custom Gif
           }
         });
       }
+      if (title || bullets.length > 0 || tags.length > 0 || description) {
+        sourceEvidenceState = 'SOURCE_REPORTED';
+      }
     } catch (fetchErr) {
       // A blocked URL must be a real, visible failure — not silently
       // papered over with fallback placeholder text pretending to be
@@ -73,6 +77,7 @@ async function learnFromListing({ url = '', rawText = '', category = 'Custom Gif
     if (!description && lines.length > 2) {
       description = lines.slice(1).join('\n');
     }
+    if (sourceEvidenceState !== 'SOURCE_REPORTED') sourceEvidenceState = 'MANUAL_ASSERTION';
   }
 
   // A URL query, ASIN, or path slug is only a reference; it is never
@@ -112,6 +117,12 @@ async function learnFromListing({ url = '', rawText = '', category = 'Custom Gif
     styleDna = {
       marketplace: 'AMAZON',
       provenance: 'MODELED_STRUCTURAL_DNA',
+      evidence: {
+        state: sourceEvidenceState,
+        sourceKind: sourceEvidenceState === 'SOURCE_REPORTED' ? 'FETCHED_MARKETPLACE_LISTING' : 'STAFF_MANUAL_ASSERTION',
+        captureTime: new Date().toISOString(),
+        sourceUrl: extractedUrl || null
+      },
       titleFrontLoadedHook: title.slice(0, 75),
       titleCharLength: title.length,
       titleHookExplanation: '👑 Tier 1: Từ khóa hạt nhân + Target Recipient được đưa lên 75 ký tự đầu (Zero mobile truncation trên Amazon App).',
@@ -140,6 +151,12 @@ async function learnFromListing({ url = '', rawText = '', category = 'Custom Gif
     styleDna = {
       marketplace: 'ETSY',
       provenance: 'MODELED_STRUCTURAL_DNA',
+      evidence: {
+        state: sourceEvidenceState,
+        sourceKind: sourceEvidenceState === 'SOURCE_REPORTED' ? 'FETCHED_MARKETPLACE_LISTING' : 'STAFF_MANUAL_ASSERTION',
+        captureTime: new Date().toISOString(),
+        sourceUrl: extractedUrl || null
+      },
       titleFormat: 'Under 140 Chars, Multi-phrase Long-tail Keywords',
       titleExplanation: 'Tiêu đề < 140 ký tự, 40 ký tự đầu chứa cụm từ khóa chính mang tính cảm xúc/quà tặng.',
       exact13Tags: tags.slice(0, 13),
@@ -153,6 +170,9 @@ async function learnFromListing({ url = '', rawText = '', category = 'Custom Gif
   return {
     success: true,
     provenance: 'MODELED_STRUCTURAL_DNA',
+    evidenceState: sourceEvidenceState,
+    sourceKind: sourceEvidenceState === 'SOURCE_REPORTED' ? 'FETCHED_MARKETPLACE_LISTING' : 'STAFF_MANUAL_ASSERTION',
+    capturedAt: styleDna.evidence.captureTime,
     url: extractedUrl || 'Raw Text Input',
     marketplace: resolvedMarketplace,
     category,

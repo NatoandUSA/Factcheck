@@ -137,18 +137,18 @@ async function main() {
     console.log('🟢 safeFetch: exceeding the redirect budget is rejected.');
   }
 
-  // A redirect to another host within the SAME marketplace is followed
+  // A redirect to the explicitly approved Amazon short host is followed
   // end-to-end and the final body is returned.
   {
     let hop = 0;
     const fetchImpl = async () => {
       hop++;
-      if (hop === 1) return makeRedirectResponse('https://www.amazon.co.uk/');
+      if (hop === 1) return makeRedirectResponse('https://a.co/');
       return makeOkResponse('final body content');
     };
     const body = await safeFetch('https://www.amazon.com/', 'AMAZON', fetchImpl);
     assert.strictEqual(body, 'final body content', 'safeFetch should return the final hop body after following a same-marketplace redirect');
-    console.log('🟢 safeFetch: redirect to another host in the same marketplace is followed and body returned.');
+    console.log('🟢 safeFetch: redirect to the approved Amazon short host is followed and body returned.');
   }
 
   // A redirect that crosses marketplaces (Amazon host -> Etsy host) must be

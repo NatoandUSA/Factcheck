@@ -167,15 +167,17 @@ function buildEtsyTitleClean(keywordList, categoryName = 'Handmade Gift') {
 }
 
 function buildAmazonSearchTerms(keywordList) {
+  if (!Array.isArray(keywordList) || keywordList.length === 0) return '';
   const ranked = rankKeywords(keywordList);
   const wordsSet = new Set();
   const resultWords = [];
   let currentBytes = 0;
 
   for (const item of ranked) {
+    if (!item || !item.keyword) continue;
     const words = item.keyword.split(/\s+/);
     for (let word of words) {
-      word = word.toLowerCase().replace(/[^a-z0-9]/g, '').trim();
+      word = word.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '').trim();
       if (!word || word.length < 2) continue;
       const ipCheck = ipGuard.screenText(word);
       if (ipCheck.verdict === 'BLOCK') continue;
@@ -192,69 +194,29 @@ function buildAmazonSearchTerms(keywordList) {
     if (currentBytes >= 240) break;
   }
 
-  const fallbackTerms = [
-    'gifts', 'gift', 'women', 'mom', 'spanish', 'birthday', 'wedding', 'anniversary',
-    'personalized', 'custom', 'handmade', 'unique', 'keepsake', 'mother', 'daughter',
-    'regalos', 'para', 'mujer', 'esposa', 'novia', 'navidad', 'cumpleanos', 'collar'
-  ];
-  if (currentBytes < 220) {
-    for (let word of fallbackTerms) {
-      word = word.toLowerCase().replace(/[^a-z0-9]/g, '').trim();
-      if (!word || wordsSet.has(word)) continue;
-      const ipCheck = ipGuard.screenText(word);
-      if (ipCheck.verdict === 'BLOCK') continue;
-      const wordBytes = Buffer.byteLength(word, 'utf8');
-      const addedBytes = resultWords.length > 0 ? wordBytes + 1 : wordBytes;
-      if (currentBytes + addedBytes <= 249) {
-        wordsSet.add(word);
-        resultWords.push(word);
-        currentBytes += addedBytes;
-      } else break;
-    }
-  }
   return resultWords.join(' ');
 }
 
 function buildEtsyTags(keywordList, categoryName = 'Gift') {
+  if (!Array.isArray(keywordList) || keywordList.length === 0) return [];
   const ranked = rankKeywords(keywordList);
   const tagsSet = new Set();
   const resultTags = [];
-  const defaultTags = [
-    `custom ${categoryName.toLowerCase()}`,
-    'personalized gift',
-    'milestone keepsake',
-    'gift for her',
-    'gift for mom',
-    'unique keepsake',
-    'birthday gift',
-    'anniversary gift',
-    'custom name gift',
-    'aesthetic gift',
-    'trending gift',
-    'handicraft decor',
-    'handmade gift'
-  ];
 
   for (const item of ranked) {
+    if (!item || !item.keyword) continue;
     let tag = item.keyword.toLowerCase().trim();
-    tag = tag.replace(/[^a-z0-9\s]/g, '').trim();
-    if (tag && tag.length <= 20 && !tagsSet.has(tag)) {
-      tagsSet.add(tag);
-      resultTags.push(tag);
+    tag = tag.replace(/[^\p{L}\p{N}\s]/gu, '').replace(/\s+/g, ' ').trim();
+    if (tag && tag.length >= 3 && tag.length <= 20 && !tagsSet.has(tag)) {
+      const ipCheck = ipGuard.screenText(tag);
+      if (ipCheck.verdict !== 'BLOCK') {
+        tagsSet.add(tag);
+        resultTags.push(tag);
+      }
     }
     if (resultTags.length >= 13) break;
   }
 
-  if (resultTags.length < 13) {
-    for (const defTag of defaultTags) {
-      const cleanDef = defTag.substring(0, 20).trim();
-      if (!tagsSet.has(cleanDef)) {
-        tagsSet.add(cleanDef);
-        resultTags.push(cleanDef);
-      }
-      if (resultTags.length >= 13) break;
-    }
-  }
   return resultTags.slice(0, 13);
 }
 

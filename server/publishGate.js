@@ -122,25 +122,33 @@ function evaluatePublishGate(listing) {
   }
 
   // Marketplace-authoritative title selection (Etsy uses etsyTitle first; Amazon uses amazonTitle first)
-  const title = contract.marketplace === 'ETSY'
+  const rawTitle = contract.marketplace === 'ETSY'
     ? (listing.etsyTitle || listing.title || listing.amazonTitle || '')
     : (listing.amazonTitle || listing.title || listing.etsyTitle || '');
-  if (title.length > contract.maxTitleChars) {
+  const title = typeof rawTitle === 'string' ? rawTitle.trim() : String(rawTitle || '');
+  if (!title) {
+    issues.push(`Missing product title for ${contract.marketplace}`);
+  } else if (title.length > contract.maxTitleChars) {
     issues.push(`Title exceeds ${contract.maxTitleChars} character limit (${title.length} chars)`);
   }
 
   // 2a-1. Etsy Tags Contract Check
   if (contract.marketplace === 'ETSY') {
-    const tags = listing.etsyTags || listing.tags || [];
-    if (!Array.isArray(tags) || tags.length === 0) {
+    const rawTags = listing.etsyTags || listing.tags || [];
+    if (!Array.isArray(rawTags) || rawTags.length === 0) {
       issues.push('Missing Etsy tags -- exactly 13 tags required for Etsy listings');
     } else {
-      if (tags.length !== contract.requiredTagsCount) {
-        issues.push(`Etsy tags count must be exactly ${contract.requiredTagsCount} tags (current: ${tags.length})`);
+      const cleanTags = rawTags.map(t => typeof t === 'string' ? t.trim() : '').filter(Boolean);
+      if (cleanTags.length !== contract.requiredTagsCount) {
+        issues.push(`Etsy tags count must be exactly ${contract.requiredTagsCount} tags (current: ${cleanTags.length})`);
       }
-      const longTags = tags.filter(t => typeof t !== 'string' || t.length > contract.maxTagChars);
-      if (longTags.length > 0) {
-        issues.push(`${longTags.length} tags exceed ${contract.maxTagChars}-character Etsy limit`);
+      const uniqueTags = new Set(cleanTags.map(t => t.toLowerCase()));
+      if (uniqueTags.size !== cleanTags.length) {
+        issues.push('Etsy tags must not contain duplicate tags');
+      }
+      const invalidTags = cleanTags.filter(t => t.length > contract.maxTagChars);
+      if (invalidTags.length > 0) {
+        issues.push(`${invalidTags.length} tags exceed ${contract.maxTagChars}-character Etsy limit`);
       }
     }
   }
@@ -151,12 +159,9 @@ function evaluatePublishGate(listing) {
     if (!Array.isArray(bullets) || bullets.length === 0) {
       issues.push('Missing Amazon bullet points -- exactly 5 bullet points required for Amazon listings');
     } else {
-      if (bullets.length !== contract.requiredBulletsCount) {
-        issues.push(`Amazon bullets count must be exactly ${contract.requiredBulletsCount} bullet points (current: ${bullets.length})`);
-      }
-      const emptyBullets = bullets.filter(b => typeof b !== 'string' || b.trim().length === 0);
-      if (emptyBullets.length > 0) {
-        issues.push('Amazon bullet points must not contain empty lines');
+      const cleanBullets = bullets.map(b => typeof b === 'string' ? b.trim() : '').filter(Boolean);
+      if (cleanBullets.length !== contract.requiredBulletsCount) {
+        issues.push(`Amazon bullets count must be exactly ${contract.requiredBulletsCount} bullet points (current: ${cleanBullets.length})`);
       }
     }
 
@@ -175,21 +180,35 @@ function evaluatePublishGate(listing) {
   }
 
   // 2a-3. Financial Profit & Margin Floor Enforcement (Safe Finite Number Validation)
+  if (listing.price !== undefined && listing.price !== null) {
+    const priceNum = typeof listing.price === 'string' ? parseFloat(listing.price.replace(/[^0-9.]/g, '')) : Number(listing.price);
+    if (!Number.isFinite(priceNum) || priceNum <= 0) {
+      issues.push('Invalid price (must be a positive numeric figure)');
+    }
+  }
+
+  if (listing.cost !== undefined && listing.cost !== null) {
+    const costNum = typeof listing.cost === 'string' ? parseFloat(listing.cost.replace(/[^0-9.]/g, '')) : Number(listing.cost);
+    if (!Number.isFinite(costNum) || costNum < 0) {
+      issues.push('Invalid cost (must be a non-negative numeric figure)');
+    }
+  }
+
   if (listing.netProfit !== undefined && listing.netProfit !== null) {
-    const profitNum = Number(listing.netProfit);
+    const profitNum = typeof listing.netProfit === 'string' ? parseFloat(listing.netProfit) : Number(listing.netProfit);
     if (!Number.isFinite(profitNum)) {
       issues.push('Invalid net profit value (must be a valid numeric figure)');
     } else if (profitNum < MIN_NET_PROFIT) {
-      issues.push(`Net profit ($${profitNum.toFixed(2)}) is below the required $${MIN_NET_PROFIT.toFixed(2)} floor`);
+      issues.push(`Net profit ($${profitNum}) is below the required $${MIN_NET_PROFIT.toFixed(2)} floor`);
     }
   }
 
   if (listing.netMargin !== undefined && listing.netMargin !== null) {
-    const marginNum = Number(listing.netMargin);
+    const marginNum = typeof listing.netMargin === 'string' ? parseFloat(listing.netMargin) : Number(listing.netMargin);
     if (!Number.isFinite(marginNum)) {
       issues.push('Invalid net margin value (must be a valid numeric figure)');
     } else if (marginNum < MIN_NET_MARGIN) {
-      issues.push(`Net margin (${marginNum.toFixed(1)}%) is below the required ${MIN_NET_MARGIN.toFixed(1)}% floor`);
+      issues.push(`Net margin (${marginNum}%) is below the required ${MIN_NET_MARGIN.toFixed(1)}% floor`);
     }
   }
 

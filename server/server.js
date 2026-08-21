@@ -1430,14 +1430,24 @@ app.post('/api/listings/:id/feedback', requireAuth(db), requireRole(['OWNER', 'M
   const { id } = req.params;
   const { views, orders, revenue } = req.body;
   
+  const viewsNum = Number(views);
+  const ordersNum = Number(orders);
+  const revenueNum = Number(revenue);
+
+  if (!Number.isFinite(viewsNum) || viewsNum < 0 ||
+      !Number.isFinite(ordersNum) || ordersNum < 0 ||
+      !Number.isFinite(revenueNum) || revenueNum < 0) {
+    return res.status(400).json({ error: 'INVALID_FEEDBACK_NUMBERS', message: 'views, orders, and revenue must be non-negative finite numeric figures.' });
+  }
+
   // Basic logic for KEEP/CHANGE/KILL/SCALE based on Etsy Repo logic
   let action = 'KEEP';
-  const conversionRate = (views > 0) ? (orders / views) * 100 : 0;
+  const conversionRate = (viewsNum > 0) ? (ordersNum / viewsNum) * 100 : 0;
   
-  if (orders > 5 && revenue > 100) action = 'SCALE';
-  else if (views > 100 && orders === 0) action = 'CHANGE_MAIN_PHOTO_OR_PRICE';
-  else if (views < 10 && orders === 0) action = 'CHANGE_TAGS_OR_TITLE';
-  else if (views === 0) action = 'KILL_LISTING';
+  if (ordersNum > 5 && revenueNum > 100) action = 'SCALE';
+  else if (viewsNum > 100 && ordersNum === 0) action = 'CHANGE_MAIN_PHOTO_OR_PRICE';
+  else if (viewsNum < 10 && ordersNum === 0) action = 'CHANGE_TAGS_OR_TITLE';
+  else if (viewsNum === 0) action = 'KILL_LISTING';
   
   db.get(
     `SELECT id FROM listings
@@ -1447,7 +1457,7 @@ app.post('/api/listings/:id/feedback', requireAuth(db), requireRole(['OWNER', 'M
       if (scopeErr || !listing) return res.status(404).json({ error: 'Listing not found.' });
       db.run(
         "INSERT INTO sales_feedback (listingId, views, orders, revenue, action) VALUES (?, ?, ?, ?, ?)",
-        [id, views, orders, revenue, action],
+        [id, viewsNum, ordersNum, revenueNum, action],
         function(err) {
           if (err) return res.status(500).json({ error: err.message });
           res.json({ id: this.lastID, action, conversionRate });
@@ -1795,7 +1805,10 @@ app.post('/api/ip-guard/custom-term', requireAuth(db), requireRole(['OWNER']), (
       }
     }
 
-    fs.writeFileSync(libPath, JSON.stringify(lib, null, 2), 'utf8');
+    const tempPath = `${libPath}.tmp.${Date.now()}`;
+    fs.writeFileSync(tempPath, JSON.stringify(lib, null, 2), 'utf8');
+    fs.renameSync(tempPath, libPath);
+    ipGuard.reloadLibrary();
     res.json({ success: true, message: `Term "${term}" added to ${action} list (${category})` });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1863,6 +1876,13 @@ app.post('/api/learning/analyze', requireAuth(db), requireRole(['OWNER', 'MANAGE
 
   try {
     const analysis = await learnFromListing({ url, rawText, category, marketplace });
+    if (!analysis.success || !analysis.title) {
+      return res.status(422).json({
+        success: false,
+        error: analysis.code || 'INSUFFICIENT_EVIDENCE',
+        message: analysis.error || 'Could not extract listing DNA from provided URL or text.'
+      });
+    }
 
     // Store in DB, scoped to the caller's workspace (see learned_templates
     // ownership migration — templates are workspace-owned, not global)
@@ -2784,6 +2804,7 @@ app.get('/api/analytics-summary', requireAuth(db), requireRole(['OWNER', 'MANAGE
           WHERE l.tenant_id = ? AND l.workspace_id = ? AND l.marketplace = ?
           GROUP BY action
         `, [req.user.tenantId, req.user.workspaceId, req.user.marketplace], (feedErr, feedRows) => {
+          if (feedErr) return res.status(500).json({ error: feedErr.message });
           res.json({
             listingStats: listingStats || { totalListings: 0, approvedListings: 0, pendingListings: 0 },
             categoryBreakdown: catRows || [],

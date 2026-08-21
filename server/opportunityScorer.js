@@ -4,17 +4,18 @@
  */
 
 function calculateOpportunityScore(item = {}) {
-  const hasObservedDemand = typeof item.searchVolume === 'number' || typeof item.demandScore === 'number';
-  const hasObservedComp = typeof item.competitorCount === 'number' || typeof item.competitionIndex === 'number';
+  const isFiniteNonNeg = (v) => typeof v === 'number' && Number.isFinite(v) && v >= 0;
+  const hasObservedDemand = isFiniteNonNeg(item.searchVolume) || isFiniteNonNeg(item.demandScore);
+  const hasObservedComp = isFiniteNonNeg(item.competitorCount) || isFiniteNonNeg(item.competitionIndex);
 
-  // If real observed market evidence is absent, return UNSCORED with explicit provenance
+  // If real observed market evidence is absent or invalid, return UNSCORED with explicit provenance
   if (!hasObservedDemand || !hasObservedComp) {
     return {
       overallScore: null,
       verdict: 'UNSCORED',
       provenance: {
         status: 'INSUFFICIENT_MARKET_EVIDENCE',
-        note: 'Requires real observed search volume and competitor count data'
+        note: 'Requires real observed non-negative search volume and competitor count data'
       },
       metrics: {
         demandScore: null,
@@ -25,8 +26,17 @@ function calculateOpportunityScore(item = {}) {
     };
   }
 
-  const demandScore = Math.min(100.0, Math.max(0.0, item.demandScore ?? (item.searchVolume ? Math.min(100, item.searchVolume / 100) : 0)));
-  const competitionIndex = Math.min(100.0, Math.max(0.0, item.competitionIndex ?? (item.competitorCount ? Math.max(0, 100 - item.competitorCount / 50) : 0)));
+  const demandScore = Math.min(100.0, Math.max(0.0, 
+    item.demandScore !== undefined && item.demandScore !== null 
+      ? item.demandScore 
+      : (item.searchVolume !== undefined ? Math.min(100, item.searchVolume / 100) : 0)
+  ));
+  
+  const competitionIndex = Math.min(100.0, Math.max(0.0, 
+    item.competitionIndex !== undefined && item.competitionIndex !== null 
+      ? item.competitionIndex 
+      : (item.competitorCount !== undefined ? Math.max(0, 100 - item.competitorCount / 50) : 0)
+  ));
   
   const kw = item.amazonTitle || item.etsyTitle || '';
   const wordCount = kw.trim().split(/\s+/).filter(Boolean).length;

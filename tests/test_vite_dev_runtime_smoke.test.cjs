@@ -1,10 +1,23 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
+const { spawn } = require('child_process');
 
-function runViteSmokeTest() {
+async function waitForServer(url, timeoutMs = 15000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(url);
+      if (res.ok) return res;
+    } catch (_) {}
+    await new Promise(resolve => setTimeout(resolve, 300));
+  }
+  throw new Error(`Timed out waiting for Vite dev server at ${url}`);
+}
+
+async function runViteSmokeTest() {
   console.log('================================================================');
-  console.log('  TESTING VITE DEV RUNTIME MODULE BOUNDARY & ESM SMOKE SUITE');
+  console.log('  TESTING VITE DEV RUNTIME MODULE BOUNDARY & REAL VITE SERVER');
   console.log('================================================================\n');
 
   // Test 1: Verify ESM file syntax & export directly
@@ -24,17 +37,43 @@ function runViteSmokeTest() {
   assert.strictEqual(cjsContent.includes('eval('), false, 'CJS file must NOT use eval');
   console.log('  🟢 CJS module verified: ZERO string evaluation (no eval / no new Function).');
 
-  // Test 3: Verify AmazonPipelineWorkflow.jsx imports ESM version
-  console.log('\nTest 3: Verifying AmazonPipelineWorkflow.jsx imports ESM module...');
-  const workflowPath = path.join(__dirname, '../src/components/AmazonPipelineWorkflow.jsx');
-  assert.ok(fs.existsSync(workflowPath), 'AmazonPipelineWorkflow.jsx file must exist');
-  const workflowContent = fs.readFileSync(workflowPath, 'utf8');
-  assert.ok(workflowContent.includes("from '../utils/xrayUploadOutcome.js'"), 'AmazonPipelineWorkflow.jsx must import from ../utils/xrayUploadOutcome.js');
-  console.log('  🟢 AmazonPipelineWorkflow.jsx ESM import boundary verified.');
+  // Test 3: Launch real Vite dev server and fetch component module graph over HTTP
+  console.log('\nTest 3: Launching real Vite Dev Server on port 5179...');
+  const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+  const viteProc = spawn(npxCmd, ['vite', '--port', '5179', '--strictPort'], {
+    cwd: path.join(__dirname, '..'),
+    shell: true,
+    env: { ...process.env, NODE_ENV: 'development' }
+  });
 
-  console.log('\n================================================================');
-  console.log('  🟢 ALL VITE DEV RUNTIME MODULE SMOKE TESTS PASSED CLEANLY');
-  console.log('================================================================\n');
+  try {
+    const indexRes = await waitForServer('http://127.0.0.1:5179/');
+    assert.strictEqual(indexRes.status, 200, 'Vite dev server root must return 200 OK');
+    const indexText = await indexRes.text();
+    assert.ok(indexText.includes('src/main.jsx'), 'Index HTML must load main.jsx entry point');
+    console.log('  🟢 Real Vite dev server started and index.html served cleanly.');
+
+    // Fetch xrayUploadOutcome module over Vite HTTP
+    const utilRes = await fetch('http://127.0.0.1:5179/src/utils/xrayUploadOutcome.js');
+    assert.strictEqual(utilRes.status, 200, 'Vite must transform & serve xrayUploadOutcome.js');
+    const utilText = await utilRes.text();
+    assert.ok(utilText.includes('deriveXrayUploadOutcome'), 'Served JS must contain deriveXrayUploadOutcome');
+    console.log('  🟢 Vite served src/utils/xrayUploadOutcome.js without compilation errors.');
+
+    // Fetch AmazonPipelineWorkflow component over Vite HTTP
+    const compRes = await fetch('http://127.0.0.1:5179/src/components/AmazonPipelineWorkflow.jsx');
+    assert.strictEqual(compRes.status, 200, 'Vite must transform & serve AmazonPipelineWorkflow.jsx');
+    console.log('  🟢 Vite served AmazonPipelineWorkflow.jsx without module import errors.');
+
+    console.log('\n================================================================');
+    console.log('  🟢 ALL VITE DEV RUNTIME MODULE & SERVER SMOKE TESTS PASSED');
+    console.log('================================================================\n');
+  } finally {
+    viteProc.kill();
+  }
 }
 
-runViteSmokeTest();
+runViteSmokeTest().catch(err => {
+  console.error('🔴 VITE SMOKE TEST FAILED:', err);
+  process.exit(1);
+});

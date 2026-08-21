@@ -208,6 +208,33 @@ db.serialize(() => {
   `);
 
   db.run(`
+    CREATE TABLE IF NOT EXISTS evidence_acceptance_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id TEXT NOT NULL,
+      workspace_id INTEGER NOT NULL,
+      marketplace TEXT NOT NULL,
+      project_id INTEGER NOT NULL,
+      evidence_id INTEGER NOT NULL,
+      actor_id INTEGER NOT NULL,
+      reason TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS evidence_adoption_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id TEXT NOT NULL,
+      workspace_id INTEGER NOT NULL,
+      marketplace TEXT NOT NULL,
+      project_id INTEGER NOT NULL,
+      evidence_id INTEGER NOT NULL,
+      actor_id INTEGER NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  db.run(`
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       email TEXT UNIQUE NOT NULL,
@@ -818,6 +845,19 @@ app.get('/api/evidence', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELL
   );
 });
 
+const ALLOWED_EVIDENCE_SOURCES = [
+  'MCP_RETRIEVAL',
+  'FILE_UPLOAD',
+  'STAFF_MANUAL_ASSERTION',
+  'VERIFIED_EXTERNAL_URL',
+  'OWNER_ATTESTATION',
+  'HELIUM10_XRAY_OBSERVED',
+  'H10_XRAY_OBSERVED',
+  'H10',
+  'ETSY_SEARCH_OBSERVED',
+  'ETSY_MCP_LIVE'
+];
+
 // Helper: resolve active project ID from explicit request or single unambiguous project in user workspace
 function resolveActiveProjectId(db, user, explicitId, callback) {
   if (explicitId !== undefined && explicitId !== null && explicitId !== '') {
@@ -855,57 +895,77 @@ function resolveActiveProjectId(db, user, explicitId, callback) {
   );
 }
 
-// POST /api/evidence - Ingest new evidence record
-app.post('/api/evidence', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
-  const { projectId, seedPhrase, source, sourceUrl, fileName, metadata } = req.body || {};
-  if (!projectId) {
-    return res.status(400).json({ success: false, error: 'MISSING_PROJECT_ID', message: 'projectId is required.' });
+function parseAndValidateProject(db, req, rawProjectId, callback) {
+  if (rawProjectId === undefined || rawProjectId === null || rawProjectId === '') {
+    return callback({ status: 400, error: 'PROJECT_CONTEXT_REQUIRED', message: 'projectId is mandatory for this workflow action.' });
   }
-  if (!seedPhrase || !source) {
-    return res.status(400).json({ success: false, error: 'MISSING_FIELDS', message: 'seedPhrase and source are required.' });
+  const strId = String(rawProjectId).trim();
+  if (!/^\d+$/.test(strId)) {
+    return callback({ status: 400, error: 'PROJECT_CONTEXT_REQUIRED', message: 'projectId must be a valid positive integer.' });
   }
-
-  const parsedProjectId = parseInt(projectId, 10);
-  if (isNaN(parsedProjectId)) {
-    return res.status(400).json({ success: false, error: 'INVALID_PROJECT_ID', message: 'projectId must be a valid integer.' });
-  }
-
-  // Validate project existence and workspace ownership
+  const projectId = parseInt(strId, 10);
   db.get(
-    `SELECT id FROM research_projects WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
-    [parsedProjectId, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
-    (pErr, proj) => {
-      if (pErr) return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
-      if (!proj) return res.status(404).json({ success: false, error: 'PROJECT_NOT_FOUND', message: 'Target project does not exist in the active workspace.' });
-
-      db.run(
-        `INSERT INTO research_evidence (tenant_id, workspace_id, marketplace, project_id, seed_phrase, source, source_url, file_name, actor_id, evidence_state, metadata)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'OBSERVED', ?)`,
-        [
-          req.user.tenantId,
-          req.user.workspaceId,
-          req.user.marketplace,
-          parsedProjectId,
-          String(seedPhrase).trim(),
-          String(source).trim(),
-          sourceUrl ? String(sourceUrl).trim() : null,
-          fileName ? String(fileName).trim() : null,
-          req.user.userId,
-          metadata ? JSON.stringify(metadata) : null
-        ],
-        function(err) {
-          if (err) return res.status(500).json({ success: false, error: err.message });
-          res.json({
-            success: true,
-            evidenceId: this.lastID,
-            projectId: parsedProjectId,
-            evidenceState: 'OBSERVED',
-            actorId: req.user.userId
-          });
-        }
-      );
+    `SELECT * FROM research_projects WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
+    [projectId, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+    (err, project) => {
+      if (err) return callback({ status: 500, error: 'DATABASE_ERROR', message: err.message });
+      if (!project) return callback({ status: 404, error: 'PROJECT_NOT_FOUND', message: 'Project not found in active workspace scope.' });
+      callback(null, project);
     }
   );
+}
+
+// POST /api/evidence - Ingest new evidence record (Strictly Project-Bound & Source-Contracted)
+app.post('/api/evidence', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
+  const { projectId, seedPhrase, source, sourceUrl, fileName, metadata } = req.body || {};
+
+  parseAndValidateProject(db, req, projectId, (pErr, project) => {
+    if (pErr) return res.status(pErr.status).json({ success: false, error: pErr.error, message: pErr.message });
+
+    if (!seedPhrase || !source) {
+      return res.status(400).json({ success: false, error: 'MISSING_FIELDS', message: 'seedPhrase and source are required.' });
+    }
+
+    const cleanSource = String(source).trim().toUpperCase();
+    if (!ALLOWED_EVIDENCE_SOURCES.includes(cleanSource)) {
+      return res.status(400).json({
+        success: false,
+        error: 'INVALID_EVIDENCE_SOURCE',
+        message: `source must be one of: ${ALLOWED_EVIDENCE_SOURCES.join(', ')}`
+      });
+    }
+
+    const isManual = cleanSource === 'STAFF_MANUAL_ASSERTION';
+    const finalMetadata = { ...(metadata || {}), isManualAssertion: isManual };
+
+    db.run(
+      `INSERT INTO research_evidence (tenant_id, workspace_id, marketplace, project_id, seed_phrase, source, source_url, file_name, actor_id, evidence_state, metadata)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'OBSERVED', ?)`,
+      [
+        req.user.tenantId,
+        req.user.workspaceId,
+        req.user.marketplace,
+        project.id,
+        String(seedPhrase).trim(),
+        cleanSource,
+        sourceUrl ? String(sourceUrl).trim() : null,
+        fileName ? String(fileName).trim() : null,
+        req.user.userId,
+        JSON.stringify(finalMetadata)
+      ],
+      function(err) {
+        if (err) return res.status(500).json({ success: false, error: err.message });
+        res.json({
+          success: true,
+          evidenceId: this.lastID,
+          projectId: project.id,
+          evidenceState: 'OBSERVED',
+          isManualAssertion: isManual,
+          actorId: req.user.userId
+        });
+      }
+    );
+  });
 });
 
 // POST /api/evidence/:id/accept - Staff accepts research evidence (Restricted to OWNER & MANAGER)
@@ -913,15 +973,32 @@ app.post('/api/evidence/:id/accept', requireAuth(db), requireRole(['OWNER', 'MAN
   const id = req.params.id;
   const now = new Date().toISOString();
 
-  db.run(
-    `UPDATE research_evidence
-     SET evidence_state = 'ACCEPTED', accepted_at = ?, accepted_by = ?
-     WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
-    [now, req.user.userId, id, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
-    function(err) {
-      if (err) return res.status(500).json({ success: false, error: err.message });
-      if (this.changes === 0) return res.status(404).json({ success: false, error: 'EVIDENCE_NOT_FOUND' });
-      res.json({ success: true, evidenceId: id, evidenceState: 'ACCEPTED', acceptedBy: req.user.userId, acceptedAt: now });
+  db.get(
+    `SELECT * FROM research_evidence WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
+    [id, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+    (eErr, evidence) => {
+      if (eErr || !evidence) return res.status(404).json({ success: false, error: 'EVIDENCE_NOT_FOUND' });
+
+      db.run(
+        `UPDATE research_evidence
+         SET evidence_state = 'ACCEPTED', accepted_at = ?, accepted_by = ?
+         WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
+        [now, req.user.userId, id, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+        function(err) {
+          if (err) return res.status(500).json({ success: false, error: err.message });
+
+          // Log append-only evidence acceptance event
+          if (evidence.project_id) {
+            db.run(
+              `INSERT INTO evidence_acceptance_events (tenant_id, workspace_id, marketplace, project_id, evidence_id, actor_id, reason)
+               VALUES (?, ?, ?, ?, ?, ?, ?)`,
+              [req.user.tenantId, req.user.workspaceId, req.user.marketplace, evidence.project_id, id, req.user.userId, req.body?.reason || 'Staff accepted evidence']
+            );
+          }
+
+          res.json({ success: true, evidenceId: id, evidenceState: 'ACCEPTED', acceptedBy: req.user.userId, acceptedAt: now });
+        }
+      );
     }
   );
 });
@@ -976,9 +1053,10 @@ const ALLOWED_PROJECT_TRANSITIONS = {
   'EVIDENCE_INTAKE': ['RESEARCH_ACCEPTED'],
   'RESEARCH_ACCEPTED': ['DNA_ACCEPTED'],
   'DNA_ACCEPTED': ['MKL_FROZEN'],
-  'MKL_FROZEN': ['PRODUCT_TRUTH_CONFIRMED'],
+  'MKL_FROZEN': ['DRAFT_GENERATED', 'PRODUCT_TRUTH_VERIFIED', 'PRODUCT_TRUTH_CONFIRMED'],
+  'DRAFT_GENERATED': ['PRODUCT_TRUTH_VERIFIED', 'VALIDATED'],
+  'PRODUCT_TRUTH_VERIFIED': ['MANAGER_APPROVED'],
   'PRODUCT_TRUTH_CONFIRMED': ['DRAFT_GENERATED'],
-  'DRAFT_GENERATED': ['VALIDATED'],
   'VALIDATED': ['MANAGER_APPROVED'],
   'MANAGER_APPROVED': ['PUBLISH_READY'],
   'PUBLISH_READY': []
@@ -1037,10 +1115,27 @@ app.patch('/api/projects/:id/transition', requireAuth(db), requireRole(['OWNER',
               next();
             }
           );
+        } else if (targetState === 'DNA_ACCEPTED') {
+          db.get(
+            `SELECT COUNT(*) as cnt FROM research_evidence
+             WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ?
+               AND project_id = ? AND evidence_state = 'ACCEPTED'`,
+            [req.user.tenantId, req.user.workspaceId, req.user.marketplace, projectId],
+            (dErr, dRow) => {
+              if (dErr || !dRow || dRow.cnt === 0) {
+                return res.status(400).json({
+                  success: false,
+                  error: 'MISSING_DNA_PRECONDITION',
+                  message: 'Cannot accept DNA without at least 1 ACCEPTED evidence/learning artifact bound specifically to this project.'
+                });
+              }
+              next();
+            }
+          );
         } else if (targetState === 'MKL_FROZEN') {
           db.get(
-            `SELECT COUNT(*) as cnt FROM market_trends 
-             WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ? 
+            `SELECT COUNT(*) as cnt FROM market_trends
+             WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ?
                AND project_id = ?`,
             [req.user.tenantId, req.user.workspaceId, req.user.marketplace, projectId],
             (mErr, mRow) => {
@@ -1066,6 +1161,74 @@ app.patch('/api/projects/:id/transition', requireAuth(db), requireRole(['OWNER',
             });
           }
           next(notes);
+        } else if (targetState === 'DRAFT_GENERATED') {
+          db.get(
+            `SELECT COUNT(*) as cnt FROM listings
+             WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ?
+               AND project_id = ?`,
+            [req.user.tenantId, req.user.workspaceId, req.user.marketplace, projectId],
+            (lErr, lRow) => {
+              if (lErr || !lRow || lRow.cnt === 0) {
+                return res.status(400).json({
+                  success: false,
+                  error: 'MISSING_DRAFT_PRECONDITION',
+                  message: 'Cannot transition to DRAFT_GENERATED without at least 1 listing draft bound specifically to this project.'
+                });
+              }
+              next();
+            }
+          );
+        } else if (targetState === 'PRODUCT_TRUTH_VERIFIED') {
+          db.get(
+            `SELECT COUNT(*) as cnt FROM listings
+             WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ?
+               AND project_id = ? AND product_truth_notes IS NOT NULL AND length(product_truth_notes) >= 5`,
+            [req.user.tenantId, req.user.workspaceId, req.user.marketplace, projectId],
+            (pErr, pRow) => {
+              if (pErr || !pRow || pRow.cnt === 0) {
+                return res.status(400).json({
+                  success: false,
+                  error: 'MISSING_PRODUCT_TRUTH_PRECONDITION',
+                  message: 'Cannot verify product truth without at least 1 listing with verified product truth notes bound specifically to this project.'
+                });
+              }
+              next();
+            }
+          );
+        } else if (targetState === 'MANAGER_APPROVED') {
+          db.get(
+            `SELECT COUNT(*) as cnt FROM listings
+             WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ?
+               AND project_id = ? AND (status = 'MANAGER_APPROVED' OR status = 'PUBLISH_READY')`,
+            [req.user.tenantId, req.user.workspaceId, req.user.marketplace, projectId],
+            (aErr, aRow) => {
+              if (aErr || !aRow || aRow.cnt === 0) {
+                return res.status(400).json({
+                  success: false,
+                  error: 'MISSING_APPROVAL_PRECONDITION',
+                  message: 'Cannot transition to MANAGER_APPROVED without at least 1 listing approved bound specifically to this project.'
+                });
+              }
+              next();
+            }
+          );
+        } else if (targetState === 'PUBLISH_READY') {
+          db.get(
+            `SELECT COUNT(*) as cnt FROM listings
+             WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ?
+               AND project_id = ? AND status = 'PUBLISH_READY'`,
+            [req.user.tenantId, req.user.workspaceId, req.user.marketplace, projectId],
+            (rErr, rRow) => {
+              if (rErr || !rRow || rRow.cnt === 0) {
+                return res.status(400).json({
+                  success: false,
+                  error: 'MISSING_PUBLISH_PRECONDITION',
+                  message: 'Cannot transition project to PUBLISH_READY without at least 1 primary listing marked PUBLISH_READY bound specifically to this project.'
+                });
+              }
+              next();
+            }
+          );
         } else {
           next();
         }
@@ -1127,6 +1290,13 @@ app.post('/api/projects/:id/adopt-evidence', requireAuth(db), requireRole(['OWNE
         function(uErr) {
           if (uErr) return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
           if (this.changes === 0) return res.status(404).json({ success: false, error: 'UNSCOPED_EVIDENCE_NOT_FOUND' });
+
+          // Log append-only evidence adoption event
+          db.run(
+            `INSERT INTO evidence_adoption_events (tenant_id, workspace_id, marketplace, project_id, evidence_id, actor_id)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+            [req.user.tenantId, req.user.workspaceId, req.user.marketplace, projectId, evidenceId, req.user.userId]
+          );
 
           const auditMsg = `[EXPLICIT ADOPTION] User #${req.user.userId} (${req.user.role}) adopted legacy evidence #${evidenceId} into Project #${projectId}`;
           logAgentAction(db, { agentId: 1, tenantId: req.user.tenantId, workspaceId: req.user.workspaceId, message: auditMsg });
@@ -1752,10 +1922,13 @@ app.post('/api/mcp/pull-etsy', requireAuth(db), requireRole(['OWNER', 'MANAGER',
   // Parse Top Listings from MCP with STRICT PASS-THROUGH PARSER (Zero Fallbacks / Zero Fabrication)
   const sellers = topListings.map((lst, idx) => {
     const rawTitle = typeof lst.title === 'string' && lst.title.trim() ? lst.title.trim() : null;
+    const isDerivedShop = !lst.shop_name && lst.shop_id;
     const rawShop = typeof lst.shop_name === 'string' && lst.shop_name.trim() ? lst.shop_name.trim() : (lst.shop_id ? `Shop #${lst.shop_id}` : null);
     const rawCountry = typeof lst.shop_country === 'string' && lst.shop_country.trim() ? lst.shop_country.trim() : null;
+    const isDerivedUrl = !lst.url && lst.listing_id;
     const rawUrl = typeof lst.url === 'string' && lst.url.trim() ? lst.url.trim() : (lst.listing_id ? `https://www.etsy.com/listing/${lst.listing_id}` : null);
-    const rawRating = typeof lst.rating === 'number' ? lst.rating : (typeof lst.listing_score === 'number' ? lst.listing_score : null);
+    const rawRating = typeof lst.rating === 'number' ? lst.rating : null;
+    const listingScore = typeof lst.listing_score === 'number' ? lst.listing_score : null;
 
     return {
       id: `mcp-lst-${lst.listing_id || idx}-${Date.now()}`,
@@ -1770,7 +1943,9 @@ app.post('/api/mcp/pull-etsy', requireAuth(db), requireRole(['OWNER', 'MANAGER',
       favorites: typeof lst.favorites === 'number' ? lst.favorites : null,
       price: typeof lst.price_usd === 'number' ? `$${lst.price_usd}` : (typeof lst.price === 'number' ? `$${lst.price}` : null),
       rating: rawRating,
+      listingScore,
       url: rawUrl,
+      isDerivedReference: Boolean(isDerivedShop || isDerivedUrl),
       evidenceSource: 'ETSY_MCP_LIVE',
       batchName: 'Observed MCP Listings',
       isSynthetic: false,
@@ -2411,7 +2586,8 @@ app.post('/api/amazon/quick-draft', requireAuth(db), requireRole(['OWNER', 'MANA
   if (req.user.marketplace !== 'AMAZON') {
     return res.status(403).json({ success: false, error: 'MARKETPLACE_MISMATCH' });
   }
-  const { seedPhrase, category, asins = [] } = req.body;
+  const { projectId, seedPhrase, category, asins = [] } = req.body || {};
+  const projId = projectId ? parseInt(projectId, 10) : null;
 
   if (!seedPhrase || !String(seedPhrase).trim() || !category || !String(category).trim()) {
     return res.status(400).json({ success: false, error: 'INSUFFICIENT_EVIDENCE', message: 'seedPhrase and category are required' });
@@ -2543,9 +2719,9 @@ Return ONLY raw JSON without markdown code fences:
 
             db.run(
               `INSERT INTO listings
-                (tenant_id, workspace_id, marketplace, amazonTitle, etsyTitle, categoryName, status, authorId, payload)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-              [req.user.tenantId, req.user.workspaceId, req.user.marketplace, payload.amazonTitle, payload.etsyTitle, payload.categoryName, 'NEEDS_QA', req.user.userId, JSON.stringify(payload)],
+                (tenant_id, workspace_id, marketplace, project_id, amazonTitle, etsyTitle, categoryName, status, authorId, payload)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              [req.user.tenantId, req.user.workspaceId, req.user.marketplace, projId, payload.amazonTitle, payload.etsyTitle, payload.categoryName, 'NEEDS_QA', req.user.userId, JSON.stringify(payload)],
               function(insertErr) {
                 if (insertErr) return res.status(500).json({ error: insertErr.message });
 
@@ -3140,9 +3316,9 @@ Return ONLY a valid raw JSON object without markdown code fences:
 
         db.run(
           `INSERT INTO listings
-            (tenant_id, workspace_id, marketplace, amazonTitle, etsyTitle, categoryName, status, authorId, payload)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [req.user.tenantId, req.user.workspaceId, req.user.marketplace, payload.amazonTitle, payload.etsyTitle, payload.categoryName, 'NEEDS_QA', req.user.userId, JSON.stringify(payload)],
+            (tenant_id, workspace_id, marketplace, project_id, amazonTitle, etsyTitle, categoryName, status, authorId, payload)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [req.user.tenantId, req.user.workspaceId, req.user.marketplace, trend.project_id || null, payload.amazonTitle, payload.etsyTitle, payload.categoryName, 'NEEDS_QA', req.user.userId, JSON.stringify(payload)],
           function(insertErr) {
             if (insertErr) return res.status(500).json({ error: insertErr.message });
             

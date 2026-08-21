@@ -33,8 +33,10 @@ async function waitForTestFixtures(timeoutMs = 15000) {
       JOIN workspaces w ON w.id = wm.workspace_id
       ORDER BY wm.workspace_id
     `);
-    if (rows.length >= 2) return rows;
-    await new Promise(resolve => setTimeout(resolve, 25));
+    const hasOwnerAmz = rows.some(f => f.role === 'OWNER' && f.marketplace === 'AMAZON');
+    const hasSellerAmz = rows.some(f => f.role === 'SELLER' && f.marketplace === 'AMAZON');
+    if (hasOwnerAmz && hasSellerAmz) return rows;
+    await new Promise(resolve => setTimeout(resolve, 50));
   }
   throw new Error('Timed out waiting for test fixtures');
 }

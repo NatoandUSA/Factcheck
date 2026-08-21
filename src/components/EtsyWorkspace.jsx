@@ -22,8 +22,18 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
   const [mcpPulling, setMcpPulling] = useState(false);
   const [mcpResult, setMcpResult] = useState(null);
   const [isIpModalOpen, setIsIpModalOpen] = useState(false);
-  const [scannedSellers, setScannedSellers] = useState([]);
+  const [activeProject, setActiveProject] = useState(null);
   const fileInputRef = useRef(null);
+
+  const fetchProjects = React.useCallback(async () => {
+    try {
+      const res = await fetch('/api/projects', { credentials: 'include' });
+      const data = await res.json();
+      if (res.ok && data.success && Array.isArray(data.projects) && data.projects.length > 0) {
+        setActiveProject(data.projects[0]);
+      }
+    } catch (e) {}
+  }, []);
 
   const fetchData = async () => {
     try {
@@ -40,7 +50,8 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
 
   useEffect(() => {
     fetchData();
-  }, []);
+    fetchProjects();
+  }, [fetchProjects]);
 
   const handleFileUpload = async (file) => {
     if (!file) return;
@@ -51,6 +62,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
     formData.append('reportFile', file);
     formData.append('category', selectedCategory);
     formData.append('marketplace', 'ETSY');
+    if (activeProject?.id) formData.append('projectId', activeProject.id);
 
     try {
       const res = await fetch('/api/upload-h10', {
@@ -116,7 +128,8 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           seed: seedPhrase.trim(),
-          category: selectedCategory
+          category: selectedCategory,
+          projectId: activeProject?.id
         })
       });
 

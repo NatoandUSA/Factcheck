@@ -36,7 +36,11 @@ function runAllTests() {
     'tests/test_truth_evidence_ownership.test.cjs',
     'tests/test_workflow_state_machine.test.cjs',
     'tests/test_project_scoped_evidence_workflow.test.cjs',
-    'tests/spec_etsy_mcp_truth_boundary.test.cjs'
+    'tests/spec_etsy_mcp_truth_boundary.test.cjs',
+    'tests/spec_canonical_business_workflow.test.cjs',
+    'tests/test_backup_restore_and_migrations.cjs',
+    'tests/test_adversarial_staff_ui_flow.cjs',
+    'tests/test_multi_project_attribution.cjs'
   ];
 
   let passedCount = 0;

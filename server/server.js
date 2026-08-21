@@ -180,9 +180,12 @@ db.serialize(() => {
       marketplace TEXT NOT NULL CHECK(marketplace IN ('AMAZON', 'ETSY')),
       name TEXT NOT NULL,
       seed_phrase TEXT NOT NULL,
-      state TEXT DEFAULT 'EVIDENCE_INTAKE' CHECK(state IN ('EVIDENCE_INTAKE', 'RESEARCH_ACCEPTED', 'DNA_ACCEPTED', 'MKL_FROZEN', 'DRAFT_GENERATED', 'PRODUCT_TRUTH_VERIFIED', 'MANAGER_APPROVED', 'PUBLISH_READY')),
+      state TEXT DEFAULT 'EVIDENCE_INTAKE' CHECK(state IN ('EVIDENCE_INTAKE', 'RESEARCH_ACCEPTED', 'DNA_ACCEPTED', 'MKL_FROZEN', 'PRODUCT_TRUTH_CONFIRMED', 'DRAFT_GENERATED', 'VALIDATED', 'MANAGER_APPROVED', 'PUBLISH_READY')),
       reference_asin TEXT,
       batch_count INTEGER DEFAULT 0,
+      product_truth_notes TEXT,
+      validated_at DATETIME,
+      validated_by INTEGER,
       actor_id INTEGER NOT NULL,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -735,37 +738,84 @@ app.get('/api/evidence', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELL
   );
 });
 
+// Helper: resolve active project ID from explicit request or single unambiguous project in user workspace
+function resolveActiveProjectId(db, user, explicitId, callback) {
+  if (explicitId !== undefined && explicitId !== null && explicitId !== '') {
+    const parsed = parseInt(explicitId, 10);
+    if (!isNaN(parsed)) {
+      return db.get(
+        `SELECT id FROM research_projects WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
+        [parsed, user.tenantId, user.workspaceId, user.marketplace],
+        (err, row) => {
+          if (err) return callback(err, null);
+          if (!row) return callback(new Error('PROJECT_NOT_FOUND'), null);
+          callback(null, row.id);
+        }
+      );
+    }
+  }
+  // Unambiguous resolution: only if exactly 1 project exists for this workspace + marketplace
+  db.all(
+    `SELECT id FROM research_projects 
+     WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
+    [user.tenantId, user.workspaceId, user.marketplace],
+    (err, rows) => {
+      if (err) return callback(err, null);
+      if (rows && rows.length === 1) {
+        return callback(null, rows[0].id);
+      }
+      // If 0 or >1 projects exist, fail closed (do not guess / misattribute)
+      callback(null, null);
+    }
+  );
+}
+
 // POST /api/evidence - Ingest new evidence record
 app.post('/api/evidence', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
   const { projectId, seedPhrase, source, sourceUrl, fileName, metadata } = req.body || {};
-  if (!seedPhrase || !source) {
-    return res.status(400).json({ success: false, error: 'MISSING_FIELDS', message: 'seedPhrase and source are required.' });
+  if (!projectId || !seedPhrase || !source) {
+    return res.status(400).json({ success: false, error: 'MISSING_FIELDS', message: 'projectId, seedPhrase and source are required.' });
   }
 
-  db.run(
-    `INSERT INTO research_evidence (tenant_id, workspace_id, marketplace, project_id, seed_phrase, source, source_url, file_name, actor_id, evidence_state, metadata)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'OBSERVED', ?)`,
-    [
-      req.user.tenantId,
-      req.user.workspaceId,
-      req.user.marketplace,
-      projectId ? parseInt(projectId, 10) : null,
-      String(seedPhrase).trim(),
-      String(source).trim(),
-      sourceUrl ? String(sourceUrl).trim() : null,
-      fileName ? String(fileName).trim() : null,
-      req.user.userId,
-      metadata ? JSON.stringify(metadata) : null
-    ],
-    function(err) {
-      if (err) return res.status(500).json({ success: false, error: err.message });
-      res.json({
-        success: true,
-        evidenceId: this.lastID,
-        projectId: projectId ? parseInt(projectId, 10) : null,
-        evidenceState: 'OBSERVED',
-        actorId: req.user.userId
-      });
+  const parsedProjectId = parseInt(projectId, 10);
+  if (isNaN(parsedProjectId)) {
+    return res.status(400).json({ success: false, error: 'INVALID_PROJECT_ID', message: 'projectId must be a valid integer.' });
+  }
+
+  // Validate project existence and workspace ownership
+  db.get(
+    `SELECT id FROM research_projects WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
+    [parsedProjectId, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+    (pErr, proj) => {
+      if (pErr) return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
+      if (!proj) return res.status(404).json({ success: false, error: 'PROJECT_NOT_FOUND', message: 'Target project does not exist in the active workspace.' });
+
+      db.run(
+        `INSERT INTO research_evidence (tenant_id, workspace_id, marketplace, project_id, seed_phrase, source, source_url, file_name, actor_id, evidence_state, metadata)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'OBSERVED', ?)`,
+        [
+          req.user.tenantId,
+          req.user.workspaceId,
+          req.user.marketplace,
+          parsedProjectId,
+          String(seedPhrase).trim(),
+          String(source).trim(),
+          sourceUrl ? String(sourceUrl).trim() : null,
+          fileName ? String(fileName).trim() : null,
+          req.user.userId,
+          metadata ? JSON.stringify(metadata) : null
+        ],
+        function(err) {
+          if (err) return res.status(500).json({ success: false, error: err.message });
+          res.json({
+            success: true,
+            evidenceId: this.lastID,
+            projectId: parsedProjectId,
+            evidenceState: 'OBSERVED',
+            actorId: req.user.userId
+          });
+        }
+      );
     }
   );
 });
@@ -833,14 +883,15 @@ app.post('/api/projects', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SEL
   );
 });
 
-// ALLOWED_PROJECT_TRANSITIONS Adjacency Map
+// ALLOWED_PROJECT_TRANSITIONS Adjacency Map (Canonical Sequence)
 const ALLOWED_PROJECT_TRANSITIONS = {
   'EVIDENCE_INTAKE': ['RESEARCH_ACCEPTED'],
   'RESEARCH_ACCEPTED': ['DNA_ACCEPTED'],
   'DNA_ACCEPTED': ['MKL_FROZEN'],
-  'MKL_FROZEN': ['DRAFT_GENERATED'],
-  'DRAFT_GENERATED': ['PRODUCT_TRUTH_VERIFIED'],
-  'PRODUCT_TRUTH_VERIFIED': ['MANAGER_APPROVED'],
+  'MKL_FROZEN': ['PRODUCT_TRUTH_CONFIRMED'],
+  'PRODUCT_TRUTH_CONFIRMED': ['DRAFT_GENERATED'],
+  'DRAFT_GENERATED': ['VALIDATED'],
+  'VALIDATED': ['MANAGER_APPROVED'],
   'MANAGER_APPROVED': ['PUBLISH_READY'],
   'PUBLISH_READY': []
 };
@@ -848,7 +899,7 @@ const ALLOWED_PROJECT_TRANSITIONS = {
 // PATCH /api/projects/:id/transition - Server-authoritative state transition
 app.patch('/api/projects/:id/transition', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
   const projectId = req.params.id;
-  const { targetState } = req.body || {};
+  const { targetState, productTruthNotes } = req.body || {};
 
   db.get(
     `SELECT * FROM research_projects WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
@@ -885,7 +936,7 @@ app.patch('/api/projects/:id/transition', requireAuth(db), requireRole(['OWNER',
           db.get(
             `SELECT COUNT(*) as cnt FROM research_evidence 
              WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ? 
-               AND (project_id = ? OR project_id IS NULL) AND evidence_state = 'ACCEPTED'`,
+               AND project_id = ? AND evidence_state = 'ACCEPTED'`,
             [req.user.tenantId, req.user.workspaceId, req.user.marketplace, projectId],
             (eErr, eRow) => {
               if (eErr || !eRow || eRow.cnt === 0) {
@@ -902,7 +953,7 @@ app.patch('/api/projects/:id/transition', requireAuth(db), requireRole(['OWNER',
           db.get(
             `SELECT COUNT(*) as cnt FROM market_trends 
              WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ? 
-               AND (project_id = ? OR project_id IS NULL)`,
+               AND project_id = ?`,
             [req.user.tenantId, req.user.workspaceId, req.user.marketplace, projectId],
             (mErr, mRow) => {
               if (mErr || !mRow || mRow.cnt === 0) {
@@ -915,25 +966,42 @@ app.patch('/api/projects/:id/transition', requireAuth(db), requireRole(['OWNER',
               next();
             }
           );
+        } else if (targetState === 'PRODUCT_TRUTH_CONFIRMED') {
+          const notes = (typeof productTruthNotes === 'string' && productTruthNotes.trim()) 
+            ? productTruthNotes.trim() 
+            : (project.product_truth_notes || '');
+          if (notes.length < 5) {
+            return res.status(400).json({
+              success: false,
+              error: 'MISSING_PRODUCT_TRUTH_PRECONDITION',
+              message: 'Cannot confirm Product Truth without verified product material/dimension/specification notes.'
+            });
+          }
+          next(notes);
         } else {
           next();
         }
       };
 
-      checkPreconditions(() => {
+      checkPreconditions((resolvedNotes) => {
         const now = new Date().toISOString();
+        const updatedNotes = resolvedNotes || project.product_truth_notes || null;
+        const isValidated = (targetState === 'VALIDATED');
+        const validatedAt = isValidated ? now : project.validated_at;
+        const validatedBy = isValidated ? req.user.userId : project.validated_by;
+
         db.run(
           `UPDATE research_projects
-           SET state = ?, updated_at = ?
+           SET state = ?, product_truth_notes = ?, validated_at = ?, validated_by = ?, updated_at = ?
            WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
-          [targetState, now, projectId, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+          [targetState, updatedNotes, validatedAt, validatedBy, now, projectId, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
           function(uErr) {
             if (uErr) return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
 
             const auditMsg = `[PROJECT TRANSITION] Project #${projectId} (${project.name}) state moved from ${currentState} to ${targetState} by user #${req.user.userId} (${req.user.role})`;
             logAgentAction(db, { agentId: 1, tenantId: req.user.tenantId, workspaceId: req.user.workspaceId, message: auditMsg });
 
-            res.json({ success: true, projectId, previousState: currentState, state: targetState, updatedAt: now });
+            res.json({ success: true, projectId, previousState: currentState, state: targetState, productTruthNotes: updatedNotes, updatedAt: now });
           }
         );
       });
@@ -984,58 +1052,91 @@ app.post('/api/login', (req, res) => {
 
 // Create a new listing (DRAFT/NEEDS_QA or IP_RISK_BLOCKED)
 app.post('/api/listings', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
-  const { amazonTitle, etsyTitle, categoryName, payload = {} } = req.body;
+  const { amazonTitle, etsyTitle, categoryName, projectId, stage, payload = {} } = req.body || {};
   
-  const listingData = { amazonTitle, etsyTitle, categoryName, ...payload };
-  const ipResult = ipGuard.screenListing(listingData);
-  const oppResult = opportunityScorer.calculateOpportunityScore(listingData);
+  // Stage 1/Stage 2 Invariant: Cannot generate listings during intake, research, DNA, or MKL freezing
+  const stageToCheck = stage || payload.stage;
+  const blockedStages = ['STAGE_1', 'STAGE_2', 'EVIDENCE_INTAKE', 'RESEARCH_ACCEPTED', 'DNA_ACCEPTED', 'MKL_FROZEN'];
+  if (stageToCheck && blockedStages.includes(stageToCheck)) {
+    return res.status(409).json({
+      success: false,
+      error: 'STAGE_INVARIANT_VIOLATION',
+      message: `Cannot generate listing drafts in stage ${stageToCheck}. Project must reach PRODUCT_TRUTH_CONFIRMED first.`
+    });
+  }
 
-  const rawKws = `${amazonTitle || ''} ${etsyTitle || ''}`.split(/\s+/);
-  const searchTerms = payload.amazonSearchTerms || keywordRanker.buildAmazonSearchTerms(rawKws);
-  const etsyTags = (payload.etsyTags && payload.etsyTags.length > 0) ? payload.etsyTags : keywordRanker.buildEtsyTags(rawKws, categoryName);
+  const proceedWithCreation = () => {
+    const listingData = { amazonTitle, etsyTitle, categoryName, ...payload };
+    const ipResult = ipGuard.screenListing(listingData);
+    const oppResult = opportunityScorer.calculateOpportunityScore(listingData);
 
-  const updatedPayload = {
-    ...payload,
-    amazonTitle,
-    etsyTitle,
-    categoryName,
-    amazonSearchTerms: searchTerms,
-    etsyTags: etsyTags,
-    // No fallback description text: an empty description must stay empty so
-    // the Publish Gate can catch it, rather than silently asserting unverified
-    // material/quality claims that a manager could approve without noticing
-    // they were never real (GPT/Manus P0.5 audit, listing truth boundary).
-    amazonDescription: payload.amazonDescription || '',
-    ipVerdict: ipResult.verdict,
-    ipHits: ipResult.hits,
-    opportunityScore: oppResult.overallScore,
-    verdict: oppResult.verdict,
-    metrics: oppResult.metrics
-  };
+    const rawKws = `${amazonTitle || ''} ${etsyTitle || ''}`.split(/\s+/);
+    const searchTerms = payload.amazonSearchTerms || keywordRanker.buildAmazonSearchTerms(rawKws);
+    const etsyTags = (payload.etsyTags && payload.etsyTags.length > 0) ? payload.etsyTags : keywordRanker.buildEtsyTags(rawKws, categoryName);
 
-  const status = (ipResult.verdict === 'BLOCK') ? 'IP_RISK_BLOCKED' : 'NEEDS_QA';
-
-  
-  db.run(
-    `INSERT INTO listings
-      (tenant_id, workspace_id, marketplace, amazonTitle, etsyTitle, categoryName, status, authorId, payload)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      req.user.tenantId,
-      req.user.workspaceId,
-      req.user.marketplace,
+    const updatedPayload = {
+      ...payload,
       amazonTitle,
       etsyTitle,
       categoryName,
-      status,
-      req.user.userId,
-      JSON.stringify(updatedPayload)
-    ],
-    function(err) {
-      if (err) return res.status(500).json({ error: err.message });
-      res.json({ id: this.lastID, status, listingVersion: 1, payload: updatedPayload });
-    }
-  );
+      amazonSearchTerms: searchTerms,
+      etsyTags: etsyTags,
+      // No fallback description text: an empty description must stay empty so
+      // the Publish Gate can catch it, rather than silently asserting unverified
+      // material/quality claims that a manager could approve without noticing
+      // they were never real (GPT/Manus P0.5 audit, listing truth boundary).
+      amazonDescription: payload.amazonDescription || '',
+      ipVerdict: ipResult.verdict,
+      ipHits: ipResult.hits,
+      opportunityScore: oppResult.overallScore,
+      verdict: oppResult.verdict,
+      metrics: oppResult.metrics
+    };
+
+    const status = (ipResult.verdict === 'BLOCK') ? 'IP_RISK_BLOCKED' : 'NEEDS_QA';
+
+    db.run(
+      `INSERT INTO listings
+        (tenant_id, workspace_id, marketplace, project_id, amazonTitle, etsyTitle, categoryName, status, authorId, payload)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        req.user.tenantId,
+        req.user.workspaceId,
+        req.user.marketplace,
+        projectId ? parseInt(projectId, 10) : null,
+        amazonTitle,
+        etsyTitle,
+        categoryName,
+        status,
+        req.user.userId,
+        JSON.stringify(updatedPayload)
+      ],
+      function(err) {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json({ id: this.lastID, status, listingVersion: 1, payload: updatedPayload });
+      }
+    );
+  };
+
+  if (projectId) {
+    db.get(
+      `SELECT state FROM research_projects WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
+      [projectId, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+      (pErr, proj) => {
+        if (pErr) return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
+        if (proj && blockedStages.includes(proj.state)) {
+          return res.status(409).json({
+            success: false,
+            error: 'STAGE_INVARIANT_VIOLATION',
+            message: `Project #${projectId} is in stage ${proj.state}. Must reach PRODUCT_TRUTH_CONFIRMED before draft generation.`
+          });
+        }
+        proceedWithCreation();
+      }
+    );
+  } else {
+    proceedWithCreation();
+  }
 });
 
 // Get all listings
@@ -1472,32 +1573,35 @@ app.post('/api/mcp/pull-etsy', requireAuth(db), requireRole(['OWNER', 'MANAGER',
     };
   });
 
-  db.run(
-    "INSERT INTO market_trends (category, trending_keywords, keywords_detailed, marketplace, tenant_id, workspace_id) VALUES (?, ?, ?, ?, ?, ?)",
-    [category, trendingKeywordsStr, JSON.stringify(keywordsDetailed), 'ETSY', req.user.tenantId, req.user.workspaceId],
-    function(dbErr) {
-      if (dbErr) return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
-      const trendId = this.lastID;
-      const msg = `[ETSY MCP OBSERVED] Imported ${observedTags.length} source tags and ${sellers.length} top sellers for "${seed}" (${category}). No semantic padding applied.`;
-      logAgentAction(db, { agentId: 1, tenantId: req.user.tenantId, workspaceId: req.user.workspaceId, message: msg });
-      res.json({
-        success: true,
-        trendId,
-        source: 'ETSY_MCP_LIVE',
-        evidenceState: 'OBSERVED',
-        category,
-        seed,
-        overview,
-        keywords: observedTags,
-        keywordsDetailed,
-        sellers,
-        observedKeywordCount: observedTags.length,
-        blockedKeywords,
-        invalidKeywords,
-        trendingKeywordsStr
-      });
-    }
-  );
+  resolveActiveProjectId(db, req.user, req.body.projectId, (pErr, targetProjectId) => {
+    db.run(
+      "INSERT INTO market_trends (category, trending_keywords, keywords_detailed, marketplace, tenant_id, workspace_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      [category, trendingKeywordsStr, JSON.stringify(keywordsDetailed), 'ETSY', req.user.tenantId, req.user.workspaceId, targetProjectId],
+      function(dbErr) {
+        if (dbErr) return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
+        const trendId = this.lastID;
+        const msg = `[ETSY MCP OBSERVED] Imported ${observedTags.length} source tags and ${sellers.length} top sellers for "${seed}" (${category}). No semantic padding applied.`;
+        logAgentAction(db, { agentId: 1, tenantId: req.user.tenantId, workspaceId: req.user.workspaceId, message: msg });
+        res.json({
+          success: true,
+          trendId,
+          projectId: targetProjectId,
+          source: 'ETSY_MCP_LIVE',
+          evidenceState: 'OBSERVED',
+          category,
+          seed,
+          overview,
+          keywords: observedTags,
+          keywordsDetailed,
+          sellers,
+          observedKeywordCount: observedTags.length,
+          blockedKeywords,
+          invalidKeywords,
+          trendingKeywordsStr
+        });
+      }
+    );
+  });
 });
 
 // API: Helium 10 MCP Status & OAuth Check (https://mcp.helium10.com/mcp)
@@ -1911,15 +2015,16 @@ app.post('/api/amazon/quick-draft', requireAuth(db), requireRole(['OWNER', 'MANA
     const trendingKeywordsStr = `${cleanSeed}, personalized ${cleanSeed}, custom ${cleanSeed}, ${cleanSeed} gift, keepsake`;
 
     // 1. Create or retrieve market trend entry
-    db.run(
-      "INSERT INTO market_trends (category, trending_keywords, marketplace, tenant_id, workspace_id) VALUES (?, ?, ?, ?, ?)",
-      [category, `${cleanSeed} (Amazon A10 Quick Batch)`, 'AMAZON', req.user.tenantId, req.user.workspaceId],
-      function(trendErr) {
-        if (trendErr) return res.status(500).json({ error: trendErr.message });
-        const trendId = this.lastID;
+    resolveActiveProjectId(db, req.user, req.body.projectId, (pErr, targetProjectId) => {
+      db.run(
+        "INSERT INTO market_trends (category, trending_keywords, marketplace, tenant_id, workspace_id, project_id) VALUES (?, ?, ?, ?, ?, ?)",
+        [category, `${cleanSeed} (Amazon A10 Quick Batch)`, 'AMAZON', req.user.tenantId, req.user.workspaceId, targetProjectId],
+        function(trendErr) {
+          if (trendErr) return res.status(500).json({ error: trendErr.message });
+          const trendId = this.lastID;
 
-        // 2. Fetch API Keys
-        readWorkspaceLlmSettings(req.user, async (sErr, keys) => {
+          // 2. Fetch API Keys
+          readWorkspaceLlmSettings(req.user, async (sErr, keys) => {
           if (sErr) return res.status(503).json({ success: false, error: 'SECRET_DECRYPTION_FAILED' });
 
           const provider = keys.active_llm_provider || 'GEMINI';
@@ -2047,8 +2152,8 @@ Return ONLY raw JSON without markdown code fences:
             res.status(500).json({ error: `AI Listing Generation Failed: ${llmErr.message}` });
           }
         });
-      }
-    );
+      });
+    });
   } catch (err) {
     console.error('Quick draft error:', err);
     res.status(500).json({ error: err.message });
@@ -2345,29 +2450,32 @@ const handleReportUpload = async (req, res) => {
     // Insert into market_trends for AI Drafter (keywords_detailed preserves real
     // Volume/CPR/Score per keyword so staff can see the underlying data, not
     // just an AI-picked keyword string)
-    db.run(
-      "INSERT INTO market_trends (category, trending_keywords, keywords_detailed, marketplace, tenant_id, workspace_id) VALUES (?, ?, ?, ?, ?, ?)",
-      [targetCategory, trendingKeywordsStr, JSON.stringify(topKeywordsDetailed), targetMarketplace, req.user.tenantId, req.user.workspaceId],
-      function(dbErr) {
-        if (dbErr) return res.status(500).json({ error: dbErr.message });
-        
-        const trendId = this.lastID;
-        const msg = `[H10 MKL ENGINE] Scored & imported ${keywords.length} keywords from "${fileName}" for ${targetCategory}. Top Opportunity: "${keywords[0]}" (Score: ${topKeywordsDetailed[0].opportunityScore})`;
-        logAgentAction(db, { agentId: 1, tenantId: req.user.tenantId, workspaceId: req.user.workspaceId, message: msg });
+    resolveActiveProjectId(db, req.user, req.body.projectId, (pErr, targetProjectId) => {
+      db.run(
+        "INSERT INTO market_trends (category, trending_keywords, keywords_detailed, marketplace, tenant_id, workspace_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [targetCategory, trendingKeywordsStr, JSON.stringify(topKeywordsDetailed), targetMarketplace, req.user.tenantId, req.user.workspaceId, targetProjectId],
+        function(dbErr) {
+          if (dbErr) return res.status(500).json({ error: dbErr.message });
+          
+          const trendId = this.lastID;
+          const msg = `[H10 MKL ENGINE] Scored & imported ${keywords.length} keywords from "${fileName}" for ${targetCategory}. Top Opportunity: "${keywords[0]}" (Score: ${topKeywordsDetailed[0].opportunityScore})`;
+          logAgentAction(db, { agentId: 1, tenantId: req.user.tenantId, workspaceId: req.user.workspaceId, message: msg });
 
-        res.json({
-          success: true,
-          trendId,
-          fileName,
-          category: targetCategory,
-          totalRows: rawRows.length,
-          topKeywords: keywords,
-          topKeywordsDetailed,
-          flaggedIpKeywords,
-          trendingKeywordsStr
-        });
-      }
-    );
+          res.json({
+            success: true,
+            trendId,
+            projectId: targetProjectId,
+            fileName,
+            category: targetCategory,
+            totalRows: rawRows.length,
+            topKeywords: keywords,
+            topKeywordsDetailed,
+            flaggedIpKeywords,
+            trendingKeywordsStr
+          });
+        }
+      );
+    });
   } catch (err) {
     console.error('H10 File Parse Error:', err);
     res.status(500).json({ error: `Failed to parse file: ${err.message}` });

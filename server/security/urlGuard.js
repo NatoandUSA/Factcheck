@@ -86,8 +86,17 @@ function isPrivateOrReservedIpv6(ip) {
   if (norm.startsWith('::ffff:')) {                // IPv4-mapped — validate the embedded IPv4
     const embedded = norm.slice(7);
     if (net.isIPv4(embedded)) return isPrivateOrReservedIpv4(embedded);
+    // Support hex-form IPv4-mapped IPv6 e.g. ::ffff:7f00:1 or ::ffff:a9fe:a9fe
+    const hexParts = embedded.split(':');
+    if (hexParts.length === 2 && hexParts.every(p => /^[0-9a-f]{1,4}$/i.test(p))) {
+      const high = parseInt(hexParts[0], 16);
+      const low = parseInt(hexParts[1], 16);
+      const octets = [(high >> 8) & 0xff, high & 0xff, (low >> 8) & 0xff, low & 0xff];
+      return isPrivateOrReservedIpv4(octets.join('.'));
+    }
   }
   if (norm.startsWith('fe80:') || norm.startsWith('fe8') || norm.startsWith('fe9') || norm.startsWith('fea') || norm.startsWith('feb')) return true; // link-local fe80::/10
+  if (norm.startsWith('fec0:') || norm.startsWith('fec') || norm.startsWith('fed') || norm.startsWith('fee') || norm.startsWith('fef')) return true; // site-local deprecated fec0::/10
   if (norm.startsWith('fc') || norm.startsWith('fd')) return true; // unique local fc00::/7
   if (norm.startsWith('ff')) return true;          // multicast
   return false;

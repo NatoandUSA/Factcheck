@@ -32,6 +32,7 @@ async function migrateListingWorkspaceScope(db) {
   await addColumnIfMissing(db, columns, 'tenant_id', 'TEXT NULL');
   await addColumnIfMissing(db, columns, 'workspace_id', 'INTEGER NULL REFERENCES workspaces(id)');
   await addColumnIfMissing(db, columns, 'marketplace', "TEXT NULL CHECK(marketplace IN ('AMAZON', 'ETSY'))");
+  await addColumnIfMissing(db, columns, 'generatedAt', 'DATETIME DEFAULT CURRENT_TIMESTAMP');
 
   // Legacy rows intentionally remain unscoped (NULL) and therefore invisible
   // to tenant-scoped APIs. Guessing ownership during migration would create an
@@ -81,10 +82,13 @@ async function migrateSecurityControls(db) {
   // Legacy secrets were global, plaintext, and could not be assigned to a
   // tenant safely. Purge only credential rows; owners must re-enter them into
   // the encrypted workspace-scoped store after this migration.
-  await run(db, `
-    DELETE FROM settings
-    WHERE key IN ('gemini_api_key', 'openai_api_key', 'claude_api_key')
-  `);
+  const settingsTableExists = (await all(db, "SELECT name FROM sqlite_master WHERE type='table' AND name='settings'")).length > 0;
+  if (settingsTableExists) {
+    await run(db, `
+      DELETE FROM settings
+      WHERE key IN ('gemini_api_key', 'openai_api_key', 'claude_api_key')
+    `);
+  }
 }
 
 async function migrateKeywordDetailAndAuthorship(db) {
@@ -227,6 +231,19 @@ async function runMigrations(db) {
       throw error;
     }
   }
+
+  const canonicalDagApplied = await all(db, 'SELECT id FROM schema_migrations WHERE id = ?', [CANONICAL_DAG_MIGRATION]);
+  if (canonicalDagApplied.length === 0) {
+    await run(db, 'BEGIN IMMEDIATE');
+    try {
+      await migrateCanonicalDag(db);
+      await run(db, 'INSERT INTO schema_migrations (id) VALUES (?)', [CANONICAL_DAG_MIGRATION]);
+      await run(db, 'COMMIT');
+    } catch (error) {
+      try { await run(db, 'ROLLBACK'); } catch (_) {}
+      throw error;
+    }
+  }
 }
 
 async function migrateAgentWorkspaceScope(db) {
@@ -287,6 +304,25 @@ async function migrateProjectScopedEvidence(db) {
   }
 }
 
+const CANONICAL_DAG_MIGRATION = '2026-08-21_canonical_workflow_dag';
+
+async function migrateCanonicalDag(db) {
+  const tableExists = async (name) => (await all(db, "SELECT name FROM sqlite_master WHERE type='table' AND name=?", [name])).length > 0;
+
+  if (await tableExists('research_projects')) {
+    const cols = await all(db, 'PRAGMA table_info(research_projects)');
+    if (!cols.some(c => c.name === 'product_truth_notes')) {
+      await run(db, 'ALTER TABLE research_projects ADD COLUMN product_truth_notes TEXT NULL');
+    }
+    if (!cols.some(c => c.name === 'validated_at')) {
+      await run(db, 'ALTER TABLE research_projects ADD COLUMN validated_at DATETIME NULL');
+    }
+    if (!cols.some(c => c.name === 'validated_by')) {
+      await run(db, 'ALTER TABLE research_projects ADD COLUMN validated_by INTEGER NULL');
+    }
+  }
+}
+
 module.exports = {
   LISTING_SCOPE_MIGRATION,
   SECURITY_CONTROLS_MIGRATION,
@@ -296,5 +332,7 @@ module.exports = {
   PRODUCT_TRUTH_ATTESTATION_MIGRATION,
   AGENT_WORKSPACE_SCOPE_MIGRATION,
   PROJECT_SCOPED_EVIDENCE_MIGRATION,
+  CANONICAL_DAG_MIGRATION,
   runMigrations
 };
+

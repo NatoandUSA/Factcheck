@@ -31,8 +31,11 @@ async function waitForTestFixtures(timeoutMs = 15000) {
       JOIN workspaces w ON w.id = wm.workspace_id
       ORDER BY wm.workspace_id
     `);
-    if (rows.length >= 2) return rows;
-    await new Promise(resolve => setTimeout(resolve, 25));
+    const hasOwnerAmz = rows.some(f => f.role === 'OWNER' && f.marketplace === 'AMAZON');
+    const hasSellerAmz = rows.some(f => f.role === 'SELLER' && f.marketplace === 'AMAZON');
+    const hasOwnerEtsy = rows.some(f => f.role === 'OWNER' && f.marketplace === 'ETSY');
+    if (hasOwnerAmz && hasSellerAmz && hasOwnerEtsy) return rows;
+    await new Promise(resolve => setTimeout(resolve, 50));
   }
   throw new Error('Timed out waiting for test fixtures');
 }
@@ -143,12 +146,13 @@ async function runTests() {
 
     // 6. Test Role Gate Check (SELLER role attempting MANAGER_APPROVED)
     console.log('\nTest 6: Testing Role Gate Check (SELLER role attempting MANAGER_APPROVED)...');
-    await new Promise(r => db.run("INSERT INTO market_trends (category, trending_keywords, marketplace, tenant_id, workspace_id) VALUES ('Sweatshirt', 'mom, gift', 'AMAZON', ?, ?)", [ownerAmzFixture.tenant_id, ownerAmzFixture.workspace_id], r));
+    await new Promise(r => db.run("INSERT INTO market_trends (category, trending_keywords, marketplace, tenant_id, workspace_id, project_id) VALUES ('Sweatshirt', 'mom, gift', 'AMAZON', ?, ?, ?)", [ownerAmzFixture.tenant_id, ownerAmzFixture.workspace_id, projectId], r));
 
     await fetch(`${baseUrl}/api/projects/${projectId}/transition`, { method: 'PATCH', headers: { ...origin, 'Content-Type': 'application/json', Cookie: ownerAmzCookie }, body: JSON.stringify({ targetState: 'DNA_ACCEPTED' }) });
     await fetch(`${baseUrl}/api/projects/${projectId}/transition`, { method: 'PATCH', headers: { ...origin, 'Content-Type': 'application/json', Cookie: ownerAmzCookie }, body: JSON.stringify({ targetState: 'MKL_FROZEN' }) });
+    await fetch(`${baseUrl}/api/projects/${projectId}/transition`, { method: 'PATCH', headers: { ...origin, 'Content-Type': 'application/json', Cookie: ownerAmzCookie }, body: JSON.stringify({ targetState: 'PRODUCT_TRUTH_CONFIRMED', productTruthNotes: '100% Cotton 8oz Sweatshirt verified' }) });
     await fetch(`${baseUrl}/api/projects/${projectId}/transition`, { method: 'PATCH', headers: { ...origin, 'Content-Type': 'application/json', Cookie: ownerAmzCookie }, body: JSON.stringify({ targetState: 'DRAFT_GENERATED' }) });
-    await fetch(`${baseUrl}/api/projects/${projectId}/transition`, { method: 'PATCH', headers: { ...origin, 'Content-Type': 'application/json', Cookie: ownerAmzCookie }, body: JSON.stringify({ targetState: 'PRODUCT_TRUTH_VERIFIED' }) });
+    await fetch(`${baseUrl}/api/projects/${projectId}/transition`, { method: 'PATCH', headers: { ...origin, 'Content-Type': 'application/json', Cookie: ownerAmzCookie }, body: JSON.stringify({ targetState: 'VALIDATED' }) });
 
     const sellerApproveRes = await fetch(`${baseUrl}/api/projects/${projectId}/transition`, {
       method: 'PATCH',

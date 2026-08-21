@@ -99,9 +99,15 @@ async function learnFromListing({ url = '', rawText = '', category = 'Custom Gif
       provenance: 'MODELED_STRUCTURAL_DNA',
       titleFrontLoadedHook: title.slice(0, 75),
       titleCharLength: title.length,
-      bulletHookPatterns: bulletHooks.length > 0 ? bulletHooks : ['[FEATURE HOOK]'],
+      titleHookExplanation: '👑 Tier 1: Từ khóa hạt nhân + Target Recipient được đưa lên 75 ký tự đầu (Zero mobile truncation trên Amazon App).',
+      itemHighlights125: title.length > 125 ? title.slice(0, 122) + '...' : title,
+      itemHighlightsExplanation: '💡 Tier 3: Điểm nhấn sản phẩm tóm tắt <= 125 ký tự hiển thị đầu tiên trên giao diện điện thoại.',
+      bulletHookPatterns: bulletHooks.length > 0 ? bulletHooks : ['[PREMIUM CRAFTSMANSHIP]', '[PERFECT GIFT]', '[DURABLE QUALITY]', '[COMFORT FIT]', '[CUSTOMER CARE]'],
+      bulletHooksExplanation: '💎 Tier 4: 5 Bullet Points mở đầu bằng [UPPERCASE HOOK] giải quyết nỗi đau & thông số kỹ thuật (150-200 chars/bullet).',
       searchTermsRule: '249 Bytes, Space-separated generic terms, No commas, No duplicate title keywords',
+      searchTermsExplanation: '📦 Tier 2: Backend Search Terms tối đa 249 UTF-8 bytes, không dùng dấu phẩy, không lặp từ trong Title.',
       aPlusModulesRequired: ['Hero Banner Story', 'Three Feature Highlights', 'Specifications & Unboxing'],
+      aPlusExplanation: '✨ Tier 5: 10 Module A+ Content kết hợp Brand Story nâng cao CVR và phục vụ thuật toán Semantic Search Rufus AI.',
       recommendedTone: 'Direct, Feature-Rich, Hook-Driven Amazon A10 Format'
     };
   } else {
@@ -120,7 +126,9 @@ async function learnFromListing({ url = '', rawText = '', category = 'Custom Gif
       marketplace: 'ETSY',
       provenance: 'MODELED_STRUCTURAL_DNA',
       titleFormat: 'Under 140 Chars, Multi-phrase Long-tail Keywords',
+      titleExplanation: 'Tiêu đề < 140 ký tự, 40 ký tự đầu chứa cụm từ khóa chính mang tính cảm xúc/quà tặng.',
       exact13Tags: tags.slice(0, 13),
+      tagsExplanation: 'Đúng 13 Tags độc lập, mỗi tag <= 20 ký tự, không lặp từ, lọc sạch từ cấm thương hiệu IP.',
       descriptionSections: ['✨ ITEM DETAILS', '✦ SPECIFICATIONS & SIZING', '✦ HOW TO ORDER & PERSONALIZATION', '✦ CARE INSTRUCTIONS', '✦ WORKSHOP DETAILS'],
       personalizationGuidance: 'Clear Buyer Instructions (Names, Dates, Custom Options)',
       recommendedTone: 'Handmade, Artisan, Emotional Storytelling'
@@ -139,8 +147,8 @@ async function learnFromListing({ url = '', rawText = '', category = 'Custom Gif
     description: description.slice(0, 1000),
     styleDna,
     learnedRulesSummary: resolvedMarketplace === 'AMAZON'
-      ? `Đã phân tích cấu trúc Amazon (Modeled): Title Hook (${title.slice(0, 75)}), Bullet Hooks, và A+ Content Format.`
-      : `Đã phân tích cấu trúc Etsy (Modeled): Title (<140 chars), ${tags.length || 13} Tags chuẩn <=20 chars, và Story Structure.`
+      ? `👑 Title Hook (<=75c) | 📦 Backend Terms (249b) | 💡 Item Highlights (125c) | 💎 5 Bullets [HOOKS] | ✨ A+ Brand Story`
+      : `🎯 Title (<140 chars) | 🏷️ Đúng 13 Tags (<=20 chars) | 📜 Storytelling Description`
   };
 }
 

@@ -39,9 +39,11 @@ export default function LearningBoxWidget({ platform = 'AMAZON', onShowToast, sc
     fetchTemplates();
   }, [platform]);
 
-  const selectedSeller = scannedSellers.find(s => s.id === selectedSellerId);
+  const selectedSeller = scannedSellers.find(s => s.id === selectedSellerId || s.asin === selectedSellerId);
   const sellerAsRawText = selectedSeller
-    ? `Title: ${selectedSeller.title}\nShop: ${selectedSeller.shopName} (${selectedSeller.country})\nPrice: ${selectedSeller.price}\nViews 24h: ${selectedSeller.views24h}\nSold 24h: ${selectedSeller.sold24h}\nFavorites: ${selectedSeller.favorites}`
+    ? (isAmazon
+        ? `Title: ${selectedSeller.title}\nASIN: ${selectedSeller.asin || ''}\nPrice: ${selectedSeller.price || ''}\nMonthly Sales: ${selectedSeller.sales || ''}\nURL: https://www.amazon.com/dp/${selectedSeller.asin || ''}`
+        : `Title: ${selectedSeller.title}\nShop: ${selectedSeller.shopName || ''} (${selectedSeller.country || ''})\nPrice: ${selectedSeller.price || ''}\nViews 24h: ${selectedSeller.views24h || ''}\nSold 24h: ${selectedSeller.sold24h || ''}\nFavorites: ${selectedSeller.favorites || ''}`)
     : '';
 
   const handleLearn = async (e) => {
@@ -108,14 +110,14 @@ export default function LearningBoxWidget({ platform = 'AMAZON', onShowToast, sc
             </div>
             <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
               {isAmazon 
-                ? 'Dán link Amazon / ASIN hoặc văn bản đối thủ để Omni học Title Hook 75 chars, 5 Bullets [HOOKS], Search Terms 249 bytes và A+ Content.'
+                ? 'Dán link Amazon / ASIN hoặc chọn từ Xray để Omni học Title Hook <=75c, 5 Bullets [HOOKS], Search Terms 249 bytes và A+ Content.'
                 : 'Dán link Etsy / Shop text đối thủ để Omni học Title <140 chars, đúng 13 Tags <=20 chars, và Storytelling Description.'}
             </div>
           </div>
         </div>
 
         {/* Input Mode Toggle */}
-        <div style={{ display: 'flex', background: 'var(--bg-subtle)', borderRadius: '8px', padding: '3px', border: '1px solid var(--border-subtle)' }}>
+        <div style={{ display: 'flex', background: 'var(--bg-subtle)', borderRadius: '8px', padding: '3px', border: '1px solid var(--border-subtle)', flexWrap: 'wrap', gap: '2px' }}>
           <button
             type="button"
             onClick={() => setInputMode('url')}
@@ -158,30 +160,28 @@ export default function LearningBoxWidget({ platform = 'AMAZON', onShowToast, sc
             <span>Dán Văn Bản Mẫu</span>
           </button>
 
-          {!isAmazon && (
-            <button
-              type="button"
-              onClick={() => setInputMode('seller')}
-              disabled={scannedSellers.length === 0}
-              title={scannedSellers.length === 0 ? 'Chưa có seller nào được quét ở Stage 1' : undefined}
-              style={{
-                background: inputMode === 'seller' ? 'var(--bg-surface)' : 'transparent',
-                border: 'none',
-                borderRadius: '6px',
-                padding: '6px 12px',
-                fontSize: '0.8rem',
-                fontWeight: 700,
-                color: scannedSellers.length === 0 ? 'var(--text-muted)' : (inputMode === 'seller' ? themeColor : 'var(--text-secondary)'),
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                cursor: scannedSellers.length === 0 ? 'not-allowed' : 'pointer'
-              }}
-            >
-              <Users size={14} />
-              <span>Chọn Từ Sellers Đã Quét ({scannedSellers.length})</span>
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={() => setInputMode('seller')}
+            disabled={scannedSellers.length === 0}
+            title={scannedSellers.length === 0 ? (isAmazon ? 'Chưa có ASIN nào được quét ở Stage 1 Xray' : 'Chưa có seller nào được quét ở Stage 1') : undefined}
+            style={{
+              background: inputMode === 'seller' ? 'var(--bg-surface)' : 'transparent',
+              border: 'none',
+              borderRadius: '6px',
+              padding: '6px 12px',
+              fontSize: '0.8rem',
+              fontWeight: 700,
+              color: scannedSellers.length === 0 ? 'var(--text-muted)' : (inputMode === 'seller' ? themeColor : 'var(--text-secondary)'),
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              cursor: scannedSellers.length === 0 ? 'not-allowed' : 'pointer'
+            }}
+          >
+            <Users size={14} />
+            <span>{isAmazon ? `Chọn Từ ASINs Xray (${scannedSellers.length})` : `Chọn Từ Sellers Đã Quét (${scannedSellers.length})`}</span>
+          </button>
         </div>
       </div>
 
@@ -195,10 +195,10 @@ export default function LearningBoxWidget({ platform = 'AMAZON', onShowToast, sc
               value={selectedSellerId}
               onChange={(e) => setSelectedSellerId(e.target.value)}
             >
-              <option value="">-- Chọn 1 seller đã quét ở Stage 1 --</option>
+              <option value="">-- {isAmazon ? 'Chọn 1 ASIN đối thủ từ báo cáo Xray Stage 1' : 'Chọn 1 seller đã quét ở Stage 1'} --</option>
               {scannedSellers.map(s => (
-                <option key={s.id} value={s.id}>
-                  {s.title.slice(0, 60)} — {s.shopName}
+                <option key={s.id || s.asin} value={s.id || s.asin}>
+                  {s.asin ? `[${s.asin}] ` : ''}{s.title ? s.title.slice(0, 55) : 'Amazon Product'} {s.price ? `• ${s.price}` : ''} {s.sales ? `• ${s.sales} sales` : ''}
                 </option>
               ))}
             </select>
@@ -310,39 +310,87 @@ export default function LearningBoxWidget({ platform = 'AMAZON', onShowToast, sc
         </div>
       )}
 
-      {/* Active Template DNA Preview */}
+      {/* Active Template DNA Preview & Deep Breakdown */}
       {activeTemplate && (
-        <div style={{ background: isAmazon ? '#f8fafc' : '#fffaf5', borderRadius: '10px', padding: '14px 18px', border: `1px solid ${isAmazon ? '#bae6fd' : '#fed7aa'}`, fontSize: '0.85rem' }}>
-          <div style={{ fontWeight: 800, color: themeColor, marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <CheckCircle2 size={16} />
+        <div style={{ background: isAmazon ? '#f8fafc' : '#fffaf5', borderRadius: '10px', padding: '16px 20px', border: `1px solid ${isAmazon ? '#bae6fd' : '#fed7aa'}`, fontSize: '0.85rem' }}>
+          <div style={{ fontWeight: 800, color: themeColor, marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <CheckCircle2 size={18} />
             <span>DNA Đang Áp Dụng: "{activeTemplate.title}"</span>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginTop: '8px' }}>
-            <div>
-              <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-secondary)' }}>
-                {isAmazon ? 'CẤU TRÚC 5 BULLET HOOKS MẪU:' : '13 TAGS MẪU:'}
-              </div>
-              <ul style={{ margin: '4px 0 0 16px', padding: 0, fontSize: '0.8rem', color: 'var(--text-primary)' }}>
-                {isAmazon ? (
-                  (activeTemplate.bullets || []).slice(0, 4).map((b, i) => (
-                    <li key={i}>{b.slice(0, 75)}...</li>
-                  ))
-                ) : (
-                  (activeTemplate.tags || []).slice(0, 6).map((t, i) => (
-                    <li key={i}>#{t}</li>
-                  ))
-                )}
-              </ul>
-            </div>
+          {isAmazon ? (
+            /* Amazon Detailed 5-Tier DNA Breakdown */
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', marginTop: '10px' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <div style={{ background: '#fff', padding: '10px 12px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                  <div style={{ fontSize: '0.75rem', fontWeight: 800, color: '#0369a1' }}>👑 TIER 1: TITLE HOOK (≤ 75 KÝ TỰ):</div>
+                  <div style={{ fontSize: '0.82rem', fontWeight: 700, color: '#0f172a', marginTop: '2px' }}>
+                    "{activeTemplate.styleDna?.titleFrontLoadedHook || activeTemplate.title?.slice(0, 75)}"
+                  </div>
+                  <div style={{ fontSize: '0.72rem', color: '#64748b', marginTop: '2px' }}>
+                    {activeTemplate.styleDna?.titleHookExplanation || 'Từ khóa hạt nhân + Target Recipient đưa lên đầu cho Mobile App.'}
+                  </div>
+                </div>
 
-            <div>
-              <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-secondary)' }}>QUY TẮC THUẬT TOÁN ĐÃ HỌC:</div>
-              <div style={{ fontSize: '0.8rem', color: '#475569', marginTop: '4px', lineHeight: 1.4 }}>
-                {activeTemplate.learnedRulesSummary || activeTemplate.styleDna?.recommendedTone || 'Áp dụng phong cách cảm xúc kết hợp thông số kỹ thuật rõ ràng.'}
+                <div style={{ background: '#fff', padding: '10px 12px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                  <div style={{ fontSize: '0.75rem', fontWeight: 800, color: '#d97706' }}>💡 TIER 3: ITEM HIGHLIGHTS (≤ 125 CHARS):</div>
+                  <div style={{ fontSize: '0.8rem', color: '#1e293b', marginTop: '2px' }}>
+                    {activeTemplate.styleDna?.itemHighlights125 || 'Điểm nhấn sản phẩm tóm tắt ngắn gọn'}
+                  </div>
+                  <div style={{ fontSize: '0.72rem', color: '#64748b', marginTop: '2px' }}>
+                    Hiển thị trên màn hình điện thoại trước khi bấm "See more".
+                  </div>
+                </div>
+
+                <div style={{ background: '#fff', padding: '10px 12px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                  <div style={{ fontSize: '0.75rem', fontWeight: 800, color: '#475569' }}>📦 TIER 2: BACKEND SEARCH TERMS (≤ 249 BYTES):</div>
+                  <div style={{ fontSize: '0.78rem', color: '#334155', marginTop: '2px' }}>
+                    {activeTemplate.styleDna?.searchTermsRule || '249 Bytes, không dấu phẩy, không lặp từ trong Title'}
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <div style={{ background: '#fff', padding: '10px 12px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                  <div style={{ fontSize: '0.75rem', fontWeight: 800, color: '#7e22ce' }}>💎 TIER 4: 5 BULLET HOOKS MẪU:</div>
+                  <ul style={{ margin: '4px 0 0 16px', padding: 0, fontSize: '0.8rem', color: 'var(--text-primary)' }}>
+                    {(activeTemplate.bullets || []).slice(0, 5).map((b, i) => (
+                      <li key={i} style={{ marginBottom: '2px' }}>{b.slice(0, 80)}...</li>
+                    ))}
+                  </ul>
+                  <div style={{ fontSize: '0.72rem', color: '#64748b', marginTop: '4px' }}>
+                    Cấu trúc mở đầu [UPPERCASE HOOK] kích thích tỷ lệ chuyển đổi (CVR).
+                  </div>
+                </div>
+
+                <div style={{ background: '#fff', padding: '10px 12px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                  <div style={{ fontSize: '0.75rem', fontWeight: 800, color: '#0284c7' }}>✨ TIER 5: A+ CONTENT MODULES:</div>
+                  <div style={{ fontSize: '0.78rem', color: '#0369a1', marginTop: '2px' }}>
+                    Hero Banner Story • 3 Feature Highlights • Specifications & Unboxing
+                  </div>
+                </div>
               </div>
             </div>
-          </div>
+          ) : (
+            /* Etsy DNA Breakdown */
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginTop: '8px' }}>
+              <div>
+                <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-secondary)' }}>13 TAGS MẪU:</div>
+                <ul style={{ margin: '4px 0 0 16px', padding: 0, fontSize: '0.8rem', color: 'var(--text-primary)' }}>
+                  {(activeTemplate.tags || []).slice(0, 6).map((t, i) => (
+                    <li key={i}>#{t}</li>
+                  ))}
+                </ul>
+              </div>
+
+              <div>
+                <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-secondary)' }}>QUY TẮC THUẬT TOÁN ĐÃ HỌC:</div>
+                <div style={{ fontSize: '0.8rem', color: '#475569', marginTop: '4px', lineHeight: 1.4 }}>
+                  {activeTemplate.learnedRulesSummary || 'Áp dụng phong cách cảm xúc kết hợp thông số kỹ thuật rõ ràng.'}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

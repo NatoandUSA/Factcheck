@@ -2833,9 +2833,12 @@ app.get('/api/benchmark/validate', requireAuth(db), requireRole(['OWNER', 'MANAG
 
 // API: Upload and process Helium 10 / CSV / HTML reports (Universal handler with aliases)
 const handleReportUpload = async (req, res) => {
-  const file = req.file || (req.files && req.files[0]);
-  if (!file) {
-    return res.status(400).json({ error: 'No file uploaded. Please select a .xlsx, .csv, or .html file.' });
+  const uploadedFiles = (Array.isArray(req.files) && req.files.length > 0) 
+    ? req.files 
+    : (req.file ? [req.file] : []);
+
+  if (uploadedFiles.length === 0) {
+    return res.status(400).json({ error: 'No file uploaded. Please select one or more .xlsx, .csv, or .html files.' });
   }
 
   const targetCategory = req.body.category;
@@ -2843,39 +2846,38 @@ const handleReportUpload = async (req, res) => {
     return res.status(400).json({ success: false, error: 'INSUFFICIENT_EVIDENCE', message: 'category parameter is required' });
   }
 
-  const filePath = file.path;
-  const fileName = file.originalname;
-  // Marketplace is server-derived from the authenticated session, never
-  // trusted from the client body (GPT PR-5 review finding P0-B1).
+  const fileNames = uploadedFiles.map(f => f.originalname).join(', ');
   const targetMarketplace = req.user.marketplace;
 
   try {
     let rawRows = [];
 
-    // 1. Handle HTML/HTM (YTrends / Etsy Spy exports)
-    if (/\.html?$/i.test(fileName)) {
-      const htmlContent = fs.readFileSync(filePath, 'utf8');
-      const parsedKeywords = ytrendsParser.parseYTrendsHtml(htmlContent);
-      // Missing metrics stay null/UNKNOWN rather than a plausible-looking
-      // guess -- 1200/350/2 were invented defaults with no basis in the
-      // actual parsed HTML (P0.5-C truth fix).
-      rawRows = (parsedKeywords || []).map(kw => ({
-        Keyword: kw.keyword || kw,
-        // researchTruth centralizes the observed-vs-missing distinction:
-        // views24h:0 is a real observed zero and must survive as 0, not
-        // collapse into the same null used for a genuinely missing field
-        // (P0.5-C truth fix).
-        'Search Volume': researchTruth.monthlySearchVolumeFromViews24h(kw.views24h),
-        'Competing Products': researchTruth.toObservedNumber(kw.listings),
-        'Title Density': null
-      }));
-    } else {
-      // 2. Handle Excel & CSV through ExcelJS (SheetJS/xlsx removed after security audit).
-      rawRows = await readFirstWorksheet(filePath);
+    for (const f of uploadedFiles) {
+      const filePath = f.path;
+      const fileName = f.originalname;
+
+      // 1. Handle HTML/HTM (YTrends / Etsy Spy exports)
+      if (/\.html?$/i.test(fileName)) {
+        const htmlContent = fs.readFileSync(filePath, 'utf8');
+        const parsedKeywords = ytrendsParser.parseYTrendsHtml(htmlContent);
+        const rows = (parsedKeywords || []).map(kw => ({
+          Keyword: kw.keyword || kw,
+          'Search Volume': researchTruth.monthlySearchVolumeFromViews24h(kw.views24h),
+          'Competing Products': researchTruth.toObservedNumber(kw.listings),
+          'Title Density': null
+        }));
+        rawRows.push(...rows);
+      } else {
+        // 2. Handle Excel & CSV through ExcelJS
+        const rows = await readFirstWorksheet(filePath);
+        if (Array.isArray(rows) && rows.length > 0) {
+          rawRows.push(...rows);
+        }
+      }
     }
 
     if (!rawRows || rawRows.length === 0) {
-      return res.status(400).json({ error: 'Uploaded file contains no data rows.' });
+      return res.status(400).json({ error: 'Uploaded file(s) contain no data rows.' });
     }
 
     // Auto-detect if file is an Xray Report vs Cerebro Keyword Report
@@ -2887,7 +2889,7 @@ const handleReportUpload = async (req, res) => {
     ) && !columnNames.some(k => /search volume|title density|cpr/i.test(k));
 
     if (isXrayReport) {
-      console.log(`Detected Helium 10 Xray Report (${rawRows.length} rows)! Running ASIN Batcher Engine...`);
+      console.log(`Detected Helium 10 Xray Report from ${uploadedFiles.length} file(s) (${rawRows.length} total rows)! Running ASIN Batcher Engine...`);
       const seedKeyword = req.body.seedPhrase || req.body.seedKeyword || targetCategory || 'Custom Product';
       const batchResult = asinBatcher.filterAndBatchXrayAsins(rawRows, seedKeyword);
 
@@ -2900,16 +2902,30 @@ const handleReportUpload = async (req, res) => {
         });
       }
 
+      // Extract sellers list for Learning Box
+      const xraySellers = (batchResult.batches || []).flatMap(b => b.items || []).map((item, idx) => ({
+        id: `asin_${item.asin}_${idx}`,
+        asin: item.asin,
+        title: item.title || `Amazon Top Seller (${item.asin})`,
+        price: item.price !== null ? `$${item.price.toFixed(2)}` : '—',
+        sales: item.sales !== null ? item.sales.toLocaleString() : '—',
+        url: `https://www.amazon.com/dp/${item.asin}`,
+        shopName: `ASIN: ${item.asin}`
+      }));
+
       return res.json({
         success: true,
         isXray: true,
         reportType: 'HELIUM10_XRAY',
+        fileNames,
+        filesUploadedCount: uploadedFiles.length,
         seedKeyword: batchResult.seedKeyword,
         totalInputAsins: batchResult.totalInputAsins,
         totalCleanAsins: batchResult.totalCleanAsins,
         rejectedCount: batchResult.rejectedCount,
         batchCount: batchResult.batchCount,
-        batches: batchResult.batches
+        batches: batchResult.batches,
+        xraySellers
       });
     }
 
@@ -2920,7 +2936,6 @@ const handleReportUpload = async (req, res) => {
     const titleDensityKey = Object.keys(firstRow).find(k => /title\s*density|density/i.test(k));
     const cprKey = Object.keys(firstRow).find(k => /cpr/i.test(k));
     const iqKey = Object.keys(firstRow).find(k => /iq\s*score/i.test(k));
-
 
     // Common IP / Trademark / Copyright Blacklist & Competitor Brand patterns
     const IP_TRADEMARK_BLACKLIST = [
@@ -2933,7 +2948,7 @@ const handleReportUpload = async (req, res) => {
     // Compute Multi-Dimensional Opportunity Score for each row (Data Dive & H10 A10 Model)
     const evaluatedKeywords = [];
     const flaggedIpKeywords = [];
-    const seenKeywordsSet = new Set();
+    const seenKeywordsMap = new Map();
 
     for (const r of rawRows) {
       let rawVal = String(r[kwKey] || '').trim();
@@ -2945,7 +2960,7 @@ const handleReportUpload = async (req, res) => {
       rawVal = rawVal.replace(/\s+/g, ' ').replace(/^["']|["']$/g, '').trim();
 
       const sanitizedKw = keywordRanker.sanitizeKeyword(rawVal);
-      if (!sanitizedKw) continue; // Discards ASINs (b0gl7dyp9r), line numbers (10., 11.), delivery blacklist, and offensive terms
+      if (!sanitizedKw) continue; // Discards ASINs, line numbers, delivery blacklist, and offensive terms
 
       const lower = sanitizedKw.toLowerCase();
 
@@ -2958,17 +2973,6 @@ const handleReportUpload = async (req, res) => {
         continue; // Skip trademarked terms
       }
 
-      // Fast O(1) deduplication check
-      if (seenKeywordsSet.has(lower)) {
-        continue;
-      }
-      seenKeywordsSet.add(lower);
-
-
-      // A missing column/value is UNKNOWN (null), not zero. An explicit
-      // source zero ("0" in the file) is preserved as a real observation.
-      // These are different facts and were previously conflated (P0.5-C
-      // truth fix).
       const readNumericOrNull = (key) => (key ? researchTruth.toObservedNumber(r[key]) : null);
       const searchVolume = readNumericOrNull(volKey);
       const competingProducts = readNumericOrNull(compKey);
@@ -2976,11 +2980,18 @@ const handleReportUpload = async (req, res) => {
       const cpr = readNumericOrNull(cprKey);
       const rawIq = readNumericOrNull(iqKey);
 
-      // researchTruth.scoreKeywordEvidence enforces the strict rule: the
-      // local formula only runs when every input it uses (volume,
-      // competition, density) is a real observation. Missing competition/
-      // title-density is never replaced with a plausible zero/constant and
-      // then labeled SCORED (P0.5-C truth fix).
+      // Fast deduplication & max-metric merge for multi-file Cerebro uploads
+      if (seenKeywordsMap.has(lower)) {
+        const existing = seenKeywordsMap.get(lower);
+        if (searchVolume !== null && (existing.searchVolume === null || searchVolume > existing.searchVolume)) {
+          existing.searchVolume = searchVolume;
+        }
+        if (cpr !== null && (existing.cpr === null || (cpr > 0 && cpr < existing.cpr))) {
+          existing.cpr = cpr;
+        }
+        continue;
+      }
+
       const { opportunityScore, scoringState } = researchTruth.scoreKeywordEvidence({
         searchVolume,
         competingProducts,
@@ -2988,7 +2999,7 @@ const handleReportUpload = async (req, res) => {
         rawIq
       });
 
-      evaluatedKeywords.push({
+      const entry = {
         keyword: sanitizedKw,
         searchVolume,
         competingProducts,
@@ -2996,7 +3007,9 @@ const handleReportUpload = async (req, res) => {
         cpr,
         opportunityScore,
         scoringState
-      });
+      };
+      seenKeywordsMap.set(lower, entry);
+      evaluatedKeywords.push(entry);
     }
 
     if (evaluatedKeywords.length === 0) {
@@ -3010,17 +3023,25 @@ const handleReportUpload = async (req, res) => {
     const seedPhrase = req.body.seedPhrase || req.body.seedKeyword || targetCategory;
     const rankedKeywords = keywordRanker.rankKeywords(evaluatedKeywords, targetCategory, seedPhrase);
 
-    // Assign Strategic Tiers (Data Dive MKL Methodology) for 100 Keywords
+    // Assign Strategic 5 Tiers (Amazon A10 & Data Dive Methodology)
     const topKeywordsDetailed = rankedKeywords.slice(0, 100).map((item, idx) => {
-      let tier = 'Tier 3 (Backend Fuel 249 Bytes)';
-      let tierBadge = '📦 Tier 3 (Backend Fuel)';
+      let tier = 'Tier 5 (A+ Content & Brand Story)';
+      let tierBadge = '✨ Tier 5 (A+ Content)';
+
       if (idx < 10) {
-        tier = 'Tier 1 (Golden Launch - Title Hook)';
+        tier = 'Tier 1 (Golden Launch - Title Hook <=75 chars)';
         tierBadge = '👑 Tier 1 (Title Hook)';
-      } else if (idx < 35) {
-        tier = 'Tier 2 (Core Feature - Bullets & Tags)';
-        tierBadge = '💎 Tier 2 (5 Bullets)';
+      } else if (idx < 25) {
+        tier = 'Tier 2 (Backend Generic Search Terms <=249 Bytes)';
+        tierBadge = '📦 Tier 2 (Backend 249b)';
+      } else if (idx < 45) {
+        tier = 'Tier 3 (Item Highlights <=125 Chars)';
+        tierBadge = '💡 Tier 3 (Item Highlights)';
+      } else if (idx < 75) {
+        tier = 'Tier 4 (Core Features - 5 Bullets [HOOKS])';
+        tierBadge = '💎 Tier 4 (5 Bullets)';
       }
+
       return {
         ...item,
         rank: idx + 1,
@@ -3032,10 +3053,7 @@ const handleReportUpload = async (req, res) => {
     const keywords = topKeywordsDetailed.map(k => k.keyword);
     const trendingKeywordsStr = keywords.slice(0, 30).join(', ');
 
-
-    // Insert into market_trends for AI Drafter (keywords_detailed preserves real
-    // Volume/CPR/Score per keyword so staff can see the underlying data, not
-    // just an AI-picked keyword string)
+    // Insert into market_trends for AI Drafter
     resolveActiveProjectId(db, req.user, req.body.projectId, (pErr, targetProjectId) => {
       if (pErr) return res.status(pErr.status || 400).json({ success: false, error: pErr.error, message: pErr.message });
       db.run(
@@ -3045,14 +3063,16 @@ const handleReportUpload = async (req, res) => {
           if (dbErr) return res.status(500).json({ error: dbErr.message });
           
           const trendId = this.lastID;
-          const msg = `[H10 MKL ENGINE] Scored & imported ${keywords.length} keywords from "${fileName}" for ${targetCategory}. Top Opportunity: "${keywords[0]}" (Score: ${topKeywordsDetailed[0].opportunityScore})`;
+          const msg = `[H10 MKL ENGINE] Scored & imported ${keywords.length} keywords from ${uploadedFiles.length} file(s) ("${fileNames}") for ${targetCategory}. Top Opportunity: "${keywords[0]}" (Score: ${topKeywordsDetailed[0].opportunityScore})`;
           logAgentAction(db, { agentId: 1, tenantId: req.user.tenantId, workspaceId: req.user.workspaceId, message: msg });
 
           res.json({
             success: true,
             trendId,
             projectId: targetProjectId,
-            fileName,
+            fileNames,
+            filesUploadedCount: uploadedFiles.length,
+            fileName: fileNames,
             category: targetCategory,
             totalRows: rawRows.length,
             topKeywords: keywords,
@@ -3065,7 +3085,7 @@ const handleReportUpload = async (req, res) => {
     });
   } catch (err) {
     console.error('H10 File Parse Error:', err);
-    res.status(500).json({ error: `Failed to parse file: ${err.message}` });
+    res.status(500).json({ error: `Failed to parse file(s): ${err.message}` });
   }
 };
 

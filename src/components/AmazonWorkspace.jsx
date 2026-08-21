@@ -16,6 +16,12 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
   const [isIpModalOpen, setIsIpModalOpen] = useState(false);
   const [activeProject, setActiveProject] = useState(null);
 
+  // Workflow Evidence State shared across Stages
+  const [xraySellers, setXraySellers] = useState([]);
+  const [cerebroKeywords, setCerebroKeywords] = useState([]);
+  const [cerebroSummary, setCerebroSummary] = useState(null);
+  const [drafting, setDrafting] = useState(false);
+
   const fetchProjects = React.useCallback(async () => {
     try {
       const res = await fetch('/api/projects', { credentials: 'include' });
@@ -26,9 +32,35 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
     } catch (e) {}
   }, []);
 
+  // Also load latest trend if available to populate cerebroSummary
+  const fetchLatestTrend = React.useCallback(async () => {
+    try {
+      const res = await fetch('/api/trends', { credentials: 'include' });
+      if (res.ok) {
+        const trends = await res.json();
+        const amzTrends = (trends || []).filter(t => t.marketplace === 'AMAZON');
+        if (amzTrends.length > 0) {
+          const latest = amzTrends[0];
+          let detailed = [];
+          try { detailed = JSON.parse(latest.keywords_detailed || '[]'); } catch (e) {}
+          if (!cerebroSummary) {
+            setCerebroSummary({ trendId: latest.id, totalRows: detailed.length });
+          }
+          if (cerebroKeywords.length === 0 && detailed.length > 0) {
+            setCerebroKeywords(detailed);
+          }
+          if (!seedPhrase && latest.category) {
+            setSeedPhrase(latest.category);
+          }
+        }
+      }
+    } catch (e) {}
+  }, [cerebroSummary, cerebroKeywords.length, seedPhrase]);
+
   React.useEffect(() => {
     fetchProjects();
-  }, [fetchProjects]);
+    fetchLatestTrend();
+  }, [fetchProjects, fetchLatestTrend]);
 
   const handleTransition = async (targetState) => {
     if (!activeProject) return;
@@ -46,6 +78,35 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
       fetchProjects();
     } catch (err) {
       if (onShowToast) onShowToast(`⚠ Transition error: ${err.message}`);
+    }
+  };
+
+  // Generate Amazon A10 Listing Action (Available across Stage 2, Stage 3, and Stage 1)
+  const handleGenerateListing = async () => {
+    const trendId = cerebroSummary?.trendId;
+    if (!trendId) {
+      if (onShowToast) onShowToast('⚠️ Vui lòng nạp file Cerebro ở Stage 1 (Bước 3) trước khi tạo listing!');
+      setActiveStage('workflow');
+      return;
+    }
+
+    setDrafting(true);
+    try {
+      const res = await fetch(`/api/trends/${trendId}/draft`, {
+        method: 'POST',
+        credentials: 'include'
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Drafting failed');
+
+      if (onShowToast) onShowToast('✅ Đã tạo thành công Amazon Listing & A+ Content chuẩn 75 chars!');
+      if (onSelectListing && data.listing) {
+        onSelectListing(data.listing);
+      }
+    } catch (err) {
+      if (onShowToast) onShowToast(`Lỗi tạo listing: ${err.message}`);
+    } finally {
+      setDrafting(false);
     }
   };
 
@@ -194,7 +255,7 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
           onClick={() => setActiveStage('mkl')}
         >
           <Database size={18} />
-          <span>📊 Stage 3: Kho Từ Khóa Phân Tầng MKL 3-Tier</span>
+          <span>📊 Stage 3: Kho Từ Khóa Phân Tầng MKL 5-Tier</span>
         </button>
       </div>
 
@@ -211,6 +272,13 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
           onShowToast={onShowToast}
           onSelectListing={onSelectListing}
           onProceedToStage={(stage) => setActiveStage(stage)}
+          onUpdateXraySellers={(sellers) => setXraySellers(sellers)}
+          onUpdateCerebroSummary={(summary, kw) => {
+            setCerebroSummary(summary);
+            if (kw) setCerebroKeywords(kw);
+          }}
+          onGenerateListingDirect={handleGenerateListing}
+          isDrafting={drafting}
         />
       )}
 
@@ -221,47 +289,86 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
             {/* Google Trends Velocity */}
             <GoogleTrendsWidget seedPhrase={seedPhrase} onShowToast={onShowToast} />
             
-            {/* Amazon Learning Box */}
-            <LearningBoxWidget platform="AMAZON" onShowToast={onShowToast} />
+            {/* Amazon Learning Box with Scanned ASINs passed from Stage 1 */}
+            <LearningBoxWidget 
+              platform="AMAZON" 
+              scannedSellers={xraySellers} 
+              onShowToast={onShowToast} 
+            />
           </div>
 
-          {/* Stage 2 Acceptance Gate */}
-          <div className="studio-panel" style={{ padding: '20px 24px', borderLeft: '4px solid #0284c7', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#f0f9ff', borderRadius: '12px' }}>
+          {/* Stage 2 Acceptance Gate & Instant Generation */}
+          <div className="studio-panel" style={{ padding: '20px 24px', borderLeft: '4px solid #0284c7', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#f0f9ff', borderRadius: '12px', flexWrap: 'wrap', gap: '12px' }}>
             <div>
               <div style={{ fontWeight: 800, fontSize: '1rem', color: '#0369a1' }}>
                 🧠 Stage 2: Competitor DNA & Trend Recheck Completed
               </div>
               <div style={{ fontSize: '0.8rem', color: '#0284c7', marginTop: '2px' }}>
-                Xác nhận từ khóa hạt nhân "{seedPhrase}" và các mẫu copywriting đối thủ đã được duyệt đưa vào MKL.
+                Xác nhận từ khóa hạt nhân "{seedPhrase}" và DNA đối thủ ({xraySellers.length} ASINs đã quét) sẵn sàng cho MKL & Sinh Listing.
               </div>
             </div>
 
-            <button
-              onClick={() => setActiveStage('mkl')}
-              className="btn btn-primary"
-              style={{ background: '#0284c7', fontWeight: 800, padding: '10px 20px', borderRadius: '8px', cursor: 'pointer' }}
-            >
-              <span>➡️ Chấp Nhận Research DNA & Mở Khóa Stage 3 (MKL & Family Draft)</span>
-            </button>
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <button
+                onClick={handleGenerateListing}
+                disabled={drafting}
+                className="btn btn-primary"
+                style={{ background: '#16a34a', fontWeight: 800, padding: '10px 20px', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}
+              >
+                {drafting ? <RefreshCw size={16} className="spinner" /> : <Zap size={16} />}
+                <span>{drafting ? 'Đang tạo listing...' : '⚡ Sinh Listing Ngay'}</span>
+              </button>
+
+              <button
+                onClick={() => setActiveStage('mkl')}
+                className="btn btn-primary"
+                style={{ background: '#0284c7', fontWeight: 800, padding: '10px 20px', borderRadius: '8px', cursor: 'pointer' }}
+              >
+                <span>➡️ Mở Khóa Stage 3 (MKL & Family Draft)</span>
+              </button>
+            </div>
           </div>
         </div>
       )}
 
-      {/* STAGE 3: MASTER KEYWORD INTELLIGENCE & CONTROLLED DRAFT GENERATION */}
+      {/* STAGE 3: MASTER KEYWORD INTELLIGENCE & PROMINENT LISTING GENERATION */}
       {activeStage === 'mkl' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-          <div className="studio-panel" style={{ padding: '20px 24px', borderLeft: '4px solid #7e22ce', background: '#faf5ff', borderRadius: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+          <div className="studio-panel" style={{ padding: '20px 24px', borderLeft: '4px solid #7e22ce', background: '#faf5ff', borderRadius: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
             <div>
-              <h3 style={{ margin: 0, color: '#7e22ce', fontWeight: 800, fontSize: '1.1rem' }}>
-                📊 STAGE 3: Master Keyword Intelligence & Family Draft (1 Parent + 4 Children)
+              <h3 style={{ margin: 0, color: '#7e22ce', fontWeight: 800, fontSize: '1.15rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span>📊 STAGE 3: Master Keyword Intelligence & Family Draft (1 Parent + 4 Children)</span>
               </h3>
               <p style={{ margin: '4px 0 0 0', color: '#6b21a8', fontSize: '0.85rem' }}>
-                Chốt bảng MKL đã được đóng băng (Frozen MKL) và sinh bộ Amazon Listing đầy đủ 1 Parent + 4 Child Variants.
+                Bảng MKL phân tầng 5 Tiers chuẩn A10. Bấm nút dưới đây để sinh trọn bộ Amazon Listing (Title, 5 Bullets, Highlights 125c, Backend 249b, A+ Content).
               </p>
             </div>
+
+            {/* HIGH-IMPACT PROMINENT GENERATION CTA */}
+            <button
+              onClick={handleGenerateListing}
+              disabled={drafting}
+              className="btn btn-primary"
+              style={{
+                background: 'linear-gradient(135deg, #7e22ce 0%, #0284c7 100%)',
+                color: '#fff',
+                fontWeight: 800,
+                fontSize: '0.95rem',
+                padding: '12px 24px',
+                borderRadius: '10px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                boxShadow: '0 4px 16px rgba(126, 34, 206, 0.35)',
+                cursor: drafting ? 'not-allowed' : 'pointer'
+              }}
+            >
+              {drafting ? <RefreshCw size={18} className="spinner" /> : <Zap size={18} />}
+              <span>{drafting ? 'Đang sinh Amazon A10 Listing...' : '⚡ Sinh Bộ Amazon A10 Listing & Family Draft'}</span>
+            </button>
           </div>
 
-          <MasterKeywordTable marketplace="AMAZON" onShowToast={onShowToast} />
+          <MasterKeywordTable marketplace="AMAZON" keywords={cerebroKeywords} onShowToast={onShowToast} />
         </div>
       )}
 

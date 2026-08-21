@@ -58,7 +58,7 @@ export default function AmazonRealProductPage({ listing, onShowToast }) {
         </div>
 
         {/* View Mode Switcher */}
-        <div style={{ display: 'flex', gap: '8px', background: 'rgba(255, 255, 255, 0.1)', padding: '4px', borderRadius: '8px' }}>
+        <div style={{ display: 'flex', gap: '8px', background: 'rgba(255, 255, 255, 0.1)', padding: '4px', borderRadius: '8px', flexWrap: 'wrap' }}>
           <button
             onClick={() => setActiveSubTab('page')}
             style={{
@@ -75,6 +75,21 @@ export default function AmazonRealProductPage({ listing, onShowToast }) {
             🛒 Amazon Simulation View
           </button>
           <button
+            onClick={() => setActiveSubTab('raw-review')}
+            style={{
+              background: activeSubTab === 'raw-review' ? '#0284c7' : 'transparent',
+              color: '#fff',
+              border: 'none',
+              padding: '6px 14px',
+              borderRadius: '6px',
+              fontWeight: 600,
+              fontSize: '0.8rem',
+              cursor: 'pointer'
+            }}
+          >
+            📋 Raw Review & Copy All
+          </button>
+          <button
             onClick={() => setActiveSubTab('image-prompts')}
             style={{
               background: activeSubTab === 'image-prompts' ? '#0284c7' : 'transparent',
@@ -87,7 +102,7 @@ export default function AmazonRealProductPage({ listing, onShowToast }) {
               cursor: 'pointer'
             }}
           >
-            📸 10 Listing Image Prompts
+            📸 10 Image Prompts
           </button>
           <button
             onClick={() => setActiveSubTab('aplus-prompts')}
@@ -322,6 +337,230 @@ export default function AmazonRealProductPage({ listing, onShowToast }) {
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* VIEW: MASTER RAW REVIEW & 1-CLICK COPY-ALL HUB */}
+      {activeSubTab === 'raw-review' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+          
+          {/* Master Copy-All Actions Bar */}
+          <div style={{
+            background: 'linear-gradient(135deg, #0284c7 0%, #7e22ce 100%)',
+            padding: '20px 24px',
+            borderRadius: '12px',
+            color: '#fff',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            flexWrap: 'wrap',
+            gap: '14px',
+            boxShadow: '0 4px 16px rgba(2, 132, 199, 0.25)'
+          }}>
+            <div>
+              <h3 style={{ margin: 0, fontSize: '1.2rem', fontWeight: 800 }}>
+                📋 Master Raw Review & Copy-All Hub (A10 Standard)
+              </h3>
+              <p style={{ margin: '4px 0 0 0', fontSize: '0.85rem', opacity: 0.9 }}>
+                Bản tổng hợp dữ liệu thô hoàn chỉnh để copy 1-Click đưa vào Amazon Seller Central, Excel hoặc ERP.
+              </p>
+            </div>
+
+            <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                onClick={() => {
+                  const bulletsStr = (listing.amazonBullets || []).map((b, i) => `Bullet #${i + 1}: ${b}`).join('\n');
+                  const aplusStr = listing.amazonAPlusContent 
+                    ? `\n=== A+ CONTENT & BRAND STORY ===\nHeadline: ${listing.amazonAPlusContent.brandStoryHeadline || ''}\nStory: ${listing.amazonAPlusContent.brandStoryBody || ''}\nModules:\n${(listing.amazonAPlusContent.modules || []).map(m => `- [${m.moduleType}]: ${m.heading || ''} | ${m.body || ''}`).join('\n')}`
+                    : '';
+                  const fullText = `=== AMAZON A10 LISTING PACKAGE ===\n\n[TITLE (<=75c Mobile Hook)]\n${listing.amazonTitle || ''}\n\n[ITEM HIGHLIGHTS (125 Chars)]\n${listing.itemHighlights || listing.amazonTitle?.slice(0, 125) || ''}\n\n[5 BULLET POINTS [HOOKS]]\n${bulletsStr}\n\n[BACKEND SEARCH TERMS (<=249 Bytes)]\n${listing.amazonSearchTerms || ''}\n\n[PRODUCT DESCRIPTION]\n${listing.amazonDescription || ''}\n${aplusStr}`;
+                  navigator.clipboard.writeText(fullText);
+                  if (onShowToast) onShowToast('📋 Đã copy TOÀN BỘ Listing Text Package vào Clipboard!');
+                }}
+                className="btn btn-primary"
+                style={{ background: '#fff', color: '#0369a1', fontWeight: 800, padding: '10px 18px', display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', border: 'none' }}
+              >
+                <Copy size={16} />
+                <span>📋 Copy Trọn Bộ Listing (Text)</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => copyAllPrompts(listingPrompts, '📸 Đã copy toàn bộ 10 Prompt Ảnh Listing!')}
+                className="btn btn-primary"
+                style={{ background: '#0284c7', color: '#fff', fontWeight: 800, padding: '10px 18px', display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', border: '1px solid rgba(255,255,255,0.4)' }}
+              >
+                <Camera size={16} />
+                <span>📸 Copy 10 Image Prompts</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => copyAllPrompts(aplusPrompts, '✨ Đã copy toàn bộ 10 Prompt A+ Content!')}
+                className="btn btn-primary"
+                style={{ background: '#ea580c', color: '#fff', fontWeight: 800, padding: '10px 18px', display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', border: 'none' }}
+              >
+                <Sparkles size={16} />
+                <span>✨ Copy 10 A+ Prompts</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Grid of Raw Fields */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '18px' }}>
+            
+            {/* 1. Title */}
+            <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '18px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                <div>
+                  <span style={{ fontSize: '0.8rem', fontWeight: 800, color: '#0369a1', textTransform: 'uppercase' }}>👑 1. Title (≤ 75c Mobile Front-Loaded)</span>
+                  <span style={{ marginLeft: '8px', fontSize: '0.75rem', fontWeight: 700, color: (listing.amazonTitle?.length || 0) <= 75 ? '#16a34a' : '#d97706' }}>
+                    ({listing.amazonTitle?.length || 0} ký tự)
+                  </span>
+                </div>
+                <button
+                  onClick={() => copyPrompt(listing.amazonTitle || '', 'raw-title', 'Đã copy Title!')}
+                  style={{ background: '#f0f9ff', border: '1px solid #bae6fd', color: '#0284c7', padding: '4px 10px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
+                >
+                  <Copy size={13} />
+                  <span>Copy</span>
+                </button>
+              </div>
+              <div style={{ background: '#f8fafc', padding: '12px', borderRadius: '8px', fontSize: '0.85rem', color: '#0f172a', fontWeight: 600, border: '1px solid #f1f5f9' }}>
+                {listing.amazonTitle || '—'}
+              </div>
+            </div>
+
+            {/* 2. Backend Search Terms */}
+            <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '18px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                <div>
+                  <span style={{ fontSize: '0.8rem', fontWeight: 800, color: '#475569', textTransform: 'uppercase' }}>📦 2. Backend Search Terms (≤ 249 Bytes)</span>
+                  <span style={{ marginLeft: '8px', fontSize: '0.75rem', fontWeight: 700, color: '#16a34a' }}>
+                    ({new Blob([listing.amazonSearchTerms || '']).size} bytes)
+                  </span>
+                </div>
+                <button
+                  onClick={() => copyPrompt(listing.amazonSearchTerms || '', 'raw-search-terms', 'Đã copy Search Terms!')}
+                  style={{ background: '#f8fafc', border: '1px solid #cbd5e1', color: '#475569', padding: '4px 10px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
+                >
+                  <Copy size={13} />
+                  <span>Copy</span>
+                </button>
+              </div>
+              <div style={{ background: '#f8fafc', padding: '12px', borderRadius: '8px', fontSize: '0.85rem', color: '#334155', fontFamily: 'monospace', border: '1px solid #f1f5f9' }}>
+                {listing.amazonSearchTerms || '—'}
+              </div>
+            </div>
+
+            {/* 3. Item Highlights (125 Chars) */}
+            <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '18px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                <div>
+                  <span style={{ fontSize: '0.8rem', fontWeight: 800, color: '#b45309', textTransform: 'uppercase' }}>💡 3. Item Highlights (≤ 125 Chars Mobile Features)</span>
+                </div>
+                <button
+                  onClick={() => copyPrompt(listing.itemHighlights || listing.amazonTitle?.slice(0, 125) || '', 'raw-highlights', 'Đã copy Item Highlights!')}
+                  style={{ background: '#fffbeb', border: '1px solid #fde68a', color: '#b45309', padding: '4px 10px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
+                >
+                  <Copy size={13} />
+                  <span>Copy</span>
+                </button>
+              </div>
+              <div style={{ background: '#fffbeb', padding: '12px', borderRadius: '8px', fontSize: '0.85rem', color: '#92400e', fontWeight: 600 }}>
+                {listing.itemHighlights || listing.amazonTitle?.slice(0, 125) || '—'}
+              </div>
+            </div>
+
+            {/* 4. Description */}
+            <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '18px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                <span style={{ fontSize: '0.8rem', fontWeight: 800, color: '#0284c7', textTransform: 'uppercase' }}>📜 4. Product Description</span>
+                <button
+                  onClick={() => copyPrompt(listing.amazonDescription || '', 'raw-desc', 'Đã copy Description!')}
+                  style={{ background: '#f0f9ff', border: '1px solid #bae6fd', color: '#0284c7', padding: '4px 10px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
+                >
+                  <Copy size={13} />
+                  <span>Copy</span>
+                </button>
+              </div>
+              <div style={{ background: '#f8fafc', padding: '12px', borderRadius: '8px', fontSize: '0.82rem', color: '#334155', maxHeight: '120px', overflowY: 'auto' }}>
+                {listing.amazonDescription || '—'}
+              </div>
+            </div>
+
+            {/* 5. 5 Bullet Points (Full Width) */}
+            <div style={{ gridColumn: '1 / -1', background: '#fff', border: '1px solid #e2e8f0', borderRadius: '12px', padding: '18px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                <span style={{ fontSize: '0.85rem', fontWeight: 800, color: '#7e22ce', textTransform: 'uppercase' }}>💎 5. 5 Bullet Points ([UPPERCASE HOOKS] A10 Format)</span>
+                <button
+                  onClick={() => {
+                    const bulletsText = (listing.amazonBullets || []).join('\n\n');
+                    copyPrompt(bulletsText, 'raw-bullets', 'Đã copy 5 Bullets!');
+                  }}
+                  style={{ background: '#faf5ff', border: '1px solid #e9d5ff', color: '#7e22ce', padding: '5px 12px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
+                >
+                  <Copy size={13} />
+                  <span>Copy Tất Cả 5 Bullets</span>
+                </button>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                {(listing.amazonBullets || []).map((b, i) => (
+                  <div key={i} style={{ display: 'flex', gap: '10px', alignItems: 'flex-start', background: '#fcfaff', padding: '10px 14px', borderRadius: '8px', border: '1px solid #f3e8ff' }}>
+                    <span style={{ background: '#7e22ce', color: '#fff', padding: '2px 8px', borderRadius: '4px', fontSize: '0.75rem', fontWeight: 800 }}>
+                      #{i + 1}
+                    </span>
+                    <span style={{ flex: 1, fontSize: '0.85rem', color: '#1e293b', lineHeight: 1.4 }}>
+                      {b}
+                    </span>
+                    <button
+                      onClick={() => copyPrompt(b, `bullet-${i}`, `Đã copy Bullet #${i + 1}!`)}
+                      style={{ background: 'transparent', border: 'none', color: '#7e22ce', cursor: 'pointer', padding: '2px' }}
+                      title="Copy bullet này"
+                    >
+                      <Copy size={14} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* 6. A+ Content / Brand Story Package (Full Width) */}
+            {listing.amazonAPlusContent && (
+              <div style={{ gridColumn: '1 / -1', background: '#fff', border: '1px solid #fed7aa', borderRadius: '12px', padding: '18px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                  <span style={{ fontSize: '0.85rem', fontWeight: 800, color: '#c2410c', textTransform: 'uppercase' }}>✨ 6. A+ Content & Brand Story Package</span>
+                  <button
+                    onClick={() => {
+                      const text = `Headline: ${listing.amazonAPlusContent.brandStoryHeadline || ''}\nStory: ${listing.amazonAPlusContent.brandStoryBody || ''}\n\nModules:\n${(listing.amazonAPlusContent.modules || []).map(m => `[${m.moduleType}]: ${m.heading || ''} - ${m.body || ''}`).join('\n')}`;
+                      copyPrompt(text, 'raw-aplus', 'Đã copy A+ Content Package!');
+                    }}
+                    style={{ background: '#fff7ed', border: '1px solid #fed7aa', color: '#c2410c', padding: '5px 12px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
+                  >
+                    <Copy size={13} />
+                    <span>Copy A+ Package</span>
+                  </button>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                  <div style={{ background: '#fffaf5', padding: '12px', borderRadius: '8px', border: '1px solid #fed7aa' }}>
+                    <div style={{ fontSize: '0.75rem', fontWeight: 800, color: '#9a3412' }}>BRAND STORY HEADLINE:</div>
+                    <div style={{ fontSize: '0.85rem', fontWeight: 700, color: '#431407', marginTop: '2px' }}>
+                      {listing.amazonAPlusContent.brandStoryHeadline || '—'}
+                    </div>
+                  </div>
+                  <div style={{ background: '#fffaf5', padding: '12px', borderRadius: '8px', border: '1px solid #fed7aa' }}>
+                    <div style={{ fontSize: '0.75rem', fontWeight: 800, color: '#9a3412' }}>BRAND STORY BODY:</div>
+                    <div style={{ fontSize: '0.82rem', color: '#431407', marginTop: '2px' }}>
+                      {listing.amazonAPlusContent.brandStoryBody || '—'}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+          </div>
+
         </div>
       )}
 

@@ -46,106 +46,114 @@ export default function MasterKeywordTable({ marketplace = 'AMAZON', keywords: p
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
         <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Database size={22} style={{ color: themeColor }} />
-            <h3 style={{ fontSize: '1.2rem', fontWeight: 800, margin: 0, color: 'var(--text-primary)' }}>
-              {isAmazon ? '🔵 Amazon Master Keyword List (MKL 3-Tier Model)' : '🟠 Etsy Master Tag & Keyword Matrix (13 Tags Model)'}
-            </h3>
-          </div>
-          <p style={{ margin: '4px 0 0 0', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
-            {isAmazon 
-              ? 'Từ khóa phân tầng theo thuật toán Amazon A10: 👑 Tier 1 (Title <=75 chars), 💎 Tier 2 (5 Bullets [HOOKS]), 📦 Tier 3 (Backend 249 bytes).'
-              : 'Bộ 13 Tags độc lập tuân thủ chính sách Etsy Search: 100% cụm từ đa âm <=20 ký tự, lọc sạch từ cấm IP.'}
-          </p>
-        </div>
-
-        <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
-          <div style={{ position: 'relative' }}>
-            <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-            <input 
-              type="text" 
-              placeholder={`Tìm từ khóa ${isAmazon ? 'Amazon' : 'Etsy'}...`} 
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              style={{
-                padding: '6px 12px 6px 30px',
-                borderRadius: '8px',
-                border: '1px solid var(--border-color, #cbd5e1)',
-                fontSize: '0.85rem',
-                minWidth: '220px'
-              }}
-            />
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Database size={22} style={{ color: themeColor }} />
+              <h3 style={{ fontSize: '1.2rem', fontWeight: 800, margin: 0, color: 'var(--text-primary)' }}>
+                {isAmazon ? '🔵 Amazon Master Keyword List (MKL 5-Tier Model)' : '🟠 Etsy Master Tag & Keyword Matrix (13 Tags Model)'}
+              </h3>
+            </div>
+            <p style={{ margin: '4px 0 0 0', color: 'var(--text-muted)', fontSize: '0.85rem' }}>
+              {isAmazon 
+                ? 'Từ khóa phân tầng theo thuật toán Amazon A10: 👑 Tier 1 (Title ≤ 75c), 📦 Tier 2 (Backend 249b), 💡 Tier 3 (Highlights 125c), 💎 Tier 4 (5 Bullets [HOOKS]), ✨ Tier 5 (A+ Content).'
+                : 'Bộ 13 Tags độc lập tuân thủ chính sách Etsy Search: 100% cụm từ đa âm ≤ 20 ký tự, lọc sạch từ cấm IP.'}
+            </p>
           </div>
 
-          <button 
-            onClick={fetchMasterKeywords}
-            disabled={loading}
-            className="btn btn-secondary btn-sm"
-            style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
-          >
-            <RefreshCw size={14} className={loading ? 'spinner' : ''} />
-            <span>{loading ? 'Đang tải...' : 'Tải lại'}</span>
-          </button>
+          <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+            <div style={{ position: 'relative' }}>
+              <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+              <input 
+                type="text" 
+                placeholder={`Tìm từ khóa ${isAmazon ? 'Amazon' : 'Etsy'}...`} 
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                style={{
+                  padding: '6px 12px 6px 30px',
+                  borderRadius: '8px',
+                  border: '1px solid var(--border-color, #cbd5e1)',
+                  fontSize: '0.85rem',
+                  minWidth: '220px'
+                }}
+              />
+            </div>
+
+            <button 
+              onClick={fetchMasterKeywords}
+              disabled={loading}
+              className="btn btn-secondary btn-sm"
+              style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+            >
+              <RefreshCw size={14} className={loading ? 'spinner' : ''} />
+              <span>{loading ? 'Đang tải...' : 'Tải lại'}</span>
+            </button>
+          </div>
         </div>
-      </div>
 
-      {/* Table */}
-      {filtered.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: '36px 20px', background: 'var(--bg-subtle)', borderRadius: '10px', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
-          {loading ? 'Đang tải danh sách từ khóa...' : `Chưa có từ khóa nào trong Master List của ${isAmazon ? 'Amazon' : 'Etsy'}.`}
-        </div>
-      ) : (
-        <div style={{ overflowX: 'auto', borderRadius: '10px', border: '1px solid var(--border-color, #e2e8f0)' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem', textAlign: 'left' }}>
-            <thead>
-              <tr style={{ background: themeBg, borderBottom: `2px solid ${isAmazon ? '#bae6fd' : '#fed7aa'}`, color: themeColor }}>
-                <th style={{ padding: '10px 14px', fontWeight: 700 }}>STT</th>
-                <th style={{ padding: '10px 14px', fontWeight: 700 }}>{isAmazon ? 'Cụm Từ Khóa (Keyword Phrase)' : 'Etsy Tag (<= 20 ký tự)'}</th>
-                <th style={{ padding: '10px 14px', fontWeight: 700 }}>Danh Mục</th>
-                <th style={{ padding: '10px 14px', fontWeight: 700 }} title="Search Volume thực tế từ báo cáo nạp vào">Volume</th>
-                <th style={{ padding: '10px 14px', fontWeight: 700 }} title="Số sản phẩm đối thủ đang cạnh tranh từ khóa này">Competitor</th>
-                <th style={{ padding: '10px 14px', fontWeight: 700 }} title="Competing Products Rank thực tế từ báo cáo nạp vào">CPR</th>
-                <th style={{ padding: '10px 14px', fontWeight: 700 }} title="Opportunity Score tính từ dữ liệu thực, không phải AI đoán">Score</th>
-                <th style={{ padding: '10px 14px', fontWeight: 700 }}>{isAmazon ? 'Phân Tầng A10 (MKL Tier)' : 'Loại Tag Etsy'}</th>
-                <th style={{ padding: '10px 14px', fontWeight: 700 }}>Kiểm Duyệt IP Gate</th>
-                <th style={{ padding: '10px 14px', fontWeight: 700 }}>Độ Dài</th>
-                <th style={{ padding: '10px 14px', fontWeight: 700 }}>Ngày Cập Nhật</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((item, idx) => {
-                const len = (item.keyword || '').length;
+        {/* Table */}
+        {filtered.length === 0 ? (
+          <div style={{ textAlign: 'center', padding: '36px 20px', background: 'var(--bg-subtle)', borderRadius: '10px', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+            {loading ? 'Đang tải danh sách từ khóa...' : `Chưa có từ khóa nào trong Master List của ${isAmazon ? 'Amazon' : 'Etsy'}.`}
+          </div>
+        ) : (
+          <div style={{ overflowX: 'auto', borderRadius: '10px', border: '1px solid var(--border-color, #e2e8f0)' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem', textAlign: 'left' }}>
+              <thead>
+                <tr style={{ background: themeBg, borderBottom: `2px solid ${isAmazon ? '#bae6fd' : '#fed7aa'}`, color: themeColor }}>
+                  <th style={{ padding: '10px 14px', fontWeight: 700 }}>STT</th>
+                  <th style={{ padding: '10px 14px', fontWeight: 700 }}>{isAmazon ? 'Cụm Từ Khóa (Keyword Phrase)' : 'Etsy Tag (<= 20 ký tự)'}</th>
+                  <th style={{ padding: '10px 14px', fontWeight: 700 }}>Danh Mục</th>
+                  <th style={{ padding: '10px 14px', fontWeight: 700 }} title="Search Volume thực tế từ báo cáo nạp vào">Volume</th>
+                  <th style={{ padding: '10px 14px', fontWeight: 700 }} title="Số sản phẩm đối thủ đang cạnh tranh từ khóa này">Competitor</th>
+                  <th style={{ padding: '10px 14px', fontWeight: 700 }} title="Competing Products Rank thực tế từ báo cáo nạp vào">CPR</th>
+                  <th style={{ padding: '10px 14px', fontWeight: 700 }} title="Opportunity Score tính từ dữ liệu thực, không phải AI đoán">Score</th>
+                  <th style={{ padding: '10px 14px', fontWeight: 700 }}>{isAmazon ? 'Phân Tầng A10 (MKL Tier)' : 'Loại Tag Etsy'}</th>
+                  <th style={{ padding: '10px 14px', fontWeight: 700 }}>Kiểm Duyệt IP Gate</th>
+                  <th style={{ padding: '10px 14px', fontWeight: 700 }}>Độ Dài</th>
+                  <th style={{ padding: '10px 14px', fontWeight: 700 }}>Ngày Cập Nhật</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((item, idx) => {
+                  const len = (item.keyword || '').length;
 
-                // Server-Authoritative Tier Badge
-                let tierBadge = item.tierBadge || item.tier || '—';
-                let tierColor = 'var(--text-secondary)';
-                let tierBg = '#f1f5f9';
+                  // Server-Authoritative Tier Badge
+                  let tierBadge = item.tierBadge || item.tier || '—';
+                  let tierColor = 'var(--text-secondary)';
+                  let tierBg = '#f1f5f9';
 
-                if (isAmazon) {
-                  if (tierBadge.includes('Tier 1')) {
-                    tierBadge = '👑 Tier 1 (Title Hook)';
-                    tierColor = '#0369a1';
-                    tierBg = '#e0f2fe';
-                  } else if (tierBadge.includes('Tier 2')) {
-                    tierBadge = '💎 Tier 2 (5 Bullets)';
-                    tierColor = '#7e22ce';
-                    tierBg = '#f3e8ff';
-                  } else if (tierBadge.includes('Tier 3')) {
-                    tierBadge = '📦 Tier 3 (Search Terms)';
-                    tierColor = '#475569';
-                    tierBg = '#f1f5f9';
-                  }
-                } else {
-                  if (len <= 20) {
-                    tierBadge = '🎯 Valid Tag (<=20 chars)';
-                    tierColor = '#15803d';
-                    tierBg = '#dcfce7';
+                  if (isAmazon) {
+                    if (tierBadge.includes('Tier 1')) {
+                      tierBadge = '👑 Tier 1 (Title Hook)';
+                      tierColor = '#0369a1';
+                      tierBg = '#e0f2fe';
+                    } else if (tierBadge.includes('Tier 2')) {
+                      tierBadge = '📦 Tier 2 (Backend 249b)';
+                      tierColor = '#475569';
+                      tierBg = '#f1f5f9';
+                    } else if (tierBadge.includes('Tier 3')) {
+                      tierBadge = '💡 Tier 3 (Item Highlights)';
+                      tierColor = '#b45309';
+                      tierBg = '#fef3c7';
+                    } else if (tierBadge.includes('Tier 4')) {
+                      tierBadge = '💎 Tier 4 (5 Bullets)';
+                      tierColor = '#7e22ce';
+                      tierBg = '#f3e8ff';
+                    } else if (tierBadge.includes('Tier 5')) {
+                      tierBadge = '✨ Tier 5 (A+ Content)';
+                      tierColor = '#0284c7';
+                      tierBg = '#f0f9ff';
+                    }
                   } else {
-                    tierBadge = '⚠️ Over 20 chars (Title only)';
-                    tierColor = '#b45309';
-                    tierBg = '#fef3c7';
+                    if (len <= 20) {
+                      tierBadge = '🎯 Valid Tag (<=20 chars)';
+                      tierColor = '#15803d';
+                      tierBg = '#dcfce7';
+                    } else {
+                      tierBadge = '⚠️ Over 20 chars (Title only)';
+                      tierColor = '#b45309';
+                      tierBg = '#fef3c7';
+                    }
                   }
-                }
 
                 // Single Contract Resolver for IP Verdict
                 const verdict = item.ipVerdict ? String(item.ipVerdict).toUpperCase() : null;

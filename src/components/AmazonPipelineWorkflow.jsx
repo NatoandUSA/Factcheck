@@ -7,9 +7,20 @@ import MasterKeywordTable from './MasterKeywordTable';
 import { parseJsonResponse } from '../utils/apiResponse';
 import { deriveXrayUploadOutcome } from '../utils/xrayUploadOutcome.js';
 
-export default function AmazonPipelineWorkflow({ seedPhrase, selectedCategory, activeProjectId, onShowToast, onSelectListing, onProceedToStage }) {
+export default function AmazonPipelineWorkflow({ 
+  seedPhrase, 
+  selectedCategory, 
+  activeProjectId, 
+  onShowToast, 
+  onSelectListing, 
+  onProceedToStage,
+  onUpdateXraySellers,
+  onUpdateCerebroSummary,
+  onGenerateListingDirect,
+  isDrafting
+}) {
   // Step 1: Feed Xray State
-  const [xrayFile, setXrayFile] = useState(null);
+  const [xrayFiles, setXrayFiles] = useState([]);
   const [xrayAsinsInput, setXrayAsinsInput] = useState('');
   const [xraySellers, setXraySellers] = useState([]);
   const [xrayLoading, setXrayLoading] = useState(false);
@@ -22,7 +33,7 @@ export default function AmazonPipelineWorkflow({ seedPhrase, selectedCategory, a
   const [activeBatchIndex, setActiveBatchIndex] = useState(0);
 
   // Step 3: Feed Cerebro State
-  const [cerebroFile, setCerebroFile] = useState(null);
+  const [cerebroFiles, setCerebroFiles] = useState([]);
   const [cerebroLoading, setCerebroLoading] = useState(false);
   const [isCerebroDragging, setIsCerebroDragging] = useState(false);
   const [cerebroKeywords, setCerebroKeywords] = useState([]);
@@ -33,18 +44,21 @@ export default function AmazonPipelineWorkflow({ seedPhrase, selectedCategory, a
   const [drafting, setDrafting] = useState(false);
   const [draftedListing, setDraftedListing] = useState(null);
 
-  // B1: Handle Feed Xray — fail-closed: never invents ASINs/price/sales, and
-  // a failed upload must never look like a success (see xrayUploadOutcome.cjs).
-  const handleXrayUpload = async (file) => {
-    if (!file) return;
+  // B1: Handle Feed Xray — Supports Multi-File Upload
+  const handleXrayUpload = async (fileList) => {
+    if (!fileList || (fileList.length === 0 && !fileList[0])) return;
+    const filesArray = Array.from(fileList);
     setXrayLoading(true);
-    setXrayFile(file);
+    setXrayFiles(filesArray);
     setXrayError(null);
 
     const formData = new FormData();
-    formData.append('reportFile', file);
+    filesArray.forEach((file) => {
+      formData.append('reportFile', file);
+    });
     formData.append('category', selectedCategory);
     formData.append('marketplace', 'AMAZON');
+    formData.append('seedPhrase', seedPhrase || selectedCategory);
     if (activeProjectId) formData.append('projectId', activeProjectId);
 
     let outcome;
@@ -62,6 +76,9 @@ export default function AmazonPipelineWorkflow({ seedPhrase, selectedCategory, a
 
     setBatches(outcome.batches);
     setXraySellers(outcome.xraySellers);
+    if (onUpdateXraySellers && outcome.xraySellers) {
+      onUpdateXraySellers(outcome.xraySellers);
+    }
     setXrayError(outcome.status === 'SUCCESS' ? null : outcome.errorMessage);
     if (onShowToast) onShowToast(outcome.toastMessage, outcome.toastType);
     setXrayLoading(false);
@@ -74,20 +91,21 @@ export default function AmazonPipelineWorkflow({ seedPhrase, selectedCategory, a
     if (onShowToast) onShowToast(`📋 Đã copy ${(asinsArray || []).length} ASINs (dạng dấu cách) vào Clipboard! Dán trực tiếp vào H10 Cerebro.`);
   };
 
-
-  // B3: Handle Feed Cerebro Report
-  const handleCerebroUpload = async (file) => {
-    if (!file) return;
+  // B3: Handle Feed Cerebro Report — Supports Multi-File Upload
+  const handleCerebroUpload = async (fileList) => {
+    if (!fileList || (fileList.length === 0 && !fileList[0])) return;
+    const filesArray = Array.from(fileList);
     setCerebroLoading(true);
-    setCerebroFile(file);
+    setCerebroFiles(filesArray);
 
     const formData = new FormData();
-    formData.append('reportFile', file);
+    filesArray.forEach((file) => {
+      formData.append('reportFile', file);
+    });
     formData.append('category', selectedCategory);
     formData.append('marketplace', 'AMAZON');
     formData.append('seedPhrase', seedPhrase || 'para el amor de mi vida');
     if (activeProjectId) formData.append('projectId', activeProjectId);
-
 
     try {
       const res = await fetch('/api/upload-h10', {
@@ -101,9 +119,14 @@ export default function AmazonPipelineWorkflow({ seedPhrase, selectedCategory, a
       if (!res.ok) throw new Error(data.error || 'Upload Cerebro failed');
 
       setCerebroSummary(data);
-      setCerebroKeywords(data.topKeywordsDetailed || []);
+      const kws = data.topKeywordsDetailed || [];
+      setCerebroKeywords(kws);
 
-      if (onShowToast) onShowToast(`✓ [B3] Đã nạp Cerebro (${data.totalRows} từ khóa)! Đã tính điểm MKL 3-Tier ở B4.`);
+      if (onUpdateCerebroSummary) {
+        onUpdateCerebroSummary(data, kws);
+      }
+
+      if (onShowToast) onShowToast(`✓ [B3] Đã nạp Cerebro (${filesArray.length} file, ${data.totalRows} từ khóa)! Đã tính điểm MKL 5-Tier ở B4.`);
     } catch (err) {
       if (onShowToast) onShowToast(`Lỗi nạp Cerebro: ${err.message}`);
     } finally {
@@ -113,6 +136,9 @@ export default function AmazonPipelineWorkflow({ seedPhrase, selectedCategory, a
 
   // B4: Generate Amazon A10 Listing from MKL or Direct Seed
   const handleGenerateListing = async () => {
+    if (onGenerateListingDirect) {
+      return onGenerateListingDirect();
+    }
     if (!seedPhrase.trim()) {
       if (onShowToast) onShowToast('Vui lòng nhập Từ khóa Hạt nhân (Seed Phrase) ở đầu trang.');
       return;
@@ -234,7 +260,7 @@ export default function AmazonPipelineWorkflow({ seedPhrase, selectedCategory, a
           onDrop={(e) => {
             e.preventDefault();
             setIsXrayDragging(false);
-            if (e.dataTransfer.files?.[0]) handleXrayUpload(e.dataTransfer.files[0]);
+            if (e.dataTransfer.files?.length) handleXrayUpload(e.dataTransfer.files);
           }}
           onClick={() => xrayInputRef.current?.click()}
           style={{
@@ -250,16 +276,19 @@ export default function AmazonPipelineWorkflow({ seedPhrase, selectedCategory, a
           <input 
             type="file" 
             ref={xrayInputRef} 
-            onChange={(e) => { if (e.target.files?.[0]) handleXrayUpload(e.target.files[0]); }}
+            multiple
+            onChange={(e) => { if (e.target.files?.length) handleXrayUpload(e.target.files); }}
             accept=".xlsx,.xls,.csv,.html"
             style={{ display: 'none' }}
           />
           <UploadCloud size={32} style={{ color: '#0284c7', margin: '0 auto 8px' }} />
           <div style={{ fontWeight: 700, fontSize: '0.95rem', color: '#0369a1' }}>
-            {xrayFile ? `Đã chọn: ${xrayFile.name}` : 'Kéo thả file Helium 10 Xray (.xlsx / .csv) vào đây hoặc bấm để chọn'}
+            {xrayFiles.length > 0 
+              ? `✓ Đã nạp ${xrayFiles.length} file Xray: ${xrayFiles.map(f => f.name).join(', ')}` 
+              : 'Kéo thả 1 hoặc nhiều file Helium 10 Xray (.xlsx / .csv) vào đây hoặc bấm để chọn'}
           </div>
           <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '4px' }}>
-            Hỗ trợ báo cáo Xray Market Search, Competitor Analytics, và CSV xuất từ Helium 10 Extension
+            Hỗ trợ chọn nhiều file Xray cùng lúc — Hệ thống tự động gộp ASINs, loại trùng và chia Batch 10
           </div>
         </div>
 
@@ -292,10 +321,10 @@ export default function AmazonPipelineWorkflow({ seedPhrase, selectedCategory, a
             <div>
               <h3 style={{ fontSize: '1.15rem', fontWeight: 800, margin: 0, color: '#b45309', display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <Layers size={20} />
-                BƯỚC 2: Xuất Batch ASINs Đối Thủ
+                BƯỚC 2: Xuất Batch ASINs Đối Thủ ({batches.length} Batches)
               </h3>
               <p style={{ margin: '4px 0 0 0', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-                Gom nhóm các ASINs (tối đa 10/batch) để nạp vào Cerebro. Chỉ hiển thị dữ liệu có nguồn thực tế từ file Xray.
+                Gom nhóm các ASINs (tối đa 10/batch) từ tất cả file Xray để nạp vào Cerebro.
               </p>
             </div>
 
@@ -312,7 +341,7 @@ export default function AmazonPipelineWorkflow({ seedPhrase, selectedCategory, a
           </div>
 
           {/* Batch Selector Tabs */}
-          <div style={{ display: 'flex', gap: '8px', marginBottom: '14px' }}>
+          <div style={{ display: 'flex', gap: '8px', marginBottom: '14px', flexWrap: 'wrap' }}>
             {batches.map((b, idx) => (
               <button
                 key={idx}
@@ -328,12 +357,12 @@ export default function AmazonPipelineWorkflow({ seedPhrase, selectedCategory, a
                   cursor: 'pointer'
                 }}
               >
-                {b.name}
+                {b.batchName || b.name}
               </button>
             ))}
           </div>
 
-          {/* ASINs Table — unknown fields render as "—", never a plausible-looking fake value */}
+          {/* ASINs Table */}
           {activeBatch && (
             <div style={{ overflowX: 'auto', borderRadius: '10px', border: '1px solid #fde68a' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem', textAlign: 'left' }}>
@@ -355,10 +384,10 @@ export default function AmazonPipelineWorkflow({ seedPhrase, selectedCategory, a
                       </td>
                       <td style={{ padding: '8px 12px', fontWeight: 600, color: '#1e293b' }}>{item?.title || '—'}</td>
                       <td style={{ padding: '8px 12px', fontWeight: 700, color: '#16a34a' }}>
-                        {typeof item?.price === 'number' ? `$${item.price.toFixed(2)}` : '—'}
+                        {typeof item?.price === 'number' ? `$${item.price.toFixed(2)}` : (item?.price || '—')}
                       </td>
                       <td style={{ padding: '8px 12px', fontWeight: 800, color: '#0284c7' }}>
-                        {typeof item?.sales === 'number' ? item.sales.toLocaleString() : '—'}
+                        {typeof item?.sales === 'number' ? item.sales.toLocaleString() : (item?.sales || '—')}
                       </td>
                     </tr>
                   ))}
@@ -380,7 +409,7 @@ export default function AmazonPipelineWorkflow({ seedPhrase, selectedCategory, a
               BƯỚC 3: Feed Báo Cáo Helium 10 Cerebro (Reverse 10 ASINs)
             </h3>
             <p style={{ margin: '4px 0 0 0', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-              Nạp file xuất từ Helium 10 Cerebro (chạy cho Batch 10 ASINs ở Bước 2) để bóc tách toàn bộ từ khóa.
+              Nạp 1 hoặc nhiều file xuất từ Helium 10 Cerebro để gộp và bóc tách toàn bộ từ khóa.
             </p>
           </div>
 
@@ -397,7 +426,7 @@ export default function AmazonPipelineWorkflow({ seedPhrase, selectedCategory, a
           onDrop={(e) => {
             e.preventDefault();
             setIsCerebroDragging(false);
-            if (e.dataTransfer.files?.[0]) handleCerebroUpload(e.dataTransfer.files[0]);
+            if (e.dataTransfer.files?.length) handleCerebroUpload(e.dataTransfer.files);
           }}
           onClick={() => cerebroInputRef.current?.click()}
           style={{
@@ -413,16 +442,19 @@ export default function AmazonPipelineWorkflow({ seedPhrase, selectedCategory, a
           <input 
             type="file" 
             ref={cerebroInputRef} 
-            onChange={(e) => { if (e.target.files?.[0]) handleCerebroUpload(e.target.files[0]); }}
+            multiple
+            onChange={(e) => { if (e.target.files?.length) handleCerebroUpload(e.target.files); }}
             accept=".xlsx,.xls,.csv,.html"
             style={{ display: 'none' }}
           />
           <UploadCloud size={32} style={{ color: '#16a34a', margin: '0 auto 8px' }} />
           <div style={{ fontWeight: 700, fontSize: '0.95rem', color: '#15803d' }}>
-            {cerebroFile ? `Đã nạp Cerebro: ${cerebroFile.name}` : 'Kéo thả file Helium 10 Cerebro (.xlsx / .csv) vào đây hoặc bấm để chọn'}
+            {cerebroFiles.length > 0 
+              ? `✓ Đã nạp ${cerebroFiles.length} file Cerebro: ${cerebroFiles.map(f => f.name).join(', ')}` 
+              : 'Kéo thả 1 hoặc nhiều file Helium 10 Cerebro (.xlsx / .csv) vào đây hoặc bấm để chọn'}
           </div>
           <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '4px' }}>
-            Bóc tách Search Volume, Competing Products, CPR, và Title Density của 10 ASINs đối thủ
+            Hỗ trợ nạp nhiều file Cerebro cùng lúc — Tự động hợp nhất Search Volume, CPR và Title Density
           </div>
         </div>
       </div>
@@ -431,34 +463,55 @@ export default function AmazonPipelineWorkflow({ seedPhrase, selectedCategory, a
       {/* BƯỚC 4: MASTER KEYWORD LIST & SINH LISTING A10 */}
       {/* ======================================================== */}
       <div className="studio-panel" style={{ padding: '24px', borderLeft: '4px solid #7e22ce' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '10px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '12px' }}>
           <div>
             <h3 style={{ fontSize: '1.15rem', fontWeight: 800, margin: 0, color: '#7e22ce', display: 'flex', alignItems: 'center', gap: '8px' }}>
               <Sparkles size={20} />
-              BƯỚC 4: Master Keyword Intelligence (MKL 3-Tier Research Pack)
+              BƯỚC 4: Master Keyword Intelligence (MKL 5-Tier Research Pack)
             </h3>
             <p style={{ margin: '4px 0 0 0', color: 'var(--text-secondary)', fontSize: '0.85rem' }}>
-              Nghiên cứu từ khóa phân tầng 👑 Tier 1 (Title), 💎 Tier 2 (Bullets), 📦 Tier 3 (Backend). <i>(Không tạo listing tại Stage 1)</i>.
+              Phân tầng 👑 Tier 1 (Title ≤ 75c), 📦 Tier 2 (Backend 249b), 💡 Tier 3 (Highlights 125c), 💎 Tier 4 (5 Bullets), ✨ Tier 5 (A+).
             </p>
           </div>
 
-          <button
-            onClick={() => onProceedToStage && onProceedToStage('research')}
-            className="btn btn-primary"
-            style={{
-              background: '#0284c7',
-              fontWeight: 800,
-              padding: '10px 22px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px',
-              boxShadow: '0 4px 14px rgba(2, 132, 199, 0.25)',
-              cursor: 'pointer'
-            }}
-          >
-            <ArrowRight size={16} />
-            <span>➡️ Chốt Evidence Stage 1 & Chuyển Sang Stage 2 (Research DNA)</span>
-          </button>
+          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+            <button
+              onClick={handleGenerateListing}
+              disabled={drafting || isDrafting || (!cerebroSummary?.trendId && cerebroKeywords.length === 0)}
+              className="btn btn-primary"
+              style={{
+                background: 'linear-gradient(135deg, #16a34a 0%, #0284c7 100%)',
+                fontWeight: 800,
+                padding: '10px 20px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                boxShadow: '0 4px 14px rgba(22, 163, 74, 0.25)',
+                cursor: (drafting || isDrafting) ? 'not-allowed' : 'pointer'
+              }}
+            >
+              {(drafting || isDrafting) ? <RefreshCw size={16} className="spinner" /> : <Zap size={16} />}
+              <span>{(drafting || isDrafting) ? 'Đang tạo...' : '⚡ Sinh Nhanh Listing A10'}</span>
+            </button>
+
+            <button
+              onClick={() => onProceedToStage && onProceedToStage('research')}
+              className="btn btn-primary"
+              style={{
+                background: '#0284c7',
+                fontWeight: 800,
+                padding: '10px 20px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                boxShadow: '0 4px 14px rgba(2, 132, 199, 0.25)',
+                cursor: 'pointer'
+              }}
+            >
+              <ArrowRight size={16} />
+              <span>➡️ Chuyển Sang Stage 2 (Research DNA)</span>
+            </button>
+          </div>
         </div>
 
         {(cerebroKeywords.length === 0 || !cerebroSummary?.trendId) && (

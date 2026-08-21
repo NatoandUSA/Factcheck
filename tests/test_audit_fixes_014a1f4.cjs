@@ -1,9 +1,9 @@
 /**
  * test_audit_fixes_014a1f4.cjs
- * HTTP contract tests for the 3 audit fixes from commit 014a1f4:
- *   1. POST /api/listings with nonexistent projectId → 404 PROJECT_NOT_FOUND, zero DB write
- *   2. GET /api/analytics-summary counts PUBLISH_READY as approved in listingStats
- *   3. POST /api/agents/:id/toggle rejects arbitrary status → 400; accepts ONLINE/OFFLINE
+ * RIGOROUS DATA-DRIVEN HTTP & DB CONTRACT TESTS for audit fixes (commit 014a1f4):
+ *   1. POST /api/listings with nonexistent projectId → 404 PROJECT_NOT_FOUND AND ZERO DB delta (snapshot verified)
+ *   2. GET /api/analytics-summary explicitly seeds PUBLISH_READY & MANAGER_APPROVED rows and verifies count >= 2
+ *   3. POST /api/agents/:id/toggle rejects arbitrary status with 400 AND verifies zero DB mutation for invalid status
  */
 
 process.env.NODE_ENV = 'test';
@@ -79,7 +79,7 @@ async function runAuditFixesTest() {
 
   try {
     console.log('================================================================');
-    console.log('  TESTING AUDIT FIXES (014a1f4) HTTP CONTRACTS');
+    console.log('  TESTING AUDIT FIXES (014a1f4) RIGOROUS DATA & DB CONTRACTS');
     console.log('================================================================\n');
 
     // 1. Login as Owner
@@ -99,18 +99,20 @@ async function runAuditFixesTest() {
     // Ensure a test agent exists in db
     await dbRun(`
       INSERT INTO agents (name, role, status, tenant_id, workspace_id)
-      VALUES ('Test Agent', 'Researcher', 'ONLINE', ?, ?)
+      VALUES ('Test Agent Audit', 'Researcher', 'ONLINE', ?, ?)
     `, [owner.tenant_id, owner.workspace_id]);
 
-    // ── Test 1: POST /api/listings with nonexistent projectId → 404 ──
-    console.log('Test 1: Listing creation with nonexistent projectId...');
+    // ── Test 1: POST /api/listings with nonexistent projectId → 404 AND ZERO DB write ──
+    console.log('Test 1: Listing creation with nonexistent projectId (HTTP 404 + Zero DB Write)...');
+    const countBefore = (await dbAll('SELECT COUNT(*) as c FROM listings'))[0].c;
+
     const listingRes = await fetch(baseUrl, '/api/listings', {
       method: 'POST',
       headers: authHeaders,
       body: JSON.stringify({
         projectId: 999999,
         categoryName: 'Test Category',
-        amazonTitle: 'Test Listing Title',
+        amazonTitle: 'Test Listing Title Nonexistent Proj',
         bulletPoints: ['Bullet 1', 'Bullet 2'],
         description: 'Test description'
       })
@@ -118,10 +120,24 @@ async function runAuditFixesTest() {
     assert.strictEqual(listingRes.statusCode, 404, 'Nonexistent projectId must return 404');
     const listingBody = listingRes.json();
     assert.strictEqual(listingBody.error, 'PROJECT_NOT_FOUND', 'Error must be PROJECT_NOT_FOUND');
-    console.log('  🟢 Nonexistent projectId correctly returns 404 PROJECT_NOT_FOUND.\n');
 
-    // ── Test 2: Analytics counts PUBLISH_READY as approved ──
-    console.log('Test 2: Analytics summary counts PUBLISH_READY as approved...');
+    const countAfter = (await dbAll('SELECT COUNT(*) as c FROM listings'))[0].c;
+    assert.strictEqual(countAfter, countBefore, 'Listing table row count must remain unchanged (Zero DB Write)');
+    console.log(`  🟢 Nonexistent projectId correctly returns 404 PROJECT_NOT_FOUND & verified zero DB write (${countBefore} -> ${countAfter} rows).\n`);
+
+    // ── Test 2: Analytics counts PUBLISH_READY and MANAGER_APPROVED as approved ──
+    console.log('Test 2: Analytics summary counts PUBLISH_READY & MANAGER_APPROVED (Data Seeded)...');
+    // Seed 1 PUBLISH_READY and 1 MANAGER_APPROVED listing
+    await dbRun(`
+      INSERT INTO listings (categoryName, amazonTitle, status, tenant_id, workspace_id, marketplace, listing_version)
+      VALUES ('Audit Test Cat', 'Audit Test Listing PR', 'PUBLISH_READY', ?, ?, ?, 1)
+    `, [owner.tenant_id, owner.workspace_id, owner.marketplace || 'AMAZON']);
+
+    await dbRun(`
+      INSERT INTO listings (categoryName, amazonTitle, status, tenant_id, workspace_id, marketplace, listing_version)
+      VALUES ('Audit Test Cat', 'Audit Test Listing MA', 'MANAGER_APPROVED', ?, ?, ?, 1)
+    `, [owner.tenant_id, owner.workspace_id, owner.marketplace || 'AMAZON']);
+
     const analyticsRes = await fetch(baseUrl, '/api/analytics-summary', {
       headers: authHeaders
     });
@@ -129,48 +145,58 @@ async function runAuditFixesTest() {
     const analytics = analyticsRes.json();
     assert.ok(analytics.listingStats, 'Analytics response must contain listingStats');
     assert.ok(typeof analytics.listingStats.approvedListings === 'number', 'listingStats.approvedListings must be a number');
-    console.log(`  🟢 Analytics endpoint returns listingStats.approvedListings=${analytics.listingStats.approvedListings} (counts PUBLISH_READY & MANAGER_APPROVED).\n`);
+    assert.ok(analytics.listingStats.approvedListings >= 2, `approvedListings must be >= 2 (seeded 1 PUBLISH_READY + 1 MANAGER_APPROVED), got ${analytics.listingStats.approvedListings}`);
+    console.log(`  🟢 Analytics summary verified: approvedListings=${analytics.listingStats.approvedListings} (correctly sums both PUBLISH_READY & MANAGER_APPROVED rows!).\n`);
 
-    // ── Test 3: Agent toggle rejects arbitrary status ──
-    console.log('Test 3: Agent toggle rejects arbitrary status values...');
+    // ── Test 3: Agent toggle rejects arbitrary status AND verifies DB isolation ──
+    console.log('Test 3: Agent toggle status validation & DB state isolation...');
     const agentsRes = await fetch(baseUrl, '/api/agents', { headers: authHeaders });
     const agents = agentsRes.json();
     const testAgent = Array.isArray(agents) && agents.length > 0 ? agents[0] : null;
-    assert.ok(testAgent, 'Test agent must exist');
+    assert.ok(testAgent, 'Test agent must exist in DB');
 
     const agentId = testAgent.id;
+    const initialDbRow = (await dbAll('SELECT status FROM agents WHERE id = ?', [agentId]))[0];
+    const initialStatus = initialDbRow.status;
 
-    // 3a: Send arbitrary status → 400
+    // 3a: Send arbitrary status → 400 & check DB unchanged
     const badRes = await fetch(baseUrl, `/api/agents/${agentId}/toggle`, {
       method: 'POST',
       headers: authHeaders,
       body: JSON.stringify({ status: 'BROKEN' })
     });
-    assert.strictEqual(badRes.statusCode, 400, 'Arbitrary status must return 400');
+    assert.strictEqual(badRes.statusCode, 400, 'Arbitrary status "BROKEN" must return 400');
     const badBody = badRes.json();
     assert.strictEqual(badBody.error, 'INVALID_STATUS', 'Error must be INVALID_STATUS');
-    console.log('  🟢 Arbitrary status "BROKEN" correctly rejected with 400 INVALID_STATUS.');
 
-    // 3b: Send valid OFFLINE → 200
+    const afterBadDbRow = (await dbAll('SELECT status FROM agents WHERE id = ?', [agentId]))[0];
+    assert.strictEqual(afterBadDbRow.status, initialStatus, `DB agent status must remain untouched on 400 error (expected ${initialStatus}, got ${afterBadDbRow.status})`);
+    console.log(`  🟢 Arbitrary status "BROKEN" rejected with 400 INVALID_STATUS & DB status remained strictly untouched (${initialStatus}).`);
+
+    // 3b: Send valid OFFLINE → 200 & check DB updated
     const offRes = await fetch(baseUrl, `/api/agents/${agentId}/toggle`, {
       method: 'POST',
       headers: authHeaders,
       body: JSON.stringify({ status: 'OFFLINE' })
     });
     assert.strictEqual(offRes.statusCode, 200, 'OFFLINE must be accepted');
-    console.log('  🟢 Valid status "OFFLINE" accepted with 200.');
+    const afterOffDbRow = (await dbAll('SELECT status FROM agents WHERE id = ?', [agentId]))[0];
+    assert.strictEqual(afterOffDbRow.status, 'OFFLINE', 'DB status must be updated to OFFLINE');
+    console.log('  🟢 Valid status "OFFLINE" accepted with 200 & verified in DB.');
 
-    // 3c: Send valid ONLINE → 200
+    // 3c: Send valid ONLINE → 200 & check DB updated
     const onRes = await fetch(baseUrl, `/api/agents/${agentId}/toggle`, {
       method: 'POST',
       headers: authHeaders,
       body: JSON.stringify({ status: 'ONLINE' })
     });
     assert.strictEqual(onRes.statusCode, 200, 'ONLINE must be accepted');
-    console.log('  🟢 Valid status "ONLINE" accepted with 200.\n');
+    const afterOnDbRow = (await dbAll('SELECT status FROM agents WHERE id = ?', [agentId]))[0];
+    assert.strictEqual(afterOnDbRow.status, 'ONLINE', 'DB status must be updated to ONLINE');
+    console.log('  🟢 Valid status "ONLINE" accepted with 200 & verified in DB.\n');
 
     console.log('================================================================');
-    console.log('  🟢 ALL AUDIT FIX HTTP CONTRACTS PASSED CLEANLY!');
+    console.log('  🟢 ALL AUDIT FIX RIGOROUS DATA & DB CONTRACTS PASSED CLEANLY!');
     console.log('================================================================\n');
   } finally {
     server.close();

@@ -742,30 +742,35 @@ app.get('/api/evidence', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELL
 function resolveActiveProjectId(db, user, explicitId, callback) {
   if (explicitId !== undefined && explicitId !== null && explicitId !== '') {
     const parsed = parseInt(explicitId, 10);
-    if (!isNaN(parsed)) {
-      return db.get(
-        `SELECT id FROM research_projects WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
-        [parsed, user.tenantId, user.workspaceId, user.marketplace],
-        (err, row) => {
-          if (err) return callback(err, null);
-          if (!row) return callback(new Error('PROJECT_NOT_FOUND'), null);
-          callback(null, row.id);
-        }
-      );
+    if (isNaN(parsed)) {
+      return callback({ status: 400, error: 'INVALID_PROJECT_ID', message: 'projectId must be a valid integer.' }, null);
     }
+    return db.get(
+      `SELECT id FROM research_projects WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
+      [parsed, user.tenantId, user.workspaceId, user.marketplace],
+      (err, row) => {
+        if (err) return callback({ status: 500, error: 'DATABASE_ERROR', message: err.message }, null);
+        if (!row) return callback({ status: 404, error: 'PROJECT_NOT_FOUND', message: 'Target project does not exist in the active workspace.' }, null);
+        callback(null, row.id);
+      }
+    );
   }
+
   // Unambiguous resolution: only if exactly 1 project exists for this workspace + marketplace
   db.all(
     `SELECT id FROM research_projects 
      WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
     [user.tenantId, user.workspaceId, user.marketplace],
     (err, rows) => {
-      if (err) return callback(err, null);
-      if (rows && rows.length === 1) {
+      if (err) return callback({ status: 500, error: 'DATABASE_ERROR', message: err.message }, null);
+      if (!rows || rows.length === 0) {
+        return callback(null, null);
+      }
+      if (rows.length === 1) {
         return callback(null, rows[0].id);
       }
-      // If 0 or >1 projects exist, fail closed (do not guess / misattribute)
-      callback(null, null);
+      // 2+ candidate projects -> Fail closed to prevent silent misattribution
+      return callback({ status: 409, error: 'AMBIGUOUS_ACTIVE_PROJECT', message: 'Multiple active projects found. Explicit projectId is required to prevent misattribution.' }, null);
     }
   );
 }
@@ -773,8 +778,11 @@ function resolveActiveProjectId(db, user, explicitId, callback) {
 // POST /api/evidence - Ingest new evidence record
 app.post('/api/evidence', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
   const { projectId, seedPhrase, source, sourceUrl, fileName, metadata } = req.body || {};
-  if (!projectId || !seedPhrase || !source) {
-    return res.status(400).json({ success: false, error: 'MISSING_FIELDS', message: 'projectId, seedPhrase and source are required.' });
+  if (!projectId) {
+    return res.status(400).json({ success: false, error: 'MISSING_PROJECT_ID', message: 'projectId is required.' });
+  }
+  if (!seedPhrase || !source) {
+    return res.status(400).json({ success: false, error: 'MISSING_FIELDS', message: 'seedPhrase and source are required.' });
   }
 
   const parsedProjectId = parseInt(projectId, 10);
@@ -1574,6 +1582,7 @@ app.post('/api/mcp/pull-etsy', requireAuth(db), requireRole(['OWNER', 'MANAGER',
   });
 
   resolveActiveProjectId(db, req.user, req.body.projectId, (pErr, targetProjectId) => {
+    if (pErr) return res.status(pErr.status || 400).json({ success: false, error: pErr.error, message: pErr.message });
     db.run(
       "INSERT INTO market_trends (category, trending_keywords, keywords_detailed, marketplace, tenant_id, workspace_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
       [category, trendingKeywordsStr, JSON.stringify(keywordsDetailed), 'ETSY', req.user.tenantId, req.user.workspaceId, targetProjectId],
@@ -2016,6 +2025,7 @@ app.post('/api/amazon/quick-draft', requireAuth(db), requireRole(['OWNER', 'MANA
 
     // 1. Create or retrieve market trend entry
     resolveActiveProjectId(db, req.user, req.body.projectId, (pErr, targetProjectId) => {
+      if (pErr) return res.status(pErr.status || 400).json({ success: false, error: pErr.error, message: pErr.message });
       db.run(
         "INSERT INTO market_trends (category, trending_keywords, marketplace, tenant_id, workspace_id, project_id) VALUES (?, ?, ?, ?, ?, ?)",
         [category, `${cleanSeed} (Amazon A10 Quick Batch)`, 'AMAZON', req.user.tenantId, req.user.workspaceId, targetProjectId],
@@ -2451,6 +2461,7 @@ const handleReportUpload = async (req, res) => {
     // Volume/CPR/Score per keyword so staff can see the underlying data, not
     // just an AI-picked keyword string)
     resolveActiveProjectId(db, req.user, req.body.projectId, (pErr, targetProjectId) => {
+      if (pErr) return res.status(pErr.status || 400).json({ success: false, error: pErr.error, message: pErr.message });
       db.run(
         "INSERT INTO market_trends (category, trending_keywords, keywords_detailed, marketplace, tenant_id, workspace_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
         [targetCategory, trendingKeywordsStr, JSON.stringify(topKeywordsDetailed), targetMarketplace, req.user.tenantId, req.user.workspaceId, targetProjectId],

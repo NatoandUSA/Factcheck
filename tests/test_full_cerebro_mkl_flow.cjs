@@ -105,6 +105,35 @@ function httpGet(port, pathUrl, cookie) {
   });
 }
 
+function httpPostJson(port, pathUrl, bodyObj, cookie) {
+  return new Promise((resolve, reject) => {
+    const dataStr = JSON.stringify(bodyObj);
+    const options = {
+      hostname: 'localhost',
+      port: port,
+      path: pathUrl,
+      method: 'POST',
+      headers: {
+        'Origin': `http://localhost:${port}`,
+        'Cookie': cookie,
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(dataStr)
+      }
+    };
+    const req = http.request(options, (res) => {
+      let body = '';
+      res.on('data', chunk => body += chunk);
+      res.on('end', () => {
+        try { resolve({ status: res.statusCode, data: JSON.parse(body) }); }
+        catch (e) { resolve({ status: res.statusCode, rawBody: body }); }
+      });
+    });
+    req.on('error', reject);
+    req.write(dataStr);
+    req.end();
+  });
+}
+
 async function testFullCerebroMklFlow() {
   console.log('================================================================');
   console.log('  TESTING REAL CEREBRO FILE UPLOAD & MASTER KEYWORD TABLE INTEGRATION');
@@ -121,6 +150,10 @@ async function testFullCerebroMklFlow() {
     const workspaceId = await waitForOwnerAmazonWorkspace();
     const cookie = await loginAndGetCookie(TEST_PORT, workspaceId);
     console.log('Authenticated as owner@omniseller.local for Amazon workspace', workspaceId);
+
+    // Create research project for this workspace
+    const projRes = await httpPostJson(TEST_PORT, '/api/projects', { name: 'Jewelry Cerebro Project', seedPhrase: 'para el amor de mi vida' }, cookie);
+    assert.strictEqual(projRes.status, 200, 'Project creation must succeed');
 
     const trackedFixture = path.resolve(__dirname, 'fixtures/sample_cerebro.xlsx');
     assert.ok(fs.existsSync(trackedFixture), `CRITICAL TEST FAILURE: Tracked fixture file missing at ${trackedFixture}`);

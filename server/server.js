@@ -50,6 +50,7 @@ process.on('unhandledRejection', (reason) => {
 });
 
 const app = express();
+app.set('trust proxy', 1);
 app.use(cors(corsOptionsDelegate));
 app.use(express.json({ limit: '100kb' }));
 app.use(requireCsrfOrigin);
@@ -775,8 +776,8 @@ app.post('/api/evidence/:id/accept', requireAuth(db), requireRole(['OWNER', 'MAN
   db.run(
     `UPDATE research_evidence
      SET evidence_state = 'ACCEPTED', accepted_at = ?, accepted_by = ?
-     WHERE id = ? AND tenant_id = ? AND workspace_id = ?`,
-    [now, req.user.userId, id, req.user.tenantId, req.user.workspaceId],
+     WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
+    [now, req.user.userId, id, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
     function(err) {
       if (err) return res.status(500).json({ success: false, error: err.message });
       if (this.changes === 0) return res.status(404).json({ success: false, error: 'EVIDENCE_NOT_FOUND' });
@@ -830,26 +831,106 @@ app.post('/api/projects', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SEL
   );
 });
 
-// PATCH /api/projects/:id/transition - Server-validated state transition
+// ALLOWED_PROJECT_TRANSITIONS Adjacency Map
+const ALLOWED_PROJECT_TRANSITIONS = {
+  'EVIDENCE_INTAKE': ['RESEARCH_ACCEPTED'],
+  'RESEARCH_ACCEPTED': ['DNA_ACCEPTED'],
+  'DNA_ACCEPTED': ['MKL_FROZEN'],
+  'MKL_FROZEN': ['DRAFT_GENERATED'],
+  'DRAFT_GENERATED': ['PRODUCT_TRUTH_VERIFIED'],
+  'PRODUCT_TRUTH_VERIFIED': ['MANAGER_APPROVED'],
+  'MANAGER_APPROVED': ['PUBLISH_READY'],
+  'PUBLISH_READY': []
+};
+
+// PATCH /api/projects/:id/transition - Server-authoritative state transition
 app.patch('/api/projects/:id/transition', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
   const projectId = req.params.id;
   const { targetState } = req.body || {};
 
-  const VALID_STATES = ['EVIDENCE_INTAKE', 'RESEARCH_ACCEPTED', 'DNA_ACCEPTED', 'MKL_FROZEN', 'DRAFT_GENERATED', 'PRODUCT_TRUTH_VERIFIED', 'MANAGER_APPROVED', 'PUBLISH_READY'];
-  if (!targetState || !VALID_STATES.includes(targetState)) {
-    return res.status(400).json({ success: false, error: 'INVALID_TARGET_STATE', validStates: VALID_STATES });
-  }
+  db.get(
+    `SELECT * FROM research_projects WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
+    [projectId, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+    (err, project) => {
+      if (err) return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
+      if (!project) return res.status(404).json({ success: false, error: 'PROJECT_NOT_FOUND' });
 
-  const now = new Date().toISOString();
-  db.run(
-    `UPDATE research_projects
-     SET state = ?, updated_at = ?
-     WHERE id = ? AND tenant_id = ? AND workspace_id = ?`,
-    [targetState, now, projectId, req.user.tenantId, req.user.workspaceId],
-    function(err) {
-      if (err) return res.status(500).json({ success: false, error: err.message });
-      if (this.changes === 0) return res.status(404).json({ success: false, error: 'PROJECT_NOT_FOUND' });
-      res.json({ success: true, projectId, state: targetState, updatedAt: now });
+      const currentState = project.state;
+      const allowedNext = ALLOWED_PROJECT_TRANSITIONS[currentState] || [];
+
+      if (!targetState || !allowedNext.includes(targetState)) {
+        return res.status(400).json({
+          success: false,
+          error: 'INVALID_STATE_TRANSITION',
+          message: `Illegal transition from ${currentState} to ${targetState}. Allowed next state: ${allowedNext.join(', ') || 'NONE'}`
+        });
+      }
+
+      // Role Gate: MANAGER/OWNER required for MANAGER_APPROVED or PUBLISH_READY
+      if (targetState === 'MANAGER_APPROVED' || targetState === 'PUBLISH_READY') {
+        if (req.user.role !== 'MANAGER' && req.user.role !== 'OWNER' && req.user.role !== 'ADMIN') {
+          return res.status(403).json({
+            success: false,
+            error: 'FORBIDDEN_ROLE_FOR_STAGE',
+            message: `Role ${req.user.role} is not authorized to approve projects to ${targetState}.`
+          });
+        }
+      }
+
+      // Evidence Precondition Validation
+      const checkPreconditions = (next) => {
+        if (targetState === 'RESEARCH_ACCEPTED') {
+          db.get(
+            `SELECT COUNT(*) as cnt FROM research_evidence WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
+            [req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+            (eErr, eRow) => {
+              if (eErr || !eRow || eRow.cnt === 0) {
+                return res.status(400).json({
+                  success: false,
+                  error: 'MISSING_EVIDENCE_PRECONDITION',
+                  message: 'Cannot accept research without at least 1 ingested research evidence record.'
+                });
+              }
+              next();
+            }
+          );
+        } else if (targetState === 'MKL_FROZEN') {
+          db.get(
+            `SELECT COUNT(*) as cnt FROM market_trends WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
+            [req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+            (mErr, mRow) => {
+              if (mErr || !mRow || mRow.cnt === 0) {
+                return res.status(400).json({
+                  success: false,
+                  error: 'MISSING_MKL_PRECONDITION',
+                  message: 'Cannot freeze MKL without at least 1 market keyword trend entry.'
+                });
+              }
+              next();
+            }
+          );
+        } else {
+          next();
+        }
+      };
+
+      checkPreconditions(() => {
+        const now = new Date().toISOString();
+        db.run(
+          `UPDATE research_projects
+           SET state = ?, updated_at = ?
+           WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
+          [targetState, now, projectId, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+          function(uErr) {
+            if (uErr) return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
+
+            const auditMsg = `[PROJECT TRANSITION] Project #${projectId} (${project.name}) state moved from ${currentState} to ${targetState} by user #${req.user.userId} (${req.user.role})`;
+            logAgentAction(db, { agentId: 1, tenantId: req.user.tenantId, workspaceId: req.user.workspaceId, message: auditMsg });
+
+            res.json({ success: true, projectId, previousState: currentState, state: targetState, updatedAt: now });
+          }
+        );
+      });
     }
   );
 });

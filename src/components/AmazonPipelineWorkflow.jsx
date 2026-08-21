@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import MasterKeywordTable from './MasterKeywordTable';
 import { parseJsonResponse } from '../utils/apiResponse';
-import { deriveXrayUploadOutcome } from '../utils/xrayUploadOutcome.cjs';
+import { deriveXrayUploadOutcome } from '../utils/xrayUploadOutcome.js';
 
 export default function AmazonPipelineWorkflow({ seedPhrase, selectedCategory, onShowToast, onSelectListing, onProceedToStage }) {
   // Step 1: Feed Xray State

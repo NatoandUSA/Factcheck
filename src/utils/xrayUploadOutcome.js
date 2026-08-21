@@ -1,8 +1,12 @@
 /**
- * CommonJS version of deriveXrayUploadOutcome for Node.js test scripts.
+ * Pure decision function for the B1 "Feed Xray" upload step in
+ * AmazonPipelineWorkflow. Given the raw outcome of a fetch attempt, it
+ * decides what batches/toast/error state the UI should show — without ever
+ * inventing ASINs, prices, sales, or a success toast for a failed request.
+ * Kept dependency-free so it can run under plain Node in tests AND Vite ESM dev mode.
  */
 
-function deriveXrayUploadOutcome({ ok, data, error } = {}) {
+export function deriveXrayUploadOutcome({ ok, data, error } = {}) {
   if (error) {
     return {
       status: 'ERROR',
@@ -65,5 +69,3 @@ function deriveXrayUploadOutcome({ ok, data, error } = {}) {
     errorMessage: null
   };
 }
-
-module.exports = { deriveXrayUploadOutcome };

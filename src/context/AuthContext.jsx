@@ -34,17 +34,23 @@ export const AuthProvider = ({ children }) => {
     return data.user;
   };
 
-  const logout = async () => {
-    const res = await fetch('/api/auth/logout', {
+  const switchWorkspace = async ({ workspaceId, marketplace }) => {
+    const res = await fetch('/api/auth/switch-workspace', {
       method: 'POST',
-      credentials: 'include'
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workspaceId, marketplace })
     });
-    if (!res.ok) throw new Error('Không thể thu hồi phiên đăng nhập');
-    setUser(null);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data.message || 'Không thể chuyển Workspace');
+    }
+    setUser(data.user);
+    return data.user;
   };
 
   return (
-    <AuthContext.Provider value={{ user, authLoading, login, logout }}>
+    <AuthContext.Provider value={{ user, authLoading, login, logout, switchWorkspace }}>
       {children}
     </AuthContext.Provider>
   );

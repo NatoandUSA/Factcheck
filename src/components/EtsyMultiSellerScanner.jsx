@@ -25,21 +25,26 @@ function displayValue(value, formatter = v => String(v)) {
   return value === null || value === undefined || value === '' ? '—' : formatter(value);
 }
 
-export default function EtsyMultiSellerScanner({ seedPhrase, category, onShowToast, onSellersUpdated, onViewHistory }) {
+export default function EtsyMultiSellerScanner({ seedPhrase, category, onShowToast, onSellersUpdated, onViewHistory, initialSellers }) {
   const [sellers, setSellers] = useState([]);
   const [learning, setLearning] = useState(false);
   const [synthesizedResult, setSynthesizedResult] = useState(null);
   const [showManualAdd, setShowManualAdd] = useState(false);
   const [manualSeller, setManualSeller] = useState(emptyManualSeller);
   const [evidenceMessage, setEvidenceMessage] = useState(
-    'Chưa có seller evidence. Live seller connector chưa được chứng minh; hiện dùng Staff manual assertion hoặc raw source qua server API.'
+    'Chưa có seller evidence. Nhập Staff manual assertion hoặc kéo dữ liệu Live Etsy MCP.'
   );
 
   useEffect(() => {
-    setSellers([]);
-    setSynthesizedResult(null);
-    setEvidenceMessage('Seed đã thay đổi. Cần nạp seller evidence mới; hệ thống không tự tạo Top Seller giả.');
-  }, [seedPhrase]);
+    if (Array.isArray(initialSellers) && initialSellers.length > 0) {
+      setSellers(initialSellers);
+      setEvidenceMessage(`Đã nạp ${initialSellers.length} Top Sellers từ nguồn Live Etsy MCP!`);
+    } else {
+      setSellers([]);
+      setSynthesizedResult(null);
+      setEvidenceMessage('Seed đã thay đổi. Cần nạp seller evidence mới; hệ thống không tự tạo Top Seller giả.');
+    }
+  }, [seedPhrase, initialSellers]);
 
   useEffect(() => {
     if (onSellersUpdated) onSellersUpdated(sellers);

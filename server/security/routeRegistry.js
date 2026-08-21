@@ -17,6 +17,7 @@ const ROUTES = [
   { method: 'POST', path: '/api/auth/login', public: true, note: 'login must be reachable unauthenticated' },
   { method: 'POST', path: '/api/auth/logout', public: true, note: 'clears cookie regardless of session validity' },
   { method: 'GET', path: '/api/auth/me', public: false },
+  { method: 'POST', path: '/api/auth/switch-workspace', public: false },
   { method: 'POST', path: '/api/auth/reauth', public: false },
   { method: 'GET', path: '/api/owner/users', public: false },
   { method: 'POST', path: '/api/owner/users', public: false },

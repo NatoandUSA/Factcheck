@@ -618,11 +618,63 @@ app.get('/api/health', (req, res) => {
 
 // GET /api/auth/me
 app.get('/api/auth/me', requireAuth(db), (req, res) => {
-
   res.json({
     success: true,
     authenticated: true,
     user: req.user
+  });
+});
+
+// POST /api/auth/switch-workspace - Switch session to another active workspace for this user
+app.post('/api/auth/switch-workspace', requireAuth(db), (req, res) => {
+  const { workspaceId, marketplace } = req.body || {};
+  let query = `
+    SELECT wm.workspace_id, wm.role, w.tenant_id, w.marketplace, w.name as workspace_name
+    FROM workspace_memberships wm
+    JOIN workspaces w ON w.id = wm.workspace_id
+    WHERE wm.user_id = ? AND wm.status = 'ACTIVE'
+  `;
+  const params = [req.user.userId];
+  if (workspaceId) {
+    query += ` AND wm.workspace_id = ?`;
+    params.push(workspaceId);
+  } else if (marketplace) {
+    query += ` AND UPPER(w.marketplace) = ?`;
+    params.push(String(marketplace).toUpperCase());
+  }
+  query += ` LIMIT 1`;
+
+  db.get(query, params, (err, membership) => {
+    if (err) return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
+    if (!membership) {
+      return res.status(403).json({ success: false, error: 'NO_WORKSPACE_ACCESS', message: 'User does not belong to the requested workspace' });
+    }
+
+    createSessionRecord(db, req.user.userId, membership.workspace_id, membership.tenant_id, (sessErr, session) => {
+      if (sessErr) return res.status(500).json({ success: false, error: 'SESSION_CREATE_FAILED' });
+
+      const isProd = process.env.NODE_ENV === 'production';
+      res.cookie(COOKIE_NAME, session.rawToken, {
+        httpOnly: true,
+        secure: isProd,
+        sameSite: 'lax',
+        path: '/',
+        maxAge: SESSION_TTL_MS
+      });
+
+      res.json({
+        success: true,
+        user: {
+          id: req.user.userId,
+          email: req.user.email,
+          name: req.user.name,
+          role: membership.role,
+          workspaceId: membership.workspace_id,
+          tenantId: membership.tenant_id,
+          marketplace: membership.marketplace
+        }
+      });
+    });
   });
 });
 

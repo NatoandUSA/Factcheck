@@ -317,6 +317,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
             onShowToast={onShowToast}
             onViewHistory={onViewHistory}
             onSellersUpdated={setScannedSellers}
+            initialSellers={mcpResult?.sellers || scannedSellers}
           />
 
           {/* MCP Real-Time Result Action Card & Dropzone */}

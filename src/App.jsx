@@ -18,7 +18,26 @@ export default function App() {
   const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
   const [isUserManagementModalOpen, setIsUserManagementModalOpen] = useState(false);
   const [toasts, setToasts] = useState([]);
-  const { user } = useAuth();
+  const { user, switchWorkspace } = useAuth();
+
+  const handleTabChange = async (tab) => {
+    setActiveTab(tab);
+    if (tab === 'etsy-workspace' && user && user.marketplace !== 'ETSY') {
+      try {
+        await switchWorkspace({ marketplace: 'ETSY' });
+        showToast('Đã chuyển sang phiên làm việc Etsy Workspace');
+      } catch (e) {
+        console.warn('Could not switch to Etsy workspace:', e.message);
+      }
+    } else if (tab === 'amazon-workspace' && user && user.marketplace !== 'AMAZON') {
+      try {
+        await switchWorkspace({ marketplace: 'AMAZON' });
+        showToast('Đã chuyển sang phiên làm việc Amazon Workspace');
+      } catch (e) {
+        console.warn('Could not switch to Amazon workspace:', e.message);
+      }
+    }
+  };
 
   // Load history only from the authenticated backend. Listing data must not be
   // restored from a browser cache that is outside workspace authorization.
@@ -232,7 +251,7 @@ export default function App() {
     <div>
       <Header
         activeTab={activeTab}
-        setActiveTab={setActiveTab}
+        setActiveTab={handleTabChange}
         onOpenApiKeyModal={() => setIsApiKeyModalOpen(true)}
         onOpenLoginModal={() => setIsLoginModalOpen(true)}
         onOpenUserManagementModal={() => setIsUserManagementModalOpen(true)}

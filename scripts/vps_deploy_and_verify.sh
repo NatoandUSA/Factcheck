@@ -54,7 +54,7 @@ echo "🟢 Active Baseline SHA: ${BASELINE_SHA}"
 
 # Fetch remote tracking branch first before resolving target SHA (Fail-Closed)
 echo "Fetching origin/${TARGET_BRANCH}..."
-git -C "${WORKTREE_REPO}" fetch origin "${TARGET_BRANCH}" || {
+git -C "${WORKTREE_REPO}" fetch origin "${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}" || {
     echo "⚠️ Warning: git fetch origin ${TARGET_BRANCH} failed. Proceeding with local object check for target SHA..."
 }
 

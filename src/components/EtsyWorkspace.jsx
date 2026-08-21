@@ -26,6 +26,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
   const [isFeedModalOpen, setIsFeedModalOpen] = useState(false);
   const [feedRawText, setFeedRawText] = useState('');
   const [feedSubmitting, setFeedSubmitting] = useState(false);
+  const [scannedSellers, setScannedSellers] = useState([]);
   const fileInputRef = useRef(null);
 
   const handleFeedSearchResults = async () => {

@@ -2110,11 +2110,30 @@ app.post('/api/etsy/feed-search-results', requireAuth(db), requireRole(['OWNER',
   const parsedSellers = [];
   const parsedKeywords = [];
 
-  if (seed && String(seed).trim().length >= 3 && String(seed).trim().length <= 20) {
-    parsedKeywords.push(String(seed).trim().toLowerCase());
+  const addTag = (val) => {
+    if (!val || typeof val !== 'string') return;
+    const clean = val.replace(/^[#\s]+|[#\s]+$/g, '').trim().toLowerCase();
+    if (clean.length >= 3 && clean.length <= 20 && !parsedKeywords.includes(clean)) {
+      const screen = ipGuard.screenText(clean);
+      if (screen.verdict !== 'BLOCK') parsedKeywords.push(clean);
+    } else if (clean.length > 20) {
+      // Sub-token decomposition: extract words/chunks <= 20 chars
+      const subWords = clean.split(/[\s,–—|-]+/).filter(w => w.length >= 3 && w.length <= 20);
+      subWords.forEach(sw => {
+        if (!parsedKeywords.includes(sw)) {
+          const screen = ipGuard.screenText(sw);
+          if (screen.verdict !== 'BLOCK') parsedKeywords.push(sw);
+        }
+      });
+    }
+  };
+
+  if (seed && String(seed).trim().length >= 3) {
+    addTag(String(seed).trim());
   }
 
   lines.forEach((line, idx) => {
+    // 1. Direct Listing URL format
     if (line.startsWith('http://') || line.startsWith('https://')) {
       const matchId = line.match(/listing\/(\d+)/);
       parsedSellers.push({
@@ -2131,31 +2150,57 @@ app.post('/api/etsy/feed-search-results', requireAuth(db), requireRole(['OWNER',
         isSynthetic: false,
         selected: true
       });
-    } else {
-      const chunks = line.split(/[,|\-–—\t:]/).map(c => c.trim()).filter(Boolean);
-      chunks.forEach(c => {
-        const clean = c.toLowerCase();
-        if (clean.length >= 3 && clean.length <= 20 && !parsedKeywords.includes(clean)) {
-          const screen = ipGuard.screenText(clean);
-          if (screen.verdict !== 'BLOCK') parsedKeywords.push(clean);
-        }
+      return;
+    }
+
+    // 2. Extract Price, Sold, Views, Country from HeyEtsy cards
+    let price = null;
+    let sold = null;
+    let views = null;
+    let country = null;
+
+    const priceMatch = line.match(/(\$|\£|\€)?\s*([0-9]+(\.[0-9]{1,2})?)\s*(USD|GBP|EUR)?/i);
+    if (priceMatch && Number(priceMatch[2]) > 0) {
+      price = `$${priceMatch[2]}`;
+    }
+
+    const soldMatch = line.match(/([0-9+]+)\s*Sold/i);
+    if (soldMatch) {
+      sold = parseInt(soldMatch[1], 10) || null;
+    }
+
+    const viewsMatch = line.match(/([0-9.]+k?)\s*Views/i);
+    if (viewsMatch) {
+      const vStr = viewsMatch[1].toLowerCase();
+      views = vStr.endsWith('k') ? Math.round(parseFloat(vStr) * 1000) : parseInt(vStr, 10);
+    }
+
+    const countryMatch = line.match(/\b(US|UK|VN|CA|AU|DE|FR)\b/i);
+    if (countryMatch) {
+      country = countryMatch[1].toUpperCase();
+    }
+
+    // 3. Extract keywords/tags from chunking
+    const chunks = line.replace(/(\$\S+|\d+\s*Sold|\d+\s*Views|\d+\s*years)/gi, '').split(/[,|\-–—\t:]/).map(c => c.trim()).filter(Boolean);
+    chunks.forEach(c => addTag(c));
+
+    // 4. Listing Card Title row
+    const cleanTitle = line.replace(/(\$\S+|\d+\s*Sold|\d+\s*Views|\d+\s*years)/gi, '').trim();
+    if (cleanTitle.length >= 8 && !/^(views|sold|favorites|created|updated|bestseller|popular now|hot)$/i.test(cleanTitle)) {
+      parsedSellers.push({
+        id: `fed-${idx}-${Date.now()}`,
+        title: cleanTitle,
+        shopName: country ? `Etsy Seller (${country})` : null,
+        country: country,
+        url: null,
+        price: price,
+        views24h: views,
+        sold24h: sold,
+        favorites: null,
+        evidenceSource: 'ETSY_SEARCH_PAGE_RAW',
+        isSynthetic: false,
+        selected: true
       });
-      if (line.length >= 8) {
-        parsedSellers.push({
-          id: `fed-${idx}-${Date.now()}`,
-          title: line,
-          shopName: null,
-          country: null,
-          url: null,
-          price: null,
-          views24h: null,
-          sold24h: null,
-          favorites: null,
-          evidenceSource: 'ETSY_SEARCH_PAGE_RAW',
-          isSynthetic: false,
-          selected: true
-        });
-      }
     }
   });
 

@@ -10,12 +10,17 @@ class YTrendsMcpClient {
   _request(payload, sessionId = null) {
     return new Promise((resolve, reject) => {
       const postData = JSON.stringify(payload);
+      const apiToken = (process.env.YTRENDS_API_TOKEN || process.env.YTUONG_API_TOKEN || '').trim();
       const headers = {
         'Content-Type': 'application/json',
         'Accept': 'application/json, text/event-stream',
         'User-Agent': 'OmniSeller-Agent/1.0',
         'Content-Length': Buffer.byteLength(postData)
       };
+      if (apiToken) {
+        headers['Authorization'] = `Bearer ${apiToken}`;
+        headers['X-API-Key'] = apiToken;
+      }
       if (sessionId) {
         headers['Mcp-Session-Id'] = sessionId;
       }

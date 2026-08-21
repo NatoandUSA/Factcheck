@@ -3085,9 +3085,13 @@ if (fs.existsSync(distDir)) {
   app.use(express.static(distDir, {
     index: false,
     setHeaders: (res, filePath) => {
-      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-      res.setHeader('Pragma', 'no-cache');
-      res.setHeader('Expires', '0');
+      if (filePath.includes('/assets/') || filePath.includes('\\assets\\')) {
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      } else {
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
+      }
     }
   }));
   app.get(/^(?!\/api\/).*/, (req, res) => {

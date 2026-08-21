@@ -41,7 +41,8 @@ function runAllTests() {
     'tests/test_backup_restore_and_migrations.cjs',
     'tests/test_adversarial_staff_ui_flow.cjs',
     'tests/test_multi_project_attribution.cjs',
-    'tests/test_workspace_switching_and_auth_security.cjs'
+    'tests/test_workspace_switching_and_auth_security.cjs',
+    'tests/test_performance_and_latency.cjs'
   ];
 
   let passedCount = 0;

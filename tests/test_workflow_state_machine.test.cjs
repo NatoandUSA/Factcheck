@@ -105,14 +105,21 @@ async function runTests() {
     assert.strictEqual(noEvData.error, 'MISSING_EVIDENCE_PRECONDITION');
     console.log('  🟢 Transition to RESEARCH_ACCEPTED rejected due to missing evidence precondition.');
 
-    // 4. Ingest Evidence Record and Transition to RESEARCH_ACCEPTED
+    // 4. Ingest Evidence Record, Accept Evidence, and Transition to RESEARCH_ACCEPTED
     console.log('\nTest 4: Ingesting Evidence Record and Transitioning to RESEARCH_ACCEPTED...');
     const evAddRes = await fetch(`${baseUrl}/api/evidence`, {
       method: 'POST',
       headers: { ...origin, 'Content-Type': 'application/json', Cookie: ownerAmzCookie },
-      body: JSON.stringify({ seedPhrase: 'mom sweatshirt', source: 'HELIUM10_XRAY_OBSERVED', fileName: 'xray_report.csv' })
+      body: JSON.stringify({ projectId, seedPhrase: 'mom sweatshirt', source: 'HELIUM10_XRAY_OBSERVED', fileName: 'xray_report.csv' })
     });
     assert.strictEqual(evAddRes.status, 200);
+    const evAddData = await evAddRes.json();
+
+    const acceptRes = await fetch(`${baseUrl}/api/evidence/${evAddData.evidenceId}/accept`, {
+      method: 'POST',
+      headers: { ...origin, Cookie: ownerAmzCookie }
+    });
+    assert.strictEqual(acceptRes.status, 200);
 
     const validTransRes = await fetch(`${baseUrl}/api/projects/${projectId}/transition`, {
       method: 'PATCH',

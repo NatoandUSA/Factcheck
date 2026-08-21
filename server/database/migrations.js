@@ -214,6 +214,19 @@ async function runMigrations(db) {
       throw error;
     }
   }
+
+  const projScopedApplied = await all(db, 'SELECT id FROM schema_migrations WHERE id = ?', [PROJECT_SCOPED_EVIDENCE_MIGRATION]);
+  if (projScopedApplied.length === 0) {
+    await run(db, 'BEGIN IMMEDIATE');
+    try {
+      await migrateProjectScopedEvidence(db);
+      await run(db, 'INSERT INTO schema_migrations (id) VALUES (?)', [PROJECT_SCOPED_EVIDENCE_MIGRATION]);
+      await run(db, 'COMMIT');
+    } catch (error) {
+      try { await run(db, 'ROLLBACK'); } catch (_) {}
+      throw error;
+    }
+  }
 }
 
 async function migrateAgentWorkspaceScope(db) {
@@ -244,6 +257,36 @@ async function migrateAgentWorkspaceScope(db) {
 
 const AGENT_WORKSPACE_SCOPE_MIGRATION = '2026-08-20_agent_workspace_scope';
 
+const PROJECT_SCOPED_EVIDENCE_MIGRATION = '2026-08-21_project_scoped_evidence';
+
+async function migrateProjectScopedEvidence(db) {
+  const tableExists = async (name) => (await all(db, "SELECT name FROM sqlite_master WHERE type='table' AND name=?", [name])).length > 0;
+
+  if (await tableExists('research_evidence')) {
+    const cols = await all(db, 'PRAGMA table_info(research_evidence)');
+    if (!cols.some(c => c.name === 'project_id')) {
+      await run(db, 'ALTER TABLE research_evidence ADD COLUMN project_id INTEGER NULL REFERENCES research_projects(id)');
+    }
+    await run(db, `CREATE INDEX IF NOT EXISTS idx_research_evidence_proj ON research_evidence (tenant_id, workspace_id, marketplace, project_id)`);
+  }
+
+  if (await tableExists('market_trends')) {
+    const cols = await all(db, 'PRAGMA table_info(market_trends)');
+    if (!cols.some(c => c.name === 'project_id')) {
+      await run(db, 'ALTER TABLE market_trends ADD COLUMN project_id INTEGER NULL REFERENCES research_projects(id)');
+    }
+    await run(db, `CREATE INDEX IF NOT EXISTS idx_market_trends_proj ON market_trends (tenant_id, workspace_id, marketplace, project_id)`);
+  }
+
+  if (await tableExists('listings')) {
+    const cols = await all(db, 'PRAGMA table_info(listings)');
+    if (!cols.some(c => c.name === 'project_id')) {
+      await run(db, 'ALTER TABLE listings ADD COLUMN project_id INTEGER NULL REFERENCES research_projects(id)');
+    }
+    await run(db, `CREATE INDEX IF NOT EXISTS idx_listings_proj ON listings (tenant_id, workspace_id, marketplace, project_id)`);
+  }
+}
+
 module.exports = {
   LISTING_SCOPE_MIGRATION,
   SECURITY_CONTROLS_MIGRATION,
@@ -252,5 +295,6 @@ module.exports = {
   WORKSPACE_OWNERSHIP_MIGRATION,
   PRODUCT_TRUTH_ATTESTATION_MIGRATION,
   AGENT_WORKSPACE_SCOPE_MIGRATION,
+  PROJECT_SCOPED_EVIDENCE_MIGRATION,
   runMigrations
 };

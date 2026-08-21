@@ -14,6 +14,40 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
   const [selectedCategory, setSelectedCategory] = useState('Apparel: Sweatshirt');
   const [activeStage, setActiveStage] = useState('workflow'); // 'workflow' | 'research' | 'mkl'
   const [isIpModalOpen, setIsIpModalOpen] = useState(false);
+  const [activeProject, setActiveProject] = useState(null);
+
+  const fetchProjects = React.useCallback(async () => {
+    try {
+      const res = await fetch('/api/projects', { credentials: 'include' });
+      const data = await res.json();
+      if (res.ok && data.success && Array.isArray(data.projects) && data.projects.length > 0) {
+        setActiveProject(data.projects[0]);
+      }
+    } catch (e) {}
+  }, []);
+
+  React.useEffect(() => {
+    fetchProjects();
+  }, [fetchProjects]);
+
+  const handleTransition = async (targetState) => {
+    if (!activeProject) return;
+    try {
+      const res = await fetch(`/api/projects/${activeProject.id}/transition`, {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetState })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || data.error || 'Transition failed');
+      if (onShowToast) onShowToast(`✓ Chuyển trạng thái dự án sang ${data.state} thành công!`);
+      setActiveProject(prev => ({ ...prev, state: data.state }));
+      fetchProjects();
+    } catch (err) {
+      if (onShowToast) onShowToast(`⚠ Transition error: ${err.message}`);
+    }
+  };
 
   return (
     <div style={{ maxWidth: '1440px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '20px' }}>
@@ -100,8 +134,28 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
             <ShieldCheck size={16} color="#dc2626" />
             <span>🛡️ IP Gate (2-in-1)</span>
           </button>
-
         </div>
+
+        {activeProject && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', background: '#0284c7', color: '#fff', padding: '6px 14px', borderRadius: '10px', fontSize: '0.82rem', fontWeight: 800 }}>
+            <span>📌 Active Project #{activeProject.id}: <u style={{ textUnderlineOffset: '3px' }}>{activeProject.state}</u></span>
+            {activeProject.state === 'EVIDENCE_INTAKE' && (
+              <button onClick={() => handleTransition('RESEARCH_ACCEPTED')} style={{ background: '#fff', color: '#0284c7', border: 'none', padding: '3px 10px', borderRadius: '6px', cursor: 'pointer', fontWeight: 800 }}>
+                Accept Research →
+              </button>
+            )}
+            {activeProject.state === 'RESEARCH_ACCEPTED' && (
+              <button onClick={() => handleTransition('DNA_ACCEPTED')} style={{ background: '#fff', color: '#0284c7', border: 'none', padding: '3px 10px', borderRadius: '6px', cursor: 'pointer', fontWeight: 800 }}>
+                Accept DNA →
+              </button>
+            )}
+            {activeProject.state === 'DNA_ACCEPTED' && (
+              <button onClick={() => handleTransition('MKL_FROZEN')} style={{ background: '#fff', color: '#0284c7', border: 'none', padding: '3px 10px', borderRadius: '6px', cursor: 'pointer', fontWeight: 800 }}>
+                Freeze MKL →
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* 0. Market Benchmark & Go/No-Go Decision Gate (Pre-Listing Validation) */}

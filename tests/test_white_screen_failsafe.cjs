@@ -1,9 +1,12 @@
 const assert = require('assert');
 const { deriveXrayUploadOutcome } = require('../src/utils/xrayUploadOutcome.cjs');
+const fs = require('fs');
+const path = require('path');
 
-// This exercises the REAL decision function AmazonPipelineWorkflow.jsx imports
-// for its B1 Xray upload step (not a shadow reimplementation), so a passing
-// test here reflects the actual frontend behavior.
+// Verify ESM file syntax & export directly
+const esmContent = fs.readFileSync(path.join(__dirname, '../src/utils/xrayUploadOutcome.js'), 'utf8');
+assert.ok(esmContent.includes('export function deriveXrayUploadOutcome'), 'ESM file must export deriveXrayUploadOutcome for Vite dev server');
+
 function testXrayUploadOutcomeFailClosed() {
   console.log('================================================================');
   console.log('  TESTING XRAY UPLOAD OUTCOME: FAIL-CLOSED, NON-CRASHING, NO FABRICATION');

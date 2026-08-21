@@ -421,7 +421,7 @@ app.use((req, res, next) => {
 // PR-2B: AUTHENTICATION API ENDPOINTS
 // ==========================================
 
-const loginRateLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, maxHits: 20, message: 'Thao tác quá nhiều lần. Vui lòng thử lại sau 15 phút.' });
+const loginRateLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, maxHits: 20, failOnly: true, message: 'Thao tác quá nhiều lần. Vui lòng thử lại sau 15 phút.' });
 
 // POST /api/auth/login
 app.post('/api/auth/login', loginRateLimiter, async (req, res) => {
@@ -737,18 +737,19 @@ app.get('/api/evidence', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELL
 
 // POST /api/evidence - Ingest new evidence record
 app.post('/api/evidence', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
-  const { seedPhrase, source, sourceUrl, fileName, metadata } = req.body || {};
+  const { projectId, seedPhrase, source, sourceUrl, fileName, metadata } = req.body || {};
   if (!seedPhrase || !source) {
     return res.status(400).json({ success: false, error: 'MISSING_FIELDS', message: 'seedPhrase and source are required.' });
   }
 
   db.run(
-    `INSERT INTO research_evidence (tenant_id, workspace_id, marketplace, seed_phrase, source, source_url, file_name, actor_id, evidence_state, metadata)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'OBSERVED', ?)`,
+    `INSERT INTO research_evidence (tenant_id, workspace_id, marketplace, project_id, seed_phrase, source, source_url, file_name, actor_id, evidence_state, metadata)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'OBSERVED', ?)`,
     [
       req.user.tenantId,
       req.user.workspaceId,
       req.user.marketplace,
+      projectId ? parseInt(projectId, 10) : null,
       String(seedPhrase).trim(),
       String(source).trim(),
       sourceUrl ? String(sourceUrl).trim() : null,
@@ -761,6 +762,7 @@ app.post('/api/evidence', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SEL
       res.json({
         success: true,
         evidenceId: this.lastID,
+        projectId: projectId ? parseInt(projectId, 10) : null,
         evidenceState: 'OBSERVED',
         actorId: req.user.userId
       });
@@ -768,8 +770,8 @@ app.post('/api/evidence', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SEL
   );
 });
 
-// POST /api/evidence/:id/accept - Staff accepts research evidence
-app.post('/api/evidence/:id/accept', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
+// POST /api/evidence/:id/accept - Staff accepts research evidence (Restricted to OWNER & MANAGER)
+app.post('/api/evidence/:id/accept', requireAuth(db), requireRole(['OWNER', 'MANAGER']), (req, res) => {
   const id = req.params.id;
   const now = new Date().toISOString();
 
@@ -877,18 +879,20 @@ app.patch('/api/projects/:id/transition', requireAuth(db), requireRole(['OWNER',
         }
       }
 
-      // Evidence Precondition Validation
+      // Evidence & Artifact Precondition Validation
       const checkPreconditions = (next) => {
         if (targetState === 'RESEARCH_ACCEPTED') {
           db.get(
-            `SELECT COUNT(*) as cnt FROM research_evidence WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
-            [req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+            `SELECT COUNT(*) as cnt FROM research_evidence 
+             WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ? 
+               AND (project_id = ? OR project_id IS NULL) AND evidence_state = 'ACCEPTED'`,
+            [req.user.tenantId, req.user.workspaceId, req.user.marketplace, projectId],
             (eErr, eRow) => {
               if (eErr || !eRow || eRow.cnt === 0) {
                 return res.status(400).json({
                   success: false,
                   error: 'MISSING_EVIDENCE_PRECONDITION',
-                  message: 'Cannot accept research without at least 1 ingested research evidence record.'
+                  message: 'Cannot accept research without at least 1 ACCEPTED research evidence record for this project.'
                 });
               }
               next();
@@ -896,14 +900,16 @@ app.patch('/api/projects/:id/transition', requireAuth(db), requireRole(['OWNER',
           );
         } else if (targetState === 'MKL_FROZEN') {
           db.get(
-            `SELECT COUNT(*) as cnt FROM market_trends WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
-            [req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+            `SELECT COUNT(*) as cnt FROM market_trends 
+             WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ? 
+               AND (project_id = ? OR project_id IS NULL)`,
+            [req.user.tenantId, req.user.workspaceId, req.user.marketplace, projectId],
             (mErr, mRow) => {
               if (mErr || !mRow || mRow.cnt === 0) {
                 return res.status(400).json({
                   success: false,
                   error: 'MISSING_MKL_PRECONDITION',
-                  message: 'Cannot freeze MKL without at least 1 market keyword trend entry.'
+                  message: 'Cannot freeze MKL without at least 1 market keyword trend entry for this project.'
                 });
               }
               next();

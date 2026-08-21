@@ -34,7 +34,8 @@ function runAllTests() {
     'tests/vps_platform_scripts.test.cjs',
     'tests/test_opportunity_truth_boundary.cjs',
     'tests/test_truth_evidence_ownership.test.cjs',
-    'tests/test_workflow_state_machine.test.cjs'
+    'tests/test_workflow_state_machine.test.cjs',
+    'tests/test_project_scoped_evidence_workflow.test.cjs'
   ];
 
   let passedCount = 0;

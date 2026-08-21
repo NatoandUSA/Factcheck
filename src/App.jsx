@@ -21,21 +21,26 @@ export default function App() {
   const { user, switchWorkspace } = useAuth();
 
   const handleTabChange = async (tab) => {
-    setActiveTab(tab);
     if (tab === 'etsy-workspace' && user && user.marketplace !== 'ETSY') {
       try {
         await switchWorkspace({ marketplace: 'ETSY' });
+        setActiveTab(tab);
         showToast('Đã chuyển sang phiên làm việc Etsy Workspace');
       } catch (e) {
+        showToast(`Không thể chuyển sang Etsy Workspace: ${e.message}`);
         console.warn('Could not switch to Etsy workspace:', e.message);
       }
     } else if (tab === 'amazon-workspace' && user && user.marketplace !== 'AMAZON') {
       try {
         await switchWorkspace({ marketplace: 'AMAZON' });
+        setActiveTab(tab);
         showToast('Đã chuyển sang phiên làm việc Amazon Workspace');
       } catch (e) {
+        showToast(`Không thể chuyển sang Amazon Workspace: ${e.message}`);
         console.warn('Could not switch to Amazon workspace:', e.message);
       }
+    } else {
+      setActiveTab(tab);
     }
   };
 

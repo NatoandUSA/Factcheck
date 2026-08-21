@@ -24,7 +24,9 @@ function run() {
     amazonSearchTerms: 'personalized custom necklace gift pendant sterling silver',
     etsyTags: Array.from({ length: 13 }, (_, i) => `tag${i}`),
     amazonDescription: '',
-    etsyDescription: ''
+    etsyDescription: '',
+    netProfit: 8.50,
+    netMargin: 35.0
   };
   const res1 = evaluatePublishGate(approvedButEmptyDescription);
   assert.notStrictEqual(res1.final_status, 'PUBLISH_READY', 'Empty description must not reach PUBLISH_READY');

@@ -337,6 +337,19 @@ db.serialize(() => {
                       const sellerId = this.lastID;
                       db.run("INSERT INTO workspace_memberships (user_id, workspace_id, role) VALUES (?, ?, ?)", [sellerId, amzWorkspaceId, 'SELLER']);
                     });
+
+                  // Step 6: Create Tenant Beta Workspace & Owner (Cross-Tenant Isolation Fixture)
+                  db.run("INSERT INTO workspaces (tenant_id, marketplace, name) VALUES (?, ?, ?)",
+                    ['tenant-beta-uuid', 'AMAZON', 'Tenant Beta Store'], function(err) {
+                      if (err) return console.error('Error creating Beta workspace:', err);
+                      const betaWorkspaceId = this.lastID;
+                      db.run("INSERT INTO users (email, password_hash, name) VALUES (?, ?, ?)",
+                        ['owner-beta@omniseller.local', defaultPasswordHash, 'Tenant Beta Owner'], function(err) {
+                          if (err) return console.error('Error creating Beta owner:', err);
+                          const betaOwnerId = this.lastID;
+                          db.run("INSERT INTO workspace_memberships (user_id, workspace_id, role) VALUES (?, ?, ?)", [betaOwnerId, betaWorkspaceId, 'OWNER']);
+                        });
+                    });
                 });
             });
         } catch (e) {

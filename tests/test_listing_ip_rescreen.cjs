@@ -77,7 +77,9 @@ async function createBenignListing(port, cookie, marketplace) {
     payload: {
       amazonDescription: 'Human checked neutral product description.',
       etsyDescription: 'Human checked neutral product description.',
-      etsyTags: []
+      etsyTags: [],
+      netProfit: 8.50,
+      netMargin: 35.0
     }
   });
   assert.strictEqual(created.status, 200, 'benign listing create must succeed');
@@ -95,7 +97,9 @@ function forgedPayload({ amazonTitle = '', etsyTitle = '', etsyTags = [] }) {
     etsyTitle,
     amazonDescription: 'Human checked neutral product description.',
     etsyDescription: 'Human checked neutral product description.',
-    etsyTags
+    etsyTags,
+    netProfit: 8.50,
+    netMargin: 35.0
   };
 }
 

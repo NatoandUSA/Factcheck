@@ -82,11 +82,18 @@ async function runPublishGateContractSuite() {
   assert.ok(result3.reasons.some(r => r.includes('249 UTF-8 bytes limit')));
   console.log('  🟢 Search Terms >249 Bytes: NEEDS_REVIEW caught byte limit violation.');
 
+  const missingProfitListing = { ...validAmazonListing, netProfit: null, netMargin: null };
+  const resultMissingFin = evaluatePublishGate(missingProfitListing);
+  assert.strictEqual(resultMissingFin.final_status, 'NEEDS_REVIEW');
+  assert.ok(resultMissingFin.reasons.some(r => r.includes('Net profit is required')));
+  assert.ok(resultMissingFin.reasons.some(r => r.includes('Net margin is required')));
+  console.log('  🟢 Financial Required: Rejects missing net profit / net margin safely.');
+
   const nanProfitListing = { ...validAmazonListing, netProfit: 'invalid_number_string', netMargin: NaN };
   const result4 = evaluatePublishGate(nanProfitListing);
   assert.strictEqual(result4.final_status, 'NEEDS_REVIEW');
-  assert.ok(result4.reasons.some(r => r.includes('Invalid net profit value')));
-  assert.ok(result4.reasons.some(r => r.includes('Invalid net margin value')));
+  assert.ok(result4.reasons.some(r => r.includes('Net profit is required and must be a valid numeric figure')));
+  assert.ok(result4.reasons.some(r => r.includes('Net margin is required and must be a valid numeric figure')));
   console.log('  🟢 Financial NaN: Rejects invalid non-finite numbers safely without failing open.');
 
   const lowProfitListing = { ...validAmazonListing, netProfit: 4.50, netMargin: 32.0 };
@@ -94,6 +101,12 @@ async function runPublishGateContractSuite() {
   assert.strictEqual(result5.final_status, 'NEEDS_REVIEW');
   assert.ok(result5.reasons.some(r => r.includes('below the required $6.00 floor')));
   console.log('  🟢 Financial Floor: Rejects net profit below $6.00 floor.');
+
+  const impossibleMathListing = { ...validAmazonListing, price: 10, cost: 200, netProfit: 8.5, netMargin: 35 };
+  const resultImpossible = evaluatePublishGate(impossibleMathListing);
+  assert.strictEqual(resultImpossible.final_status, 'NEEDS_REVIEW');
+  assert.ok(resultImpossible.reasons.some(r => r.includes('Cost ($200) cannot exceed price ($10)')));
+  console.log('  🟢 Impossible Math: Rejects cost > price safely.');
 
   // Unrecognized Product Type test (Fail-closed contract)
   const unknownTypeListing = { ...validAmazonListing, productType: 'INVALID_SURPRISE_PRODUCT_TYPE' };
@@ -113,7 +126,9 @@ async function runPublishGateContractSuite() {
     etsyDescription: 'Valid Etsy description text.',
     productTruthNotes: 'Verified Etsy product details.',
     ipVerdict: 'OK',
-    ipHits: []
+    ipHits: [],
+    netProfit: 8.50,
+    netMargin: 35.0
   };
   const resultEtsyTitle = evaluatePublishGate(etsyDualListing);
   assert.strictEqual(resultEtsyTitle.final_status, 'PUBLISH_READY', 'Etsy contract must evaluate etsyTitle over amazonTitle');
@@ -252,18 +267,18 @@ async function runPublishGateContractSuite() {
     assert.ok(termsBody.reasons.some(r => r.includes('Missing Amazon search terms')));
     console.log('  🟢 HTTP Matrix 2 (Missing Amazon Search Terms): Rejected via HTTP 400.');
 
-    // Test C: Economics Absence Non-Blocking & Export Integration
-    const fullValidRes = await fetch(`http://127.0.0.1:${port}/api/listings`, {
+    // Test C: Financial Gate Enforcement & Export Integration
+    const missingFinRes = await fetch(`http://127.0.0.1:${port}/api/listings`, {
       method: 'POST',
       headers: { Cookie: ownerCookie, 'Content-Type': 'application/json', Origin: `http://127.0.0.1:${port}` },
       body: JSON.stringify({
-        amazonTitle: 'Full Valid Amazon Listing Without Financial Figures',
-        etsyTitle: 'Full Valid Amazon Listing Without Financial Figures',
+        amazonTitle: 'Valid Listing Without Financial Figures',
+        etsyTitle: 'Valid Listing Without Financial Figures',
         categoryName: 'Apparel',
         payload: {
           ipVerdict: 'OK',
           ipHits: [],
-          amazonTitle: 'Full Valid Amazon Listing Without Financial Figures',
+          amazonTitle: 'Valid Listing Without Financial Figures',
           amazonBullets: [
             '[HOOK ONE] Valid bullet description one.',
             '[HOOK TWO] Valid bullet description two.',
@@ -276,15 +291,53 @@ async function runPublishGateContractSuite() {
         }
       })
     });
+    assert.strictEqual(missingFinRes.status, 200);
+    const missingFinListing = await missingFinRes.json();
+
+    const approveMissingFinRes = await fetch(`http://127.0.0.1:${port}/api/listings/${missingFinListing.id}/approve`, {
+      method: 'PATCH',
+      headers: { Cookie: ownerCookie, 'Content-Type': 'application/json', Origin: `http://127.0.0.1:${port}` },
+      body: JSON.stringify({ expectedVersion: 1, productTruthNotes: 'Testing missing financial figures rejection.' })
+    });
+    assert.strictEqual(approveMissingFinRes.status, 400, 'Listing without financial figures must be rejected via HTTP 400');
+    const missingFinBody = await approveMissingFinRes.json();
+    assert.ok(missingFinBody.reasons.some(r => r.includes('Net profit is required')));
+    assert.ok(missingFinBody.reasons.some(r => r.includes('Net margin is required')));
+
+    const fullValidRes = await fetch(`http://127.0.0.1:${port}/api/listings`, {
+      method: 'POST',
+      headers: { Cookie: ownerCookie, 'Content-Type': 'application/json', Origin: `http://127.0.0.1:${port}` },
+      body: JSON.stringify({
+        amazonTitle: 'Full Valid Amazon Listing With Financial Figures',
+        etsyTitle: 'Full Valid Amazon Listing With Financial Figures',
+        categoryName: 'Apparel',
+        payload: {
+          ipVerdict: 'OK',
+          ipHits: [],
+          amazonTitle: 'Full Valid Amazon Listing With Financial Figures',
+          amazonBullets: [
+            '[HOOK ONE] Valid bullet description one.',
+            '[HOOK TWO] Valid bullet description two.',
+            '[HOOK THREE] Valid bullet description three.',
+            '[HOOK FOUR] Valid bullet description four.',
+            '[HOOK FIVE] Valid bullet description five.'
+          ],
+          amazonSearchTerms: 'valid generic search terms for apparel sweatshirt',
+          amazonDescription: 'Valid description for complete test listing.',
+          netProfit: 8.50,
+          netMargin: 35.0
+        }
+      })
+    });
     assert.strictEqual(fullValidRes.status, 200);
     const validListingRow = await fullValidRes.json();
 
     const approveValidRes = await fetch(`http://127.0.0.1:${port}/api/listings/${validListingRow.id}/approve`, {
       method: 'PATCH',
       headers: { Cookie: ownerCookie, 'Content-Type': 'application/json', Origin: `http://127.0.0.1:${port}` },
-      body: JSON.stringify({ expectedVersion: 1, productTruthNotes: 'Verified full valid listing without financial figures.' })
+      body: JSON.stringify({ expectedVersion: 1, productTruthNotes: 'Verified full valid listing with financial figures.' })
     });
-    assert.strictEqual(approveValidRes.status, 200, 'Full valid listing without financial figures must reach PUBLISH_READY');
+    assert.strictEqual(approveValidRes.status, 200, 'Full valid listing with financial figures must reach PUBLISH_READY');
     const validApproveBody = await approveValidRes.json();
     assert.strictEqual(validApproveBody.status, 'PUBLISH_READY');
 
@@ -294,7 +347,7 @@ async function runPublishGateContractSuite() {
     assert.strictEqual(exportValidRes.status, 200, 'PUBLISH_READY listing must export successfully');
     const exportBody = await exportValidRes.json();
     assert.strictEqual(exportBody.listing.marketplace, 'AMAZON', 'Exported payload must retain server DB row marketplace authority');
-    console.log('  🟢 HTTP Matrix 3 (Economics Absence & Export Authority): Approved and exported with server row.marketplace authority.');
+    console.log('  🟢 HTTP Matrix 3 (Financial Gate & Export Authority): Missing financials rejected (400), valid financials approved (PUBLISH_READY).');
 
     // Test D: Etsy DB Row Symmetry (Client spoofing marketplace: 'AMAZON')
     const etsyWs = workspaces.find(w => w.marketplace === 'ETSY');
@@ -363,7 +416,9 @@ async function runPublishGateContractSuite() {
           ipVerdict: 'OK',
           ipHits: [],
           etsyTags: Array.from({ length: 13 }, (_, i) => `etsytag${i + 1}`),
-          etsyDescription: 'Valid Etsy product description.'
+          etsyDescription: 'Valid Etsy product description.',
+          netProfit: 8.50,
+          netMargin: 35.0
         }
       })
     });

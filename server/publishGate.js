@@ -179,7 +179,7 @@ function evaluatePublishGate(listing) {
     }
   }
 
-  // 2a-3. Financial Profit & Margin Floor Enforcement (Safe Finite Number Validation)
+  // 2a-3. Financial Profit & Margin Floor Enforcement (Mandatory Finite Number Validation)
   if (listing.price !== undefined && listing.price !== null) {
     const priceNum = typeof listing.price === 'string' ? parseFloat(listing.price.replace(/[^0-9.]/g, '')) : Number(listing.price);
     if (!Number.isFinite(priceNum) || priceNum <= 0) {
@@ -194,19 +194,31 @@ function evaluatePublishGate(listing) {
     }
   }
 
-  if (listing.netProfit !== undefined && listing.netProfit !== null) {
+  if (listing.price !== undefined && listing.price !== null && listing.cost !== undefined && listing.cost !== null) {
+    const priceNum = typeof listing.price === 'string' ? parseFloat(listing.price.replace(/[^0-9.]/g, '')) : Number(listing.price);
+    const costNum = typeof listing.cost === 'string' ? parseFloat(listing.cost.replace(/[^0-9.]/g, '')) : Number(listing.cost);
+    if (Number.isFinite(priceNum) && Number.isFinite(costNum) && costNum > priceNum) {
+      issues.push(`Cost ($${costNum}) cannot exceed price ($${priceNum})`);
+    }
+  }
+
+  if (listing.netProfit === undefined || listing.netProfit === null || listing.netProfit === '') {
+    issues.push(`Net profit is required and must be a valid numeric figure (minimum $${MIN_NET_PROFIT.toFixed(2)})`);
+  } else {
     const profitNum = typeof listing.netProfit === 'string' ? parseFloat(listing.netProfit) : Number(listing.netProfit);
     if (!Number.isFinite(profitNum)) {
-      issues.push('Invalid net profit value (must be a valid numeric figure)');
+      issues.push(`Net profit is required and must be a valid numeric figure (minimum $${MIN_NET_PROFIT.toFixed(2)})`);
     } else if (profitNum < MIN_NET_PROFIT) {
       issues.push(`Net profit ($${profitNum}) is below the required $${MIN_NET_PROFIT.toFixed(2)} floor`);
     }
   }
 
-  if (listing.netMargin !== undefined && listing.netMargin !== null) {
+  if (listing.netMargin === undefined || listing.netMargin === null || listing.netMargin === '') {
+    issues.push(`Net margin is required and must be a valid numeric figure (minimum ${MIN_NET_MARGIN.toFixed(1)}%)`);
+  } else {
     const marginNum = typeof listing.netMargin === 'string' ? parseFloat(listing.netMargin) : Number(listing.netMargin);
     if (!Number.isFinite(marginNum)) {
-      issues.push('Invalid net margin value (must be a valid numeric figure)');
+      issues.push(`Net margin is required and must be a valid numeric figure (minimum ${MIN_NET_MARGIN.toFixed(1)}%)`);
     } else if (marginNum < MIN_NET_MARGIN) {
       issues.push(`Net margin (${marginNum}%) is below the required ${MIN_NET_MARGIN.toFixed(1)}% floor`);
     }

@@ -287,7 +287,9 @@ async function runAuthFoundationTests() {
           ],
           amazonSearchTerms: 'personalized sweatshirt custom embroidered gift',
           etsyTags: Array.from({ length: 13 }, (_, index) => `test tag ${index + 1}`),
-          amazonDescription: 'Real test fixture description: personalized embroidered sweatshirt, cotton-poly blend.'
+          amazonDescription: 'Real test fixture description: personalized embroidered sweatshirt, cotton-poly blend.',
+          netProfit: 8.50,
+          netMargin: 35.0
         }
       })
     });
@@ -426,7 +428,9 @@ async function runAuthFoundationTests() {
           ],
           amazonSearchTerms: 'amazon private listing embroidered gift sweatshirt',
           etsyTags: Array.from({ length: 13 }, (_, index) => `scope tag ${index + 1}`),
-          amazonDescription: 'Real test fixture description: embroidered gift item, cotton blend, machine washable.'
+          amazonDescription: 'Real test fixture description: embroidered gift item, cotton blend, machine washable.',
+          netProfit: 8.50,
+          netMargin: 35.0
         }
       })
     });

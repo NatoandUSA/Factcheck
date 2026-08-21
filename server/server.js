@@ -27,6 +27,7 @@ const { parseEtsySearchResults, sanitizeStaffManualAssertions, synthesizeEtsyBat
 const benchmarkService = require('./benchmarkService');
 const publishGate = require('./publishGate');
 const { hashPassword, verifyPassword } = require('./security/scrypt');
+const { createRateLimiter } = require('./security/rateLimiter');
 const { COOKIE_NAME, SESSION_TTL_MS, createSessionRecord, verifySessionRecord, revokeSessionRecord } = require('./security/session');
 const { parseCookies, extractRawToken, requireAuth, requireRole, requireCsrfOrigin, corsOptionsDelegate } = require('./middleware/auth');
 const { runMigrations } = require('./database/migrations');
@@ -166,6 +167,23 @@ db.serialize(() => {
       accepted_at DATETIME,
       accepted_by INTEGER,
       metadata TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS research_projects (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id TEXT NOT NULL,
+      workspace_id INTEGER NOT NULL,
+      marketplace TEXT NOT NULL CHECK(marketplace IN ('AMAZON', 'ETSY')),
+      name TEXT NOT NULL,
+      seed_phrase TEXT NOT NULL,
+      state TEXT DEFAULT 'EVIDENCE_INTAKE' CHECK(state IN ('EVIDENCE_INTAKE', 'RESEARCH_ACCEPTED', 'DNA_ACCEPTED', 'MKL_FROZEN', 'DRAFT_GENERATED', 'PRODUCT_TRUTH_VERIFIED', 'MANAGER_APPROVED', 'PUBLISH_READY')),
+      reference_asin TEXT,
+      batch_count INTEGER DEFAULT 0,
+      actor_id INTEGER NOT NULL,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `);
@@ -402,8 +420,10 @@ app.use((req, res, next) => {
 // PR-2B: AUTHENTICATION API ENDPOINTS
 // ==========================================
 
+const loginRateLimiter = createRateLimiter({ windowMs: 15 * 60 * 1000, maxHits: 20, message: 'Thao tác quá nhiều lần. Vui lòng thử lại sau 15 phút.' });
+
 // POST /api/auth/login
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', loginRateLimiter, async (req, res) => {
   const { email, password, workspaceId } = req.body || {};
 
   if (!email || !password) {
@@ -761,6 +781,75 @@ app.post('/api/evidence/:id/accept', requireAuth(db), requireRole(['OWNER', 'MAN
       if (err) return res.status(500).json({ success: false, error: err.message });
       if (this.changes === 0) return res.status(404).json({ success: false, error: 'EVIDENCE_NOT_FOUND' });
       res.json({ success: true, evidenceId: id, evidenceState: 'ACCEPTED', acceptedBy: req.user.userId, acceptedAt: now });
+    }
+  );
+});
+
+// GET /api/projects - List research projects for workspace
+app.get('/api/projects', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
+  db.all(
+    `SELECT * FROM research_projects
+     WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ?
+     ORDER BY updated_at DESC`,
+    [req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+    (err, rows) => {
+      if (err) return res.status(500).json({ success: false, error: err.message });
+      res.json({ success: true, count: (rows || []).length, projects: rows || [] });
+    }
+  );
+});
+
+// POST /api/projects - Create new research project
+app.post('/api/projects', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
+  const { name, seedPhrase, referenceAsin } = req.body || {};
+  if (!name || !seedPhrase) {
+    return res.status(400).json({ success: false, error: 'MISSING_FIELDS', message: 'Project name and seedPhrase are required.' });
+  }
+
+  db.run(
+    `INSERT INTO research_projects (tenant_id, workspace_id, marketplace, name, seed_phrase, state, reference_asin, actor_id)
+     VALUES (?, ?, ?, ?, ?, 'EVIDENCE_INTAKE', ?, ?)`,
+    [
+      req.user.tenantId,
+      req.user.workspaceId,
+      req.user.marketplace,
+      String(name).trim(),
+      String(seedPhrase).trim(),
+      referenceAsin ? String(referenceAsin).trim() : null,
+      req.user.userId
+    ],
+    function(err) {
+      if (err) return res.status(500).json({ success: false, error: err.message });
+      res.json({
+        success: true,
+        projectId: this.lastID,
+        state: 'EVIDENCE_INTAKE',
+        marketplace: req.user.marketplace
+      });
+    }
+  );
+});
+
+// PATCH /api/projects/:id/transition - Server-validated state transition
+app.patch('/api/projects/:id/transition', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
+  const projectId = req.params.id;
+  const { targetState } = req.body || {};
+
+  const VALID_STATES = ['EVIDENCE_INTAKE', 'RESEARCH_ACCEPTED', 'DNA_ACCEPTED', 'MKL_FROZEN', 'DRAFT_GENERATED', 'PRODUCT_TRUTH_VERIFIED', 'MANAGER_APPROVED', 'PUBLISH_READY'];
+  if (!targetState || !VALID_STATES.includes(targetState)) {
+    return res.status(400).json({ success: false, error: 'INVALID_TARGET_STATE', validStates: VALID_STATES });
+  }
+
+  const now = new Date().toISOString();
+  db.run(
+    `UPDATE research_projects
+     SET state = ?, updated_at = ?
+     WHERE id = ? AND tenant_id = ? AND workspace_id = ?`,
+    [targetState, now, projectId, req.user.tenantId, req.user.workspaceId],
+    function(err) {
+      if (err) return res.status(500).json({ success: false, error: err.message });
+      if (this.changes === 0) return res.status(404).json({ success: false, error: 'PROJECT_NOT_FOUND' });
+      res.json({ success: true, projectId, state: targetState, updatedAt: now });
     }
   );
 });

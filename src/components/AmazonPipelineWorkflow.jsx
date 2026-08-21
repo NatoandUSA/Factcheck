@@ -76,11 +76,6 @@ export default function AmazonPipelineWorkflow({
 
     setBatches(outcome.batches);
     setXraySellers(outcome.xraySellers);
-    if (Array.isArray(outcome.xraySellers) && outcome.xraySellers.length > 0) {
-      try {
-        sessionStorage.setItem('omni_amazon_xray_sellers', JSON.stringify(outcome.xraySellers));
-      } catch (e) {}
-    }
     if (onUpdateXraySellers && outcome.xraySellers) {
       onUpdateXraySellers(outcome.xraySellers);
     }
@@ -409,12 +404,12 @@ export default function AmazonPipelineWorkflow({
                               {item?.asin || '—'} ↗
                             </a>
                             <div style={{ display: 'flex', gap: '4px', marginTop: '2px' }}>
-                              {item?.isBestSeller && (
+                              {item?.isBestSeller === true && (
                                 <span style={{ background: '#fef08a', color: '#854d0e', fontSize: '0.65rem', padding: '1px 4px', borderRadius: '3px', fontWeight: 800 }}>
                                   #1 Best Seller
                                 </span>
                               )}
-                              {item?.isSponsored && (
+                              {item?.isSponsored === true && (
                                 <span style={{ background: '#f1f5f9', color: '#475569', fontSize: '0.65rem', padding: '1px 4px', borderRadius: '3px', fontWeight: 700 }}>
                                   Sponsored
                                 </span>
@@ -495,7 +490,7 @@ export default function AmazonPipelineWorkflow({
                             fontWeight: 800,
                             fontSize: '0.7rem'
                           }}>
-                            {item?.fulfillment || 'FBA'}
+                            {item?.fulfillment || 'UNKNOWN'}
                           </span>
                           {item?.buyBox && (
                             <span style={{ fontSize: '0.72rem', color: '#334155', fontWeight: 600 }}>

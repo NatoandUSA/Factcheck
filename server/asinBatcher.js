@@ -35,6 +35,21 @@ function parseNumericField(row, keys) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+// Xray exports encode flags inconsistently. Only explicit positive values
+// may become true; explicit negative values become false and all other
+// values remain UNKNOWN/null. This prevents strings such as "No" from being
+// truthy in a staff-facing badge.
+function parseObservedBoolean(row, keys) {
+  const raw = firstDefined(row, keys);
+  if (raw === undefined) return null;
+  if (raw === true || raw === 1) return true;
+  if (raw === false || raw === 0) return false;
+  const normalized = String(raw).trim().toLowerCase();
+  if (['true', 'yes', 'y', '1'].includes(normalized)) return true;
+  if (['false', 'no', 'n', '0'].includes(normalized)) return false;
+  return null;
+}
+
 function filterAndBatchXrayAsins(xrayData, seedKeyword = 'Custom Gift') {
   let rawRows = [];
 
@@ -134,8 +149,8 @@ function filterAndBatchXrayAsins(xrayData, seedKeyword = 'Custom Gift') {
     const sellerAge = parseNumericField(row, ['Seller Age (mo)', 'Seller Age']);
     const creationDate = firstDefined(row, ['Creation Date', 'Creation date', 'Date First Available']) || null;
     const abaMostClicked = firstDefined(row, ['ABA Most Clicked', 'ABA']) || null;
-    const isBestSeller = firstDefined(row, ['Best Seller', 'best seller', 'Badge']) || null;
-    const isSponsored = firstDefined(row, ['Sponsored', 'sponsored']) || null;
+    const isBestSeller = parseObservedBoolean(row, ['Best Seller', 'best seller']);
+    const isSponsored = parseObservedBoolean(row, ['Sponsored', 'sponsored']);
     const imageUrl = firstDefined(row, ['Image URL', 'Image', 'image url', 'imageUrl', 'Thumbnail']) || null;
     const fees = parseNumericField(row, ['Fees $', 'Fees', 'fees']);
     const titleCharCount = parseNumericField(row, ['Title Char. Count', 'Title Length']) || (title ? title.length : null);

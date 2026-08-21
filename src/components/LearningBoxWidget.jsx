@@ -39,23 +39,9 @@ export default function LearningBoxWidget({ platform = 'AMAZON', onShowToast, sc
     fetchTemplates();
   }, [platform]);
 
-  const [cachedSellers, setCachedSellers] = useState([]);
-
-  useEffect(() => {
-    if (isAmazon && scannedSellers.length === 0) {
-      try {
-        const cached = sessionStorage.getItem('omni_amazon_xray_sellers');
-        if (cached) {
-          const parsed = JSON.parse(cached);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            setCachedSellers(parsed);
-          }
-        }
-      } catch (e) {}
-    }
-  }, [isAmazon, scannedSellers.length]);
-
-  const effectiveSellers = scannedSellers.length > 0 ? scannedSellers : (isAmazon ? cachedSellers : []);
+  // The parent workspace owns the active evidence set. Do not restore an
+  // unscoped browser cache from another workspace/project/session.
+  const effectiveSellers = Array.isArray(scannedSellers) ? scannedSellers : [];
   const selectedSeller = effectiveSellers.find(s => s.id === selectedSellerId || s.asin === selectedSellerId);
   const sellerAsRawText = selectedSeller
     ? (isAmazon

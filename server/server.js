@@ -2906,12 +2906,12 @@ const handleReportUpload = async (req, res) => {
       const xraySellers = (batchResult.batches || []).flatMap(b => b.items || []).map((item, idx) => ({
         id: `asin_${item.asin}_${idx}`,
         asin: item.asin,
-        title: item.title || `Amazon Top Seller (${item.asin})`,
-        brand: item.brand || '—',
-        price: item.price !== null ? `$${item.price.toFixed(2)}` : '—',
-        sales: item.sales !== null ? item.sales.toLocaleString() : '—',
+        title: item.title,
+        brand: item.brand,
+        price: item.price,
+        sales: item.sales,
         parentSales: item.parentSales,
-        revenue: item.revenue !== null ? `$${item.revenue.toLocaleString()}` : '—',
+        revenue: item.revenue,
         parentRevenue: item.parentRevenue,
         bsr: item.bsr,
         ratings: item.ratings,
@@ -2931,8 +2931,11 @@ const handleReportUpload = async (req, res) => {
         fees: item.fees,
         titleCharCount: item.titleCharCount,
         activeSellers: item.activeSellers,
+        // This is a navigation reference deterministically derived from the
+        // observed ASIN, not an observed listing URL or seller identity.
         url: `https://www.amazon.com/dp/${item.asin}`,
-        shopName: item.seller || item.brand || `ASIN: ${item.asin}`
+        urlProvenance: 'DERIVED_FROM_ASIN',
+        shopName: item.seller || null
       }));
 
       return res.json({

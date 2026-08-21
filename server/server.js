@@ -2159,6 +2159,12 @@ app.post('/api/etsy/feed-search-results', requireAuth(db), requireRole(['OWNER',
   const parsedSellers = [];
   const parsedKeywords = [];
 
+  let searchSeed = seed;
+  const searchUrlMatch = rawText.match(/https?:\/\/(?:www\.)?etsy\.com\/[^\s]*[?&]q=([^&#\s]+)/i);
+  if (searchUrlMatch) {
+    searchSeed = decodeURIComponent(searchUrlMatch[1].replace(/\+/g, ' ')).trim();
+  }
+
   const addTag = (val) => {
     if (!val || typeof val !== 'string') return;
     const clean = val.replace(/^[#\s]+|[#\s]+$/g, '').trim().toLowerCase();
@@ -2177,8 +2183,75 @@ app.post('/api/etsy/feed-search-results', requireAuth(db), requireRole(['OWNER',
     }
   };
 
-  if (seed && String(seed).trim().length >= 3) {
-    addTag(String(seed).trim());
+  if (searchSeed && String(searchSeed).trim().length >= 3) {
+    addTag(String(searchSeed).trim());
+  }
+
+  // If an Etsy Search URL or query seed is present, fetch live listings via MCP
+  if (searchSeed) {
+    try {
+      const [searchRes, hotRes] = await Promise.allSettled([
+        ytrendsMcp.callTool('ytrends_search', { query: searchSeed, limit: 30 }),
+        ytrendsMcp.callTool('ytrends_find_hot_listings', { search: searchSeed, limit: 30 })
+      ]);
+
+      if (searchRes.status === 'fulfilled' && Array.isArray(searchRes.value?.data?.results)) {
+        searchRes.value.data.results.forEach((item, idx) => {
+          let price = null;
+          let country = null;
+          if (item.snippet) {
+            const priceMatch = item.snippet.match(/\$([0-9.]+)/);
+            if (priceMatch) price = `$${priceMatch[1]}`;
+            const countryMatch = item.snippet.match(/([A-Z]{2})\s+shop/i);
+            if (countryMatch) country = countryMatch[1].toUpperCase();
+          }
+          parsedSellers.push({
+            id: `fed-search-${item.id?.replace(/^lst:/, '') || idx}-${Date.now()}`,
+            title: item.title,
+            shopName: country ? `Etsy Seller (${country})` : 'Etsy Search Result',
+            country: country,
+            url: item.url,
+            price: price,
+            views24h: null,
+            sold24h: null,
+            favorites: null,
+            evidenceSource: 'ETSY_SEARCH_PAGE_RAW',
+            isSynthetic: false,
+            selected: true
+          });
+          if (item.title) {
+            const decoded = item.title.replace(/&#39;/g, "'").replace(/&amp;/g, '&');
+            const chunks = decoded.split(/[,|\-–—:]/).map(c => c.trim());
+            chunks.forEach(addTag);
+          }
+        });
+      }
+
+      if (hotRes.status === 'fulfilled' && Array.isArray(hotRes.value?.data?.listings)) {
+        hotRes.value.data.listings.forEach((lst) => {
+          parsedSellers.push({
+            id: `fed-hot-${lst.listing_id}-${Date.now()}`,
+            title: lst.title,
+            shopName: lst.shop_country ? `Etsy Seller (${lst.shop_country})` : 'Etsy Top Seller',
+            country: lst.shop_country,
+            url: `https://www.etsy.com/listing/${lst.listing_id}`,
+            price: lst.price_usd ? `$${lst.price_usd}` : null,
+            views24h: lst.views_24h,
+            sold24h: lst.sold_24h,
+            conversionRate: lst.conversion_rate ? Number((lst.conversion_rate * 100).toFixed(2)) : null,
+            favorites: lst.favorites,
+            evidenceSource: 'ETSY_SEARCH_PAGE_RAW',
+            isSynthetic: false,
+            selected: true
+          });
+          if (Array.isArray(lst.tags)) {
+            lst.tags.forEach(addTag);
+          }
+        });
+      }
+    } catch (mcpErr) {
+      console.warn('Live search fetch error in feed:', mcpErr.message);
+    }
   }
 
   lines.forEach((line, idx) => {
@@ -2257,6 +2330,7 @@ app.post('/api/etsy/feed-search-results', requireAuth(db), requireRole(['OWNER',
     success: true,
     source: 'ETSY_SEARCH_PAGE_RAW',
     evidenceState: 'OBSERVED',
+    seed: searchSeed || null,
     sellers: parsedSellers.slice(0, 30),
     keywords: parsedKeywords.slice(0, 13),
     count: parsedSellers.length

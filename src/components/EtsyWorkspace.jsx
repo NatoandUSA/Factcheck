@@ -48,6 +48,9 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || data.error || 'Failed to feed Etsy search data');
 
+      if (data.seed) {
+        setSeedPhrase(data.seed);
+      }
       if (Array.isArray(data.sellers) && data.sellers.length > 0) {
         setScannedSellers(data.sellers);
       }
@@ -60,7 +63,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
           trendingKeywordsStr: data.keywords.join(', ')
         });
       }
-      if (onShowToast) onShowToast(`✓ Đã nạp thành công ${data.sellers?.length || 0} seller evidence & ${data.keywords?.length || 0} tags từ trang Etsy!`);
+      if (onShowToast) onShowToast(`✓ Đã kéo thành công ${data.sellers?.length || 0} seller evidence & ${data.keywords?.length || 0} tags từ Etsy!`);
       setIsFeedModalOpen(false);
       setFeedRawText('');
     } catch (err) {
@@ -589,7 +592,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
                   <Sparkles size={20} />
                 </div>
                 <h3 style={{ margin: 0, fontSize: '1.15rem', color: '#0f172a', fontWeight: 800 }}>
-                  📥 Feed Dữ Liệu Từ Trang Kết Quả Etsy
+                  🔗 Tự Động Kéo Dữ Liệu Từ Link Tìm Kiếm Etsy
                 </h3>
               </div>
               <button
@@ -601,14 +604,14 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
             </div>
 
             <p style={{ fontSize: '0.85rem', color: '#475569', margin: '0 0 14px 0', lineHeight: 1.5 }}>
-              Bạn có thể copy toàn bộ text/tiêu đề từ tab tìm kiếm Etsy đang mở (ví dụ <i>"Para mi hija - Etsy Vietnam"</i>), dán danh sách URL listing, hoặc dán các cụm từ khóa. Hệ thống sẽ tự động bóc tách thành <b>Evidence Sellers</b> & <b>13 Etsy Tags chuẩn</b> với nguồn gốc xác thực 100%!
+              Chỉ cần copy đường link trang tìm kiếm Etsy (hoặc các link listing cụ thể) dán vào đây. Hệ thống sẽ tự động bóc tách từ khóa hạt nhân, cào <b>30 Sellers thực tế</b> và <b>13 Tags chuẩn 100%</b>!
             </p>
 
             <textarea
               value={feedRawText}
               onChange={(e) => setFeedRawText(e.target.value)}
-              placeholder="Dán nội dung kết quả Etsy tại đây...&#10;Ví dụ:&#10;Custom Para Mi Hija Es Verte Ser Mamá 3D Effect Coffee Mug - $11.90&#10;https://www.etsy.com/listing/4463297405&#10;Custom Spanish Daughter Mug, Para Mi Hija..."
-              rows={8}
+              placeholder="Dán link trang tìm kiếm Etsy hoặc các link listing tại đây...&#10;Ví dụ:&#10;https://www.etsy.com/search?q=para%20mi%20hija&ref=search_bar&#10;https://www.etsy.com/listing/4463297405"
+              rows={6}
               style={{
                 width: '100%',
                 borderRadius: '10px',
@@ -616,39 +619,56 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
                 padding: '12px',
                 fontSize: '0.85rem',
                 fontFamily: 'inherit',
-                marginBottom: '18px',
+                marginBottom: '14px',
                 outline: 'none',
                 boxSizing: 'border-box'
               }}
             />
 
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <button
-                onClick={() => setIsFeedModalOpen(false)}
-                className="btn btn-secondary"
-                style={{ padding: '8px 16px', borderRadius: '8px' }}
-              >
-                Hủy bỏ
-              </button>
-              <button
-                onClick={handleFeedSearchResults}
-                disabled={feedSubmitting || !feedRawText.trim()}
-                className="btn btn-primary"
+                type="button"
+                onClick={() => setFeedRawText('https://www.etsy.com/search?q=para%20mi%20hija&ref=search_bar')}
                 style={{
-                  background: '#059669',
-                  color: '#fff',
-                  fontWeight: 700,
-                  padding: '8px 20px',
-                  borderRadius: '8px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  cursor: (feedSubmitting || !feedRawText.trim()) ? 'not-allowed' : 'pointer'
+                  background: '#f1f5f9',
+                  border: '1px solid #e2e8f0',
+                  color: '#475569',
+                  fontSize: '0.75rem',
+                  padding: '5px 10px',
+                  borderRadius: '6px',
+                  cursor: 'pointer'
                 }}
               >
-                <Zap size={16} />
-                <span>{feedSubmitting ? 'Đang phân tích...' : '✓ Nạp Dữ Liệu Vào Workspace'}</span>
+                + Thử link mẫu: para mi hija
               </button>
+              <div style={{ display: 'flex', gap: '10px' }}>
+                <button
+                  onClick={() => setIsFeedModalOpen(false)}
+                  className="btn btn-secondary"
+                  style={{ padding: '8px 16px', borderRadius: '8px' }}
+                >
+                  Hủy bỏ
+                </button>
+                <button
+                  onClick={handleFeedSearchResults}
+                  disabled={feedSubmitting || !feedRawText.trim()}
+                  className="btn btn-primary"
+                  style={{
+                    background: '#059669',
+                    color: '#fff',
+                    fontWeight: 700,
+                    padding: '8px 20px',
+                    borderRadius: '8px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    cursor: (feedSubmitting || !feedRawText.trim()) ? 'not-allowed' : 'pointer'
+                  }}
+                >
+                  <Zap size={16} />
+                  <span>{feedSubmitting ? 'Đang kéo dữ liệu...' : '⚡ Tự Động Kéo Dữ Liệu'}</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>

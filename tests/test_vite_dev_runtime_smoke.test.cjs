@@ -69,8 +69,17 @@ async function runViteSmokeTest() {
     console.log('  🟢 ALL VITE DEV RUNTIME MODULE & SERVER SMOKE TESTS PASSED');
     console.log('================================================================\n');
   } finally {
-    viteProc.kill();
+    if (process.platform === 'win32') {
+      try {
+        require('child_process').execSync(`taskkill /F /T /PID ${viteProc.pid}`, { stdio: 'ignore' });
+      } catch (_) {
+        viteProc.kill('SIGKILL');
+      }
+    } else {
+      viteProc.kill('SIGKILL');
+    }
   }
+  process.exit(0);
 }
 
 runViteSmokeTest().catch(err => {

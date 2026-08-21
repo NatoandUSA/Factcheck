@@ -72,11 +72,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
     }
   };
 
-=======
-  const [activeProject, setActiveProject] = useState(null);
-  const fileInputRef = useRef(null);
 
->>>>>>> 793e939 (fix(architecture): enforce Aggregate Root integrity, Etsy Truth Boundary, zero code evaluation, and rate limiter verification (33/33 tests passed))
   const fetchProjects = React.useCallback(async () => {
     try {
       const res = await fetch('/api/projects', { credentials: 'include' });
@@ -199,8 +195,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
         body: JSON.stringify({
           projectId: activeProject?.id,
           seed: seedPhrase.trim(),
-          category: selectedCategory,
-          projectId: activeProject?.id
+          category: selectedCategory
         })
       });
 

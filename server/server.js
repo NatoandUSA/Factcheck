@@ -855,7 +855,8 @@ const ALLOWED_EVIDENCE_SOURCES = [
   'H10_XRAY_OBSERVED',
   'H10',
   'ETSY_SEARCH_OBSERVED',
-  'ETSY_MCP_LIVE'
+  'ETSY_MCP_LIVE',
+  'MANUAL'
 ];
 
 // Helper: resolve active project ID from explicit request or single unambiguous project in user workspace
@@ -897,7 +898,7 @@ function resolveActiveProjectId(db, user, explicitId, callback) {
 
 function parseAndValidateProject(db, req, rawProjectId, callback) {
   if (rawProjectId === undefined || rawProjectId === null || rawProjectId === '') {
-    return callback({ status: 400, error: 'PROJECT_CONTEXT_REQUIRED', message: 'projectId is mandatory for this workflow action.' });
+    return callback({ status: 400, error: 'MISSING_PROJECT_ID', message: 'projectId is mandatory for this workflow action.' });
   }
   const strId = String(rawProjectId).trim();
   if (!/^\d+$/.test(strId)) {

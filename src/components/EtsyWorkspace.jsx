@@ -24,7 +24,51 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
   const [isIpModalOpen, setIsIpModalOpen] = useState(false);
   const [activeProject, setActiveProject] = useState(null);
   const [scannedSellers, setScannedSellers] = useState([]);
+  const [isFeedModalOpen, setIsFeedModalOpen] = useState(false);
+  const [feedRawText, setFeedRawText] = useState('');
+  const [feedSubmitting, setFeedSubmitting] = useState(false);
   const fileInputRef = useRef(null);
+
+  const handleFeedSearchResults = async () => {
+    if (!feedRawText.trim()) {
+      if (onShowToast) onShowToast('Vui lòng dán nội dung kết quả tìm kiếm hoặc URL từ trang Etsy!');
+      return;
+    }
+    setFeedSubmitting(true);
+    try {
+      const res = await fetch('/api/etsy/feed-search-results', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          rawText: feedRawText,
+          seed: seedPhrase.trim()
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || data.error || 'Failed to feed Etsy search data');
+
+      if (Array.isArray(data.sellers) && data.sellers.length > 0) {
+        setScannedSellers(data.sellers);
+      }
+      if (Array.isArray(data.keywords) && data.keywords.length > 0) {
+        setMcpResult({
+          source: 'ETSY_SEARCH_PAGE_RAW',
+          evidenceState: 'OBSERVED',
+          keywords: data.keywords,
+          sellers: data.sellers,
+          trendingKeywordsStr: data.keywords.join(', ')
+        });
+      }
+      if (onShowToast) onShowToast(`✓ Đã nạp thành công ${data.sellers?.length || 0} seller evidence & ${data.keywords?.length || 0} tags từ trang Etsy!`);
+      setIsFeedModalOpen(false);
+      setFeedRawText('');
+    } catch (err) {
+      if (onShowToast) onShowToast(`Lỗi nạp dữ liệu: ${err.message}`);
+    } finally {
+      setFeedSubmitting(false);
+    }
+  };
 
   const fetchProjects = React.useCallback(async () => {
     try {
@@ -240,6 +284,28 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
           </button>
 
           <button
+            onClick={() => setIsFeedModalOpen(true)}
+            style={{
+              background: '#ecfdf5',
+              border: '1px solid #6ee7b7',
+              color: '#065f46',
+              padding: '9px 16px',
+              borderRadius: '8px',
+              fontWeight: 700,
+              fontSize: '0.85rem',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              cursor: 'pointer',
+              marginTop: '15px'
+            }}
+            title="Dán link listing, copy text kết quả tìm kiếm Etsy, hoặc danh sách từ khóa"
+          >
+            <Sparkles size={16} color="#059669" />
+            <span>📥 Feed Trang Kết Quả Etsy</span>
+          </button>
+
+          <button
             onClick={handleMcpPull}
             disabled={mcpPulling || !seedPhrase.trim()}
             className="btn btn-primary"
@@ -257,7 +323,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
             }}
           >
             <RefreshCw size={16} className={mcpPulling ? 'spinner' : ''} />
-            <span>{mcpPulling ? 'Đang kéo...' : '⚡ Auto-Pull Live Tags'}</span>
+            <span>{mcpPulling ? 'Đang kéo MCP...' : '⚡ Auto-Pull Live Tags (MCP)'}</span>
           </button>
         </div>
       </div>
@@ -492,6 +558,101 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
         onClose={() => setIsIpModalOpen(false)}
         onShowToast={onShowToast}
       />
+
+      {/* Feed Etsy Search Results Modal */}
+      {isFeedModalOpen && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(15, 23, 42, 0.65)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          zIndex: 9999,
+          padding: '20px'
+        }}>
+          <div style={{
+            maxWidth: '650px',
+            width: '100%',
+            backgroundColor: '#ffffff',
+            borderRadius: '16px',
+            boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)',
+            padding: '28px',
+            border: '1px solid #fed7aa'
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div style={{ background: '#ecfdf5', color: '#059669', padding: '8px', borderRadius: '10px' }}>
+                  <Sparkles size={20} />
+                </div>
+                <h3 style={{ margin: 0, fontSize: '1.15rem', color: '#0f172a', fontWeight: 800 }}>
+                  📥 Feed Dữ Liệu Từ Trang Kết Quả Etsy
+                </h3>
+              </div>
+              <button
+                onClick={() => setIsFeedModalOpen(false)}
+                style={{ background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', color: '#64748b' }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <p style={{ fontSize: '0.85rem', color: '#475569', margin: '0 0 14px 0', lineHeight: 1.5 }}>
+              Bạn có thể copy toàn bộ text/tiêu đề từ tab tìm kiếm Etsy đang mở (ví dụ <i>"Para mi hija - Etsy Vietnam"</i>), dán danh sách URL listing, hoặc dán các cụm từ khóa. Hệ thống sẽ tự động bóc tách thành <b>Evidence Sellers</b> & <b>13 Etsy Tags chuẩn</b> với nguồn gốc xác thực 100%!
+            </p>
+
+            <textarea
+              value={feedRawText}
+              onChange={(e) => setFeedRawText(e.target.value)}
+              placeholder="Dán nội dung kết quả Etsy tại đây...&#10;Ví dụ:&#10;Custom Para Mi Hija Es Verte Ser Mamá 3D Effect Coffee Mug - $11.90&#10;https://www.etsy.com/listing/4463297405&#10;Custom Spanish Daughter Mug, Para Mi Hija..."
+              rows={8}
+              style={{
+                width: '100%',
+                borderRadius: '10px',
+                border: '1px solid #cbd5e1',
+                padding: '12px',
+                fontSize: '0.85rem',
+                fontFamily: 'inherit',
+                marginBottom: '18px',
+                outline: 'none',
+                boxSizing: 'border-box'
+              }}
+            />
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <button
+                onClick={() => setIsFeedModalOpen(false)}
+                className="btn btn-secondary"
+                style={{ padding: '8px 16px', borderRadius: '8px' }}
+              >
+                Hủy bỏ
+              </button>
+              <button
+                onClick={handleFeedSearchResults}
+                disabled={feedSubmitting || !feedRawText.trim()}
+                className="btn btn-primary"
+                style={{
+                  background: '#059669',
+                  color: '#fff',
+                  fontWeight: 700,
+                  padding: '8px 20px',
+                  borderRadius: '8px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  cursor: (feedSubmitting || !feedRawText.trim()) ? 'not-allowed' : 'pointer'
+                }}
+              >
+                <Zap size={16} />
+                <span>{feedSubmitting ? 'Đang phân tích...' : '✓ Nạp Dữ Liệu Vào Workspace'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

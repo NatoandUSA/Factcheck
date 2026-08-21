@@ -51,6 +51,7 @@ const ROUTES = [
   { method: 'DELETE', path: '/api/learning/templates/:id', public: false },
   { method: 'POST', path: '/api/etsy/scan-search', public: false },
   { method: 'POST', path: '/api/etsy/batch-learn', public: false },
+  { method: 'POST', path: '/api/etsy/feed-search-results', public: false },
   { method: 'POST', path: '/api/amazon/quick-draft', public: false },
   { method: 'GET', path: '/api/master-keywords', public: false },
   { method: 'GET', path: '/api/benchmark/validate', public: false },

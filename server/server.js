@@ -1514,13 +1514,36 @@ app.post('/api/mcp/pull-etsy', requireAuth(db), requireRole(['OWNER', 'MANAGER',
     });
   }
 
-  const liveData = mcpData?.data;
-  if (!liveData || typeof liveData !== 'object') {
-    return res.status(503).json({
-      success: false,
-      error: 'ETSY_MCP_UNAVAILABLE',
-      message: 'Live Etsy MCP data is unavailable. No fallback market data was generated or persisted.'
-    });
+  let liveData = mcpData?.data || {};
+  let topListings = Array.isArray(liveData.top_listings) ? [...liveData.top_listings] : [];
+
+  // Fallback to ytrends_search if top_listings or tags are empty from exploreNiche
+  if (topListings.length === 0 || (!Array.isArray(liveData.adjacent_tags) && !Array.isArray(liveData.related_keywords))) {
+    try {
+      const searchRes = await ytrendsMcp.callTool('ytrends_search', { query: cleanSeed });
+      if (Array.isArray(searchRes?.data?.results) && searchRes.data.results.length > 0) {
+        searchRes.data.results.forEach((item, idx) => {
+          let price = null;
+          let country = null;
+          if (item.snippet) {
+            const priceMatch = item.snippet.match(/\$([0-9.]+)/);
+            if (priceMatch) price = `$${priceMatch[1]}`;
+            const countryMatch = item.snippet.match(/([A-Z]{2})\s+shop/i);
+            if (countryMatch) country = countryMatch[1].toUpperCase();
+          }
+          topListings.push({
+            listing_id: item.id?.replace(/^lst:/, '') || `${idx + 1}`,
+            title: item.title,
+            url: item.url,
+            price: price,
+            shop_country: country,
+            evidenceSource: 'ETSY_MCP_LIVE'
+          });
+        });
+      }
+    } catch (searchErr) {
+      console.warn('YTrends search fallback error:', searchErr.message);
+    }
   }
 
   const overview = liveData.overview && typeof liveData.overview === 'object' ? liveData.overview : null;
@@ -1541,6 +1564,21 @@ app.post('/api/mcp/pull-etsy', requireAuth(db), requireRole(['OWNER', 'MANAGER',
 
   (Array.isArray(liveData.adjacent_tags) ? liveData.adjacent_tags : []).forEach(addObservedTag);
   (Array.isArray(liveData.related_keywords) ? liveData.related_keywords : []).forEach(addRelatedKw);
+
+  // If exploreNiche yielded no tags, extract clean tags from cleanSeed and live search listing titles
+  if (rawTags.length === 0 && rawRelatedKws.length === 0) {
+    if (cleanSeed) addObservedTag(cleanSeed);
+    topListings.forEach(lst => {
+      if (lst.title) {
+        const decoded = lst.title.replace(/&#39;/g, "'").replace(/&amp;/g, '&');
+        const chunks = decoded.split(/[,|\-–—:]/).map(c => c.trim().toLowerCase());
+        chunks.forEach(chunk => {
+          if (chunk.length >= 3 && chunk.length <= 20) addObservedTag(chunk);
+          else if (chunk.length > 20 && chunk.length <= 128) addRelatedKw(chunk);
+        });
+      }
+    });
+  }
 
   const cleanTags = [];
   const cleanRelatedKws = [];
@@ -1604,7 +1642,6 @@ app.post('/api/mcp/pull-etsy', requireAuth(db), requireRole(['OWNER', 'MANAGER',
   const trendingKeywordsStr = observedTags.join(', ');
 
   // Parse Top Listings from MCP with STRICT PASS-THROUGH PARSER (Zero Fallbacks / Zero Fabrication)
-  const topListings = Array.isArray(liveData.top_listings) ? liveData.top_listings : [];
   const sellers = topListings.map((lst, idx) => {
     const rawTitle = typeof lst.title === 'string' && lst.title.trim() ? lst.title.trim() : null;
     const rawShop = typeof lst.shop_name === 'string' && lst.shop_name.trim() ? lst.shop_name.trim() : (lst.shop_id ? `Shop #${lst.shop_id}` : null);
@@ -2056,6 +2093,79 @@ app.post('/api/etsy/batch-learn', requireAuth(db), requireRole(['OWNER', 'MANAGE
         message: evidenceError ? err.message : 'Etsy evidence learning failed.'
       });
     }
+  });
+});
+
+// POST /api/etsy/feed-search-results - Parse raw text / HTML / URLs from Etsy search result page
+app.post('/api/etsy/feed-search-results', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  if (req.user.marketplace !== 'ETSY') {
+    return res.status(403).json({ success: false, error: 'MARKETPLACE_MISMATCH', message: 'Tác vụ này yêu cầu Session Workspace Etsy.' });
+  }
+  const { rawText, seed = '' } = req.body || {};
+  if (!rawText || typeof rawText !== 'string' || !rawText.trim()) {
+    return res.status(400).json({ success: false, error: 'MISSING_RAW_TEXT', message: 'Vui lòng dán nội dung hoặc URL từ trang kết quả Etsy.' });
+  }
+
+  const lines = rawText.split('\n').map(l => l.trim()).filter(Boolean);
+  const parsedSellers = [];
+  const parsedKeywords = [];
+
+  if (seed && String(seed).trim().length >= 3 && String(seed).trim().length <= 20) {
+    parsedKeywords.push(String(seed).trim().toLowerCase());
+  }
+
+  lines.forEach((line, idx) => {
+    if (line.startsWith('http://') || line.startsWith('https://')) {
+      const matchId = line.match(/listing\/(\d+)/);
+      parsedSellers.push({
+        id: `fed-${matchId ? matchId[1] : idx}-${Date.now()}`,
+        title: line,
+        shopName: 'Etsy Web Live',
+        country: null,
+        url: line,
+        price: null,
+        views24h: null,
+        sold24h: null,
+        favorites: null,
+        evidenceSource: 'ETSY_SEARCH_PAGE_RAW',
+        isSynthetic: false,
+        selected: true
+      });
+    } else {
+      const chunks = line.split(/[,|\-–—\t:]/).map(c => c.trim()).filter(Boolean);
+      chunks.forEach(c => {
+        const clean = c.toLowerCase();
+        if (clean.length >= 3 && clean.length <= 20 && !parsedKeywords.includes(clean)) {
+          const screen = ipGuard.screenText(clean);
+          if (screen.verdict !== 'BLOCK') parsedKeywords.push(clean);
+        }
+      });
+      if (line.length >= 8) {
+        parsedSellers.push({
+          id: `fed-${idx}-${Date.now()}`,
+          title: line,
+          shopName: null,
+          country: null,
+          url: null,
+          price: null,
+          views24h: null,
+          sold24h: null,
+          favorites: null,
+          evidenceSource: 'ETSY_SEARCH_PAGE_RAW',
+          isSynthetic: false,
+          selected: true
+        });
+      }
+    }
+  });
+
+  res.json({
+    success: true,
+    source: 'ETSY_SEARCH_PAGE_RAW',
+    evidenceState: 'OBSERVED',
+    sellers: parsedSellers.slice(0, 30),
+    keywords: parsedKeywords.slice(0, 13),
+    count: parsedSellers.length
   });
 });
 

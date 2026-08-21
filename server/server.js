@@ -1424,7 +1424,10 @@ app.post('/api/listings', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SEL
       [projectId, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
       (pErr, proj) => {
         if (pErr) return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
-        if (proj && blockedStages.includes(proj.state)) {
+        if (!proj) {
+          return res.status(404).json({ success: false, error: 'PROJECT_NOT_FOUND' });
+        }
+        if (blockedStages.includes(proj.state)) {
           return res.status(409).json({
             success: false,
             error: 'STAGE_INVARIANT_VIOLATION',
@@ -3167,7 +3170,7 @@ app.get('/api/analytics-summary', requireAuth(db), requireRole(['OWNER', 'MANAGE
   db.get(`
     SELECT 
       COUNT(*) as totalListings,
-      SUM(CASE WHEN status = 'MANAGER_APPROVED' THEN 1 ELSE 0 END) as approvedListings,
+      SUM(CASE WHEN status IN ('PUBLISH_READY', 'MANAGER_APPROVED') THEN 1 ELSE 0 END) as approvedListings,
       SUM(CASE WHEN status = 'NEEDS_QA' THEN 1 ELSE 0 END) as pendingListings
     FROM listings
     WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ?
@@ -3562,7 +3565,11 @@ app.get('/api/agents/logs', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'S
 // API: Toggle Agent Status (Workspace-Isolated)
 app.post('/api/agents/:id/toggle', requireAuth(db), requireRole(['OWNER', 'MANAGER']), (req, res) => {
   const { id } = req.params;
-  const { status } = req.body; // 'ONLINE' or 'OFFLINE'
+  const { status } = req.body;
+  const VALID_AGENT_STATUSES = ['ONLINE', 'OFFLINE'];
+  if (!VALID_AGENT_STATUSES.includes(status)) {
+    return res.status(400).json({ success: false, error: 'INVALID_STATUS', allowed: VALID_AGENT_STATUSES });
+  }
   db.run("UPDATE agents SET status = ?, lastActive = CURRENT_TIMESTAMP WHERE id = ? AND tenant_id = ? AND workspace_id = ?", [status, id, req.user.tenantId, req.user.workspaceId], function(err) {
     if (err) return res.status(500).json({ error: err.message });
     if (this.changes === 0) {

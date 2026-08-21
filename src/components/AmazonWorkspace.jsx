@@ -207,6 +207,7 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
         <AmazonPipelineWorkflow
           seedPhrase={seedPhrase}
           selectedCategory={selectedCategory}
+          activeProjectId={activeProject?.id}
           onShowToast={onShowToast}
           onSelectListing={onSelectListing}
           onProceedToStage={(stage) => setActiveStage(stage)}

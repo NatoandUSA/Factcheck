@@ -223,6 +223,15 @@ function evaluatePublishGate(listing) {
     issues.push('Missing Product Truth attestation -- the approver must state what they verified about this product before publishing.');
   }
 
+  // 2d. Operational Evidence Checks: Shipping Profile & Personalization Authority
+  if (listing.shippingProfile && (listing.shippingProfile.isSynthetic || listing.shippingProfile.source === 'AI_GENERATED_WITHOUT_EVIDENCE')) {
+    issues.push('BLOCKED: AI-generated shipping profile without real shipping carrier evidence.');
+  }
+
+  if (listing.personalizationEnabled && !listing.personalizationEvidence && !listing.etsyPersonalizationInstructions) {
+    issues.push('BLOCKED: Personalization asserted without real product customization evidence.');
+  }
+
   // 3. Fail-Closed Status Determination (Ported from 22etsy-agent Truth Discipline)
   let final_status = 'INSUFFICIENT_DATA';
   let canExport = false;

@@ -7,7 +7,7 @@ import MasterKeywordTable from './MasterKeywordTable';
 import { parseJsonResponse } from '../utils/apiResponse';
 import { deriveXrayUploadOutcome } from '../utils/xrayUploadOutcome.js';
 
-export default function AmazonPipelineWorkflow({ seedPhrase, selectedCategory, onShowToast, onSelectListing, onProceedToStage }) {
+export default function AmazonPipelineWorkflow({ seedPhrase, selectedCategory, activeProjectId, onShowToast, onSelectListing, onProceedToStage }) {
   // Step 1: Feed Xray State
   const [xrayFile, setXrayFile] = useState(null);
   const [xrayAsinsInput, setXrayAsinsInput] = useState('');
@@ -45,6 +45,7 @@ export default function AmazonPipelineWorkflow({ seedPhrase, selectedCategory, o
     formData.append('reportFile', file);
     formData.append('category', selectedCategory);
     formData.append('marketplace', 'AMAZON');
+    if (activeProjectId) formData.append('projectId', activeProjectId);
 
     let outcome;
     try {
@@ -85,6 +86,7 @@ export default function AmazonPipelineWorkflow({ seedPhrase, selectedCategory, o
     formData.append('category', selectedCategory);
     formData.append('marketplace', 'AMAZON');
     formData.append('seedPhrase', seedPhrase || 'para el amor de mi vida');
+    if (activeProjectId) formData.append('projectId', activeProjectId);
 
 
     try {

@@ -59,84 +59,6 @@ export default function EtsyMultiSellerScanner({ seedPhrase, category, onShowToa
     setSellers(prev => prev.map(s => s.id === id ? { ...s, selected: !s.selected } : s));
   };
 
-  const addSeedBenchmarkSellers = () => {
-    const cleanSeed = (seedPhrase || 'custom gift').trim();
-    const benchmark30 = [];
-
-    // Batch 1: 10 High-Revenue & Sold Count Top Sellers
-    for (let i = 1; i <= 10; i++) {
-      benchmark30.push({
-        id: `bench-b1-${i}-${Date.now()}`,
-        title: `Custom ${cleanSeed} Best Seller Handmade Edition #${i}`,
-        shopName: `EtsyCraftStudioUS_${i}`,
-        country: 'United States',
-        views24h: 1500 - i * 80,
-        sold24h: 50 - i * 3,
-        totalSold: 3500 - i * 200,
-        revenueUsd: 85000 - i * 5000,
-        conversionRate: 4.8 - i * 0.2,
-        favorites: 1200 - i * 60,
-        price: `$${(29.99 + i * 1.5).toFixed(2)}`,
-        rating: 4.9,
-        batchName: 'Batch 1 (High Revenue & Total Sold)',
-        url: `https://www.etsy.com/search?q=${encodeURIComponent(cleanSeed)}`,
-        evidenceSource: 'ETSY_SEARCH_OBSERVED',
-        isSynthetic: false,
-        selected: true
-      });
-    }
-
-    // Batch 2: 10 High 24h Views & Conversion Rate Sellers
-    for (let i = 1; i <= 10; i++) {
-      benchmark30.push({
-        id: `bench-b2-${i}-${Date.now()}`,
-        title: `Personalized ${cleanSeed} Premium Gift Box #${i}`,
-        shopName: `PersonalizedGiftsCo_${i}`,
-        country: 'United States',
-        views24h: 980 - i * 50,
-        sold24h: 32 - i * 2,
-        totalSold: 1800 - i * 110,
-        revenueUsd: 42000 - i * 2500,
-        conversionRate: 3.9 - i * 0.15,
-        favorites: 750 - i * 40,
-        price: `$${(34.50 + i * 2.0).toFixed(2)}`,
-        rating: 4.8,
-        batchName: 'Batch 2 (High 24h Traffic & Conversion)',
-        url: `https://www.etsy.com/search?q=${encodeURIComponent(cleanSeed)}`,
-        evidenceSource: 'ETSY_SEARCH_OBSERVED',
-        isSynthetic: false,
-        selected: true
-      });
-    }
-
-    // Batch 3: 10 High Favorites & Rating Rising Star Sellers
-    for (let i = 1; i <= 10; i++) {
-      benchmark30.push({
-        id: `bench-b3-${i}-${Date.now()}`,
-        title: `Unique ${cleanSeed} Artisan Gift Idea #${i}`,
-        shopName: `ArtisanMakerHub_${i}`,
-        country: i % 2 === 0 ? 'United Kingdom' : 'Canada',
-        views24h: 650 - i * 35,
-        sold24h: 20 - i,
-        totalSold: 950 - i * 60,
-        revenueUsd: 21000 - i * 1200,
-        conversionRate: 3.1 - i * 0.1,
-        favorites: 520 - i * 30,
-        price: `$${(24.90 + i * 1.0).toFixed(2)}`,
-        rating: 4.9,
-        batchName: 'Batch 3 (Trending Favorites & Rating)',
-        url: `https://www.etsy.com/search?q=${encodeURIComponent(cleanSeed)}`,
-        evidenceSource: 'ETSY_SEARCH_OBSERVED',
-        isSynthetic: false,
-        selected: true
-      });
-    }
-
-    setSellers(prev => [...prev, ...benchmark30]);
-    setEvidenceMessage(`Đã nạp 30 Top Sellers (3 Batches) thực tế theo ưu tiên thuật toán Etsy cho "${cleanSeed}".`);
-    if (onShowToast) onShowToast(`✓ Đã nạp 30 Top Sellers (3 Batches) cho "${cleanSeed}"!`);
-  };
-
   const addManualSeller = () => {
     if (!manualSeller.title.trim()) {
       if (onShowToast) onShowToast('Cần nhập Tiêu đề listing đã kiểm tra. Các field còn thiếu có thể để trống/UNKNOWN.');
@@ -210,14 +132,6 @@ export default function EtsyMultiSellerScanner({ seedPhrase, category, onShowToa
           </p>
         </div>
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-          <button 
-            onClick={addSeedBenchmarkSellers} 
-            className="btn btn-primary btn-sm" 
-            style={{ background: '#ea580c', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 800 }}
-          >
-            <Zap size={14} /> ⚡ Quick Nạp 30 Top Sellers (3 Batches)
-          </button>
-
           <button onClick={() => setShowManualAdd(v => !v)} className="btn btn-secondary btn-sm" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <Plus size={14} /> Thêm Seller Đã Kiểm Tra
           </button>

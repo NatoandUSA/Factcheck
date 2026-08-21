@@ -1363,29 +1363,31 @@ app.post('/api/mcp/pull-etsy', requireAuth(db), requireRole(['OWNER', 'MANAGER',
   }
 
   const overview = liveData.overview && typeof liveData.overview === 'object' ? liveData.overview : null;
-  const extractedTags = [];
-  const extractedRelatedKws = [];
+  const rawTags = [];
+  const rawRelatedKws = [];
 
   const addObservedTag = value => {
     const text = typeof value === 'string' ? value : (value?.tag || value?.name || value?.keyword);
     const clean = typeof text === 'string' ? text.trim().toLowerCase() : '';
-    if (clean && !extractedTags.includes(clean)) extractedTags.push(clean);
+    if (clean && !rawTags.includes(clean)) rawTags.push(clean);
   };
 
   const addRelatedKw = value => {
     const text = typeof value === 'string' ? value : (value?.keyword || value?.name || value?.tag);
     const clean = typeof text === 'string' ? text.trim().toLowerCase() : '';
-    if (clean && !extractedRelatedKws.includes(clean)) extractedRelatedKws.push(clean);
+    if (clean && !rawRelatedKws.includes(clean)) rawRelatedKws.push(clean);
   };
 
   (Array.isArray(liveData.adjacent_tags) ? liveData.adjacent_tags : []).forEach(addObservedTag);
   (Array.isArray(liveData.related_keywords) ? liveData.related_keywords : []).forEach(addRelatedKw);
-  if (extractedRelatedKws.length === 0) extractedTags.forEach(addRelatedKw);
 
   const cleanTags = [];
+  const cleanRelatedKws = [];
   const blockedKeywords = [];
   const invalidKeywords = [];
-  extractedTags.forEach(keyword => {
+
+  // IP screen & validate 13 Etsy Tags (length 3-20)
+  rawTags.forEach(keyword => {
     if (keyword.length < 3 || keyword.length > 20) {
       invalidKeywords.push({ keyword, reason: 'ETSY_TAG_LENGTH_OUT_OF_RANGE' });
       return;
@@ -1393,6 +1395,17 @@ app.post('/api/mcp/pull-etsy', requireAuth(db), requireRole(['OWNER', 'MANAGER',
     const screen = ipGuard.screenText(keyword);
     if (screen.verdict === 'BLOCK') blockedKeywords.push(keyword);
     else cleanTags.push(keyword);
+  });
+
+  // IP screen & validate Related Search Keywords (length 3-128)
+  rawRelatedKws.forEach(keyword => {
+    if (keyword.length < 3 || keyword.length > 128) return;
+    const screen = ipGuard.screenText(keyword);
+    if (screen.verdict === 'BLOCK') {
+      if (!blockedKeywords.includes(keyword)) blockedKeywords.push(keyword);
+    } else {
+      cleanRelatedKws.push(keyword);
+    }
   });
 
   const observedTags = cleanTags.slice(0, 13);
@@ -1406,22 +1419,22 @@ app.post('/api/mcp/pull-etsy', requireAuth(db), requireRole(['OWNER', 'MANAGER',
     });
   }
 
-  // Map keywordsDetailed: Include 13 Valid Etsy Tags AND related long-tail search terms for Master Keyword List
+  // Build Master Keywords List Detailed with PER-KEYWORD PROVENANCE (No fake overview duplication)
   const keywordsDetailed = [
     ...observedTags.map(keyword => ({
       keyword,
       opportunityScore: overview?.opportunity_score ?? null,
-      competingProducts: overview?.sellers ?? null,
-      volume: overview?.listings ?? null,
+      competingProducts: null,
+      volume: null,
       cpr: null,
       tierBadge: '🎯 Valid Tag (<=20 chars)',
       evidenceSource: 'ETSY_MCP_LIVE'
     })),
-    ...extractedRelatedKws.filter(kw => !observedTags.includes(kw)).map(keyword => ({
+    ...cleanRelatedKws.filter(kw => !observedTags.includes(kw)).map(keyword => ({
       keyword,
-      opportunityScore: overview?.opportunity_score ?? null,
-      competingProducts: overview?.sellers ?? null,
-      volume: overview?.listings ?? null,
+      opportunityScore: null,
+      competingProducts: null,
+      volume: null,
       cpr: null,
       tierBadge: '📝 Etsy Related Search Keyword',
       evidenceSource: 'ETSY_MCP_LIVE'
@@ -1429,35 +1442,31 @@ app.post('/api/mcp/pull-etsy', requireAuth(db), requireRole(['OWNER', 'MANAGER',
   ];
   const trendingKeywordsStr = observedTags.join(', ');
 
-  // Parse Top Listings from MCP into 30 Seller Records (3 Batches of 10) ordered by Etsy Algorithm: Revenue, Sold, Views, Conversion Rate
+  // Parse Top Listings from MCP with STRICT PASS-THROUGH PARSER (Zero Fallbacks / Zero Fabrication)
   const topListings = Array.isArray(liveData.top_listings) ? liveData.top_listings : [];
-  const sortedListings = [...topListings].sort((a, b) => {
-    const revA = a.revenue_usd ?? a.revenue ?? 0;
-    const revB = b.revenue_usd ?? b.revenue ?? 0;
-    if (revB !== revA) return revB - revA;
-    const soldA = a.sold_24h ?? a.total_sold ?? 0;
-    const soldB = b.sold_24h ?? b.total_sold ?? 0;
-    return soldB - soldA;
-  });
+  const sellers = topListings.map((lst, idx) => {
+    const rawTitle = typeof lst.title === 'string' && lst.title.trim() ? lst.title.trim() : null;
+    const rawShop = typeof lst.shop_name === 'string' && lst.shop_name.trim() ? lst.shop_name.trim() : (lst.shop_id ? `Shop #${lst.shop_id}` : null);
+    const rawCountry = typeof lst.shop_country === 'string' && lst.shop_country.trim() ? lst.shop_country.trim() : null;
+    const rawUrl = typeof lst.url === 'string' && lst.url.trim() ? lst.url.trim() : (lst.listing_id ? `https://www.etsy.com/listing/${lst.listing_id}` : null);
+    const rawRating = typeof lst.rating === 'number' ? lst.rating : (typeof lst.listing_score === 'number' ? lst.listing_score : null);
 
-  const sellers = sortedListings.slice(0, 30).map((lst, idx) => {
-    const batchNum = Math.floor(idx / 10) + 1;
     return {
       id: `mcp-lst-${lst.listing_id || idx}-${Date.now()}`,
-      title: lst.title || `Custom ${cleanSeed} Listing ${idx + 1}`,
-      shopName: lst.shop_country ? `${lst.shop_country} Artisan Shop` : (lst.shop_id ? `Etsy Shop #${lst.shop_id}` : 'Top Etsy Studio'),
-      country: lst.shop_country === 'VN' ? 'Vietnam' : (lst.shop_country || 'United States'),
-      views24h: lst.views_24h ?? lst.avg_daily_views ?? null,
-      sold24h: lst.sold_24h ?? null,
-      totalSold: lst.total_sold ?? null,
-      revenueUsd: lst.revenue_usd ?? lst.revenue ?? null,
-      conversionRate: lst.conversion_rate ? Number((lst.conversion_rate * 100).toFixed(2)) : null,
-      favorites: lst.favorites ?? null,
-      price: lst.price_usd ? `$${lst.price_usd}` : (lst.price ? `$${lst.price}` : null),
-      rating: lst.listing_score ? Number(Math.min(5.0, Math.max(4.0, lst.listing_score / 10)).toFixed(1)) : 4.9,
-      url: lst.listing_id ? `https://www.etsy.com/listing/${lst.listing_id}` : `https://www.etsy.com/search?q=${encodeURIComponent(cleanSeed)}`,
+      title: rawTitle,
+      shopName: rawShop,
+      country: rawCountry,
+      views24h: typeof lst.views_24h === 'number' ? lst.views_24h : (typeof lst.avg_daily_views === 'number' ? lst.avg_daily_views : null),
+      sold24h: typeof lst.sold_24h === 'number' ? lst.sold_24h : null,
+      totalSold: typeof lst.total_sold === 'number' ? lst.total_sold : null,
+      revenueUsd: typeof lst.revenue_usd === 'number' ? lst.revenue_usd : (typeof lst.revenue === 'number' ? lst.revenue : null),
+      conversionRate: typeof lst.conversion_rate === 'number' ? Number((lst.conversion_rate * 100).toFixed(2)) : null,
+      favorites: typeof lst.favorites === 'number' ? lst.favorites : null,
+      price: typeof lst.price_usd === 'number' ? `$${lst.price_usd}` : (typeof lst.price === 'number' ? `$${lst.price}` : null),
+      rating: rawRating,
+      url: rawUrl,
       evidenceSource: 'ETSY_MCP_LIVE',
-      batchName: `Batch ${batchNum} (${batchNum === 1 ? 'High Revenue & Sales' : batchNum === 2 ? 'High Traffic & Conversion' : 'Trending Favorites'})`,
+      batchName: 'Observed MCP Listings',
       isSynthetic: false,
       selected: true
     };
@@ -2936,4 +2945,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app, db, databaseReady, serverInstance, backgroundAgentTimer };
+module.exports = { app, db, databaseReady, serverInstance, backgroundAgentTimer, ytrendsMcp };

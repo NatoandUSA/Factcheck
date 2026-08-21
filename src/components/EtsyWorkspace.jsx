@@ -127,7 +127,10 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
         throw new Error('INSUFFICIENT_EVIDENCE: MCP response is not verified live evidence.');
       }
       setMcpResult(data);
-      if (onShowToast) onShowToast(`✓ Đã nạp ${data.keywords.length} observed Etsy tags cho "${data.seed}" (không padding).`);
+      if (Array.isArray(data.sellers) && data.sellers.length > 0) {
+        setScannedSellers(data.sellers);
+      }
+      if (onShowToast) onShowToast(`✓ Đã nạp ${data.keywords.length} observed Etsy tags & ${data.sellers?.length || 0} Top Sellers từ MCP!`);
       fetchData();
     } catch (err) {
       if (onShowToast) onShowToast(`Lỗi kéo MCP: ${err.message}`);

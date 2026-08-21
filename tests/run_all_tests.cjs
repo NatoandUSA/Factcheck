@@ -43,7 +43,10 @@ function runAllTests() {
     'tests/test_multi_project_attribution.cjs',
     'tests/test_workspace_switching_and_auth_security.cjs',
     'tests/test_performance_and_latency.cjs',
-    'tests/test_cross_tenant_isolation.cjs'
+    'tests/test_cross_tenant_isolation.cjs',
+    'tests/test_vite_dev_runtime_smoke.test.cjs',
+    'tests/test_login_rate_limiter_http.test.cjs',
+    'tests/test_legacy_migration_integrity.test.cjs'
   ];
 
   let passedCount = 0;

@@ -64,6 +64,7 @@ const ROUTES = [
   { method: 'POST', path: '/api/settings/apikey', public: false },
   { method: 'POST', path: '/api/chat', public: false },
   { method: 'GET', path: '/api/analytics', public: false },
+  { method: 'POST', path: '/api/projects/:id/adopt-evidence', public: false },
   { method: 'GET', path: '/api/agents', public: false },
   { method: 'GET', path: '/api/agents/logs', public: false },
   { method: 'POST', path: '/api/agents/:id/toggle', public: false }

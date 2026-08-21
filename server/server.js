@@ -193,6 +193,21 @@ db.serialize(() => {
   `);
 
   db.run(`
+    CREATE TABLE IF NOT EXISTS project_transition_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id TEXT NOT NULL,
+      workspace_id INTEGER NOT NULL,
+      marketplace TEXT NOT NULL,
+      project_id INTEGER NOT NULL,
+      previous_state TEXT NOT NULL,
+      target_state TEXT NOT NULL,
+      actor_id INTEGER NOT NULL,
+      reason TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  db.run(`
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       email TEXT UNIQUE NOT NULL,
@@ -984,14 +999,6 @@ app.patch('/api/projects/:id/transition', requireAuth(db), requireRole(['OWNER',
       const currentState = project.state;
       const allowedNext = ALLOWED_PROJECT_TRANSITIONS[currentState] || [];
 
-      if (!targetState || !allowedNext.includes(targetState)) {
-        return res.status(400).json({
-          success: false,
-          error: 'INVALID_STATE_TRANSITION',
-          message: `Illegal transition from ${currentState} to ${targetState}. Allowed next state: ${allowedNext.join(', ') || 'NONE'}`
-        });
-      }
-
       // Role Gate: MANAGER/OWNER required for MANAGER_APPROVED or PUBLISH_READY
       if (targetState === 'MANAGER_APPROVED' || targetState === 'PUBLISH_READY') {
         if (req.user.role !== 'MANAGER' && req.user.role !== 'OWNER' && req.user.role !== 'ADMIN') {
@@ -1003,7 +1010,15 @@ app.patch('/api/projects/:id/transition', requireAuth(db), requireRole(['OWNER',
         }
       }
 
-      // Evidence & Artifact Precondition Validation
+      if (!targetState || !allowedNext.includes(targetState)) {
+        return res.status(400).json({
+          success: false,
+          error: 'INVALID_STATE_TRANSITION',
+          message: `Illegal transition from ${currentState} to ${targetState}. Allowed next state: ${allowedNext.join(', ') || 'NONE'}`
+        });
+      }
+
+      // Evidence & Artifact Precondition Validation (Strict Project-Scoped - NO legacy fallbacks)
       const checkPreconditions = (next) => {
         if (targetState === 'RESEARCH_ACCEPTED') {
           db.get(
@@ -1016,7 +1031,7 @@ app.patch('/api/projects/:id/transition', requireAuth(db), requireRole(['OWNER',
                 return res.status(400).json({
                   success: false,
                   error: 'MISSING_EVIDENCE_PRECONDITION',
-                  message: 'Cannot accept research without at least 1 ACCEPTED research evidence record for this project.'
+                  message: 'Cannot accept research without at least 1 ACCEPTED research evidence record bound specifically to this project.'
                 });
               }
               next();
@@ -1033,7 +1048,7 @@ app.patch('/api/projects/:id/transition', requireAuth(db), requireRole(['OWNER',
                 return res.status(400).json({
                   success: false,
                   error: 'MISSING_MKL_PRECONDITION',
-                  message: 'Cannot freeze MKL without at least 1 market keyword trend entry for this project.'
+                  message: 'Cannot freeze MKL without at least 1 market keyword trend entry bound specifically to this project.'
                 });
               }
               next();
@@ -1071,6 +1086,13 @@ app.patch('/api/projects/:id/transition', requireAuth(db), requireRole(['OWNER',
           function(uErr) {
             if (uErr) return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
 
+            // Append-Only Transition Event Audit Record
+            db.run(
+              `INSERT INTO project_transition_events (tenant_id, workspace_id, marketplace, project_id, previous_state, target_state, actor_id, reason)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+              [req.user.tenantId, req.user.workspaceId, req.user.marketplace, projectId, currentState, targetState, req.user.userId, req.body.reason || 'User initiated transition']
+            );
+
             const auditMsg = `[PROJECT TRANSITION] Project #${projectId} (${project.name}) state moved from ${currentState} to ${targetState} by user #${req.user.userId} (${req.user.role})`;
             logAgentAction(db, { agentId: 1, tenantId: req.user.tenantId, workspaceId: req.user.workspaceId, message: auditMsg });
 
@@ -1078,6 +1100,40 @@ app.patch('/api/projects/:id/transition', requireAuth(db), requireRole(['OWNER',
           }
         );
       });
+    }
+  );
+});
+
+// POST /api/projects/:id/adopt-evidence - Staff/Owner explicitly adopts legacy unscoped evidence into this project
+app.post('/api/projects/:id/adopt-evidence', requireAuth(db), requireRole(['OWNER', 'MANAGER']), (req, res) => {
+  const projectId = req.params.id;
+  const { evidenceId } = req.body || {};
+
+  if (!evidenceId) {
+    return res.status(400).json({ success: false, error: 'MISSING_FIELDS', message: 'evidenceId is required.' });
+  }
+
+  db.get(
+    `SELECT * FROM research_projects WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
+    [projectId, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+    (pErr, project) => {
+      if (pErr || !project) return res.status(404).json({ success: false, error: 'PROJECT_NOT_FOUND' });
+
+      db.run(
+        `UPDATE research_evidence
+         SET project_id = ?
+         WHERE id = ? AND project_id IS NULL AND tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
+        [projectId, evidenceId, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+        function(uErr) {
+          if (uErr) return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
+          if (this.changes === 0) return res.status(404).json({ success: false, error: 'UNSCOPED_EVIDENCE_NOT_FOUND' });
+
+          const auditMsg = `[EXPLICIT ADOPTION] User #${req.user.userId} (${req.user.role}) adopted legacy evidence #${evidenceId} into Project #${projectId}`;
+          logAgentAction(db, { agentId: 1, tenantId: req.user.tenantId, workspaceId: req.user.workspaceId, message: auditMsg });
+
+          res.json({ success: true, projectId, evidenceId, adoptedBy: req.user.userId });
+        }
+      );
     }
   );
 });
@@ -1522,7 +1578,7 @@ app.post('/api/mcp/pull-etsy', requireAuth(db), requireRole(['OWNER', 'MANAGER',
   if (req.user.marketplace !== 'ETSY') {
     return res.status(403).json({ success: false, error: 'MARKETPLACE_MISMATCH', message: 'Tác vụ này yêu cầu Session Workspace Etsy. Vui lòng chuyển Workspace phiên làm việc sang Etsy.' });
   }
-  const { seed = 'custom gift', category = 'Custom Gift' } = req.body;
+  const { projectId, seed = 'custom gift', category = 'Custom Gift' } = req.body || {};
   const cleanSeed = String(seed).trim().toLowerCase();
 
   let mcpData;

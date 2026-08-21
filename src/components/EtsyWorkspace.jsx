@@ -23,7 +23,6 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
   const [mcpResult, setMcpResult] = useState(null);
   const [isIpModalOpen, setIsIpModalOpen] = useState(false);
   const [activeProject, setActiveProject] = useState(null);
-  const [scannedSellers, setScannedSellers] = useState([]);
   const [isFeedModalOpen, setIsFeedModalOpen] = useState(false);
   const [feedRawText, setFeedRawText] = useState('');
   const [feedSubmitting, setFeedSubmitting] = useState(false);
@@ -73,6 +72,11 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
     }
   };
 
+=======
+  const [activeProject, setActiveProject] = useState(null);
+  const fileInputRef = useRef(null);
+
+>>>>>>> 793e939 (fix(architecture): enforce Aggregate Root integrity, Etsy Truth Boundary, zero code evaluation, and rate limiter verification (33/33 tests passed))
   const fetchProjects = React.useCallback(async () => {
     try {
       const res = await fetch('/api/projects', { credentials: 'include' });
@@ -100,6 +104,24 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
     fetchData();
     fetchProjects();
   }, [fetchProjects]);
+  const handleTransition = async (targetState) => {
+    if (!activeProject) return;
+    try {
+      const res = await fetch(`/api/projects/${activeProject.id}/transition`, {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetState })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || data.error || 'Transition failed');
+      if (onShowToast) onShowToast(`✓ Chuyển trạng thái dự án sang ${data.state} thành công!`);
+      setActiveProject(prev => ({ ...prev, state: data.state }));
+      fetchProjects();
+    } catch (err) {
+      if (onShowToast) onShowToast(`⚠ Transition error: ${err.message}`);
+    }
+  };
 
   const handleFileUpload = async (file) => {
     if (!file) return;
@@ -175,6 +197,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          projectId: activeProject?.id,
           seed: seedPhrase.trim(),
           category: selectedCategory,
           projectId: activeProject?.id
@@ -285,6 +308,27 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
             <ShieldCheck size={16} color="#dc2626" />
             <span>🛡️ IP Gate (2-in-1)</span>
           </button>
+
+          {activeProject && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', background: '#ea580c', color: '#fff', padding: '6px 14px', borderRadius: '10px', fontSize: '0.82rem', fontWeight: 800, marginTop: '15px' }}>
+              <span>📌 Active Project #{activeProject.id}: <u style={{ textUnderlineOffset: '3px' }}>{activeProject.state}</u></span>
+              {activeProject.state === 'EVIDENCE_INTAKE' && (
+                <button onClick={() => handleTransition('RESEARCH_ACCEPTED')} style={{ background: '#fff', color: '#ea580c', border: 'none', padding: '3px 10px', borderRadius: '6px', cursor: 'pointer', fontWeight: 800 }}>
+                  Accept Research →
+                </button>
+              )}
+              {activeProject.state === 'RESEARCH_ACCEPTED' && (
+                <button onClick={() => handleTransition('DNA_ACCEPTED')} style={{ background: '#fff', color: '#ea580c', border: 'none', padding: '3px 10px', borderRadius: '6px', cursor: 'pointer', fontWeight: 800 }}>
+                  Accept DNA →
+                </button>
+              )}
+              {activeProject.state === 'DNA_ACCEPTED' && (
+                <button onClick={() => handleTransition('MKL_FROZEN')} style={{ background: '#fff', color: '#ea580c', border: 'none', padding: '3px 10px', borderRadius: '6px', cursor: 'pointer', fontWeight: 800 }}>
+                  Freeze MKL →
+                </button>
+              )}
+            </div>
+          )}
 
           <button
             onClick={() => setIsFeedModalOpen(true)}

@@ -102,6 +102,11 @@ rollback() {
     echo -e "\n🔴 DEPLOYMENT OR LOCAL/PUBLIC HEALTH VALIDATION FAILED! INITIATING FAIL-CLOSED ROLLBACK..."
     sudo systemctl stop omniseller-web || true
     
+    # Remove incomplete / failed release directory to reclaim disk space
+    if [ -n "${TARGET_RELEASE_DIR}" ] && [ "${TARGET_RELEASE_DIR}" != "${BASELINE_RELEASE_DIR}" ]; then
+        rm -rf "${TARGET_RELEASE_DIR}" 2>/dev/null || true
+    fi
+
     echo "Restoring active symlink atomically to pre-built baseline release ${BASELINE_RELEASE_DIR}..."
     atomic_symlink_switch "${BASELINE_RELEASE_DIR}"
     
@@ -258,6 +263,15 @@ if [ "${PUBLIC_STATUS}" -ne 200 ] || [ "${PUBLIC_REVISION}" != "${TARGET_SHA}" ]
 fi
 
 echo "🟢 Public Cloudflare health probe ${PUBLIC_DOMAIN}/api/health returned 200 OK (Revision: ${PUBLIC_REVISION})."
+
+# Prune old releases (keep only the 2 most recent releases) to prevent ENOSPC disk exhaustion
+echo "Pruning old releases from ${RELEASES_DIR}..."
+find "${RELEASES_DIR}" -mindepth 1 -maxdepth 1 -type d | sort -r | tail -n +3 | while read -r old_release; do
+    if [ "${old_release}" != "${TARGET_RELEASE_DIR}" ] && [ "${old_release}" != "${BASELINE_RELEASE_DIR}" ]; then
+        echo "Removing obsolete release: ${old_release}"
+        rm -rf "${old_release}"
+    fi
+done
 
 # --- STEP 7: DEPLOYMENT SUCCESS DECLARATION ---
 echo -e "\n========================================================================"

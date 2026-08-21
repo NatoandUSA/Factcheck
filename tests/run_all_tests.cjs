@@ -47,7 +47,8 @@ function runAllTests() {
     'tests/test_cross_tenant_isolation.cjs',
     'tests/test_vite_dev_runtime_smoke.test.cjs',
     'tests/test_login_rate_limiter_http.test.cjs',
-    'tests/test_legacy_migration_integrity.test.cjs'
+    'tests/test_legacy_migration_integrity.test.cjs',
+    'tests/test_audit_fixes_014a1f4.cjs'
   ];
 
   let passedCount = 0;

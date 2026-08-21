@@ -4,11 +4,14 @@ import { useAuth } from '../context/AuthContext';
 
 export default function ListingHistory({ history, onSelectListing, onDeleteListing, onClearHistory, onShowToast, onRefresh, onApproveListing }) {
   const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState('ALL'); // 'ALL' | 'NEEDS_QA' | 'MANAGER_APPROVED'
+  const [statusFilter, setStatusFilter] = useState('ALL'); // 'ALL' | 'NEEDS_QA' | 'APPROVED'
   const [expandedFeedbackId, setExpandedFeedbackId] = useState(null);
   const [syncing, setSyncing] = useState(false);
   const [showToast, setShowToast] = useState(false);
   const { user } = useAuth();
+
+  const APPROVED_STATUSES = ['PUBLISH_READY', 'MANAGER_APPROVED'];
+  const isApproved = (status) => APPROVED_STATUSES.includes(status);
 
   const handleRefresh = async () => {
     setSyncing(true);
@@ -21,7 +24,7 @@ export default function ListingHistory({ history, onSelectListing, onDeleteListi
   const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER' || user?.role === 'ADMIN';
 
   const pendingCount = history.filter(h => h.status === 'NEEDS_QA').length;
-  const approvedCount = history.filter(h => h.status === 'MANAGER_APPROVED').length;
+  const approvedCount = history.filter(h => isApproved(h.status)).length;
 
   const filteredHistory = history.filter(item => {
     const query = searchTerm.toLowerCase();
@@ -32,7 +35,7 @@ export default function ListingHistory({ history, onSelectListing, onDeleteListi
 
     if (!matchesSearch) return false;
     if (statusFilter === 'NEEDS_QA') return item.status === 'NEEDS_QA';
-    if (statusFilter === 'MANAGER_APPROVED') return item.status === 'MANAGER_APPROVED';
+    if (statusFilter === 'APPROVED') return isApproved(item.status);
     return true;
   });
 
@@ -117,9 +120,9 @@ export default function ListingHistory({ history, onSelectListing, onDeleteListi
             ⏳ Chờ Duyệt ({pendingCount})
           </button>
           <button 
-            className={`btn btn-sm ${statusFilter === 'MANAGER_APPROVED' ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => setStatusFilter('MANAGER_APPROVED')}
-            style={statusFilter === 'MANAGER_APPROVED' ? { background: '#16a34a' } : {}}
+            className={`btn btn-sm ${statusFilter === 'APPROVED' ? 'btn-primary' : 'btn-secondary'}`}
+            onClick={() => setStatusFilter('APPROVED')}
+            style={statusFilter === 'APPROVED' ? { background: '#16a34a' } : {}}
           >
             ✅ Đã Phê Duyệt ({approvedCount})
           </button>
@@ -175,8 +178,8 @@ export default function ListingHistory({ history, onSelectListing, onDeleteListi
                   <span style={{ fontSize: '0.75rem', background: 'var(--primary-light)', color: 'var(--primary)', fontWeight: '700', padding: '2px 8px', borderRadius: '4px' }}>
                     {item.categoryName || item.category?.name || 'Custom Product'}
                   </span>
-                  <span style={{ fontSize: '0.75rem', background: item.status === 'MANAGER_APPROVED' ? '#dcfce7' : '#fef3c7', color: item.status === 'MANAGER_APPROVED' ? '#166534' : '#92400e', fontWeight: '600', padding: '2px 8px', borderRadius: '4px' }}>
-                    {item.status === 'MANAGER_APPROVED' ? '✅ ĐÃ DUYỆT' : '⏳ CHỜ QA'}
+                  <span style={{ fontSize: '0.75rem', background: isApproved(item.status) ? '#dcfce7' : '#fef3c7', color: isApproved(item.status) ? '#166534' : '#92400e', fontWeight: '600', padding: '2px 8px', borderRadius: '4px' }}>
+                    {isApproved(item.status) ? '✅ ĐÃ DUYỆT' : '⏳ CHỜ QA'}
                   </span>
                   <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
                     {new Date(item.generatedAt || Date.now()).toLocaleString()}

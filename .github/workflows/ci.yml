@@ -30,7 +30,7 @@ jobs:
       - name: Verify Native SQLite Addon Loading
         run: node -e "require('./node_modules/sqlite3'); console.log('🟢 Native sqlite3 addon verified in CI');"
 
-      - name: Run Canonical Test Suite (41/41 Test Files)
+      - name: Run Canonical Test Suite (42/42 Test Files)
         run: npm test
 
       - name: Build Vite Production Bundle

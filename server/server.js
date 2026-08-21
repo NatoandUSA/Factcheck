@@ -3201,7 +3201,11 @@ app.get('/api/analytics-summary', requireAuth(db), requireRole(['OWNER', 'MANAGE
         `, [req.user.tenantId, req.user.workspaceId, req.user.marketplace], (feedErr, feedRows) => {
           if (feedErr) return res.status(500).json({ error: feedErr.message });
           res.json({
-            listingStats: listingStats || { totalListings: 0, approvedListings: 0, pendingListings: 0 },
+            listingStats: {
+              totalListings: listingStats?.totalListings || 0,
+              approvedListings: listingStats?.approvedListings || 0,
+              pendingListings: listingStats?.pendingListings || 0
+            },
             categoryBreakdown: catRows || [],
             trendStats: trendStats || { totalTrends: 0, processedTrends: 0 },
             feedbackStats: feedRows || []

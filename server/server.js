@@ -2902,15 +2902,37 @@ const handleReportUpload = async (req, res) => {
         });
       }
 
-      // Extract sellers list for Learning Box
+      // Extract rich sellers list for Learning Box & Staff Review
       const xraySellers = (batchResult.batches || []).flatMap(b => b.items || []).map((item, idx) => ({
         id: `asin_${item.asin}_${idx}`,
         asin: item.asin,
         title: item.title || `Amazon Top Seller (${item.asin})`,
+        brand: item.brand || '—',
         price: item.price !== null ? `$${item.price.toFixed(2)}` : '—',
         sales: item.sales !== null ? item.sales.toLocaleString() : '—',
+        parentSales: item.parentSales,
+        revenue: item.revenue !== null ? `$${item.revenue.toLocaleString()}` : '—',
+        parentRevenue: item.parentRevenue,
+        bsr: item.bsr,
+        ratings: item.ratings,
+        reviewCount: item.reviewCount,
+        reviewVelocity: item.reviewVelocity,
+        buyBox: item.buyBox,
+        fulfillment: item.fulfillment,
+        category: item.category,
+        seller: item.seller,
+        sellerCountry: item.sellerCountry,
+        sellerAge: item.sellerAge,
+        creationDate: item.creationDate,
+        abaMostClicked: item.abaMostClicked,
+        isBestSeller: item.isBestSeller,
+        isSponsored: item.isSponsored,
+        imageUrl: item.imageUrl,
+        fees: item.fees,
+        titleCharCount: item.titleCharCount,
+        activeSellers: item.activeSellers,
         url: `https://www.amazon.com/dp/${item.asin}`,
-        shopName: `ASIN: ${item.asin}`
+        shopName: item.seller || item.brand || `ASIN: ${item.asin}`
       }));
 
       return res.json({

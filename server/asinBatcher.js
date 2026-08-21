@@ -113,7 +113,33 @@ function filterAndBatchXrayAsins(xrayData, seedKeyword = 'Custom Gift') {
     const titleLower = (title || '').toLowerCase();
 
     const price = parseNumericField(row, ['Price', 'price', 'Price  $', 'Price $']);
-    const sales = parseNumericField(row, ['Sales', 'sales', 'Parent Level Sales', 'ASIN Sales']);
+    const parentSales = parseNumericField(row, ['Parent Level Sales', 'Parent Sales', 'parent sales']);
+    const asinSales = parseNumericField(row, ['ASIN Sales', 'asin sales', 'Sales', 'sales']);
+    const sales = asinSales !== null ? asinSales : parentSales;
+
+    const parentRevenue = parseNumericField(row, ['Parent Level Revenue', 'Parent Revenue']);
+    const asinRevenue = parseNumericField(row, ['ASIN Revenue', 'Revenue', 'revenue', 'Monthly Revenue']);
+    const revenue = asinRevenue !== null ? asinRevenue : parentRevenue;
+
+    const brand = firstDefined(row, ['Brand', 'brand']) || null;
+    const bsr = parseNumericField(row, ['BSR', 'bsr', 'Rank']);
+    const ratings = parseNumericField(row, ['Ratings', 'Rating', 'ratings', 'rating']);
+    const reviewCount = parseNumericField(row, ['Review Count', 'Reviews', 'review count']);
+    const reviewVelocity = parseNumericField(row, ['Review velocity', 'Review Velocity']);
+    const buyBox = firstDefined(row, ['Buy Box', 'buy box', 'Buy Box Winner']) || null;
+    const fulfillment = firstDefined(row, ['Fulfillment', 'fulfillment', 'FBA/FBM']) || null;
+    const categoryName = firstDefined(row, ['Category', 'category']) || null;
+    const seller = firstDefined(row, ['Seller', 'seller', 'Sold By']) || null;
+    const sellerCountry = firstDefined(row, ['Seller Country/Region', 'Seller Country', 'Country']) || null;
+    const sellerAge = parseNumericField(row, ['Seller Age (mo)', 'Seller Age']);
+    const creationDate = firstDefined(row, ['Creation Date', 'Creation date', 'Date First Available']) || null;
+    const abaMostClicked = firstDefined(row, ['ABA Most Clicked', 'ABA']) || null;
+    const isBestSeller = firstDefined(row, ['Best Seller', 'best seller', 'Badge']) || null;
+    const isSponsored = firstDefined(row, ['Sponsored', 'sponsored']) || null;
+    const imageUrl = firstDefined(row, ['Image URL', 'Image', 'image url', 'imageUrl', 'Thumbnail']) || null;
+    const fees = parseNumericField(row, ['Fees $', 'Fees', 'fees']);
+    const titleCharCount = parseNumericField(row, ['Title Char. Count', 'Title Length']) || (title ? title.length : null);
+    const activeSellers = parseNumericField(row, ['Active Sellers', 'Sellers']);
 
     // 1. Filter by configured price floor/ceiling. Only applies when a real
     // price was supplied — never invent one to filter on. The reason text
@@ -148,8 +174,30 @@ function filterAndBatchXrayAsins(xrayData, seedKeyword = 'Custom Gift') {
     cleanAsins.push({
       asin,
       title,
+      brand,
       price,
       sales,
+      parentSales,
+      revenue,
+      parentRevenue,
+      bsr,
+      ratings,
+      reviewCount,
+      reviewVelocity,
+      buyBox,
+      fulfillment,
+      categoryName,
+      seller,
+      sellerCountry,
+      sellerAge,
+      creationDate,
+      abaMostClicked,
+      isBestSeller,
+      isSponsored,
+      imageUrl,
+      fees,
+      titleCharCount,
+      activeSellers,
       relevanceScore,
       hasMetadata: Boolean(title || price !== null || sales !== null)
     });
@@ -193,7 +241,35 @@ function filterAndBatchXrayAsins(xrayData, seedKeyword = 'Custom Gift') {
       rationale,
       asinCount: pool.length,
       asins: pool.map(i => i.asin),
-      items: pool.map(i => ({ asin: i.asin, title: i.title, price: i.price, sales: i.sales })),
+      items: pool.map(i => ({
+        asin: i.asin,
+        title: i.title,
+        brand: i.brand,
+        price: i.price,
+        sales: i.sales,
+        parentSales: i.parentSales,
+        revenue: i.revenue,
+        parentRevenue: i.parentRevenue,
+        bsr: i.bsr,
+        ratings: i.ratings,
+        reviewCount: i.reviewCount,
+        reviewVelocity: i.reviewVelocity,
+        buyBox: i.buyBox,
+        fulfillment: i.fulfillment,
+        category: i.categoryName,
+        seller: i.seller,
+        sellerCountry: i.sellerCountry,
+        sellerAge: i.sellerAge,
+        creationDate: i.creationDate,
+        abaMostClicked: i.abaMostClicked,
+        isBestSeller: i.isBestSeller,
+        isSponsored: i.isSponsored,
+        imageUrl: i.imageUrl,
+        fees: i.fees,
+        titleCharCount: i.titleCharCount,
+        activeSellers: i.activeSellers,
+        url: `https://www.amazon.com/dp/${i.asin}`
+      })),
       cerebroCommand: pool.map(i => i.asin).join(' ')
     });
   }

@@ -367,32 +367,156 @@ export default function AmazonPipelineWorkflow({
             ))}
           </div>
 
-          {/* ASINs Table */}
+          {/* ASINs Table with Rich Xray Metrics for Staff Manual Review */}
           {activeBatch && (
             <div style={{ overflowX: 'auto', borderRadius: '10px', border: '1px solid #fde68a' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem', textAlign: 'left' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem', textAlign: 'left', minWidth: '1000px' }}>
                 <thead>
                   <tr style={{ background: '#fffbeb', borderBottom: '2px solid #fde68a', color: '#92400e' }}>
-                    <th style={{ padding: '8px 12px' }}>STT</th>
-                    <th style={{ padding: '8px 12px' }}>ASIN</th>
-                    <th style={{ padding: '8px 12px' }}>Tiêu Đề (Nếu Có Trong File)</th>
-                    <th style={{ padding: '8px 12px' }}>Giá (Nếu Có)</th>
-                    <th style={{ padding: '8px 12px' }}>Sales (Nếu Có)</th>
+                    <th style={{ padding: '10px 12px', fontWeight: 700 }}>STT</th>
+                    <th style={{ padding: '10px 12px', fontWeight: 700 }}>Sản Phẩm & ASIN</th>
+                    <th style={{ padding: '10px 12px', fontWeight: 700, minWidth: '220px' }}>Tiêu Đề & Brand</th>
+                    <th style={{ padding: '10px 12px', fontWeight: 700 }}>Giá / Fees</th>
+                    <th style={{ padding: '10px 12px', fontWeight: 700 }}>Sales (ASIN / Parent)</th>
+                    <th style={{ padding: '10px 12px', fontWeight: 700 }}>Doanh Thu (Revenue)</th>
+                    <th style={{ padding: '10px 12px', fontWeight: 700 }}>BSR / Đánh Giá</th>
+                    <th style={{ padding: '10px 12px', fontWeight: 700 }}>Fulfillment / Seller</th>
+                    <th style={{ padding: '10px 12px', fontWeight: 700 }}>Ngày Tạo / ABA</th>
                   </tr>
                 </thead>
                 <tbody>
                   {(Array.isArray(activeBatch?.items) ? activeBatch.items : (activeBatch?.asins || []).map(asin => ({ asin, title: null, price: null, sales: null }))).map((item, i) => (
                     <tr key={i} style={{ borderBottom: '1px solid #fef3c7', background: i % 2 === 0 ? '#fff' : '#fffdf5' }}>
-                      <td style={{ padding: '8px 12px', fontWeight: 700, color: '#92400e' }}>#{i + 1}</td>
-                      <td style={{ padding: '8px 12px', fontFamily: 'monospace', fontWeight: 800, color: '#0369a1' }}>
-                        {item?.asin || '—'}
+                      <td style={{ padding: '10px 12px', fontWeight: 700, color: '#92400e' }}>#{i + 1}</td>
+                      
+                      {/* ASIN & Image */}
+                      <td style={{ padding: '10px 12px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          {item?.imageUrl && (
+                            <img 
+                              src={item.imageUrl} 
+                              alt="Thumbnail" 
+                              style={{ width: '36px', height: '36px', objectFit: 'contain', borderRadius: '4px', border: '1px solid #e2e8f0', background: '#fff' }} 
+                            />
+                          )}
+                          <div>
+                            <a 
+                              href={item?.url || `https://www.amazon.com/dp/${item?.asin}`} 
+                              target="_blank" 
+                              rel="noreferrer" 
+                              style={{ fontFamily: 'monospace', fontWeight: 800, color: '#0369a1', textDecoration: 'none' }}
+                            >
+                              {item?.asin || '—'} ↗
+                            </a>
+                            <div style={{ display: 'flex', gap: '4px', marginTop: '2px' }}>
+                              {item?.isBestSeller && (
+                                <span style={{ background: '#fef08a', color: '#854d0e', fontSize: '0.65rem', padding: '1px 4px', borderRadius: '3px', fontWeight: 800 }}>
+                                  #1 Best Seller
+                                </span>
+                              )}
+                              {item?.isSponsored && (
+                                <span style={{ background: '#f1f5f9', color: '#475569', fontSize: '0.65rem', padding: '1px 4px', borderRadius: '3px', fontWeight: 700 }}>
+                                  Sponsored
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
                       </td>
-                      <td style={{ padding: '8px 12px', fontWeight: 600, color: '#1e293b' }}>{item?.title || '—'}</td>
-                      <td style={{ padding: '8px 12px', fontWeight: 700, color: '#16a34a' }}>
-                        {typeof item?.price === 'number' ? `$${item.price.toFixed(2)}` : (item?.price || '—')}
+
+                      {/* Title & Brand */}
+                      <td style={{ padding: '10px 12px' }}>
+                        <div style={{ fontWeight: 600, color: '#1e293b', lineHeight: 1.3, maxHeight: '2.6em', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {item?.title || '—'}
+                        </div>
+                        <div style={{ fontSize: '0.72rem', color: '#64748b', marginTop: '3px', display: 'flex', gap: '8px' }}>
+                          {item?.brand && <span>Brand: <strong>{item.brand}</strong></span>}
+                          {item?.titleCharCount && <span>({item.titleCharCount} ký tự)</span>}
+                        </div>
                       </td>
-                      <td style={{ padding: '8px 12px', fontWeight: 800, color: '#0284c7' }}>
-                        {typeof item?.sales === 'number' ? item.sales.toLocaleString() : (item?.sales || '—')}
+
+                      {/* Price & Fees */}
+                      <td style={{ padding: '10px 12px' }}>
+                        <div style={{ fontWeight: 800, color: '#16a34a', fontSize: '0.9rem' }}>
+                          {typeof item?.price === 'number' ? `$${item.price.toFixed(2)}` : (item?.price || '—')}
+                        </div>
+                        {typeof item?.fees === 'number' && (
+                          <div style={{ fontSize: '0.72rem', color: '#94a3b8', marginTop: '2px' }}>
+                            Fees: ${item.fees.toFixed(2)}
+                          </div>
+                        )}
+                      </td>
+
+                      {/* Sales */}
+                      <td style={{ padding: '10px 12px' }}>
+                        <div style={{ fontWeight: 800, color: '#0284c7', fontSize: '0.9rem' }}>
+                          {typeof item?.sales === 'number' ? item.sales.toLocaleString() : (item?.sales || '—')}
+                        </div>
+                        {typeof item?.parentSales === 'number' && item?.parentSales !== item?.sales && (
+                          <div style={{ fontSize: '0.72rem', color: '#64748b', marginTop: '2px' }}>
+                            Parent: {item.parentSales.toLocaleString()}
+                          </div>
+                        )}
+                      </td>
+
+                      {/* Revenue */}
+                      <td style={{ padding: '10px 12px' }}>
+                        <div style={{ fontWeight: 800, color: '#0f172a' }}>
+                          {typeof item?.revenue === 'number' 
+                            ? `$${item.revenue.toLocaleString()}` 
+                            : (item?.revenue ? (item.revenue.startsWith?.('$') ? item.revenue : `$${item.revenue}`) : '—')}
+                        </div>
+                        {typeof item?.parentRevenue === 'number' && item?.parentRevenue !== item?.revenue && (
+                          <div style={{ fontSize: '0.72rem', color: '#64748b', marginTop: '2px' }}>
+                            Parent: ${item.parentRevenue.toLocaleString()}
+                          </div>
+                        )}
+                      </td>
+
+                      {/* BSR & Ratings */}
+                      <td style={{ padding: '10px 12px' }}>
+                        <div style={{ fontWeight: 700, color: '#7e22ce' }}>
+                          {typeof item?.bsr === 'number' ? `#${item.bsr.toLocaleString()}` : (item?.bsr || '—')}
+                        </div>
+                        <div style={{ fontSize: '0.72rem', color: '#475569', marginTop: '2px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          {typeof item?.ratings === 'number' && <span>⭐ {item.ratings.toFixed(1)}</span>}
+                          {typeof item?.reviewCount === 'number' && <span>({item.reviewCount.toLocaleString()})</span>}
+                        </div>
+                      </td>
+
+                      {/* Fulfillment & Seller */}
+                      <td style={{ padding: '10px 12px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          <span style={{
+                            background: item?.fulfillment?.toUpperCase() === 'FBA' ? '#dbeafe' : '#f1f5f9',
+                            color: item?.fulfillment?.toUpperCase() === 'FBA' ? '#1d4ed8' : '#475569',
+                            padding: '1px 6px',
+                            borderRadius: '4px',
+                            fontWeight: 800,
+                            fontSize: '0.7rem'
+                          }}>
+                            {item?.fulfillment || 'FBA'}
+                          </span>
+                          {item?.buyBox && (
+                            <span style={{ fontSize: '0.72rem', color: '#334155', fontWeight: 600 }}>
+                              {item.buyBox}
+                            </span>
+                          )}
+                        </div>
+                        <div style={{ fontSize: '0.72rem', color: '#64748b', marginTop: '3px' }}>
+                          {item?.sellerCountry && <span>{item.sellerCountry}</span>}
+                          {typeof item?.sellerAge === 'number' && <span> • {item.sellerAge} mo</span>}
+                        </div>
+                      </td>
+
+                      {/* Creation Date / ABA */}
+                      <td style={{ padding: '10px 12px', fontSize: '0.75rem', color: '#475569' }}>
+                        <div>{item?.creationDate || '—'}</div>
+                        {item?.abaMostClicked && (
+                          <div style={{ color: '#0369a1', fontWeight: 700, marginTop: '2px', fontSize: '0.7rem' }}>
+                            ABA: {item.abaMostClicked}
+                          </div>
+                        )}
                       </td>
                     </tr>
                   ))}

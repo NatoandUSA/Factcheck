@@ -23,6 +23,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
   const [mcpResult, setMcpResult] = useState(null);
   const [isIpModalOpen, setIsIpModalOpen] = useState(false);
   const [activeProject, setActiveProject] = useState(null);
+  const [scannedSellers, setScannedSellers] = useState([]);
   const fileInputRef = useRef(null);
 
   const fetchProjects = React.useCallback(async () => {

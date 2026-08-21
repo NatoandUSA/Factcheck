@@ -6,7 +6,7 @@
 
 set -Eeuo pipefail
 
-TARGET_BRANCH="codex/audit-closeout"
+TARGET_BRANCH="main"
 PUBLIC_DOMAIN="https://omniseller.theglobalserviceteam.site"
 
 # Production Base Paths

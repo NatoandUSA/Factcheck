@@ -10,6 +10,11 @@ const net = require('net');
 // including on redirect hops (GPT PR-5 final review, P0-FINAL-1).
 const AMAZON_HOSTS = new Set([
   'amazon.com', 'www.amazon.com',
+  'a.co', 'www.a.co',
+  'amzn.to', 'www.amzn.to',
+  'amzn.eu', 'www.amzn.eu',
+  'amzn.asia', 'www.amzn.asia',
+  'amzn.com', 'www.amzn.com',
   'amazon.co.uk', 'www.amazon.co.uk',
   'amazon.de', 'www.amazon.de',
   'amazon.fr', 'www.amazon.fr',

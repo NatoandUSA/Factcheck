@@ -39,7 +39,24 @@ export default function LearningBoxWidget({ platform = 'AMAZON', onShowToast, sc
     fetchTemplates();
   }, [platform]);
 
-  const selectedSeller = scannedSellers.find(s => s.id === selectedSellerId || s.asin === selectedSellerId);
+  const [cachedSellers, setCachedSellers] = useState([]);
+
+  useEffect(() => {
+    if (isAmazon && scannedSellers.length === 0) {
+      try {
+        const cached = sessionStorage.getItem('omni_amazon_xray_sellers');
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setCachedSellers(parsed);
+          }
+        }
+      } catch (e) {}
+    }
+  }, [isAmazon, scannedSellers.length]);
+
+  const effectiveSellers = scannedSellers.length > 0 ? scannedSellers : (isAmazon ? cachedSellers : []);
+  const selectedSeller = effectiveSellers.find(s => s.id === selectedSellerId || s.asin === selectedSellerId);
   const sellerAsRawText = selectedSeller
     ? (isAmazon
         ? `Title: ${selectedSeller.title}\nASIN: ${selectedSeller.asin || ''}\nPrice: ${selectedSeller.price || ''}\nMonthly Sales: ${selectedSeller.sales || ''}\nURL: https://www.amazon.com/dp/${selectedSeller.asin || ''}`
@@ -110,8 +127,8 @@ export default function LearningBoxWidget({ platform = 'AMAZON', onShowToast, sc
             </div>
             <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
               {isAmazon 
-                ? 'Dán link Amazon / ASIN hoặc chọn từ Xray để Omni học Title Hook <=75c, 5 Bullets [HOOKS], Search Terms 249 bytes và A+ Content.'
-                : 'Dán link Etsy / Shop text đối thủ để Omni học Title <140 chars, đúng 13 Tags <=20 chars, và Storytelling Description.'}
+                ? 'Dán link Amazon / ASIN hoặc chọn từ Xray để Omni học Title Hook ≤ 75c, 5 Bullets [HOOKS], Search Terms 249 bytes và A+ Content.'
+                : 'Dán link Etsy / Shop text đối thủ để Omni học Title <140 chars, đúng 13 Tags ≤ 20 chars, và Storytelling Description.'}
             </div>
           </div>
         </div>
@@ -163,8 +180,6 @@ export default function LearningBoxWidget({ platform = 'AMAZON', onShowToast, sc
           <button
             type="button"
             onClick={() => setInputMode('seller')}
-            disabled={scannedSellers.length === 0}
-            title={scannedSellers.length === 0 ? (isAmazon ? 'Chưa có ASIN nào được quét ở Stage 1 Xray' : 'Chưa có seller nào được quét ở Stage 1') : undefined}
             style={{
               background: inputMode === 'seller' ? 'var(--bg-surface)' : 'transparent',
               border: 'none',
@@ -172,15 +187,15 @@ export default function LearningBoxWidget({ platform = 'AMAZON', onShowToast, sc
               padding: '6px 12px',
               fontSize: '0.8rem',
               fontWeight: 700,
-              color: scannedSellers.length === 0 ? 'var(--text-muted)' : (inputMode === 'seller' ? themeColor : 'var(--text-secondary)'),
+              color: inputMode === 'seller' ? themeColor : 'var(--text-secondary)',
               display: 'flex',
               alignItems: 'center',
               gap: '6px',
-              cursor: scannedSellers.length === 0 ? 'not-allowed' : 'pointer'
+              cursor: 'pointer'
             }}
           >
             <Users size={14} />
-            <span>{isAmazon ? `Chọn Từ ASINs Xray (${scannedSellers.length})` : `Chọn Từ Sellers Đã Quét (${scannedSellers.length})`}</span>
+            <span>{isAmazon ? `Chọn Từ ASINs Xray (${effectiveSellers.length})` : `Chọn Từ Sellers Đã Quét (${effectiveSellers.length})`}</span>
           </button>
         </div>
       </div>
@@ -188,30 +203,36 @@ export default function LearningBoxWidget({ platform = 'AMAZON', onShowToast, sc
       {/* Input Form */}
       <form onSubmit={handleLearn} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
         {inputMode === 'seller' ? (
-          <div style={{ display: 'flex', gap: '10px' }}>
-            <select
-              className="form-input"
-              style={{ flex: 1, fontSize: '0.85rem' }}
-              value={selectedSellerId}
-              onChange={(e) => setSelectedSellerId(e.target.value)}
-            >
-              <option value="">-- {isAmazon ? 'Chọn 1 ASIN đối thủ từ báo cáo Xray Stage 1' : 'Chọn 1 seller đã quét ở Stage 1'} --</option>
-              {scannedSellers.map(s => (
-                <option key={s.id || s.asin} value={s.id || s.asin}>
-                  {s.asin ? `[${s.asin}] ` : ''}{s.title ? s.title.slice(0, 55) : 'Amazon Product'} {s.price ? `• ${s.price}` : ''} {s.sales ? `• ${s.sales} sales` : ''}
-                </option>
-              ))}
-            </select>
-            <button
-              type="submit"
-              disabled={learning || !selectedSeller}
-              className="btn btn-primary"
-              style={{ background: themeColor, fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px', minWidth: '140px', justifyContent: 'center' }}
-            >
-              {learning ? <RefreshCw size={15} className="spinner" /> : <Sparkles size={15} />}
-              <span>{learning ? 'Đang phân tích...' : '🧠 Học DNA'}</span>
-            </button>
-          </div>
+          effectiveSellers.length === 0 ? (
+            <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: '8px', padding: '12px 16px', color: '#92400e', fontSize: '0.85rem' }}>
+              ⚠️ Chưa có ASIN nào được nạp từ báo cáo Xray. Vui lòng quay lại <strong>Stage 1 (Bước 1)</strong> để tải file Helium 10 Xray, hoặc chuyển sang tab <strong>"Dán Link Amazon/ASIN"</strong> để học DNA trực tiếp từ đường link.
+            </div>
+          ) : (
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <select
+                className="form-input"
+                style={{ flex: 1, fontSize: '0.85rem' }}
+                value={selectedSellerId}
+                onChange={(e) => setSelectedSellerId(e.target.value)}
+              >
+                <option value="">-- {isAmazon ? 'Chọn 1 ASIN đối thủ từ báo cáo Xray Stage 1' : 'Chọn 1 seller đã quét ở Stage 1'} --</option>
+                {effectiveSellers.map(s => (
+                  <option key={s.id || s.asin} value={s.id || s.asin}>
+                    {s.asin ? `[${s.asin}] ` : ''}{s.title ? s.title.slice(0, 55) : 'Amazon Product'} {s.price ? `• ${s.price}` : ''} {s.sales ? `• ${s.sales} sales` : ''}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="submit"
+                disabled={learning || !selectedSeller}
+                className="btn btn-primary"
+                style={{ background: themeColor, fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px', minWidth: '140px', justifyContent: 'center' }}
+              >
+                {learning ? <RefreshCw size={15} className="spinner" /> : <Sparkles size={15} />}
+                <span>{learning ? 'Đang phân tích...' : '🧠 Học DNA'}</span>
+              </button>
+            </div>
+          )
         ) : inputMode === 'url' ? (
           <div style={{ display: 'flex', gap: '10px' }}>
             <input

@@ -76,6 +76,11 @@ export default function AmazonPipelineWorkflow({
 
     setBatches(outcome.batches);
     setXraySellers(outcome.xraySellers);
+    if (Array.isArray(outcome.xraySellers) && outcome.xraySellers.length > 0) {
+      try {
+        sessionStorage.setItem('omni_amazon_xray_sellers', JSON.stringify(outcome.xraySellers));
+      } catch (e) {}
+    }
     if (onUpdateXraySellers && outcome.xraySellers) {
       onUpdateXraySellers(outcome.xraySellers);
     }

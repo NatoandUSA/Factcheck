@@ -17,10 +17,28 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
   const [activeProject, setActiveProject] = useState(null);
 
   // Workflow Evidence State shared across Stages
-  const [xraySellers, setXraySellers] = useState([]);
+  const [xraySellers, setXraySellers] = useState(() => {
+    try {
+      const cached = sessionStorage.getItem('omni_amazon_xray_sellers');
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch (e) {}
+    return [];
+  });
   const [cerebroKeywords, setCerebroKeywords] = useState([]);
   const [cerebroSummary, setCerebroSummary] = useState(null);
   const [drafting, setDrafting] = useState(false);
+
+  const handleUpdateXraySellers = React.useCallback((sellers) => {
+    if (Array.isArray(sellers) && sellers.length > 0) {
+      setXraySellers(sellers);
+      try {
+        sessionStorage.setItem('omni_amazon_xray_sellers', JSON.stringify(sellers));
+      } catch (e) {}
+    }
+  }, []);
 
   const fetchProjects = React.useCallback(async () => {
     try {
@@ -272,7 +290,7 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
           onShowToast={onShowToast}
           onSelectListing={onSelectListing}
           onProceedToStage={(stage) => setActiveStage(stage)}
-          onUpdateXraySellers={(sellers) => setXraySellers(sellers)}
+          onUpdateXraySellers={handleUpdateXraySellers}
           onUpdateCerebroSummary={(summary, kw) => {
             setCerebroSummary(summary);
             if (kw) setCerebroKeywords(kw);

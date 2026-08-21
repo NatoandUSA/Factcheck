@@ -1,8 +1,23 @@
 import React, { createContext, useState, useContext, useEffect } from 'react';
 
-const AuthContext = createContext(null);
+const AuthContext = createContext({
+  user: null,
+  authLoading: true,
+  login: async () => {},
+  logout: async () => {},
+  switchWorkspace: async () => {}
+});
 
-export const useAuth = () => useContext(AuthContext);
+export const useAuth = () => {
+  const context = useContext(AuthContext);
+  return context || {
+    user: null,
+    authLoading: true,
+    login: async () => {},
+    logout: async () => {},
+    switchWorkspace: async () => {}
+  };
+};
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
@@ -32,6 +47,15 @@ export const AuthProvider = ({ children }) => {
     }
     setUser(data.user);
     return data.user;
+  };
+
+  const logout = async () => {
+    const res = await fetch('/api/auth/logout', {
+      method: 'POST',
+      credentials: 'include'
+    });
+    if (!res.ok) throw new Error('Không thể thu hồi phiên đăng nhập');
+    setUser(null);
   };
 
   const switchWorkspace = async ({ workspaceId, marketplace }) => {

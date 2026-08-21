@@ -11,7 +11,7 @@ import MarketBenchmarkWidget from './MarketBenchmarkWidget';
 import { parseJsonResponse } from '../utils/apiResponse';
 
 export default function EtsyWorkspace({ onSelectListing, onApproveListing, onShowToast, onViewHistory }) {
-  const [seedPhrase, setSeedPhrase] = useState('para el amor de mi vida');
+  const [seedPhrase, setSeedPhrase] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('✨ Custom Jewelry');
   const [activeStage, setActiveStage] = useState('workflow'); // 'workflow' | 'research' | 'mkl'
   const [uploading, setUploading] = useState(false);

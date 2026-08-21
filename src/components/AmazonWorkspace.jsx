@@ -10,7 +10,7 @@ import UnifiedIpGateModal from './UnifiedIpGateModal';
 import MarketBenchmarkWidget from './MarketBenchmarkWidget';
 
 export default function AmazonWorkspace({ onSelectListing, onApproveListing, onShowToast }) {
-  const [seedPhrase, setSeedPhrase] = useState('mom sweatshirt');
+  const [seedPhrase, setSeedPhrase] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('Apparel: Sweatshirt');
   const [activeStage, setActiveStage] = useState('workflow'); // 'workflow' | 'research' | 'mkl'
   const [isIpModalOpen, setIsIpModalOpen] = useState(false);

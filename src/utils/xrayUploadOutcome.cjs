@@ -68,4 +68,7 @@ function deriveXrayUploadOutcome({ ok, data, error } = {}) {
   };
 }
 
-module.exports = { deriveXrayUploadOutcome };
+exports.deriveXrayUploadOutcome = deriveXrayUploadOutcome;
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { deriveXrayUploadOutcome };
+}

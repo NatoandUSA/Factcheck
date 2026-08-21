@@ -152,6 +152,25 @@ db.serialize(() => {
   `);
 
   db.run(`
+    CREATE TABLE IF NOT EXISTS research_evidence (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id TEXT NOT NULL,
+      workspace_id INTEGER NOT NULL,
+      marketplace TEXT NOT NULL,
+      seed_phrase TEXT NOT NULL,
+      source TEXT NOT NULL,
+      source_url TEXT,
+      file_name TEXT,
+      actor_id INTEGER NOT NULL,
+      evidence_state TEXT DEFAULT 'OBSERVED',
+      accepted_at DATETIME,
+      accepted_by INTEGER,
+      metadata TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  db.run(`
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       email TEXT UNIQUE NOT NULL,
@@ -679,6 +698,71 @@ app.post('/api/owner/users', requireAuth(db), requireRole(['OWNER']), async (req
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
+});
+
+// GET /api/evidence - Authoritative Research Evidence Ledger
+app.get('/api/evidence', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
+  db.all(
+    `SELECT * FROM research_evidence
+     WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ?
+     ORDER BY created_at DESC`,
+    [req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+    (err, rows) => {
+      if (err) return res.status(500).json({ success: false, error: err.message });
+      res.json({ success: true, count: (rows || []).length, evidence: rows || [] });
+    }
+  );
+});
+
+// POST /api/evidence - Ingest new evidence record
+app.post('/api/evidence', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
+  const { seedPhrase, source, sourceUrl, fileName, metadata } = req.body || {};
+  if (!seedPhrase || !source) {
+    return res.status(400).json({ success: false, error: 'MISSING_FIELDS', message: 'seedPhrase and source are required.' });
+  }
+
+  db.run(
+    `INSERT INTO research_evidence (tenant_id, workspace_id, marketplace, seed_phrase, source, source_url, file_name, actor_id, evidence_state, metadata)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'OBSERVED', ?)`,
+    [
+      req.user.tenantId,
+      req.user.workspaceId,
+      req.user.marketplace,
+      String(seedPhrase).trim(),
+      String(source).trim(),
+      sourceUrl ? String(sourceUrl).trim() : null,
+      fileName ? String(fileName).trim() : null,
+      req.user.userId,
+      metadata ? JSON.stringify(metadata) : null
+    ],
+    function(err) {
+      if (err) return res.status(500).json({ success: false, error: err.message });
+      res.json({
+        success: true,
+        evidenceId: this.lastID,
+        evidenceState: 'OBSERVED',
+        actorId: req.user.userId
+      });
+    }
+  );
+});
+
+// POST /api/evidence/:id/accept - Staff accepts research evidence
+app.post('/api/evidence/:id/accept', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
+  const id = req.params.id;
+  const now = new Date().toISOString();
+
+  db.run(
+    `UPDATE research_evidence
+     SET evidence_state = 'ACCEPTED', accepted_at = ?, accepted_by = ?
+     WHERE id = ? AND tenant_id = ? AND workspace_id = ?`,
+    [now, req.user.userId, id, req.user.tenantId, req.user.workspaceId],
+    function(err) {
+      if (err) return res.status(500).json({ success: false, error: err.message });
+      if (this.changes === 0) return res.status(404).json({ success: false, error: 'EVIDENCE_NOT_FOUND' });
+      res.json({ success: true, evidenceId: id, evidenceState: 'ACCEPTED', acceptedBy: req.user.userId, acceptedAt: now });
+    }
+  );
 });
 
 // API: Full Database Reset (Wipe all old listings, trends, and templates - Protected OWNER Only)

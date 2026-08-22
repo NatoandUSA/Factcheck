@@ -23,8 +23,13 @@ assert.ok(server.includes("evidenceState: liveEvidenceCount > 0 ? 'MIXED_EVIDENC
 assert.ok(server.includes('observedAt: null'), 'Unknown provider observation time must remain null');
 assert.ok(server.includes("evidenceProvider: 'STAFF_PASTED_TEXT'"), 'Staff-pasted sellers must retain their unverified provider label');
 assert.ok(server.includes("evidenceProvider: 'YTRENDS_MCP'"), 'Live sellers must retain their MCP provider label');
+assert.ok(server.includes("evidenceState: 'RETRIEVED_NO_OBSERVED_AT'"), 'MCP retrieval without provider observation time must not claim OBSERVED');
 assert.strictEqual(etsy.includes("evidenceState: 'OBSERVED'"), false, 'Client must consume server provenance rather than invent OBSERVED state');
-assert.ok(etsy.includes('Number(t.project_id) === Number(activeProject.id)'), 'Etsy trends must be scoped to the selected project');
-assert.ok(amazon.includes('Number(t.project_id) === Number(activeProject.id)'), 'Amazon trends must be scoped to the selected project');
+assert.ok(etsy.includes('Number(t.project_id) === Number(requestedProjectId)'), 'Etsy trends must be scoped to the selected project');
+assert.ok(amazon.includes('Number(t.project_id) === Number(requestedProjectId)'), 'Amazon trends must be scoped to the selected project');
+assert.ok(etsy.includes('activeProjectIdRef.current !== requestedProjectId'), 'Etsy must reject stale async responses after a project switch');
+assert.ok(amazon.includes('activeProjectIdRef.current !== requestedProjectId'), 'Amazon must reject stale async responses after a project switch');
+assert.ok(etsy.includes('setScannedSellers([])'), 'Etsy must clear seller evidence when project context changes');
+assert.ok(server.includes('project_id = ? AND tenant_id = ?'), 'Draft route must support strict project context validation');
 
 console.log('Workflow truth UI contract passed.');

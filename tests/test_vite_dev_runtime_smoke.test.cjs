@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 
-async function waitForServer(url, timeoutMs = 15000) {
+async function waitForServer(url, timeoutMs, getDiagnostics) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
@@ -12,7 +12,11 @@ async function waitForServer(url, timeoutMs = 15000) {
     } catch (_) {}
     await new Promise(resolve => setTimeout(resolve, 300));
   }
-  throw new Error(`Timed out waiting for Vite dev server at ${url}`);
+  const diagnostics = getDiagnostics?.().trim();
+  throw new Error(
+    `Timed out waiting for Vite dev server at ${url} after ${timeoutMs}ms.`
+    + (diagnostics ? `\nVite output:\n${diagnostics}` : '')
+  );
 }
 
 async function runViteSmokeTest() {
@@ -39,15 +43,18 @@ async function runViteSmokeTest() {
 
   // Test 3: Launch real Vite dev server and fetch component module graph over HTTP
   console.log('\nTest 3: Launching real Vite Dev Server on port 5179...');
-  const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
-  const viteProc = spawn(npxCmd, ['vite', '--port', '5179', '--strictPort'], {
+  const viteCli = path.join(__dirname, '../node_modules/vite/bin/vite.js');
+  assert.ok(fs.existsSync(viteCli), 'Local Vite CLI must be installed before the runtime smoke test');
+  let viteOutput = '';
+  const viteProc = spawn(process.execPath, [viteCli, '--host', '127.0.0.1', '--port', '5179', '--strictPort'], {
     cwd: path.join(__dirname, '..'),
-    shell: true,
     env: { ...process.env, NODE_ENV: 'development' }
   });
+  viteProc.stdout.on('data', chunk => { viteOutput += chunk.toString(); });
+  viteProc.stderr.on('data', chunk => { viteOutput += chunk.toString(); });
 
   try {
-    const indexRes = await waitForServer('http://127.0.0.1:5179/');
+    const indexRes = await waitForServer('http://127.0.0.1:5179/', 30000, () => viteOutput);
     assert.strictEqual(indexRes.status, 200, 'Vite dev server root must return 200 OK');
     const indexText = await indexRes.text();
     assert.ok(indexText.includes('src/main.jsx'), 'Index HTML must load main.jsx entry point');

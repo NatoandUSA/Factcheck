@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { 
   Zap, ShieldCheck, Layers, Brain, Database, TrendingUp, RefreshCw
 } from 'lucide-react';
@@ -25,6 +25,8 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
   const [cerebroKeywords, setCerebroKeywords] = useState([]);
   const [cerebroSummary, setCerebroSummary] = useState(null);
   const [drafting, setDrafting] = useState(false);
+  const activeProjectIdRef = useRef(null);
+  activeProjectIdRef.current = activeProject?.id || null;
 
   const handleUpdateXraySellers = React.useCallback((sellers) => {
     setXraySellers(Array.isArray(sellers) ? sellers : []);
@@ -52,13 +54,15 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
   // Also load latest trend if available to populate cerebroSummary
   const fetchLatestTrend = React.useCallback(async () => {
     if (!activeProject?.id) return;
+    const requestedProjectId = activeProject.id;
     try {
       const res = await fetch('/api/trends', { credentials: 'include' });
       if (res.ok) {
         const trends = await res.json();
+        if (activeProjectIdRef.current !== requestedProjectId) return;
         const amzTrends = (trends || []).filter(t => (
           t.marketplace === 'AMAZON'
-          && Number(t.project_id) === Number(activeProject.id)
+          && Number(t.project_id) === Number(requestedProjectId)
         ));
         if (amzTrends.length > 0) {
           const latest = amzTrends[0];
@@ -119,7 +123,9 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
     try {
       const res = await fetch(`/api/trends/${trendId}/draft`, {
         method: 'POST',
-        credentials: 'include'
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId: activeProject.id })
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Drafting failed');

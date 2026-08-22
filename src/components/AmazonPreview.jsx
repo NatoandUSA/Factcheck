@@ -1,5 +1,5 @@
 import React from 'react';
-import { Star, ChevronDown, ShoppingCart, Sparkles, Award, ShieldCheck, Heart } from 'lucide-react';
+import { Star, ShoppingCart, Sparkles, Award, ShieldCheck, Heart } from 'lucide-react';
 
 export default function AmazonPreview({ data }) {
   if (!data) return null;
@@ -26,25 +26,27 @@ export default function AmazonPreview({ data }) {
           </h1>
           
           <div style={{ display: 'flex', alignItems: 'center', gap: '16px', borderBottom: '1px solid #e7e7e7', paddingBottom: '12px', marginBottom: '12px' }}>
-            <div style={{ color: '#007185', fontSize: '0.9rem', cursor: 'pointer' }}>Visit the Store</div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '4px', color: '#de7921' }}>
-              <Star size={16} fill="currentColor" />
-              <Star size={16} fill="currentColor" />
-              <Star size={16} fill="currentColor" />
-              <Star size={16} fill="currentColor" />
-              <Star size={16} fill="currentColor" />
-              <span style={{ color: '#007185', marginLeft: '4px' }}><ChevronDown size={14}/> 4,892 ratings</span>
-            </div>
+            <div style={{ color: '#007185', fontSize: '0.9rem' }}>Amazon FBM Listing</div>
+            {data.rating ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px', color: '#de7921' }}>
+                <Star size={16} fill="currentColor" />
+                <span style={{ color: '#007185', marginLeft: '4px' }}>{data.rating} ({data.reviewCount || 0} reviews)</span>
+              </div>
+            ) : (
+              <span style={{ fontSize: '0.8rem', color: '#666' }}>New Listing (0 ratings)</span>
+            )}
           </div>
 
           <div style={{ display: 'flex', alignItems: 'baseline', gap: '4px', marginBottom: '16px' }}>
-            <span style={{ fontSize: '0.8rem', position: 'relative', top: '-0.5em' }}>$</span>
-            <span style={{ fontSize: '1.8rem', fontWeight: '500' }}>29</span>
-            <span style={{ fontSize: '0.8rem', position: 'relative', top: '-0.5em' }}>99</span>
+            {data.price ? (
+              <span style={{ fontSize: '1.8rem', fontWeight: '600', color: '#b12704' }}>${data.price}</span>
+            ) : (
+              <span style={{ fontSize: '1.2rem', color: '#666', fontStyle: 'italic' }}>Price not set</span>
+            )}
           </div>
 
-          <div style={{ background: '#f6f6f6', padding: '10px 14px', borderRadius: '4px', marginBottom: '16px' }}>
-            <span style={{ fontWeight: 'bold' }}>Prime</span> <span style={{ color: '#007185' }}>FREE delivery</span> Tomorrow
+          <div style={{ background: '#f6f6f6', padding: '10px 14px', borderRadius: '4px', marginBottom: '16px', fontSize: '0.85rem' }}>
+            <span style={{ fontWeight: 'bold' }}>FBM Merchant Fulfilled</span> — {data.shippingPrice ? `Shipping: $${data.shippingPrice}` : 'Standard Shipping'}
           </div>
 
           <div>
@@ -62,9 +64,11 @@ export default function AmazonPreview({ data }) {
         
         {/* Right Column: Buy Box */}
         <div style={{ flex: '0 0 220px', border: '1px solid #d5d9d9', borderRadius: '8px', padding: '16px', height: 'fit-content', background: '#fafafa' }}>
-          <div style={{ fontSize: '1.25rem', fontWeight: 'bold', marginBottom: '8px', color: '#b12704' }}>$29.99</div>
-          <div style={{ color: '#007185', fontSize: '0.85rem', marginBottom: '10px' }}>FREE Returns</div>
-          <div style={{ color: '#007600', fontSize: '1.05rem', fontWeight: 600, marginBottom: '14px' }}>In Stock</div>
+          <div style={{ fontSize: '1.25rem', fontWeight: 'bold', marginBottom: '8px', color: '#b12704' }}>
+            {data.price ? `$${data.price}` : '—'}
+          </div>
+          <div style={{ color: '#007185', fontSize: '0.85rem', marginBottom: '10px' }}>Standard Return Policy</div>
+          <div style={{ color: '#007600', fontSize: '1.05rem', fontWeight: 600, marginBottom: '14px' }}>Draft / Pre-Publish</div>
           <button style={{ width: '100%', background: '#ffd814', border: '1px solid #fcd200', borderRadius: '100px', padding: '10px', cursor: 'pointer', marginBottom: '8px', fontWeight: 600 }}>
             Add to Cart
           </button>

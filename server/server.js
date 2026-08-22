@@ -26,6 +26,7 @@ const { learnFromListing } = require('./learningService');
 const { parseEtsySearchResults, sanitizeStaffManualAssertions, synthesizeEtsyBatchLearnings } = require('./competitorBatchLearner');
 const benchmarkService = require('./benchmarkService');
 const publishGate = require('./publishGate');
+const analyticsEngine = require('./analyticsEngine');
 const { hashPassword, verifyPassword } = require('./security/scrypt');
 const { createRateLimiter } = require('./security/rateLimiter');
 const { COOKIE_NAME, SESSION_TTL_MS, createSessionRecord, verifySessionRecord, revokeSessionRecord } = require('./security/session');
@@ -914,6 +915,12 @@ function parseAndValidateProject(db, req, rawProjectId, callback) {
       callback(null, project);
     }
   );
+}
+
+function requireProjectContext(req, rawProjectId) {
+  return new Promise((resolve, reject) => {
+    parseAndValidateProject(db, req, rawProjectId, (err, project) => err ? reject(err) : resolve(project));
+  });
 }
 
 // POST /api/evidence - Ingest new evidence record (Strictly Project-Bound & Source-Contracted)
@@ -2596,6 +2603,144 @@ app.post('/api/etsy/feed-search-results', requireAuth(db), requireRole(['OWNER',
     sellers: parsedSellers.slice(0, 30),
     keywords: parsedKeywords.slice(0, 13),
     count: parsedSellers.length
+  });
+});
+
+// POST /api/research/smart-pull - Project-bound market evidence analysis.
+app.post('/api/research/smart-pull', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  const { query, unitCost, projectId } = req.body || {};
+  const rawInput = typeof query === 'string' ? query.trim() : '';
+  if (!rawInput) {
+    return res.status(400).json({ success: false, error: 'MISSING_QUERY' });
+  }
+  if (rawInput.length > 2000) {
+    return res.status(413).json({ success: false, error: 'QUERY_TOO_LARGE' });
+  }
+  const parsedUnitCost = unitCost === null || unitCost === undefined || unitCost === '' ? null : Number(unitCost);
+  if (parsedUnitCost !== null && (!Number.isFinite(parsedUnitCost) || parsedUnitCost < 0 || parsedUnitCost > 100000)) {
+    return res.status(400).json({ success: false, error: 'INVALID_UNIT_COST' });
+  }
+
+  let project;
+  try {
+    project = await requireProjectContext(req, projectId);
+  } catch (err) {
+    return res.status(err.status || 500).json({ success: false, error: err.error || 'PROJECT_CONTEXT_ERROR', message: err.message });
+  }
+
+  let searchSeed = rawInput;
+  try {
+    const etsyMatch = rawInput.match(/https?:\/\/(?:www\.)?etsy\.com\/[^\s]*[?&]q=([^&#\s]+)/i);
+    const amazonMatch = rawInput.match(/https?:\/\/(?:www\.)?amazon\.[a-z.]+\/[^\s]*[?&]k=([^&#\s]+)/i);
+    const encodedSeed = req.user.marketplace === 'ETSY' ? etsyMatch?.[1] : amazonMatch?.[1];
+    if (encodedSeed) searchSeed = decodeURIComponent(encodedSeed.replace(/\+/g, ' ')).trim();
+  } catch (_) {
+    return res.status(400).json({ success: false, error: 'INVALID_SEARCH_URL' });
+  }
+  if (!searchSeed || searchSeed.length > 300) {
+    return res.status(400).json({ success: false, error: 'INVALID_SEARCH_SEED' });
+  }
+
+  const importedAt = new Date().toISOString();
+
+  if (req.user.marketplace === 'AMAZON') {
+    const asins = [...new Set(rawInput.match(/\bB[0-9A-Z]{9}\b/g) || [])];
+    if (asins.length === 0) {
+      return res.status(422).json({ success: false, error: 'AMAZON_INPUT_EVIDENCE_REQUIRED', message: 'Provide at least one valid ASIN. No live Amazon connector was invoked.' });
+    }
+    const listings = asins.slice(0, 30).map(asin => ({
+      asin,
+      title: null,
+      price: null,
+      views24h: null,
+      sold24h: null,
+      tags: [],
+      evidenceSource: 'STAFF_ASIN_INPUT',
+      evidenceState: 'INPUT_ONLY_UNVERIFIED'
+    }));
+    const synthesis = analyticsEngine.synthesizeNicheIntelligence({ seedPhrase: searchSeed, listings, keywords: [], unitCost: parsedUnitCost });
+    return res.json({
+      ...synthesis,
+      projectId: project.id,
+      marketplace: 'AMAZON',
+      source: 'SMART_PULL_INPUT',
+      provider: 'STAFF_INPUT',
+      evidenceState: 'INPUT_ONLY_UNVERIFIED',
+      observedAt: null,
+      importedAt,
+      contentHash: crypto.createHash('sha256').update(JSON.stringify({ projectId: project.id, asins })).digest('hex'),
+      providerResults: { amazonLiveConnector: 'NOT_INVOKED' },
+      listings
+    });
+  }
+
+  const [searchResult, hotResult] = await Promise.allSettled([
+    ytrendsMcp.callTool('ytrends_search', { query: searchSeed, limit: 30 }),
+    ytrendsMcp.callTool('ytrends_find_hot_listings', { search: searchSeed, limit: 30 })
+  ]);
+  const searchRows = searchResult.status === 'fulfilled' && Array.isArray(searchResult.value?.data?.results)
+    ? searchResult.value.data.results
+    : [];
+  const hotRows = hotResult.status === 'fulfilled' && Array.isArray(hotResult.value?.data?.listings)
+    ? hotResult.value.data.listings
+    : [];
+  if (searchResult.status === 'rejected' && hotResult.status === 'rejected') {
+    return res.status(503).json({ success: false, error: 'ETSY_MCP_UNAVAILABLE', providerResults: { search: 'FAILED', hotListings: 'FAILED' } });
+  }
+  if (searchRows.length === 0 && hotRows.length === 0) {
+    return res.status(422).json({ success: false, error: 'INSUFFICIENT_EVIDENCE', providerResults: { search: searchResult.status, hotListings: hotResult.status } });
+  }
+
+  const listings = [];
+  for (const [index, item] of searchRows.entries()) {
+    const priceMatch = String(item.snippet || '').match(/\$([0-9]+(?:\.[0-9]+)?)/);
+    listings.push({
+      id: item.id || `search-${index}`,
+      title: item.title || null,
+      url: item.url || item.link || null,
+      price: priceMatch ? Number(priceMatch[1]) : null,
+      views24h: null,
+      sold24h: null,
+      tags: [],
+      evidenceSource: 'YTRENDS_MCP_SEARCH',
+      evidenceState: 'RETRIEVED_NO_OBSERVED_AT'
+    });
+  }
+  for (const item of hotRows) {
+    const numericOrNull = value => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value))
+      ? Number(value)
+      : null;
+    listings.push({
+      id: item.listing_id,
+      title: item.title || null,
+      url: item.listing_id ? `https://www.etsy.com/listing/${item.listing_id}` : null,
+      price: numericOrNull(item.price_usd),
+      views24h: numericOrNull(item.views_24h),
+      sold24h: numericOrNull(item.sold_24h),
+      tags: Array.isArray(item.tags) ? item.tags : [],
+      evidenceSource: 'YTRENDS_MCP_HOT',
+      evidenceState: 'RETRIEVED_NO_OBSERVED_AT'
+    });
+  }
+  const observedTags = [...new Set(hotRows.flatMap(item => Array.isArray(item.tags) ? item.tags : []))];
+  const synthesis = analyticsEngine.synthesizeNicheIntelligence({ seedPhrase: searchSeed, listings: listings.slice(0, 30), keywords: observedTags, unitCost: parsedUnitCost });
+  const partial = searchResult.status !== 'fulfilled' || hotResult.status !== 'fulfilled' || searchRows.length === 0 || hotRows.length === 0;
+  const providerResults = {
+    search: searchResult.status === 'fulfilled' ? (searchRows.length ? 'SUCCESS' : 'EMPTY') : 'FAILED',
+    hotListings: hotResult.status === 'fulfilled' ? (hotRows.length ? 'SUCCESS' : 'EMPTY') : 'FAILED'
+  };
+  return res.json({
+    ...synthesis,
+    projectId: project.id,
+    marketplace: 'ETSY',
+    source: 'SMART_PULL_MCP',
+    provider: 'YTRENDS_MCP',
+    evidenceState: partial ? 'PARTIAL_EVIDENCE' : 'RETRIEVED_NO_OBSERVED_AT',
+    observedAt: null,
+    importedAt,
+    contentHash: crypto.createHash('sha256').update(JSON.stringify({ searchRows, hotRows })).digest('hex'),
+    providerResults,
+    listings: listings.slice(0, 30)
   });
 });
 

@@ -8,6 +8,7 @@ import EtsyMultiSellerScanner from './EtsyMultiSellerScanner';
 import MasterKeywordTable from './MasterKeywordTable';
 import UnifiedIpGateModal from './UnifiedIpGateModal';
 import MarketBenchmarkWidget from './MarketBenchmarkWidget';
+import SmartPullAnalyticsBar from './SmartPullAnalyticsBar';
 import { parseJsonResponse } from '../utils/apiResponse';
 
 export default function EtsyWorkspace({ onSelectListing, onApproveListing, onShowToast, onViewHistory }) {
@@ -445,6 +446,29 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
           </button>
         </div>
       </div>
+
+      <SmartPullAnalyticsBar
+        marketplace="ETSY"
+        activeProjectId={activeProject?.id || null}
+        initialSeed={seedPhrase}
+        onShowToast={onShowToast}
+        onProceedToDraft={({ seed, tags, intelligence }) => {
+          if (seed) setSeedPhrase(seed);
+          const sellers = Array.isArray(intelligence?.listings) ? intelligence.listings : [];
+          setScannedSellers(sellers);
+          setMcpResult({
+            source: intelligence?.source || 'SMART_PULL',
+            evidenceState: intelligence?.evidenceState || null,
+            provider: intelligence?.provider || null,
+            observedAt: intelligence?.observedAt || null,
+            importedAt: intelligence?.importedAt || null,
+            keywords: Array.isArray(tags) ? tags : [],
+            sellers,
+            trendingKeywordsStr: Array.isArray(tags) ? tags.join(', ') : ''
+          });
+          setActiveStage('workflow');
+        }}
+      />
 
       {/* 0. Market Benchmark & Go/No-Go Decision Gate (Pre-Listing Validation) */}
       <MarketBenchmarkWidget 

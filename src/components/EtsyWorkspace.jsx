@@ -29,8 +29,24 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
   const [feedSubmitting, setFeedSubmitting] = useState(false);
   const [scannedSellers, setScannedSellers] = useState([]);
   const fileInputRef = useRef(null);
+  const activeProjectIdRef = useRef(null);
+  activeProjectIdRef.current = activeProject?.id || null;
+
+  useEffect(() => {
+    setMcpResult(null);
+    setScannedSellers([]);
+    setTrends([]);
+    setUploadStatus(null);
+    setFeedRawText('');
+    setSeedPhrase(activeProject?.seed_phrase || '');
+  }, [activeProject?.id]);
 
   const handleFeedSearchResults = async () => {
+    if (!activeProject?.id) {
+      if (onShowToast) onShowToast('Hãy chọn Active Project trước khi nạp Etsy Feed.');
+      return;
+    }
+    const requestedProjectId = activeProject.id;
     if (!feedRawText.trim()) {
       if (onShowToast) onShowToast('Vui lòng dán nội dung kết quả tìm kiếm hoặc URL từ trang Etsy!');
       return;
@@ -43,11 +59,13 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           rawText: feedRawText,
-          seed: seedPhrase.trim()
+          seed: seedPhrase.trim(),
+          projectId: requestedProjectId
         })
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || data.error || 'Failed to feed Etsy search data');
+      if (activeProjectIdRef.current !== requestedProjectId) return;
 
       if (data.seed) {
         setSeedPhrase(data.seed);
@@ -94,13 +112,15 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
       setTrends([]);
       return;
     }
+    const requestedProjectId = activeProject.id;
     try {
       const trendsRes = await fetch('/api/trends', { credentials: 'include' });
       if (trendsRes.ok) {
         const trendsData = await trendsRes.json();
+        if (activeProjectIdRef.current !== requestedProjectId) return;
         const etsyTrends = (trendsData || []).filter(t => (
           t.marketplace === 'ETSY'
-          && Number(t.project_id) === Number(activeProject.id)
+          && Number(t.project_id) === Number(requestedProjectId)
           && t.keywords_detailed
         ));
         setTrends(etsyTrends);
@@ -184,7 +204,9 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
     try {
       const res = await fetch(`/api/trends/${trendId}/draft`, {
         method: 'POST',
-        credentials: 'include'
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId: activeProject.id })
       });
       const result = await parseJsonResponse(res);
       if (!res.ok) throw new Error(result.error || 'Drafting failed');

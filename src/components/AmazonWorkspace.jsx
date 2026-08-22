@@ -15,6 +15,7 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
   const [activeStage, setActiveStage] = useState('workflow'); // 'workflow' | 'research' | 'mkl'
   const [isIpModalOpen, setIsIpModalOpen] = useState(false);
   const [activeProject, setActiveProject] = useState(null);
+  const [projects, setProjects] = useState([]);
 
   // Workflow Evidence State shared across Stages
   // Xray data is held only in the active workspace React state. Browser-wide
@@ -33,25 +34,32 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
   // project context change or become an authority for Learning Box/publish flow.
   useEffect(() => {
     setXraySellers([]);
+    setCerebroKeywords([]);
+    setCerebroSummary(null);
   }, [activeProject?.id]);
 
   const fetchProjects = React.useCallback(async () => {
     try {
       const res = await fetch('/api/projects', { credentials: 'include' });
       const data = await res.json();
-      if (res.ok && data.success && Array.isArray(data.projects) && data.projects.length > 0) {
-        setActiveProject(data.projects[0]);
+      if (res.ok && data.success && Array.isArray(data.projects)) {
+        setProjects(data.projects);
+        setActiveProject(prev => prev ? (data.projects.find(project => project.id === prev.id) || null) : null);
       }
     } catch (e) {}
   }, []);
 
   // Also load latest trend if available to populate cerebroSummary
   const fetchLatestTrend = React.useCallback(async () => {
+    if (!activeProject?.id) return;
     try {
       const res = await fetch('/api/trends', { credentials: 'include' });
       if (res.ok) {
         const trends = await res.json();
-        const amzTrends = (trends || []).filter(t => t.marketplace === 'AMAZON');
+        const amzTrends = (trends || []).filter(t => (
+          t.marketplace === 'AMAZON'
+          && Number(t.project_id) === Number(activeProject.id)
+        ));
         if (amzTrends.length > 0) {
           const latest = amzTrends[0];
           let detailed = [];
@@ -68,7 +76,7 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
         }
       }
     } catch (e) {}
-  }, [cerebroSummary, cerebroKeywords.length, seedPhrase]);
+  }, [activeProject?.id, cerebroSummary, cerebroKeywords.length, seedPhrase]);
 
   React.useEffect(() => {
     fetchProjects();
@@ -96,6 +104,10 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
 
   // Generate Amazon A10 Listing Action (Available across Stage 2, Stage 3, and Stage 1)
   const handleGenerateListing = async () => {
+    if (!activeProject?.id) {
+      if (onShowToast) onShowToast('⚠️ Hãy chọn Active Project trước khi tạo listing.');
+      return;
+    }
     const trendId = cerebroSummary?.trendId;
     if (!trendId) {
       if (onShowToast) onShowToast('⚠️ Vui lòng nạp file Cerebro ở Stage 1 (Bước 3) trước khi tạo listing!');
@@ -141,6 +153,28 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
         gap: '16px',
         boxShadow: '0 4px 14px rgba(2, 132, 199, 0.08)'
       }}>
+        <div style={{ display: 'flex', flexDirection: 'column', minWidth: '260px' }}>
+          <label htmlFor="amazon-active-project" style={{ fontSize: '0.72rem', fontWeight: 800, color: '#0369a1' }}>
+            Active Project (bắt buộc)
+          </label>
+          <select
+            id="amazon-active-project"
+            value={activeProject?.id || ''}
+            onChange={(event) => {
+              const selectedId = Number(event.target.value);
+              setActiveProject(projects.find(project => project.id === selectedId) || null);
+              setActiveStage('workflow');
+            }}
+            style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid #7dd3fc', background: '#fff' }}
+          >
+            <option value="">— Chọn project —</option>
+            {projects.map(project => (
+              <option key={project.id} value={project.id}>
+                #{project.id} {project.name || project.seed_phrase || 'Untitled'} — {project.state}
+              </option>
+            ))}
+          </select>
+        </div>
         {/* Seed Phrase Input */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flex: 1, minWidth: '320px' }}>
           <div style={{ background: '#0284c7', color: '#fff', padding: '10px', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -258,6 +292,7 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
         <button
           className={`command-stage-tab ${activeStage === 'research' ? 'active-amazon' : ''}`}
           onClick={() => setActiveStage('research')}
+          disabled={!activeProject || activeProject.state === 'EVIDENCE_INTAKE'}
         >
           <Brain size={18} />
           <span>🧠 Stage 2: Nghiên Cứu Sâu & Học DNA Đối Thủ (Research Hub)</span>
@@ -266,6 +301,7 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
         <button
           className={`command-stage-tab ${activeStage === 'mkl' ? 'active-amazon' : ''}`}
           onClick={() => setActiveStage('mkl')}
+          disabled={!activeProject || !['MKL_FROZEN', 'DRAFT_GENERATED', 'PRODUCT_TRUTH_VERIFIED', 'PRODUCT_TRUTH_CONFIRMED', 'VALIDATED', 'MANAGER_APPROVED', 'PUBLISH_READY'].includes(activeProject.state)}
         >
           <Database size={18} />
           <span>📊 Stage 3: Kho Từ Khóa Phân Tầng MKL 5-Tier</span>
@@ -333,11 +369,17 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
               </button>
 
               <button
-                onClick={() => setActiveStage('mkl')}
+                onClick={async () => {
+                  if (activeProject?.state === 'RESEARCH_ACCEPTED') {
+                    await handleTransition('DNA_ACCEPTED');
+                  } else if (onShowToast) {
+                    onShowToast('Project phải ở trạng thái RESEARCH_ACCEPTED trước khi chấp nhận DNA.');
+                  }
+                }}
                 className="btn btn-primary"
                 style={{ background: '#0284c7', fontWeight: 800, padding: '10px 20px', borderRadius: '8px', cursor: 'pointer' }}
               >
-                <span>➡️ Mở Khóa Stage 3 (MKL & Family Draft)</span>
+                <span>➡️ Chấp Nhận Research DNA (sau đó Freeze MKL để mở Stage 3)</span>
               </button>
             </div>
           </div>

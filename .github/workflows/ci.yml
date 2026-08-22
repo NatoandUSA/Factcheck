@@ -30,8 +30,11 @@ jobs:
       - name: Verify Native SQLite Addon Loading
         run: node -e "require('./node_modules/sqlite3'); console.log('🟢 Native sqlite3 addon verified in CI');"
 
-      - name: Run Canonical Test Suite (42/42 Test Files)
-        run: npm test
-
       - name: Build Vite Production Bundle
         run: npm run build
+
+      # The performance contract serves the production SPA from dist/.
+      # Build it before the suite so CI tests the same artifact boundary as
+      # the production runtime rather than a missing static directory.
+      - name: Run Canonical Test Suite (42/42 Test Files)
+        run: npm test

@@ -158,7 +158,7 @@ async function run() {
   assert.ok(workspaceSrc.includes("data.source !== 'ETSY_MCP_LIVE'"));
   assert.ok(workspaceSrc.includes("data.evidenceState !== 'OBSERVED'"));
   assert.ok(workspaceSrc.includes("t.marketplace === 'ETSY'"));
-  assert.ok(workspaceSrc.includes('Number(t.project_id) === Number(activeProject.id)'));
+  assert.ok(workspaceSrc.includes('Number(t.project_id) === Number(requestedProjectId)'));
   assert.ok(workspaceSrc.includes('&& t.keywords_detailed'));
   console.log('  🟢 Etsy workspace refuses non-live MCP responses as new listing evidence.');
 

@@ -8,6 +8,7 @@ import AmazonPipelineWorkflow from './AmazonPipelineWorkflow';
 import MasterKeywordTable from './MasterKeywordTable';
 import UnifiedIpGateModal from './UnifiedIpGateModal';
 import MarketBenchmarkWidget from './MarketBenchmarkWidget';
+import SmartPullAnalyticsBar from './SmartPullAnalyticsBar';
 
 export default function AmazonWorkspace({ onSelectListing, onApproveListing, onShowToast }) {
   const [seedPhrase, setSeedPhrase] = useState('');
@@ -273,6 +274,17 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
           </div>
         )}
       </div>
+
+      <SmartPullAnalyticsBar
+        marketplace="AMAZON"
+        activeProjectId={activeProject?.id || null}
+        initialSeed={seedPhrase}
+        onShowToast={onShowToast}
+        onProceedToDraft={({ seed }) => {
+          if (seed) setSeedPhrase(seed);
+          setActiveStage('workflow');
+        }}
+      />
 
       {/* 0. Market Benchmark & Go/No-Go Decision Gate (Pre-Listing Validation) */}
       <MarketBenchmarkWidget 

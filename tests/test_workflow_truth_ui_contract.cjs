@@ -30,6 +30,9 @@ assert.ok(amazon.includes('Number(t.project_id) === Number(requestedProjectId)')
 assert.ok(etsy.includes('activeProjectIdRef.current !== requestedProjectId'), 'Etsy must reject stale async responses after a project switch');
 assert.ok(amazon.includes('activeProjectIdRef.current !== requestedProjectId'), 'Amazon must reject stale async responses after a project switch');
 assert.ok(etsy.includes('setScannedSellers([])'), 'Etsy must clear seller evidence when project context changes');
+assert.ok(etsy.includes('prev?.id === requestedProjectId'), 'Etsy transitions must not update a newly selected project');
+assert.ok(amazon.includes('prev?.id === requestedProjectId'), 'Amazon transitions must not update a newly selected project');
+assert.ok(etsy.includes('projectId: requestedProjectId'), 'Etsy MCP pull must bind to the captured project context');
 assert.ok(server.includes('project_id = ? AND tenant_id = ?'), 'Draft route must support strict project context validation');
 
 console.log('Workflow truth UI contract passed.');

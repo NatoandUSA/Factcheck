@@ -89,6 +89,7 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
 
   const handleTransition = async (targetState) => {
     if (!activeProject) return;
+    const requestedProjectId = activeProject.id;
     try {
       const res = await fetch(`/api/projects/${activeProject.id}/transition`, {
         method: 'PATCH',
@@ -98,8 +99,9 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || data.error || 'Transition failed');
+      if (activeProjectIdRef.current !== requestedProjectId) return false;
       if (onShowToast) onShowToast(`✓ Chuyển trạng thái dự án sang ${data.state} thành công!`);
-      setActiveProject(prev => ({ ...prev, state: data.state }));
+      setActiveProject(prev => prev?.id === requestedProjectId ? ({ ...prev, state: data.state }) : prev);
       fetchProjects();
     } catch (err) {
       if (onShowToast) onShowToast(`⚠ Transition error: ${err.message}`);

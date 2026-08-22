@@ -136,6 +136,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
   }, [fetchProjects, activeProject?.id]);
   const handleTransition = async (targetState) => {
     if (!activeProject) return;
+    const requestedProjectId = activeProject.id;
     try {
       const res = await fetch(`/api/projects/${activeProject.id}/transition`, {
         method: 'PATCH',
@@ -145,8 +146,9 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || data.error || 'Transition failed');
+      if (activeProjectIdRef.current !== requestedProjectId) return false;
       if (onShowToast) onShowToast(`✓ Chuyển trạng thái dự án sang ${data.state} thành công!`);
-      setActiveProject(prev => ({ ...prev, state: data.state }));
+      setActiveProject(prev => prev?.id === requestedProjectId ? ({ ...prev, state: data.state }) : prev);
       fetchProjects();
       return true;
     } catch (err) {
@@ -233,6 +235,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
       if (onShowToast) onShowToast('Vui lòng nhập Từ khóa Hạt nhân (Seed Phrase).');
       return;
     }
+    const requestedProjectId = activeProject.id;
 
     setMcpPulling(true);
     setMcpResult(null);
@@ -243,7 +246,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          projectId: activeProject?.id,
+          projectId: requestedProjectId,
           seed: seedPhrase.trim(),
           category: selectedCategory
         })
@@ -251,6 +254,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
 
       const data = await parseJsonResponse(res);
       if (!res.ok) throw new Error(data.error || 'Failed to pull Etsy MCP');
+      if (activeProjectIdRef.current !== requestedProjectId) return;
 
       if (data.source !== 'ETSY_MCP_LIVE' || data.evidenceState !== 'OBSERVED' || !Array.isArray(data.keywords) || data.keywords.length === 0) {
         throw new Error('INSUFFICIENT_EVIDENCE: MCP response is not verified live evidence.');

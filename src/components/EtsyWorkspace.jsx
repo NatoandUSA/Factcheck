@@ -23,13 +23,30 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
   const [mcpResult, setMcpResult] = useState(null);
   const [isIpModalOpen, setIsIpModalOpen] = useState(false);
   const [activeProject, setActiveProject] = useState(null);
+  const [projects, setProjects] = useState([]);
   const [isFeedModalOpen, setIsFeedModalOpen] = useState(false);
   const [feedRawText, setFeedRawText] = useState('');
   const [feedSubmitting, setFeedSubmitting] = useState(false);
   const [scannedSellers, setScannedSellers] = useState([]);
   const fileInputRef = useRef(null);
+  const activeProjectIdRef = useRef(null);
+  activeProjectIdRef.current = activeProject?.id || null;
+
+  useEffect(() => {
+    setMcpResult(null);
+    setScannedSellers([]);
+    setTrends([]);
+    setUploadStatus(null);
+    setFeedRawText('');
+    setSeedPhrase(activeProject?.seed_phrase || '');
+  }, [activeProject?.id]);
 
   const handleFeedSearchResults = async () => {
+    if (!activeProject?.id) {
+      if (onShowToast) onShowToast('Hãy chọn Active Project trước khi nạp Etsy Feed.');
+      return;
+    }
+    const requestedProjectId = activeProject.id;
     if (!feedRawText.trim()) {
       if (onShowToast) onShowToast('Vui lòng dán nội dung kết quả tìm kiếm hoặc URL từ trang Etsy!');
       return;
@@ -42,11 +59,13 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           rawText: feedRawText,
-          seed: seedPhrase.trim()
+          seed: seedPhrase.trim(),
+          projectId: requestedProjectId
         })
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || data.error || 'Failed to feed Etsy search data');
+      if (activeProjectIdRef.current !== requestedProjectId) return;
 
       if (data.seed) {
         setSeedPhrase(data.seed);
@@ -56,8 +75,11 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
       }
       if (Array.isArray(data.keywords) && data.keywords.length > 0) {
         setMcpResult({
-          source: 'ETSY_SEARCH_PAGE_RAW',
-          evidenceState: 'OBSERVED',
+          source: data.source,
+          evidenceState: data.evidenceState,
+          provider: data.provider || null,
+          observedAt: data.observedAt || null,
+          importedAt: data.importedAt || null,
           keywords: data.keywords,
           sellers: data.sellers,
           trendingKeywordsStr: data.keywords.join(', ')
@@ -78,18 +100,29 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
     try {
       const res = await fetch('/api/projects', { credentials: 'include' });
       const data = await res.json();
-      if (res.ok && data.success && Array.isArray(data.projects) && data.projects.length > 0) {
-        setActiveProject(data.projects[0]);
+      if (res.ok && data.success && Array.isArray(data.projects)) {
+        setProjects(data.projects);
+        setActiveProject(prev => prev ? (data.projects.find(project => project.id === prev.id) || null) : null);
       }
     } catch (e) {}
   }, []);
 
   const fetchData = async () => {
+    if (!activeProject?.id) {
+      setTrends([]);
+      return;
+    }
+    const requestedProjectId = activeProject.id;
     try {
       const trendsRes = await fetch('/api/trends', { credentials: 'include' });
       if (trendsRes.ok) {
         const trendsData = await trendsRes.json();
-        const etsyTrends = (trendsData || []).filter(t => t.marketplace === 'ETSY' && t.keywords_detailed);
+        if (activeProjectIdRef.current !== requestedProjectId) return;
+        const etsyTrends = (trendsData || []).filter(t => (
+          t.marketplace === 'ETSY'
+          && Number(t.project_id) === Number(requestedProjectId)
+          && t.keywords_detailed
+        ));
         setTrends(etsyTrends);
       }
     } catch (e) {
@@ -100,9 +133,10 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
   useEffect(() => {
     fetchData();
     fetchProjects();
-  }, [fetchProjects]);
+  }, [fetchProjects, activeProject?.id]);
   const handleTransition = async (targetState) => {
     if (!activeProject) return;
+    const requestedProjectId = activeProject.id;
     try {
       const res = await fetch(`/api/projects/${activeProject.id}/transition`, {
         method: 'PATCH',
@@ -112,16 +146,23 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || data.error || 'Transition failed');
+      if (activeProjectIdRef.current !== requestedProjectId) return false;
       if (onShowToast) onShowToast(`✓ Chuyển trạng thái dự án sang ${data.state} thành công!`);
-      setActiveProject(prev => ({ ...prev, state: data.state }));
+      setActiveProject(prev => prev?.id === requestedProjectId ? ({ ...prev, state: data.state }) : prev);
       fetchProjects();
+      return true;
     } catch (err) {
       if (onShowToast) onShowToast(`⚠ Transition error: ${err.message}`);
+      return false;
     }
   };
 
   const handleFileUpload = async (file) => {
     if (!file) return;
+    if (!activeProject?.id) {
+      if (onShowToast) onShowToast('Hãy chọn Active Project trước khi nạp dữ liệu Etsy.');
+      return;
+    }
     setUploading(true);
     setUploadStatus(null);
 
@@ -157,11 +198,17 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
   };
 
   const handleManualDraft = async (trendId) => {
+    if (!activeProject?.id) {
+      if (onShowToast) onShowToast('Hãy chọn Active Project trước khi tạo listing.');
+      return;
+    }
     setDraftingTrendId(trendId);
     try {
       const res = await fetch(`/api/trends/${trendId}/draft`, {
         method: 'POST',
-        credentials: 'include'
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectId: activeProject.id })
       });
       const result = await parseJsonResponse(res);
       if (!res.ok) throw new Error(result.error || 'Drafting failed');
@@ -180,10 +227,15 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
   };
 
   const handleMcpPull = async () => {
+    if (!activeProject?.id) {
+      if (onShowToast) onShowToast('Hãy chọn Active Project trước khi kéo dữ liệu MCP.');
+      return;
+    }
     if (!seedPhrase.trim()) {
       if (onShowToast) onShowToast('Vui lòng nhập Từ khóa Hạt nhân (Seed Phrase).');
       return;
     }
+    const requestedProjectId = activeProject.id;
 
     setMcpPulling(true);
     setMcpResult(null);
@@ -194,7 +246,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          projectId: activeProject?.id,
+          projectId: requestedProjectId,
           seed: seedPhrase.trim(),
           category: selectedCategory
         })
@@ -202,6 +254,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
 
       const data = await parseJsonResponse(res);
       if (!res.ok) throw new Error(data.error || 'Failed to pull Etsy MCP');
+      if (activeProjectIdRef.current !== requestedProjectId) return;
 
       if (data.source !== 'ETSY_MCP_LIVE' || data.evidenceState !== 'OBSERVED' || !Array.isArray(data.keywords) || data.keywords.length === 0) {
         throw new Error('INSUFFICIENT_EVIDENCE: MCP response is not verified live evidence.');
@@ -237,6 +290,28 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
         gap: '16px',
         boxShadow: '0 4px 14px rgba(234, 88, 12, 0.08)'
       }}>
+        <div style={{ display: 'flex', flexDirection: 'column', minWidth: '260px' }}>
+          <label htmlFor="etsy-active-project" style={{ fontSize: '0.72rem', fontWeight: 800, color: '#9a3412' }}>
+            Active Project (bắt buộc)
+          </label>
+          <select
+            id="etsy-active-project"
+            value={activeProject?.id || ''}
+            onChange={(event) => {
+              const selectedId = Number(event.target.value);
+              setActiveProject(projects.find(project => project.id === selectedId) || null);
+              setActiveStage('workflow');
+            }}
+            style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid #fdba74', background: '#fff' }}
+          >
+            <option value="">— Chọn project —</option>
+            {projects.map(project => (
+              <option key={project.id} value={project.id}>
+                #{project.id} {project.name || project.seed_phrase || 'Untitled'} — {project.state}
+              </option>
+            ))}
+          </select>
+        </div>
         {/* Seed Phrase Input */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flex: 1, minWidth: '320px' }}>
           <div style={{ background: '#ea580c', color: '#fff', padding: '10px', borderRadius: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -394,17 +469,19 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
           <span>⚡ Stage 1: Challenger Top Sellers & MCP 13 Tags (Workflow)</span>
         </button>
 
-        <button
-          className={`command-stage-tab ${activeStage === 'research' ? 'active-etsy' : ''}`}
-          onClick={() => setActiveStage('research')}
+          <button
+            className={`command-stage-tab ${activeStage === 'research' ? 'active-etsy' : ''}`}
+            onClick={() => setActiveStage('research')}
+            disabled={!activeProject || activeProject.state === 'EVIDENCE_INTAKE'}
         >
           <Brain size={18} />
           <span>🧠 Stage 2: Nghiên Cứu Sâu & Học DNA Đối Thủ (Research Hub)</span>
         </button>
 
-        <button
-          className={`command-stage-tab ${activeStage === 'mkl' ? 'active-etsy' : ''}`}
-          onClick={() => setActiveStage('mkl')}
+          <button
+            className={`command-stage-tab ${activeStage === 'mkl' ? 'active-etsy' : ''}`}
+            onClick={() => setActiveStage('mkl')}
+            disabled={!activeProject || !['MKL_FROZEN', 'DRAFT_GENERATED', 'PRODUCT_TRUTH_VERIFIED', 'PRODUCT_TRUTH_CONFIRMED', 'VALIDATED', 'MANAGER_APPROVED', 'PUBLISH_READY'].includes(activeProject.state)}
         >
           <Database size={18} />
           <span>📊 Stage 3: Ma Trận 13 Tags & Từ Khóa Etsy</span>
@@ -446,7 +523,13 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
 
                 <button
                   className="btn btn-primary btn-sm"
-                  onClick={() => setActiveStage('research')}
+                  onClick={async () => {
+                    if (activeProject?.state === 'EVIDENCE_INTAKE') {
+                      const transitioned = await handleTransition('RESEARCH_ACCEPTED');
+                      if (!transitioned) return;
+                    }
+                    setActiveStage('research');
+                  }}
                   style={{ background: '#c2410c', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 800, cursor: 'pointer' }}
                 >
                   <span>➡️ Chốt Evidence Stage 1 & Chuyển Sang Stage 2 (Research DNA)</span>
@@ -538,11 +621,17 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
             </div>
 
             <button
-              onClick={() => setActiveStage('mkl')}
+              onClick={async () => {
+                if (activeProject?.state === 'RESEARCH_ACCEPTED') {
+                  await handleTransition('DNA_ACCEPTED');
+                } else if (onShowToast) {
+                  onShowToast('Project phải ở trạng thái RESEARCH_ACCEPTED trước khi chấp nhận DNA.');
+                }
+              }}
               className="btn btn-primary"
               style={{ background: '#ea580c', fontWeight: 800, padding: '10px 20px', borderRadius: '8px', cursor: 'pointer' }}
             >
-              <span>➡️ Chấp Nhận Research DNA & Mở Khóa Stage 3 (MKL & Controlled Drafts)</span>
+              <span>➡️ Chấp Nhận Research DNA (sau đó Freeze MKL để mở Stage 3)</span>
             </button>
           </div>
         </div>

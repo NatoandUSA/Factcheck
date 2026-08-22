@@ -2406,6 +2406,7 @@ app.post('/api/etsy/feed-search-results', requireAuth(db), requireRole(['OWNER',
   const lines = rawText.split('\n').map(l => l.trim()).filter(Boolean);
   const parsedSellers = [];
   const parsedKeywords = [];
+  let liveEvidenceCount = 0;
 
   let searchSeed = seed;
   const searchUrlMatch = rawText.match(/https?:\/\/(?:www\.)?etsy\.com\/[^\s]*[?&]q=([^&#\s]+)/i);
@@ -2464,9 +2465,12 @@ app.post('/api/etsy/feed-search-results', requireAuth(db), requireRole(['OWNER',
             sold24h: null,
             favorites: null,
             evidenceSource: 'ETSY_SEARCH_PAGE_RAW',
+            evidenceState: 'OBSERVED',
+            evidenceProvider: 'YTRENDS_MCP',
             isSynthetic: false,
             selected: true
           });
+          liveEvidenceCount += 1;
           if (item.title) {
             const decoded = item.title.replace(/&#39;/g, "'").replace(/&amp;/g, '&');
             const chunks = decoded.split(/[,|\-–—:]/).map(c => c.trim());
@@ -2489,9 +2493,12 @@ app.post('/api/etsy/feed-search-results', requireAuth(db), requireRole(['OWNER',
             conversionRate: lst.conversion_rate ? Number((lst.conversion_rate * 100).toFixed(2)) : null,
             favorites: lst.favorites,
             evidenceSource: 'ETSY_SEARCH_PAGE_RAW',
+            evidenceState: 'OBSERVED',
+            evidenceProvider: 'YTRENDS_MCP',
             isSynthetic: false,
             selected: true
           });
+          liveEvidenceCount += 1;
           if (Array.isArray(lst.tags)) {
             lst.tags.forEach(addTag);
           }
@@ -2517,6 +2524,8 @@ app.post('/api/etsy/feed-search-results', requireAuth(db), requireRole(['OWNER',
         sold24h: null,
         favorites: null,
         evidenceSource: 'ETSY_SEARCH_PAGE_RAW',
+        evidenceState: 'UNVERIFIED_INPUT',
+        evidenceProvider: 'STAFF_PASTED_TEXT',
         isSynthetic: false,
         selected: true
       });
@@ -2568,6 +2577,8 @@ app.post('/api/etsy/feed-search-results', requireAuth(db), requireRole(['OWNER',
         sold24h: sold,
         favorites: null,
         evidenceSource: 'ETSY_SEARCH_PAGE_RAW',
+        evidenceState: 'UNVERIFIED_INPUT',
+        evidenceProvider: 'STAFF_PASTED_TEXT',
         isSynthetic: false,
         selected: true
       });
@@ -2576,8 +2587,11 @@ app.post('/api/etsy/feed-search-results', requireAuth(db), requireRole(['OWNER',
 
   res.json({
     success: true,
-    source: 'ETSY_SEARCH_PAGE_RAW',
-    evidenceState: 'OBSERVED',
+    source: liveEvidenceCount > 0 ? 'ETSY_FEED_COMPOSITE' : 'ETSY_SEARCH_PAGE_RAW',
+    evidenceState: liveEvidenceCount > 0 ? 'MIXED_EVIDENCE' : 'UNVERIFIED_INPUT',
+    provider: liveEvidenceCount > 0 ? 'YTRENDS_MCP+STAFF_PASTED_TEXT' : 'STAFF_PASTED_TEXT',
+    observedAt: null,
+    importedAt: new Date().toISOString(),
     seed: searchSeed || null,
     sellers: parsedSellers.slice(0, 30),
     keywords: parsedKeywords.slice(0, 13),

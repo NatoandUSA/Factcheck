@@ -4,6 +4,7 @@ const KEYWORD_DETAIL_MIGRATION = '004_keyword_detail_and_authorship';
 const MARKET_TRENDS_MARKETPLACE_MIGRATION = '005_market_trends_marketplace';
 const WORKSPACE_OWNERSHIP_MIGRATION = '006_market_trends_and_templates_ownership';
 const PRODUCT_TRUTH_ATTESTATION_MIGRATION = '007_listing_product_truth_attestation';
+const PRODUCT_TRUTH_CARD_MIGRATION = '008_listing_product_truth_card';
 
 function run(db, sql, params = []) {
   return new Promise((resolve, reject) => {
@@ -132,6 +133,11 @@ async function migrateProductTruthAttestation(db) {
   await addColumnIfMissing(db, columns, 'product_truth_notes', 'TEXT NULL');
 }
 
+async function migrateProductTruthCard(db) {
+  const columns = new Set((await all(db, 'PRAGMA table_info(listings)')).map(column => column.name));
+  await addColumnIfMissing(db, columns, 'product_truth_card', 'TEXT NULL');
+}
+
 async function runMigrations(db) {
   await run(db, `
     CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -204,6 +210,18 @@ async function runMigrations(db) {
       try { await run(db, 'ROLLBACK'); } catch (_) {}
       throw error;
     }
+  }
+
+  const truthAttestationApplied = await all(db, 'SELECT id FROM schema_migrations WHERE id = ?', [PRODUCT_TRUTH_ATTESTATION_MIGRATION]);
+  if (truthAttestationApplied.length === 0) {
+    await migrateProductTruthAttestation(db);
+    await run(db, 'INSERT INTO schema_migrations (id) VALUES (?)', [PRODUCT_TRUTH_ATTESTATION_MIGRATION]);
+  }
+
+  const truthCardApplied = await all(db, 'SELECT id FROM schema_migrations WHERE id = ?', [PRODUCT_TRUTH_CARD_MIGRATION]);
+  if (truthCardApplied.length === 0) {
+    await migrateProductTruthCard(db);
+    await run(db, 'INSERT INTO schema_migrations (id) VALUES (?)', [PRODUCT_TRUTH_CARD_MIGRATION]);
   }
 
   const agentScopeApplied = await all(db, 'SELECT id FROM schema_migrations WHERE id = ?', [AGENT_WORKSPACE_SCOPE_MIGRATION]);
@@ -330,9 +348,9 @@ module.exports = {
   MARKET_TRENDS_MARKETPLACE_MIGRATION,
   WORKSPACE_OWNERSHIP_MIGRATION,
   PRODUCT_TRUTH_ATTESTATION_MIGRATION,
+  PRODUCT_TRUTH_CARD_MIGRATION,
   AGENT_WORKSPACE_SCOPE_MIGRATION,
   PROJECT_SCOPED_EVIDENCE_MIGRATION,
   CANONICAL_DAG_MIGRATION,
   runMigrations
 };
-

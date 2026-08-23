@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { getVerifiedPersonalization } from '../../shared/productTruth.js';
 import { 
   Star, Heart, ShoppingBag, ShieldCheck, Sparkles, Copy, Check, 
   Camera, Tag, Gift, Award, Info, ChevronRight, Layers
@@ -6,6 +7,11 @@ import {
 import { generateEtsyListingImagePrompts } from '../services/imagePromptGenerator';
 
 export default function EtsyRealProductPage({ listing, onShowToast }) {
+  const truthContext = {
+    productId: listing?.productId ?? listing?.dbId ?? listing?.id,
+    listingVersion: listing?.listingVersion ?? listing?.listing_version
+  };
+  const verifiedPersonalization = getVerifiedPersonalization(listing?.productTruthCard, truthContext);
   const [selectedImgIdx, setSelectedImgIdx] = useState(0);
   const [activeSubTab, setActiveSubTab] = useState('page'); // 'page' | 'image-prompts'
   const [copiedIdx, setCopiedIdx] = useState(null);
@@ -181,13 +187,13 @@ export default function EtsyRealProductPage({ listing, onShowToast }) {
             </div>
 
             {/* Personalization Section (Strictly verified only) */}
-            {listing.personalizationSupported || listing.personalizationInstructions ? (
+            {verifiedPersonalization ? (
               <div style={{ background: '#f8f8f8', padding: '14px', borderRadius: '8px', border: '1px solid #e1e3df' }}>
                 <label style={{ display: 'block', fontWeight: 700, fontSize: '0.85rem', marginBottom: '4px', color: '#222' }}>
                   Add your personalization:
                 </label>
                 <div style={{ fontSize: '0.75rem', color: '#595959', marginBottom: '8px' }}>
-                  {listing.personalizationInstructions || 'Enter your custom details below:'}
+                  {verifiedPersonalization.instructions}
                 </div>
                 <textarea
                   rows={2}

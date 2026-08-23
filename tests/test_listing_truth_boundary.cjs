@@ -9,6 +9,7 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const { evaluatePublishGate } = require('../server/publishGate');
+const { makeProductTruthCard } = require('./helpers/productTruth.cjs');
 
 function run() {
   console.log('================================================================');
@@ -27,6 +28,8 @@ function run() {
     etsyDescription: '',
     netProfit: 8.50,
     netMargin: 35.0
+    ,productId: 1
+    ,listingVersion: 1
   };
   const res1 = evaluatePublishGate(approvedButEmptyDescription);
   assert.notStrictEqual(res1.final_status, 'PUBLISH_READY', 'Empty description must not reach PUBLISH_READY');
@@ -45,14 +48,14 @@ function run() {
   const res2 = evaluatePublishGate(realDescriptionNoAttestation);
   assert.notStrictEqual(res2.final_status, 'PUBLISH_READY', 'Real description without a Product Truth attestation must not reach PUBLISH_READY');
   assert.strictEqual(res2.canExport, false);
-  assert.ok(res2.reasons.some(r => /attestation/i.test(r)), 'Gate must explain the attestation is missing');
-  console.log('🟢 publishGate rejects a real description with no human Product Truth attestation.');
+  assert.ok(res2.reasons.some(r => /Product Truth Card/i.test(r)), 'Gate must explain the structured Product Truth Card is missing');
+  console.log('🟢 publishGate rejects a real description with no structured Product Truth Card.');
 
   // --- 3. publishGate: real description AND a real attestation passes
   // (positive case, proves this isn't just failing everything closed) ---
   const approvedWithAttestation = {
     ...realDescriptionNoAttestation,
-    productTruthNotes: 'Checked against supplier spec sheet: 925 sterling silver, 18in cable chain, matches sample photo.'
+    productTruthCard: makeProductTruthCard(1, 1)
   };
   const res3 = evaluatePublishGate(approvedWithAttestation);
   assert.strictEqual(res3.final_status, 'PUBLISH_READY', 'Real description + real attestation must reach PUBLISH_READY');
@@ -61,7 +64,7 @@ function run() {
 
   // --- 4. publishGate: a trivially short attestation ("ok", "yes") does not
   // satisfy the requirement -- it must be a real statement, not a rubber stamp ---
-  const trivialAttestation = { ...approvedWithAttestation, productTruthNotes: 'ok' };
+  const trivialAttestation = { ...realDescriptionNoAttestation, productTruthNotes: 'This free-text note is deliberately long but non-authoritative.' };
   const res4 = evaluatePublishGate(trivialAttestation);
   assert.notStrictEqual(res4.final_status, 'PUBLISH_READY', 'A trivial/rubber-stamp attestation must not satisfy the gate');
   console.log('🟢 publishGate rejects a trivial rubber-stamp attestation.');
@@ -76,8 +79,8 @@ function run() {
   assert.ok(serverSrc.includes("amazonDescription: payload.amazonDescription || ''"), 'server.js must leave a missing description empty, not fabricated');
   assert.ok(!serverSrc.includes('Sterling Silver / Medium'), 'server.js must not fabricate Gold/Silver/Rose-Gold child variations');
   assert.ok(!serverSrc.includes('variationThemes'), 'server.js must not auto-generate fabricated variation themes');
-  assert.ok(serverSrc.includes('PRODUCT_TRUTH_ATTESTATION_REQUIRED'), 'server.js approve endpoint must require an explicit Product Truth attestation');
-  console.log('🟢 server.js no longer fabricates a fallback description or Gold/Silver/Rose-Gold variations, and requires attestation on approve.');
+  assert.ok(serverSrc.includes('PRODUCT_TRUTH_CARD_INVALID'), 'server.js approve endpoint must require a canonical Product Truth Card');
+  console.log('🟢 server.js no longer fabricates fallback content and requires structured Product Truth evidence on approve.');
 
   // --- 5b. server.js: the Amazon Quick Draft and trend-draft AI prompts no
   // longer instruct the model to invent materials/specs/care/workshop facts
@@ -146,8 +149,9 @@ function run() {
   const appSrc = fs.readFileSync(path.resolve(__dirname, '../src/App.jsx'), 'utf8');
   assert.ok(appSrc.includes('NOT_PERSISTED'), 'App.jsx must have an explicit NOT_PERSISTED state for failed backend saves');
   assert.ok(appSrc.includes('if (enrichedResult.dbId)'), 'App.jsx must gate the success toast/history-save on an actual backend id, not just local generation');
-  assert.ok(appSrc.includes('productTruthNotes'), 'App.jsx approval flow must collect and send a Product Truth attestation');
-  console.log('🟢 App.jsx no longer shows a false success state after a failed backend save, and collects a Product Truth attestation on approve.');
+  assert.ok(appSrc.includes('productTruthCard'), 'App.jsx approval flow must send a structured Product Truth Card');
+  assert.ok(!appSrc.includes('window.prompt('), 'App.jsx must not turn free-text notes into Product Truth authority');
+  console.log('🟢 App.jsx no longer shows false save success and only submits structured Product Truth evidence.');
 
   // --- 9. The live Staff-facing listing viewer (ProductListingPageSimulator)
   // stays clean of synthetic ASIN/SKU/price fallback data. Note: a separate

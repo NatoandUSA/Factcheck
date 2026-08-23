@@ -34,6 +34,7 @@ const { parseCookies, extractRawToken, requireAuth, requireRole, requireCsrfOrig
 const { runMigrations } = require('./database/migrations');
 const { encryptSecret, decryptSecret, maskSecret } = require('./security/secretBox');
 const { approvalHash } = require('./security/approval');
+const { validateProductTruthCard } = require('../shared/productTruth.cjs');
 const { readFirstWorksheet } = require('./services/spreadsheetReader');
 const { UrlGuardError } = require('./security/urlGuard');
 const { resolveRuntimePaths } = require('./config/paths');
@@ -264,6 +265,7 @@ db.serialize(() => {
       approved_by INTEGER,
       approved_at DATETIME,
       product_truth_notes TEXT,
+      product_truth_card TEXT,
       payload TEXT
     )
   `);
@@ -1580,7 +1582,8 @@ app.patch('/api/listings/:id', requireAuth(db), requireRole(['OWNER', 'MANAGER',
     `UPDATE listings
      SET amazonTitle = ?, etsyTitle = ?, categoryName = ?, payload = ?, status = ?,
          listing_version = listing_version + 1, approved_version = NULL,
-         approved_hash = NULL, approved_by = NULL, approved_at = NULL, product_truth_notes = NULL
+         approved_hash = NULL, approved_by = NULL, approved_at = NULL,
+         product_truth_notes = NULL, product_truth_card = NULL
      WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?
        AND listing_version = ?`,
     [newPayload.amazonTitle, newPayload.etsyTitle, newPayload.categoryName, JSON.stringify(newPayload), nextStatus, req.params.id,
@@ -1612,23 +1615,13 @@ app.patch('/api/listings/:id', requireAuth(db), requireRole(['OWNER', 'MANAGER',
 app.patch('/api/listings/:id/approve', requireAuth(db), requireRole(['OWNER', 'MANAGER']), (req, res) => {
   const { id } = req.params;
 
-  const { expectedVersion, productTruthNotes } = req.body || {};
+  const { expectedVersion, productTruthCard, productTruthNotes } = req.body || {};
   if (!Number.isInteger(expectedVersion) || expectedVersion < 1) {
     return res.status(400).json({ success: false, error: 'EXPECTED_VERSION_REQUIRED' });
   }
-  // A generic approval click is not proof that materials/specs/facts were
-  // actually verified -- require the approver to state what they checked,
-  // bound to this exact listing_version (invalidated on any later edit, same
-  // as approved_hash). Model-generated non-empty text alone cannot satisfy
-  // this because it requires the human's own words (GPT PR-10 re-audit).
+  // Notes are retained for audit context only. They carry no factual
+  // authority and cannot satisfy the gate.
   const truthNotes = typeof productTruthNotes === 'string' ? productTruthNotes.trim() : '';
-  if (truthNotes.length < 10) {
-    return res.status(400).json({
-      success: false,
-      error: 'PRODUCT_TRUTH_ATTESTATION_REQUIRED',
-      message: 'Describe what you personally verified about this product (materials, specs, personalization limits, etc.) before approving -- at least 10 characters.'
-    });
-  }
 
   db.get(
     `SELECT * FROM listings
@@ -1654,16 +1647,41 @@ app.patch('/api/listings/:id/approve', requireAuth(db), requireRole(['OWNER', 'M
     // ipVerdict/ipHits are already on the object -- it does not call IP
     // Guard itself.
     let parsedPayload;
+    let ipScreening;
     try {
-      ({ listing: parsedPayload } = screenListingIpOrFail(persistedPayload));
+      ipScreening = screenListingIpOrFail(persistedPayload);
+      parsedPayload = ipScreening.listing;
     } catch (error) {
       console.error('IP Guard failed while approving listing:', error);
       return res.status(503).json({ success: false, error: 'IP_GUARD_UNAVAILABLE' });
     }
 
+    // IP clearance is server-derived. Client-supplied ipEvidence is replaced,
+    // never trusted as authority.
+    const canonicalTruthCard = productTruthCard && typeof productTruthCard === 'object'
+      ? {
+          ...productTruthCard,
+          ipEvidence: {
+            state: ipScreening.result.verdict === 'BLOCK' ? 'BLOCKED' : 'CLEARED',
+            subjectId: String(row.id),
+            listingVersion: row.listing_version,
+            checkerVersion: 'server-ip-guard-v1',
+            checkedAt: new Date().toISOString()
+          }
+        }
+      : productTruthCard;
+    const truthContext = { productId: row.id, listingVersion: row.listing_version };
+    const truthValidation = validateProductTruthCard(canonicalTruthCard, truthContext);
+    if (!truthValidation.valid) {
+      return res.status(400).json({ success: false, error: 'PRODUCT_TRUTH_CARD_INVALID', reasons: truthValidation.errors });
+    }
+
     // C5B Fix: Evaluate via Canonical Publish Gate (Fail-Closed)
     parsedPayload.status = 'MANAGER_APPROVED';
     parsedPayload.productTruthNotes = truthNotes;
+    parsedPayload.productTruthCard = canonicalTruthCard;
+    parsedPayload.productId = row.id;
+    parsedPayload.listingVersion = row.listing_version;
     parsedPayload.marketplace = row.marketplace;
     const gateRes = publishGate.evaluatePublishGate(parsedPayload);
 
@@ -1679,10 +1697,11 @@ app.patch('/api/listings/:id/approve', requireAuth(db), requireRole(['OWNER', 'M
     const approvedHash = payloadHash;
     db.run(
       `UPDATE listings SET status = 'PUBLISH_READY', approved_version = listing_version,
-         approved_hash = ?, approved_by = ?, approved_at = CURRENT_TIMESTAMP, product_truth_notes = ?
+         approved_hash = ?, approved_by = ?, approved_at = CURRENT_TIMESTAMP,
+         product_truth_notes = ?, product_truth_card = ?
        WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?
          AND listing_version = ?`,
-      [approvedHash, req.user.userId, truthNotes, id, req.user.tenantId, req.user.workspaceId, req.user.marketplace, expectedVersion],
+      [approvedHash, req.user.userId, truthNotes || null, JSON.stringify(canonicalTruthCard), id, req.user.tenantId, req.user.workspaceId, req.user.marketplace, expectedVersion],
       function(updateErr) {
       if (updateErr) return res.status(500).json({ error: updateErr.message });
       if (this.changes !== 1) return res.status(412).json({ success: false, error: 'STALE_LISTING_VERSION' });
@@ -1725,6 +1744,9 @@ app.get('/api/listings/:id/export', requireAuth(db), requireRole(['OWNER', 'MANA
     }
     parsedPayload.status = row.status;
     parsedPayload.productTruthNotes = row.product_truth_notes || '';
+    try { parsedPayload.productTruthCard = JSON.parse(row.product_truth_card); } catch (_) { parsedPayload.productTruthCard = null; }
+    parsedPayload.productId = row.id;
+    parsedPayload.listingVersion = row.listing_version;
     parsedPayload.marketplace = row.marketplace;
 
     const gateRes = publishGate.evaluatePublishGate(parsedPayload);

@@ -11,6 +11,10 @@
 
 const MIN_NET_PROFIT = 6.0;   // $6 net profit floor
 const MIN_NET_MARGIN = 30.0;  // 30% net margin floor
+const {
+  getVerifiedPersonalization,
+  validateProductTruthCard
+} = require('../shared/productTruth.cjs');
 
 /**
  * Single Contract Resolver for Marketplace & Product Type Authority
@@ -241,17 +245,12 @@ function evaluatePublishGate(listing) {
     issues.push(`Missing product description for ${contract.marketplace} -- write real product details before publishing (no cross-marketplace description fallback).`);
   }
 
-  // 2c. Product Truth Check, part 2: a non-empty description is necessary
-  // but not sufficient -- it could still be entirely AI-generated text that
-  // nobody actually verified against the real product. Require an explicit,
-  // human-authored attestation of what was checked, bound to this exact
-  // listing_version by the caller (server.js clears it on every edit, same
-  // as approved_hash). This is what actually distinguishes "a manager
-  // clicked approve" from "a manager verified the facts are real"
-  // (GPT PR-10 re-audit).
-  const truthNotes = typeof listing.productTruthNotes === 'string' ? listing.productTruthNotes.trim() : '';
-  if (truthNotes.length < 10) {
-    issues.push('Missing Product Truth attestation -- the approver must state what they verified about this product before publishing.');
+  // Free text is audit context only. Factual authority comes exclusively
+  // from structured evidence bound to this exact persisted listing version.
+  const truthContext = { productId: listing.productId, listingVersion: listing.listingVersion };
+  const truthValidation = validateProductTruthCard(listing.productTruthCard, truthContext);
+  if (!truthValidation.valid) {
+    issues.push(`Invalid Product Truth Card: ${truthValidation.errors.join(', ')}`);
   }
 
   // 2d. Operational Evidence Checks: Shipping Profile & Personalization Authority
@@ -259,8 +258,11 @@ function evaluatePublishGate(listing) {
     issues.push('BLOCKED: AI-generated shipping profile without real shipping carrier evidence.');
   }
 
-  if (listing.personalizationEnabled && !listing.personalizationEvidence && !listing.etsyPersonalizationInstructions) {
-    issues.push('BLOCKED: Personalization asserted without real product customization evidence.');
+  const assertsPersonalization = listing.personalizationEnabled === true ||
+    listing.personalizationSupported === true ||
+    (typeof listing.etsyPersonalizationInstructions === 'string' && listing.etsyPersonalizationInstructions.trim().length > 0);
+  if (assertsPersonalization && !getVerifiedPersonalization(listing.productTruthCard, truthContext)) {
+    issues.push('BLOCKED: Personalization asserted without version-bound VERIFIED evidence.');
   }
 
   // 3. Fail-Closed Status Determination (Ported from 22etsy-agent Truth Discipline)

@@ -6,7 +6,8 @@ function runAllTests() {
   console.log('  RUNNING OMNISELLER STUDIO SUITE - 100% EXECUTABLE ASSERTIONS');
   console.log('================================================================\n');
 
-  const testFiles = [
+const testFiles = [
+    'tests/test_product_truth_core.cjs',
     'tests/spec_hash_vector.test.cjs',
     'tests/security_controls_unit.test.cjs',
     'tests/listing_scope_migration.test.cjs',

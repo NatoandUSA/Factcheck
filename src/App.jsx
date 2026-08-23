@@ -181,17 +181,10 @@ export default function App() {
       showToast('Error: Cannot approve an offline listing.');
       return;
     }
-    // A generic approval click is not proof the facts were verified --
-    // require the approver to state what they personally checked about this
-    // product before it can reach PUBLISH_READY.
-    const productTruthNotes = window.prompt(
-      'Product Truth confirmation required.\n\nDescribe what you personally verified about this product (materials, specs, personalization limits, etc.) before approving:'
-    );
-    if (productTruthNotes === null) {
-      return; // Staff cancelled -- not an error, just no approval.
-    }
-    if (productTruthNotes.trim().length < 10) {
-      showToast('Approval cancelled: description must be at least 10 characters.');
+    // Approval consumes an already-created structured evidence card. A text
+    // prompt is not evidence and must never manufacture factual authority.
+    if (!listingToApprove.productTruthCard) {
+      showToast('Approval blocked: create a version-bound Product Truth Card first.');
       return;
     }
     try {
@@ -201,7 +194,7 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           expectedVersion: listingToApprove.listingVersion || listingToApprove.listing_version || 1,
-          productTruthNotes: productTruthNotes.trim()
+          productTruthCard: listingToApprove.productTruthCard
         })
       });
       if (!res.ok) {

@@ -1,5 +1,6 @@
 import { CATEGORIES } from '../data/categoryPresets';
 import { getUtf8Bytes } from '../utils/complianceValidator';
+import { assertModelClaimsAuthorized } from '../utils/aiTruthBoundary';
 const STORAGE_KEY = 'omni_gemini_api_key';
 
 export function getStoredApiKey() {
@@ -23,9 +24,10 @@ export async function generateListingAI({
   tone,
   materials = [],
   imageBase64 = null,
-  apiKey = null
+  apiKey = null,
+  verifiedProjection = null
 }) {
-  return await callGeminiApi({
+  const listing = await callGeminiApi({
     category,
     productBrief,
     occasion,
@@ -33,6 +35,7 @@ export async function generateListingAI({
     materials,
     imageBase64
   });
+  return verifiedProjection ? assertModelClaimsAuthorized(listing, verifiedProjection) : listing;
 }
 
 /**

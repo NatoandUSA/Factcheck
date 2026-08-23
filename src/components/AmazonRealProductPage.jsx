@@ -22,8 +22,8 @@ export default function AmazonRealProductPage({ listing, onShowToast }) {
     );
   }
 
-  const listingPrompts = generateAmazonListingImagePrompts(listing.amazonTitle, listing.categoryName, listing.amazonSearchTerms);
-  const aplusPrompts = generateAmazonAPlusImagePrompts(listing.amazonTitle, listing.categoryName);
+  const listingPrompts = generateAmazonListingImagePrompts(listing);
+  const aplusPrompts = generateAmazonAPlusImagePrompts(listing);
 
   const copyPrompt = (text, idx, label = 'Đã copy prompt ảnh!') => {
     navigator.clipboard.writeText(text);

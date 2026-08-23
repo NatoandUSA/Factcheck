@@ -79,24 +79,16 @@ async function runZeroFabricationSuite() {
   }
   console.log('  🟢 Image prompt generators verified: Zero unverified material/origin claims.');
 
-  // 2. Batch CSV Processing Static Contract Verification
-  console.log('\nTest 2: Batch CSV Generator - Strict ProductBrief Requirement...');
+  // 2. Batch behavior is exercised in test_ai_boundary_and_batch.cjs. This
+  // suite retains a narrow wiring assertion so a future UI edit cannot bypass
+  // the canonical preflight helper without the behavioral suite noticing.
+  console.log('\nTest 2: Batch CSV Generator - Canonical Product Truth Preflight...');
   const batchCsvSource = fs.readFileSync(path.join(__dirname, '../src/components/BatchCsvGenerator.jsx'), 'utf8');
-  assert.strictEqual(
-    batchCsvSource.includes('categoryObj.sampleBrief'),
-    false,
-    'Batch CSV Generator must NOT fallback to sampleBrief'
-  );
-  assert.strictEqual(
-    batchCsvSource.includes('categoryObj.defaultMaterials'),
-    false,
-    'Batch CSV Generator must NOT fallback to defaultMaterials'
-  );
-  assert.ok(
-    batchCsvSource.includes('INSUFFICIENT_PRODUCT_TRUTH: ProductBrief is required'),
-    'Batch CSV Generator must fail row when ProductBrief is missing'
-  );
-  console.log('  🟢 Batch CSV generator verified: Zero sample brief injection.');
+  assert.ok(batchCsvSource.includes('prepareVerifiedBatchRow(row)'), 'Batch CSV must use the canonical GPT2 preflight');
+  assert.strictEqual(batchCsvSource.includes('categoryObj.sampleBrief'), false, 'Batch CSV must not inject sampleBrief');
+  assert.strictEqual(batchCsvSource.includes('categoryObj.defaultMaterials'), false, 'Batch CSV must not inject defaultMaterials');
+  assert.strictEqual(batchCsvSource.includes('sourceRow: row'), false, 'Raw CSV prose must not be persisted inside the generated listing');
+  console.log('  🟢 Batch CSV generator is wired to evidence-bound preflight.');
 
   // 3. Etsy Preview Static Contract Verification
   console.log('\nTest 3: Etsy Preview - Zero Hardcoded Reviews or Bestseller Badges...');

@@ -3,6 +3,7 @@ import Papa from 'papaparse';
 import { Upload, Download, Play, CheckCircle, AlertCircle, FileSpreadsheet, RefreshCw } from 'lucide-react';
 import { CATEGORIES, OCCASIONS, TONES } from '../data/categoryPresets';
 import { generateListingAI } from '../services/geminiService';
+import { generateVerifiedBatchRow, prepareVerifiedBatchRow } from '../utils/batchTruthBoundary';
 
 export default function BatchCsvGenerator({ onShowToast, onSaveListing }) {
   const [rows, setRows] = useState([]);
@@ -12,32 +13,7 @@ export default function BatchCsvGenerator({ onShowToast, onSaveListing }) {
 
   // Download Sample Template CSV
   const downloadSampleTemplate = () => {
-    const sampleData = [
-      {
-        Category: 'jewelry',
-        Occasion: "Mother's Day",
-        ProductBrief: 'Ribbon heart necklace with emerald birthstone for mom in luxury mahogany LED gift box with emotional message card from son.',
-        Materials: 'Sterling Silver 925, Cubic Zirconia'
-      },
-      {
-        Category: 'acrylic',
-        Occasion: 'Anniversary / Couples',
-        ProductBrief: 'Custom song plaque with personal couple photo, Spotify code, warm LED wooden base, engraved names and wedding date.',
-        Materials: '5mm Optical Acrylic, Solid Beechwood Base'
-      },
-      {
-        Category: 'blanket',
-        Occasion: "Mother's Day",
-        ProductBrief: 'Custom grandma name throw blanket with floral bouquet background and 6 grandchildren names.',
-        Materials: 'Ultra-Soft Sherpa 50x60'
-      },
-      {
-        Category: 'embroidery',
-        Occasion: 'Valentine\'s Day',
-        ProductBrief: 'Matching couple hoodie with custom outline portrait from customer photo on chest and Roman numeral date on sleeve.',
-        Materials: '80/20 Cotton Poly Fleece, Madeira Thread'
-      }
-    ];
+    const sampleData = [{ ProductId: '', ListingVersion: '', ProductTruthCard: '' }];
 
     const csv = Papa.unparse(sampleData);
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
@@ -76,32 +52,33 @@ export default function BatchCsvGenerator({ onShowToast, onSaveListing }) {
 
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
-      const categoryObj = CATEGORIES.find(c => c.id.toLowerCase() === (row.Category || '').toLowerCase()) || { id: 'custom', name: row.Category || 'Custom Item' };
-      const toneObj = TONES[0];
-      const occasion = row.Occasion || '';
-      const brief = (row.ProductBrief || '').trim();
-      const materials = row.Materials ? row.Materials.split(',').map(s => s.trim()).filter(Boolean) : [];
-
-      if (!brief) {
-        setRows(prev => prev.map((r, idx) => idx === i ? { ...r, status: 'error', errorMsg: 'INSUFFICIENT_PRODUCT_TRUTH: ProductBrief is required.' } : r));
+      const prepared = prepareVerifiedBatchRow(row);
+      if (!prepared.eligible) {
+        setRows(prev => prev.map((r, idx) => idx === i ? { ...r, status: 'error', errorMsg: prepared.code } : r));
+        setProgress(Math.round(((i + 1) / rows.length) * 100));
         continue;
       }
+
+      const categoryObj = CATEGORIES.find(c => c.id.toLowerCase() === prepared.aiInput.productType.toLowerCase()) || {
+        id: 'verified-product',
+        name: prepared.aiInput.productType
+      };
+      const toneObj = TONES[0];
 
       // Update row status to running
       setRows(prev => prev.map((r, idx) => idx === i ? { ...r, status: 'generating' } : r));
 
       try {
-        const listing = await generateListingAI({
-          category: categoryObj,
-          productBrief: brief,
-          occasion,
-          tone: toneObj,
-          materials
-        });
+        const generated = await generateVerifiedBatchRow(row, generateListingAI, { category: categoryObj, tone: toneObj });
+        const listing = generated.listing;
 
         const combined = {
           ...listing,
-          sourceRow: row,
+          batchSource: {
+            productId: prepared.projection.context.productId,
+            listingVersion: prepared.projection.context.listingVersion,
+            evidenceCode: prepared.code
+          },
           categoryName: categoryObj.name
         };
 
@@ -186,7 +163,7 @@ export default function BatchCsvGenerator({ onShowToast, onSaveListing }) {
               <Upload size={28} />
             </div>
             <div style={{ fontSize: '1.05rem', fontWeight: '600' }}>Click to upload batch products CSV</div>
-            <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Accepts .csv with Category, Occasion, ProductBrief, Materials</div>
+            <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Requires ProductId, ListingVersion, and a canonical ProductTruthCard JSON value</div>
           </label>
         </div>
       ) : (

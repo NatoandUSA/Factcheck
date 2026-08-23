@@ -834,16 +834,28 @@ app.post('/api/owner/users', requireAuth(db), requireRole(['OWNER']), async (req
 
 // GET /api/evidence - Authoritative Research Evidence Ledger
 app.get('/api/evidence', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
-  db.all(
-    `SELECT * FROM research_evidence
-     WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ?
-     ORDER BY created_at DESC`,
-    [req.user.tenantId, req.user.workspaceId, req.user.marketplace],
-    (err, rows) => {
-      if (err) return res.status(500).json({ success: false, error: err.message });
-      res.json({ success: true, count: (rows || []).length, evidence: rows || [] });
-    }
-  );
+  const sendRows = (project) => {
+    const scoped = project ? ' AND project_id = ?' : '';
+    const params = [req.user.tenantId, req.user.workspaceId, req.user.marketplace];
+    if (project) params.push(project.id);
+    db.all(
+      `SELECT * FROM research_evidence
+       WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ?${scoped}
+       ORDER BY created_at DESC`,
+      params,
+      (err, rows) => {
+        if (err) return res.status(500).json({ success: false, error: err.message });
+        res.json({ success: true, projectId: project?.id || null, count: (rows || []).length, evidence: rows || [] });
+      }
+    );
+  };
+  if (req.query.projectId !== undefined) {
+    return parseAndValidateProject(db, req, req.query.projectId, (err, project) => {
+      if (err) return res.status(err.status).json({ success: false, error: err.error, message: err.message });
+      sendRows(project);
+    });
+  }
+  sendRows(null);
 });
 
 const ALLOWED_EVIDENCE_SOURCES = [
@@ -923,6 +935,56 @@ function requireProjectContext(req, rawProjectId) {
   });
 }
 
+// Smart Pull is an analysis artifact, not proof by itself. Only a complete
+// provider retrieval may be accepted into the project workflow. In particular,
+// staff-entered ASINs and partial provider responses stay observable but can
+// never be promoted to ACCEPTED merely by a ledger action.
+const SMART_PULL_ARTIFACT_KIND = 'SMART_PULL_ARTIFACT_V1';
+const ACCEPTABLE_SMART_PULL_STATES = new Set([
+  'RETRIEVED_NO_OBSERVED_AT',
+  'VERIFIED_RETRIEVED'
+]);
+
+function parseEvidenceMetadata(evidence) {
+  if (!evidence || !evidence.metadata) return {};
+  try {
+    const metadata = typeof evidence.metadata === 'string' ? JSON.parse(evidence.metadata) : evidence.metadata;
+    return metadata && typeof metadata === 'object' ? metadata : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+function getEvidenceAcceptanceEligibility(evidence) {
+  const metadata = parseEvidenceMetadata(evidence);
+  if (metadata.kind !== SMART_PULL_ARTIFACT_KIND) return { eligible: true };
+
+  const state = metadata.evidenceState;
+  const hasContentHash = typeof metadata.contentHash === 'string' && /^[a-f0-9]{64}$/i.test(metadata.contentHash);
+  const completeRetrieval = evidence.source === 'MCP_RETRIEVAL'
+    && ACCEPTABLE_SMART_PULL_STATES.has(state)
+    && hasContentHash;
+
+  if (completeRetrieval) return { eligible: true };
+  return {
+    eligible: false,
+    error: 'UNQUALIFIED_SMART_PULL_ARTIFACT',
+    message: `Smart Pull artifact state ${state || 'UNKNOWN'} is not eligible for acceptance. Only complete, hashed MCP retrievals may satisfy research acceptance.`
+  };
+}
+
+function persistSmartPullArtifact(req, project, source, seedPhrase, artifact) {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `INSERT INTO research_evidence (tenant_id, workspace_id, marketplace, project_id, seed_phrase, source, actor_id, evidence_state, metadata)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'OBSERVED', ?)`,
+      [req.user.tenantId, req.user.workspaceId, req.user.marketplace, project.id, seedPhrase, source, req.user.userId,
+        JSON.stringify({ kind: 'SMART_PULL_ARTIFACT_V1', ...artifact })],
+      function(err) { if (err) reject(err); else resolve(this.lastID); }
+    );
+  });
+}
+
 // POST /api/evidence - Ingest new evidence record (Strictly Project-Bound & Source-Contracted)
 app.post('/api/evidence', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
   const { projectId, seedPhrase, source, sourceUrl, fileName, metadata } = req.body || {};
@@ -986,6 +1048,15 @@ app.post('/api/evidence/:id/accept', requireAuth(db), requireRole(['OWNER', 'MAN
     [id, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
     (eErr, evidence) => {
       if (eErr || !evidence) return res.status(404).json({ success: false, error: 'EVIDENCE_NOT_FOUND' });
+
+      const eligibility = getEvidenceAcceptanceEligibility(evidence);
+      if (!eligibility.eligible) {
+        return res.status(409).json({
+          success: false,
+          error: eligibility.error,
+          message: eligibility.message
+        });
+      }
 
       db.run(
         `UPDATE research_evidence
@@ -1107,17 +1178,18 @@ app.patch('/api/projects/:id/transition', requireAuth(db), requireRole(['OWNER',
       // Evidence & Artifact Precondition Validation (Strict Project-Scoped - NO legacy fallbacks)
       const checkPreconditions = (next) => {
         if (targetState === 'RESEARCH_ACCEPTED') {
-          db.get(
-            `SELECT COUNT(*) as cnt FROM research_evidence 
+          db.all(
+            `SELECT * FROM research_evidence
              WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ? 
                AND project_id = ? AND evidence_state = 'ACCEPTED'`,
             [req.user.tenantId, req.user.workspaceId, req.user.marketplace, projectId],
-            (eErr, eRow) => {
-              if (eErr || !eRow || eRow.cnt === 0) {
+            (eErr, evidenceRows) => {
+              const hasQualifyingEvidence = !eErr && (evidenceRows || []).some(row => getEvidenceAcceptanceEligibility(row).eligible);
+              if (!hasQualifyingEvidence) {
                 return res.status(400).json({
                   success: false,
-                  error: 'MISSING_EVIDENCE_PRECONDITION',
-                  message: 'Cannot accept research without at least 1 ACCEPTED research evidence record bound specifically to this project.'
+                  error: 'MISSING_QUALIFYING_EVIDENCE_PRECONDITION',
+                  message: 'Cannot accept research without at least 1 qualifying ACCEPTED evidence record bound specifically to this project.'
                 });
               }
               next();
@@ -2659,7 +2731,7 @@ app.post('/api/research/smart-pull', requireAuth(db), requireRole(['OWNER', 'MAN
       evidenceState: 'INPUT_ONLY_UNVERIFIED'
     }));
     const synthesis = analyticsEngine.synthesizeNicheIntelligence({ seedPhrase: searchSeed, listings, keywords: [], unitCost: parsedUnitCost });
-    return res.json({
+    const responsePayload = {
       ...synthesis,
       projectId: project.id,
       marketplace: 'AMAZON',
@@ -2671,7 +2743,16 @@ app.post('/api/research/smart-pull', requireAuth(db), requireRole(['OWNER', 'MAN
       contentHash: crypto.createHash('sha256').update(JSON.stringify({ projectId: project.id, asins })).digest('hex'),
       providerResults: { amazonLiveConnector: 'NOT_INVOKED' },
       listings
-    });
+    };
+    try {
+      responsePayload.evidenceId = await persistSmartPullArtifact(req, project, 'STAFF_MANUAL_ASSERTION', searchSeed, {
+        contentHash: responsePayload.contentHash, provider: responsePayload.provider, providerResults: responsePayload.providerResults,
+        evidenceState: responsePayload.evidenceState, observedAt: null, importedAt, response: responsePayload
+      });
+    } catch (err) {
+      return res.status(500).json({ success: false, error: 'EVIDENCE_PERSIST_FAILED' });
+    }
+    return res.json(responsePayload);
   }
 
   const [searchResult, hotResult] = await Promise.allSettled([
@@ -2729,7 +2810,7 @@ app.post('/api/research/smart-pull', requireAuth(db), requireRole(['OWNER', 'MAN
     search: searchResult.status === 'fulfilled' ? (searchRows.length ? 'SUCCESS' : 'EMPTY') : 'FAILED',
     hotListings: hotResult.status === 'fulfilled' ? (hotRows.length ? 'SUCCESS' : 'EMPTY') : 'FAILED'
   };
-  return res.json({
+  const responsePayload = {
     ...synthesis,
     projectId: project.id,
     marketplace: 'ETSY',
@@ -2741,7 +2822,16 @@ app.post('/api/research/smart-pull', requireAuth(db), requireRole(['OWNER', 'MAN
     contentHash: crypto.createHash('sha256').update(JSON.stringify({ searchRows, hotRows })).digest('hex'),
     providerResults,
     listings: listings.slice(0, 30)
-  });
+  };
+  try {
+    responsePayload.evidenceId = await persistSmartPullArtifact(req, project, 'MCP_RETRIEVAL', searchSeed, {
+      contentHash: responsePayload.contentHash, provider: responsePayload.provider, providerResults,
+      evidenceState: responsePayload.evidenceState, observedAt: null, importedAt, response: responsePayload
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: 'EVIDENCE_PERSIST_FAILED' });
+  }
+  return res.json(responsePayload);
 });
 
 // API: Amazon Quick Draft (Works directly from Seed Phrase, 10 ASINs, or Cerebro)

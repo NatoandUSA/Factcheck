@@ -14,8 +14,8 @@ export default function AmazonPreview({ data }) {
         <div style={{ flex: '0 0 300px' }}>
           <div style={{ width: '100%', height: '300px', backgroundColor: '#f7f7f7', border: '1px solid #e7e7e7', borderRadius: '6px', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#888', padding: '16px', textAlign: 'center' }}>
             <Sparkles size={36} style={{ color: '#de7921', marginBottom: '8px' }} />
-            <div style={{ fontWeight: 600, color: '#333' }}>{data.categoryName || 'Custom Product'}</div>
-            <div style={{ fontSize: '0.75rem', color: '#999', marginTop: '4px' }}>HD Quality Artisan Render</div>
+            <div style={{ fontWeight: 600, color: '#333' }}>{data.categoryName || 'Product category: UNKNOWN'}</div>
+            <div style={{ fontSize: '0.75rem', color: '#999', marginTop: '4px' }}>Simulation Preview — Not Live — Not Submission Ready</div>
           </div>
         </div>
 
@@ -41,12 +41,12 @@ export default function AmazonPreview({ data }) {
             {data.price ? (
               <span style={{ fontSize: '1.8rem', fontWeight: '600', color: '#b12704' }}>${data.price}</span>
             ) : (
-              <span style={{ fontSize: '1.2rem', color: '#666', fontStyle: 'italic' }}>Price not set</span>
+            <span style={{ fontSize: '1.2rem', color: '#666', fontStyle: 'italic' }}>Price: UNKNOWN — pending listing export</span>
             )}
           </div>
 
           <div style={{ background: '#f6f6f6', padding: '10px 14px', borderRadius: '4px', marginBottom: '16px', fontSize: '0.85rem' }}>
-            <span style={{ fontWeight: 'bold' }}>FBM Merchant Fulfilled</span> — {data.shippingPrice ? `Shipping: $${data.shippingPrice}` : 'Standard Shipping'}
+            <span style={{ fontWeight: 'bold' }}>Fulfillment: UNKNOWN</span> — {data.shippingPrice ? `Shipping: $${data.shippingPrice}` : 'Shipping: UNKNOWN'}
           </div>
 
           <div>
@@ -67,14 +67,9 @@ export default function AmazonPreview({ data }) {
           <div style={{ fontSize: '1.25rem', fontWeight: 'bold', marginBottom: '8px', color: '#b12704' }}>
             {data.price ? `$${data.price}` : '—'}
           </div>
-          <div style={{ color: '#007185', fontSize: '0.85rem', marginBottom: '10px' }}>Standard Return Policy</div>
+          <div style={{ color: '#007185', fontSize: '0.85rem', marginBottom: '10px' }}>Return policy: UNKNOWN</div>
           <div style={{ color: '#007600', fontSize: '1.05rem', fontWeight: 600, marginBottom: '14px' }}>Draft / Pre-Publish</div>
-          <button style={{ width: '100%', background: '#ffd814', border: '1px solid #fcd200', borderRadius: '100px', padding: '10px', cursor: 'pointer', marginBottom: '8px', fontWeight: 600 }}>
-            Add to Cart
-          </button>
-          <button style={{ width: '100%', background: '#ffa41c', border: '1px solid #ff8f00', borderRadius: '100px', padding: '10px', cursor: 'pointer', fontWeight: 600 }}>
-            Buy Now
-          </button>
+          <div style={{ fontSize: '0.8rem', color: '#666' }}>No live offer, inventory, delivery, or purchase action.</div>
         </div>
       </div>
 
@@ -83,23 +78,23 @@ export default function AmazonPreview({ data }) {
         <div style={{ borderBottom: '2px solid #ea580c', paddingBottom: '8px', marginBottom: '20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <h2 style={{ fontSize: '1.15rem', fontWeight: '700', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
             <Award size={20} style={{ color: '#ea580c' }} />
-            From the Brand — Amazon A+ Enhanced Content
+            A+ Layout Preview — Content Unset
           </h2>
           <span style={{ fontSize: '0.75rem', background: '#ffedd5', color: '#c2410c', padding: '3px 8px', borderRadius: '4px', fontWeight: 600 }}>
-            A+ Modules Active
+            Simulation only
           </span>
         </div>
 
         {/* Brand Story Hero Banner */}
         <div style={{ background: 'linear-gradient(135deg, #1e293b, #0f172a)', color: '#fff', padding: '28px 24px', borderRadius: '8px', marginBottom: '24px', textAlign: 'center' }}>
           <div style={{ fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '2px', color: '#f59e0b', marginBottom: '8px', fontWeight: 700 }}>
-            Artisan Story & Heritage
+            [A+ Brand Story: Unset]
           </div>
           <h3 style={{ fontSize: '1.4rem', fontWeight: 700, margin: '0 0 12px 0', color: '#ffffff' }}>
-            {aplus?.brandStoryHeadline || 'Crafting Unforgettable Milestone Memories'}
+            {aplus?.brandStoryHeadline || '[A+ Headline: Unset]'}
           </h3>
           <p style={{ fontSize: '0.95rem', color: '#cbd5e1', maxWidth: '750px', margin: '0 auto', lineHeight: 1.6 }}>
-            {aplus?.brandStoryBody || 'Every personalized piece is crafted with meticulous care in our workshop to turn your love stories and milestones into timeless keepsakes.'}
+            {aplus?.brandStoryBody || '[A+ Brand Story: Unset]'}
           </p>
         </div>
 
@@ -119,18 +114,18 @@ export default function AmazonPreview({ data }) {
             <>
               <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', padding: '18px', borderRadius: '8px', textAlign: 'center' }}>
                 <ShieldCheck size={24} style={{ color: '#059669', margin: '0 auto 8px auto' }} />
-                <h4 style={{ fontSize: '0.95rem', fontWeight: 700, margin: '0 0 4px 0' }}>USA Handcrafted Precision</h4>
-                <p style={{ fontSize: '0.85rem', color: '#64748b', margin: 0 }}>Built using optical-grade acrylic and solid timber bases.</p>
+                <h4 style={{ fontSize: '0.95rem', fontWeight: 700, margin: '0 0 4px 0' }}>[A+ Feature: Unset]</h4>
+                <p style={{ fontSize: '0.85rem', color: '#64748b', margin: 0 }}>Product Truth evidence required.</p>
               </div>
               <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', padding: '18px', borderRadius: '8px', textAlign: 'center' }}>
                 <Heart size={24} style={{ color: '#e11d48', margin: '0 auto 8px auto' }} />
-                <h4 style={{ fontSize: '0.95rem', fontWeight: 700, margin: '0 0 4px 0' }}>Emotional Gift Ready</h4>
-                <p style={{ fontSize: '0.85rem', color: '#64748b', margin: 0 }}>Packaged in a luxury keepsake unboxing experience.</p>
+                <h4 style={{ fontSize: '0.95rem', fontWeight: 700, margin: '0 0 4px 0' }}>[A+ Feature: Unset]</h4>
+                <p style={{ fontSize: '0.85rem', color: '#64748b', margin: 0 }}>Product Truth evidence required.</p>
               </div>
               <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', padding: '18px', borderRadius: '8px', textAlign: 'center' }}>
                 <Award size={24} style={{ color: '#d97706', margin: '0 auto 8px auto' }} />
-                <h4 style={{ fontSize: '0.95rem', fontWeight: 700, margin: '0 0 4px 0' }}>Fade-Proof Laser UV</h4>
-                <p style={{ fontSize: '0.85rem', color: '#64748b', margin: 0 }}>Crisp resolution designed to endure for generations.</p>
+                <h4 style={{ fontSize: '0.95rem', fontWeight: 700, margin: '0 0 4px 0' }}>[A+ Feature: Unset]</h4>
+                <p style={{ fontSize: '0.85rem', color: '#64748b', margin: 0 }}>Product Truth evidence required.</p>
               </div>
             </>
           )}

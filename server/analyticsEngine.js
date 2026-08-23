@@ -290,10 +290,11 @@ function synthesizeNicheIntelligence({ seedPhrase, listings = [], keywords = [],
   const derivedTitlePhrases = deriveTitlePhrases(listings);
 
   // Extract Top Title Patterns from Bestsellers
-  const bestsellerTitles = (listings || [])
-    .filter(l => l.isBestseller || (l.sold24h && l.sold24h > 5))
+  // This is a local ranking heuristic, not a marketplace Best Seller claim.
+  const derivedHighActivityPatterns = (listings || [])
+    .filter(l => l.isBestseller === true || (Number.isFinite(Number(l.sold24h)) && Number(l.sold24h) > 5))
     .slice(0, 5)
-    .map(l => l.title);
+    .map(l => ({ title: l.title || null, evidenceState: 'DERIVED_HEURISTIC', rule: 'source_flag_or_sold24h_gt_5' }));
 
   return {
     success: true,
@@ -310,7 +311,7 @@ function synthesizeNicheIntelligence({ seedPhrase, listings = [], keywords = [],
     tagAnalytics,
     derivedTitlePhrases,
     priceAnalytics,
-    bestsellerPatterns: bestsellerTitles
+    derivedHighActivityPatterns
   };
 }
 

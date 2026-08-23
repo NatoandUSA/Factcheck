@@ -116,7 +116,7 @@ async function runTests() {
     });
     assert.strictEqual(transObsRes.status, 400);
     const transObsData = await transObsRes.json();
-    assert.strictEqual(transObsData.error, 'MISSING_EVIDENCE_PRECONDITION');
+    assert.strictEqual(transObsData.error, 'MISSING_QUALIFYING_EVIDENCE_PRECONDITION');
     console.log('  🟢 Transition rejected: OBSERVED evidence cannot unlock RESEARCH_ACCEPTED.');
 
     // Test 5: Role Gate Check for Evidence Acceptance: SELLER role attempting to accept evidence -> 403
@@ -146,7 +146,7 @@ async function runTests() {
     });
     assert.strictEqual(projBTransRes.status, 400);
     const projBTransData = await projBTransRes.json();
-    assert.strictEqual(projBTransData.error, 'MISSING_EVIDENCE_PRECONDITION');
+    assert.strictEqual(projBTransData.error, 'MISSING_QUALIFYING_EVIDENCE_PRECONDITION');
     console.log('  🟢 Project B transition correctly rejected: Evidence of Project A cannot unlock Project B.');
 
     // Test 8: Project A transition to RESEARCH_ACCEPTED -> Must Succeed!

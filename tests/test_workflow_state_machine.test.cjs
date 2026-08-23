@@ -105,7 +105,7 @@ async function runTests() {
     });
     assert.strictEqual(noEvRes.status, 400, `Missing evidence precondition should return 400, got ${noEvRes.status}`);
     const noEvData = await noEvRes.json();
-    assert.strictEqual(noEvData.error, 'MISSING_EVIDENCE_PRECONDITION');
+    assert.strictEqual(noEvData.error, 'MISSING_QUALIFYING_EVIDENCE_PRECONDITION');
     console.log('  🟢 Transition to RESEARCH_ACCEPTED rejected due to missing evidence precondition.');
 
     // 4. Ingest Evidence Record, Accept Evidence, and Transition to RESEARCH_ACCEPTED

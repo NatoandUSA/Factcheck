@@ -9,6 +9,7 @@ const { app, db, databaseReady, ytrendsMcp } = require('../server/server');
 const { createSessionRecord } = require('../server/security/session');
 
 const dbAll = (sql, params = []) => new Promise((resolve, reject) => db.all(sql, params, (err, rows) => err ? reject(err) : resolve(rows)));
+const dbRun = (sql, params = []) => new Promise((resolve, reject) => db.run(sql, params, err => err ? reject(err) : resolve()));
 const createSession = (userId, workspaceId, tenantId) => new Promise((resolve, reject) => {
   createSessionRecord(db, userId, workspaceId, tenantId, (err, session) => err ? reject(err) : resolve(session));
 });
@@ -77,6 +78,10 @@ async function waitForFixtures() {
       const response = await fetch(base + path, { method: 'GET', headers: { Origin: base, Cookie: headers.Cookie } });
       return { status: response.status, body: await response.json() };
     };
+    request.patch = async (path, body) => {
+      const response = await fetch(base + path, { method: 'PATCH', headers, body: JSON.stringify(body) });
+      return { status: response.status, body: await response.json() };
+    };
     return request;
   };
 
@@ -130,6 +135,23 @@ async function waitForFixtures() {
     const crossProjectRead = await callEtsy.get(`/api/evidence?projectId=${amazonProjectId}`);
     assert.strictEqual(crossProjectRead.status, 404, 'Cross-marketplace project evidence read must be IDOR-safe');
 
+    // A partial artifact is kept for audit/reload, but it can never become
+    // accepted evidence or unlock the project state machine.
+    const partialAccept = await callEtsy(`/api/evidence/${partial.body.evidenceId}/accept`, { reason: 'attempt acceptance' });
+    assert.strictEqual(partialAccept.status, 409);
+    assert.strictEqual(partialAccept.body.error, 'UNQUALIFIED_SMART_PULL_ARTIFACT');
+    const partialAfterAccept = await dbAll('SELECT evidence_state, accepted_at FROM research_evidence WHERE id = ?', [partial.body.evidenceId]);
+    assert.deepStrictEqual(partialAfterAccept[0], { evidence_state: 'OBSERVED', accepted_at: null }, 'Rejected artifact acceptance must not mutate the ledger row');
+    const partialTransition = await callEtsy.patch(`/api/projects/${etsyProjectId}/transition`, { targetState: 'RESEARCH_ACCEPTED' });
+    assert.strictEqual(partialTransition.status, 400);
+    assert.strictEqual(partialTransition.body.error, 'MISSING_QUALIFYING_EVIDENCE_PRECONDITION');
+    // Even a legacy/direct DB elevation cannot make a partial Smart Pull
+    // artifact satisfy the workflow gate.
+    await dbRun("UPDATE research_evidence SET evidence_state = 'ACCEPTED' WHERE id = ?", [partial.body.evidenceId]);
+    const tamperedPartialTransition = await callEtsy.patch(`/api/projects/${etsyProjectId}/transition`, { targetState: 'RESEARCH_ACCEPTED' });
+    assert.strictEqual(tamperedPartialTransition.status, 400);
+    assert.strictEqual(tamperedPartialTransition.body.error, 'MISSING_QUALIFYING_EVIDENCE_PRECONDITION');
+
     ytrendsMcp.callTool = async () => ({ data: {} });
     const empty = await callEtsy('/api/research/smart-pull', { projectId: etsyProjectId, query: 'nurse gift' });
     assert.strictEqual(empty.status, 422);
@@ -147,6 +169,35 @@ async function waitForFixtures() {
     const amazonArtifacts = await dbAll('SELECT * FROM research_evidence WHERE id = ? AND project_id = ?', [inputOnly.body.evidenceId, amazonProjectId]);
     assert.strictEqual(amazonArtifacts.length, 1);
     assert.strictEqual(amazonArtifacts[0].source, 'STAFF_MANUAL_ASSERTION');
+    const inputOnlyAccept = await callAmazon(`/api/evidence/${inputOnly.body.evidenceId}/accept`, { reason: 'attempt acceptance' });
+    assert.strictEqual(inputOnlyAccept.status, 409);
+    assert.strictEqual(inputOnlyAccept.body.error, 'UNQUALIFIED_SMART_PULL_ARTIFACT');
+    const inputOnlyAfterAccept = await dbAll('SELECT evidence_state, accepted_at FROM research_evidence WHERE id = ?', [inputOnly.body.evidenceId]);
+    assert.deepStrictEqual(inputOnlyAfterAccept[0], { evidence_state: 'OBSERVED', accepted_at: null }, 'Input-only acceptance rejection must not mutate the ledger row');
+    await dbRun("UPDATE research_evidence SET evidence_state = 'ACCEPTED' WHERE id = ?", [inputOnly.body.evidenceId]);
+    const tamperedInputTransition = await callAmazon.patch(`/api/projects/${amazonProjectId}/transition`, { targetState: 'RESEARCH_ACCEPTED' });
+    assert.strictEqual(tamperedInputTransition.status, 400);
+    assert.strictEqual(tamperedInputTransition.body.error, 'MISSING_QUALIFYING_EVIDENCE_PRECONDITION');
+
+    // A complete, hashed MCP retrieval is the explicitly allowed Smart Pull
+    // path: it may be accepted and then unlock RESEARCH_ACCEPTED.
+    const verifiedProjectResponse = await callEtsy('/api/projects', { name: 'Complete retrieval', seedPhrase: 'verified nurse gift' });
+    const verifiedProjectId = verifiedProjectResponse.body.projectId ?? verifiedProjectResponse.body.project?.id;
+    ytrendsMcp.callTool = async name => {
+      if (name === 'ytrends_search') return { data: { results: [{ id: 'verified-search', title: 'Verified Nurse Gift', snippet: '$25.00' }] } };
+      if (name === 'ytrends_find_hot_listings') return { data: { listings: [{ listing_id: 'verified-hot', title: 'Verified Nurse Gift', price_usd: 25, sold_24h: 2, tags: ['nurse gift'] }] } };
+      throw new Error(`unexpected tool ${name}`);
+    };
+    const retrieved = await callEtsy('/api/research/smart-pull', { projectId: verifiedProjectId, query: 'verified nurse gift' });
+    assert.strictEqual(retrieved.status, 200);
+    assert.strictEqual(retrieved.body.evidenceState, 'RETRIEVED_NO_OBSERVED_AT');
+    const retrievedAccept = await callEtsy(`/api/evidence/${retrieved.body.evidenceId}/accept`, { reason: 'complete MCP retrieval' });
+    assert.strictEqual(retrievedAccept.status, 200);
+    assert.strictEqual(retrievedAccept.body.evidenceState, 'ACCEPTED');
+    const retrievedTransition = await callEtsy.patch(`/api/projects/${verifiedProjectId}/transition`, { targetState: 'RESEARCH_ACCEPTED' });
+    assert.strictEqual(retrievedTransition.status, 200);
+    assert.strictEqual(retrievedTransition.body.state, 'RESEARCH_ACCEPTED');
+    ytrendsMcp.callTool = originalCallTool;
   } finally {
     server.close();
   }

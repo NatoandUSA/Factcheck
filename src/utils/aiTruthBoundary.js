@@ -1,11 +1,17 @@
 import { getVerifiedPersonalization, isIpCleared, projectVerifiedFacts, validateProductTruthCard } from '../../shared/productTruth.js';
 
 const AUTHORIZED_PROJECTIONS = new WeakSet();
-const SAFE_NON_FACTUAL_TOKENS = new Set([
-  'a', 'an', 'and', 'as', 'at', 'be', 'by', 'choice', 'description', 'details',
-  'everyday', 'for', 'from', 'gift', 'gifting', 'in', 'is', 'it', 'item', 'love',
-  'meaningful', 'of', 'or', 'p', 'product', 'someone', 'special', 'strong', 'the',
-  'this', 'to', 'use', 'with', 'your'
+const FACTUAL_CLAIM_RULES = Object.freeze([
+  { kind: 'MATERIAL', pattern: /\b(?:acrylic|aluminum|bamboo|beechwood|brass|cashmere|ceramic|cotton|crystal|diamond|fleece|glass|gold|leather|linen|mahogany|nylon|oak|platinum|polyester|resin|sherpa|silk|silver|steel|timber|titanium|velvet|wool|wood)\b/giu },
+  { kind: 'PERFORMANCE', pattern: /\b(?:dishwasher|fade|fire|heat|scratch|shatter|stain|water)[- ]?(?:proof|resistant|safe)\b|\b(?:bpa|chemical|lead|toxin)[- ]?free\b|\b(?:durable|hypoallergenic|non[- ]?toxic|washable)\b/giu },
+  { kind: 'PROCESS', pattern: /\b(?:artisan|handcrafted|handmade|handwoven|laser[- ]?(?:cut|engraved)|organic|sustainable)\b/giu },
+  { kind: 'ORIGIN', pattern: /\bmade in\b|\b(?:usa|u\.s\.a\.|austin|american)\s+(?:made|workshop)\b/giu },
+  { kind: 'FULFILLMENT', pattern: /\b(?:ships?|dispatch(?:es|ed)?|delivers?|arrives?)\s+(?:in|within|by)\b|\b(?:shipping|delivery|arrival)\s+(?:guarantee|guaranteed)\b/giu },
+  { kind: 'WARRANTY', pattern: /\b(?:warranty|guarantee|guaranteed|lifetime)\b/giu },
+  { kind: 'SOCIAL_PROOF', pattern: /\b(?:best[ -]?seller|top[ -]?seller|five[ -]?star|5\s*stars?|customer review|testimonial)\b/giu },
+  { kind: 'IP_OR_LICENSE', pattern: /\b(?:licensed|official|authentic)\b/giu },
+  { kind: 'PERSONALIZATION', pattern: /\b(?:customi[sz](?:e|ed|ation)|personaliz(?:e|ed|ation)|engrave(?:d|ment))\b/giu },
+  { kind: 'MEASUREMENT', pattern: /\b\d+(?:\.\d+)?\s*(?:cm|mm|inches?|inch|oz|ounces?|lb|lbs|kg|gsm|k)\b/giu }
 ]);
 
 function listingContext(listing) {
@@ -44,6 +50,22 @@ export function isAuthorizedAiProjection(projection) {
   return Boolean(projection?.eligible) && AUTHORIZED_PROJECTIONS.has(projection);
 }
 
+export function buildVerifiedAiRequest(projection, options = {}) {
+  if (!isAuthorizedAiProjection(projection)) return null;
+  const productType = typeof projection.facts.productType === 'string' && projection.facts.productType.trim()
+    ? projection.facts.productType.trim()
+    : 'Verified Product';
+  return Object.freeze({
+    category: Object.freeze({ id: 'verified-product', name: productType }),
+    productBrief: JSON.stringify(projection.facts),
+    occasion: typeof projection.facts.occasion === 'string' ? projection.facts.occasion.trim() : '',
+    tone: options.tone || null,
+    materials: Array.isArray(projection.facts.materials) ? [...projection.facts.materials] : [],
+    imageBase64: null,
+    verifiedProjection: projection
+  });
+}
+
 export function verifiedSubject(projection) {
   if (!projection?.eligible) return null;
   const candidate = projection.facts.productName ?? projection.facts.productType;
@@ -53,12 +75,33 @@ export function verifiedSubject(projection) {
 
 export function validateModelClaims(output, projection) {
   if (!isAuthorizedAiProjection(projection)) return { valid: false, errors: ['UNQUALIFIED_PRODUCT_TRUTH'], claims: [] };
-  const tokenize = value => new Set(flattenStrings(value).join(' ').toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu) || []);
-  const outputTokens = tokenize(output);
-  const authorityTokens = tokenize(projection.facts);
-  const claims = [...outputTokens]
-    .filter(token => !authorityTokens.has(token) && !SAFE_NON_FACTUAL_TOKENS.has(token))
-    .map(value => ({ kind: 'UNAUTHORIZED_TOKEN', value }));
+  const normalize = value => String(value).normalize('NFKC').toLocaleLowerCase().replace(/\s+/g, ' ').trim();
+  let unauthorizedText = normalize(flattenStrings(output).join(' '));
+  const authorizedValues = flattenStrings(projection.facts)
+    .map(normalize)
+    .filter(value => value.length > 0)
+    .sort((a, b) => b.length - a.length);
+  for (const value of authorizedValues) {
+    const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    unauthorizedText = unauthorizedText.replace(new RegExp(`(?<![\\p{L}\\p{N}])${escaped}(?![\\p{L}\\p{N}])`, 'giu'), ' ');
+  }
+
+  const claims = [];
+  for (const rule of FACTUAL_CLAIM_RULES) {
+    for (const match of unauthorizedText.matchAll(rule.pattern)) claims.push({ kind: rule.kind, value: match[0] });
+  }
+
+  const materials = Array.isArray(output?.etsyMaterials) ? output.etsyMaterials.map(normalize).filter(Boolean) : [];
+  const verifiedMaterials = new Set((Array.isArray(projection.facts.materials) ? projection.facts.materials : []).map(normalize));
+  for (const material of materials) {
+    if (!verifiedMaterials.has(material)) claims.push({ kind: 'MATERIAL_FIELD', value: material });
+  }
+
+  const personalization = normalize(output?.etsyPersonalizationInstructions || '');
+  const verifiedPersonalization = normalize(projection.facts.personalization?.instructions || '');
+  if (personalization && personalization !== verifiedPersonalization) {
+    claims.push({ kind: 'PERSONALIZATION_FIELD', value: personalization });
+  }
   return { valid: claims.length === 0, errors: claims.length ? ['UNVERIFIED_OUTPUT_CLAIM'] : [], claims };
 }
 
@@ -73,4 +116,4 @@ export function assertModelClaimsAuthorized(output, projection) {
   return output;
 }
 
-export const AI_SAFE_NON_FACTUAL_TOKENS = Object.freeze([...SAFE_NON_FACTUAL_TOKENS]);
+export const AI_FACTUAL_CLAIM_RULES = FACTUAL_CLAIM_RULES;

@@ -1,6 +1,8 @@
 'use strict';
 
 const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
 const { makeProductTruthCard } = require('./helpers/productTruth.cjs');
 const {
   generateAmazonListingImagePrompts,
@@ -8,6 +10,7 @@ const {
   generateEtsyListingImagePrompts
 } = require('../src/services/imagePromptGenerator.js');
 const {
+  buildVerifiedAiRequest,
   projectVerifiedAiInput,
   validateModelClaims
 } = require('../src/utils/aiTruthBoundary.js');
@@ -58,6 +61,10 @@ assert.strictEqual(projectVerifiedAiInput({ ...listing, productTruthCard: { ...c
 const projection = projectVerifiedAiInput(listing);
 assert.strictEqual(projection.eligible, true);
 assert.strictEqual(Object.hasOwn(projection.facts, 'personalization'), false, 'supported:false personalization must not enter AI authority');
+const singleRequest = buildVerifiedAiRequest(projection, { tone: { id: 'warm', name: 'Warm' } });
+assert.strictEqual(singleRequest.productBrief.includes('Official Disney'), false, 'single-listing AI request must not reuse raw title/brief prose');
+assert.strictEqual(singleRequest.category.name, 'SWEATSHIRT');
+assert.strictEqual(singleRequest.imageBase64, null, 'unverified image input must not enter the factual AI request');
 assert.strictEqual(validateModelClaims({ etsyDescription: 'Made in USA and ships in 24 hours.' }, projection).valid, false);
 assert.strictEqual(validateModelClaims({ etsyDescription: 'Organic linen with dishwasher-safe finish.' }, projection).valid, false, 'unlisted factual claims must fail deny-by-default validation');
 assert.strictEqual(validateModelClaims({ etsyDescription: 'Handwoven with a lifetime warranty.' }, projection).valid, false, 'novel claims must not bypass a finite blacklist');
@@ -71,6 +78,40 @@ const linenCard = makeProductTruthCard(productId, listingVersion, {
 });
 const linenProjection = projectVerifiedAiInput({ productId, listingVersion, productTruthCard: linenCard });
 assert.strictEqual(validateModelClaims({ etsyDescription: 'Organic linen gift' }, linenProjection).valid, true, 'exact verified facts must remain usable');
+
+const fullModelOutput = {
+  amazonTitle: 'Sweatshirt Gift for Family Everyday Style',
+  amazonBullets: [
+    'A meaningful sweatshirt gift for someone special',
+    'Everyday sweatshirt style for gifting',
+    'A thoughtful choice for family',
+    'Sweatshirt design for everyday use',
+    'A special gift with meaningful style'
+  ],
+  amazonSearchTerms: 'sweatshirt family gift everyday style thoughtful',
+  amazonDescription: '<p>A meaningful sweatshirt gift for someone special.</p>',
+  amazonAPlusContent: {
+    brandStoryHeadline: 'Meaningful Everyday Gifting',
+    brandStoryBody: 'A thoughtful sweatshirt choice for someone special.',
+    modules: [
+      { moduleType: 'Hero Banner Story', heading: 'Everyday Style', body: 'A sweatshirt for meaningful gifting.' },
+      { moduleType: 'Three Feature Highlights', features: [{ title: 'Gift Style', desc: 'A thoughtful choice.' }] }
+    ]
+  },
+  etsyTitle: 'Sweatshirt Gift for Family Everyday Style',
+  etsyTags: ['sweatshirt gift', 'family gift', 'everyday style'],
+  etsyMaterials: ['cotton'],
+  etsyPersonalizationInstructions: '',
+  etsyDescription: 'A meaningful cotton sweatshirt gift for someone special.'
+};
+assert.strictEqual(validateModelClaims(fullModelOutput, projection).valid, true, 'realistic model-shaped generic copy with exact verified facts must pass');
+
+const appSource = fs.readFileSync(path.resolve(__dirname, '../src/App.jsx'), 'utf8');
+const singleSource = fs.readFileSync(path.resolve(__dirname, '../src/components/SingleListingGenerator.jsx'), 'utf8');
+assert.ok(appSource.includes('buildVerifiedAiRequest(verifiedProjection'), 'single-listing flow must rebuild the AI request from verified facts');
+assert.strictEqual(appSource.includes('generateListingAI(formData)'), false, 'raw single-listing form data must not reach AI');
+assert.ok(singleSource.includes('disabled={isGenerating || !verifiedProjection.eligible}'), 'single-listing UI must visibly fail closed before generation');
+assert.ok(singleSource.includes('Product Truth Required'), 'single-listing UI must explain the evidence gate');
 
 const batchRow = {
   ProductId: productId,

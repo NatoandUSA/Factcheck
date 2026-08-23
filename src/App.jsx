@@ -8,6 +8,8 @@ import ApiKeyModal from './components/ApiKeyModal';
 import LoginModal from './components/LoginModal';
 import UserManagementModal from './components/UserManagementModal';
 import { useAuth } from './context/AuthContext';
+import { generateListingAI } from './services/geminiService.js';
+import { buildVerifiedAiRequest, projectVerifiedAiInput } from './utils/aiTruthBoundary.js';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('amazon-workspace');
@@ -88,15 +90,21 @@ export default function App() {
   };
 
   const handleGenerateListing = async (formData) => {
+    const verifiedProjection = projectVerifiedAiInput(formData);
+    if (!verifiedProjection.eligible) {
+      showToast('Generation blocked: select a listing with a current, IP-cleared Product Truth Card first.');
+      return;
+    }
+    const verifiedRequest = buildVerifiedAiRequest(verifiedProjection, { tone: formData?.tone });
     setIsGenerating(true);
     try {
-      const result = await generateListingAI(formData);
+      const result = await generateListingAI(verifiedRequest);
       const enrichedResult = {
         ...result,
         id: Date.now(),
-        categoryName: formData.category?.name || 'Custom Product',
-        categoryIcon: formData.category?.icon || '✨',
-        categoryBadge: formData.category?.badge || '',
+        categoryName: verifiedRequest.category.name,
+        categoryIcon: '✨',
+        categoryBadge: 'VERIFIED PRODUCT TRUTH',
         status: 'NEEDS_QA'
       };
 

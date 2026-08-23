@@ -1,8 +1,10 @@
 import React, { useState, useRef } from 'react';
 import { Sparkles, Upload, Image as ImageIcon, X, Wand2, RefreshCw } from 'lucide-react';
 import { CATEGORIES, OCCASIONS, TONES } from '../data/categoryPresets';
+import { projectVerifiedAiInput } from '../utils/aiTruthBoundary.js';
 
-export default function SingleListingGenerator({ onGenerate, isGenerating }) {
+export default function SingleListingGenerator({ onGenerate, isGenerating, truthListing = null }) {
+  const verifiedProjection = projectVerifiedAiInput(truthListing);
   const [selectedCategory, setSelectedCategory] = useState(CATEGORIES[0]);
   const [selectedOccasion, setSelectedOccasion] = useState(OCCASIONS[0]);
   const [selectedTone, setSelectedTone] = useState(TONES[0]);
@@ -40,18 +42,11 @@ export default function SingleListingGenerator({ onGenerate, isGenerating }) {
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    if (!productBrief.trim()) return;
+    if (!verifiedProjection.eligible) return;
 
     onGenerate({
-      category: selectedCategory,
-      occasion: selectedOccasion,
+      ...truthListing,
       tone: selectedTone,
-      productBrief: productBrief.trim(),
-      // Category presets are unverified suggestions for staff reference, not
-      // confirmed facts about this specific product -- never sent to the AI
-      // as real materials unless staff typed them into productBrief.
-      materials: [],
-      imageBase64: imagePreview
     });
   };
 
@@ -196,14 +191,14 @@ export default function SingleListingGenerator({ onGenerate, isGenerating }) {
       {/* Product Details & Brief */}
       <div className="form-group">
         <div className="form-label">
-          <span>Product Brief & Personalization Specs</span>
+          <span>Creative Notes (not Product Truth; not sent to AI)</span>
         </div>
         <textarea
           className="form-textarea"
           rows={3}
           value={productBrief}
           onChange={(e) => setProductBrief(e.target.value)}
-          placeholder={`e.g. "${selectedCategory.sampleBrief}" -- describe your design, personalization options, specs, sizing, and recipient details...`}
+          placeholder="Optional staff note. Verify factual details in the version-bound Product Truth Card instead."
         />
       </div>
 
@@ -222,11 +217,16 @@ export default function SingleListingGenerator({ onGenerate, isGenerating }) {
       </div>
 
       {/* Submit Button */}
+      {!verifiedProjection.eligible && (
+        <div role="alert" style={{ marginBottom: '10px', color: 'var(--danger)', fontSize: '0.82rem' }}>
+          Generation locked: select a listing with a current, IP-cleared Product Truth Card.
+        </div>
+      )}
       <button
         type="button"
         className="btn btn-primary"
         style={{ width: '100%', padding: '14px', fontSize: '1rem', boxShadow: '0 4px 12px rgba(15, 118, 110, 0.2)' }}
-        disabled={isGenerating || !productBrief.trim()}
+        disabled={isGenerating || !verifiedProjection.eligible}
         onClick={handleSubmit}
       >
         {isGenerating ? (
@@ -237,7 +237,7 @@ export default function SingleListingGenerator({ onGenerate, isGenerating }) {
         ) : (
           <>
             <Wand2 size={18} />
-            <span>Generate Dual Listing Package</span>
+            <span>{verifiedProjection.eligible ? 'Generate Dual Listing Package' : 'Product Truth Required'}</span>
           </>
         )}
       </button>

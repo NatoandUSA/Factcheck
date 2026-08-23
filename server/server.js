@@ -2330,6 +2330,21 @@ function validateServerAiOutput(output, projection) {
   return output;
 }
 
+// Commerce models are a control-plane selector, not a prose generator. Keep
+// the wire contract deliberately narrower than ordinary JSON: one canonical,
+// raw JSON object only. This rejects whitespace variations, Markdown fences,
+// prose, duplicate keys, arrays, and concatenated JSON objects before the
+// renderer can create a listing.
+function parseStrictCommercePlan(modelReply) {
+  if (typeof modelReply !== 'string') return null;
+  try {
+    const plan = JSON.parse(modelReply);
+    return modelReply === JSON.stringify(plan) ? plan : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 // A non-compliant model can return any JSON shape it wants for a field the
 // prompt asked to be an array (e.g. a comma-separated string instead of a
 // real array). Calling .slice()/.map() directly on that would 500 the whole
@@ -2988,13 +3003,7 @@ Allowed values: WARM, MINIMAL, CELEBRATORY.`;
               systemInstruction: "Select one allowed creativeProfile enum. Never author commerce prose or factual claims."
             });
 
-            let text = llmOutput;
-            if (text.includes('```json')) {
-              text = text.split('```json')[1].split('```')[0].trim();
-            } else if (text.includes('```')) {
-              text = text.split('```')[1].split('```')[0].trim();
-            }
-            const aiPlan = safeJsonParse(text, {});
+            const aiPlan = parseStrictCommercePlan(llmOutput);
             const canonicalListing = renderVerifiedCommerceListing(aiAuthority.projection, aiPlan);
             if (!canonicalListing) {
               const contractError = new Error('INVALID_COMMERCE_OUTPUT_CONTRACT');
@@ -3626,13 +3635,7 @@ Allowed values: WARM, MINIMAL, CELEBRATORY.`;
             systemInstruction: "Select one allowed creativeProfile enum. Never author commerce prose."
           });
 
-          let text = llmOutput;
-          if (text.includes('```json')) {
-            text = text.split('```json')[1].split('```')[0].trim();
-          } else if (text.includes('```')) {
-            text = text.split('```')[1].split('```')[0].trim();
-          }
-          const aiPlan = safeJsonParse(text, {});
+          const aiPlan = parseStrictCommercePlan(llmOutput);
           const canonicalListing = renderVerifiedCommerceListing(aiAuthority.projection, aiPlan);
           if (!canonicalListing) {
             const contractError = new Error('INVALID_COMMERCE_OUTPUT_CONTRACT');
@@ -3782,15 +3785,13 @@ If the user asks a general question (not about drafting/writing), respond conver
       // Commerce LLM output is a one-enum plan, never listing prose. The
       // complete listing is rendered deterministically from verified facts.
       let extractedListing = null;
-      const jsonMatch = commerceMode ? fullReply.match(/```json\s*([\s\S]*?)```/) : null;
-      const rawListingJson = jsonMatch?.[1] || (commerceMode && String(fullReply).trim().startsWith('{') ? String(fullReply).trim() : null);
-      if (rawListingJson) {
+      if (commerceMode) {
         try {
-          const parsedPlan = JSON.parse(rawListingJson.trim());
+          const parsedPlan = parseStrictCommercePlan(fullReply);
           const rendered = renderVerifiedCommerceListing(aiAuthority.projection, parsedPlan);
           if (!rendered) {
             const contractError = new Error('INVALID_COMMERCE_OUTPUT_CONTRACT');
-            contractError.code = 'UNVERIFIED_OUTPUT_CLAIM';
+            contractError.code = 'INVALID_COMMERCE_OUTPUT_CONTRACT';
             throw contractError;
           }
           extractedListing = { ...rendered, generatedAt: new Date().toISOString(), status: 'NEEDS_QA' };
@@ -3798,7 +3799,7 @@ If the user asks a general question (not about drafting/writing), respond conver
         } catch (parseErr) {
           if (parseErr.code === 'UNVERIFIED_OUTPUT_CLAIM') throw parseErr;
           extractedListing = null;
-          console.warn('Could not parse listing JSON from chat response:', parseErr.message);
+          console.warn('Rejected non-canonical commerce plan:', parseErr.message);
         }
       }
 
@@ -3806,16 +3807,10 @@ If the user asks a general question (not about drafting/writing), respond conver
         return res.status(422).json({ success: false, error: 'INVALID_COMMERCE_OUTPUT_CONTRACT' });
       }
 
-      // Clean the reply text: remove the raw JSON block for display
-      let displayReply = fullReply;
-      if (extractedListing && jsonMatch) {
-        displayReply = fullReply.replace(/```json\s*[\s\S]*?```/, '').trim();
-        if (!displayReply) {
-          displayReply = '✅ Listing draft generated and loaded into the editor!';
-        } else {
-          displayReply += '\n\n✅ **Listing loaded into the draft editor!**';
-        }
-      }
+      // Never reflect model-authored text in commerce responses.
+      const displayReply = commerceMode
+        ? 'Commerce draft generated from verified Product Truth.'
+        : fullReply;
 
       res.json({ reply: displayReply, listing: extractedListing });
     } catch (apiError) {

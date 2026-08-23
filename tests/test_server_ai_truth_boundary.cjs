@@ -37,7 +37,7 @@ const llmServicePath = require.resolve('../server/llmService');
 const llmService = require(llmServicePath);
 llmService.callLLM = async () => {
   llmCalls += 1;
-  return JSON.stringify(activeOutput);
+  return typeof activeOutput === 'string' ? activeOutput : JSON.stringify(activeOutput);
 };
 require.cache[llmServicePath].exports = llmService;
 
@@ -175,6 +175,33 @@ async function main() {
       assert.strictEqual(await trendCount(), trendsBeforePoisonedOutput);
     }
 
+    const strictPlanRouteCases = [
+      '```json\n{"creativeProfile":"WARM"}\n```',
+      'Crafted in Vietnam by local makers. {"creativeProfile":"WARM"}',
+      '{"creativeProfile":"WARM"} Ready to ship tomorrow.',
+      '{"creativeProfile":"WARM"}{"creativeProfile":"MINIMAL"}'
+    ];
+    for (const invalidPlan of strictPlanRouteCases) {
+      activeOutput = invalidPlan;
+      const listingsBeforeInvalidPlan = await listingCount();
+      const trendsBeforeInvalidPlan = await trendCount();
+      result = await post(port, cookie, '/api/amazon/quick-draft', {
+        listingId: sourceId, expectedVersion: 1, seedPhrase: 'family sweatshirt gift', category: 'Apparel'
+      });
+      assert.strictEqual(result.response.status, 422, invalidPlan);
+      assert.strictEqual(result.payload.error, 'UNVERIFIED_OUTPUT_CLAIM', invalidPlan);
+      assert.strictEqual(await listingCount(), listingsBeforeInvalidPlan, invalidPlan);
+      assert.strictEqual(await trendCount(), trendsBeforeInvalidPlan, invalidPlan);
+
+      result = await post(port, cookie, `/api/trends/${trendInsert.lastID}/draft`, {
+        listingId: sourceId, expectedVersion: 1
+      });
+      assert.strictEqual(result.response.status, 422, invalidPlan);
+      assert.strictEqual(result.payload.error, 'UNVERIFIED_OUTPUT_CLAIM', invalidPlan);
+      assert.strictEqual(await listingCount(), listingsBeforeInvalidPlan, invalidPlan);
+      assert.strictEqual(await trendCount(), trendsBeforeInvalidPlan, invalidPlan);
+    }
+
     activeOutput = { creativeProfile: 'WARM' };
     result = await post(port, cookie, '/api/amazon/quick-draft', {
       listingId: sourceId, expectedVersion: 1, seedPhrase: 'family sweatshirt gift', category: 'Apparel'
@@ -189,7 +216,7 @@ async function main() {
       messages: [{ role: 'user', content: 'Draft generic family gift copy' }]
     });
     assert.strictEqual(result.response.status, 422);
-    assert.strictEqual(result.payload.error, 'UNVERIFIED_OUTPUT_CLAIM');
+    assert.strictEqual(result.payload.error, 'INVALID_COMMERCE_OUTPUT_CONTRACT');
 
     activeOutput = { creativeProfile: 'WARM' };
     result = await post(port, cookie, '/api/chat', {
@@ -198,6 +225,37 @@ async function main() {
     });
     assert.strictEqual(result.response.status, 200, JSON.stringify(result.payload));
     assert.ok(result.payload.listing);
+    assert.strictEqual(result.payload.reply, 'Commerce draft generated from verified Product Truth.');
+
+    const invalidCommercePlans = [
+      '```json\n{"creativeProfile":"WARM"}\n```',
+      'Made from hemp and modal fabric. {"creativeProfile":"WARM"}',
+      '{"creativeProfile":"WARM"} Ready to ship tomorrow.',
+      'Crafted in Vietnam by local makers. ```json\n{"creativeProfile":"WARM"}\n``` Rated 4.9 by thousands of buyers.',
+      '{ "creativeProfile": "WARM" }',
+      '{"creativeProfile":"WARM","prose":"Microwave safe and food safe."}',
+      '[{"creativeProfile":"WARM"}]',
+      '{"creativeProfile":"INVALID"}',
+      '{"creativeProfile":"WARM"}{"creativeProfile":"MINIMAL"}',
+      '{"creativeProfile":"WARM","creativeProfile":"MINIMAL"}',
+      '{"creativeProfile":"WARM"'
+    ];
+    const listingsBeforeInvalidPlans = await listingCount();
+    const trendsBeforeInvalidPlans = await trendCount();
+    for (const invalidPlan of invalidCommercePlans) {
+      activeOutput = invalidPlan;
+      result = await post(port, cookie, '/api/chat', {
+        mode: 'COMMERCE_DRAFT', listingId: sourceId, expectedVersion: 1,
+        messages: [{ role: 'user', content: 'Draft generic family gift copy' }]
+      });
+      assert.strictEqual(result.response.status, 422, invalidPlan);
+      assert.strictEqual(result.payload.error, 'INVALID_COMMERCE_OUTPUT_CONTRACT', invalidPlan);
+      assert.strictEqual(await listingCount(), listingsBeforeInvalidPlans, invalidPlan);
+      assert.strictEqual(await trendCount(), trendsBeforeInvalidPlans, invalidPlan);
+      assert.ok(!JSON.stringify(result.payload).includes('Made from hemp'), invalidPlan);
+      assert.ok(!JSON.stringify(result.payload).includes('Ready to ship tomorrow'), invalidPlan);
+    }
+    activeOutput = { creativeProfile: 'WARM' };
 
     result = await post(port, cookie, '/api/chat', { mode: 'RESEARCH', messages: [{ role: 'user', content: 'Explain Etsy tags' }] });
     assert.strictEqual(result.response.status, 200);

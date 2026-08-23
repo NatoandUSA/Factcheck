@@ -35,7 +35,7 @@ const { runMigrations } = require('./database/migrations');
 const { encryptSecret, decryptSecret, maskSecret } = require('./security/secretBox');
 const { approvalHash } = require('./security/approval');
 const { validateProductTruthCard } = require('../shared/productTruth.cjs');
-const { projectVerifiedAiInput, validateModelClaims } = require('../shared/aiTruthBoundary.cjs');
+const { projectVerifiedAiInput, renderVerifiedCommerceListing, validateModelClaims } = require('../shared/aiTruthBoundary.cjs');
 const { readFirstWorksheet } = require('./services/spreadsheetReader');
 const { UrlGuardError } = require('./security/urlGuard');
 const { resolveRuntimePaths } = require('./config/paths');
@@ -2975,45 +2975,17 @@ ${asinNote}
 VERIFIED PRODUCT FACTS (the only factual authority):
 ${JSON.stringify(aiAuthority.projection.facts)}
 
-CRITICAL RULES:
-1. "amazonTitle": Strictly 75-80 characters max. Title Case. Front-load the exact seed phrase "${cleanSeed}" in the first 75 characters. Zero prohibited claims (no "best seller", "free shipping", "guarantee", "perfect gift").
-2. "amazonBullets": EXACTLY 5 bullet points (150-200 chars each). Each MUST start with a [CAPITALIZED HOOK]. Use only generic, non-material-specific benefit language (e.g. gifting occasion, ease of use) -- no invented material/construction claims.
-3. "amazonSearchTerms": Space-separated generic terms strictly under 249 UTF-8 bytes. NO COMMAS.
-4. "amazonDescription": High-converting HTML formatted product description (<p>, <ul>, <strong>) using only the seed phrase/category -- no invented specs, materials, or care instructions.
-5. "amazonAPlusContent": Structured A+ package with Hero Banner and 3 Feature Cards using generic gifting/benefit language only -- no Specifications module, since no real specs exist yet.
-6. "etsyTitle": Under 140 chars, first 40 chars hook.
-7. "etsyTags": EXACTLY 13 tags, each <= 20 chars.
-8. "etsyMaterials": Use only the exact materials present in VERIFIED PRODUCT FACTS; otherwise return an EMPTY array.
-9. "etsyPersonalizationInstructions": Use only the exact verified personalization instructions; otherwise return an empty string. The seed phrase is never evidence of personalization capability.
-10. "etsyDescription": Storytelling description using only verified facts plus non-factual SEO/occasion language -- no invented specs, care instructions, or origin/workshop claims.
-
-Return ONLY raw JSON without markdown code fences:
-{
-  "amazonTitle": "...",
-  "amazonBullets": ["...", "...", "...", "...", "..."],
-  "amazonSearchTerms": "...",
-  "amazonDescription": "...",
-  "amazonAPlusContent": {
-    "brandStoryHeadline": "...",
-    "brandStoryBody": "...",
-    "modules": [
-      { "moduleType": "Hero Banner Story", "heading": "...", "body": "..." },
-      { "moduleType": "Three Feature Highlights", "features": [{ "title": "...", "desc": "..." }, { "title": "...", "desc": "..." }, { "title": "...", "desc": "..." }] }
-    ]
-  },
-  "etsyTitle": "...",
-  "etsyTags": ["...", ... (13 items <=20 chars each)],
-  "etsyMaterials": ["...", "..."],
-  "etsyPersonalizationInstructions": "...",
-  "etsyDescription": "..."
-}`;
+Select one creative tone. You are not authorized to write listing prose or factual claims.
+Return ONLY one raw JSON object with exactly one field and no markdown:
+{"creativeProfile":"WARM"}
+Allowed values: WARM, MINIMAL, CELEBRATORY.`;
 
           try {
             const llmOutput = await callLLM({
               provider,
               keys: { gemini: geminiKey, openai: openaiKey, claude: claudeKey },
               prompt,
-              systemInstruction: "You are an elite Amazon A10 Listing Specialist. Return ONLY raw JSON without markdown code fences."
+              systemInstruction: "Select one allowed creativeProfile enum. Never author commerce prose or factual claims."
             });
 
             let text = llmOutput;
@@ -3022,40 +2994,27 @@ Return ONLY raw JSON without markdown code fences:
             } else if (text.includes('```')) {
               text = text.split('```')[1].split('```')[0].trim();
             }
-            const aiData = safeJsonParse(text, {});
-
-
-            const title75 = keywordRanker.buildAmazonTitle75([cleanSeed], verifiedCategory);
-            const highlights125 = keywordRanker.buildAmazonItemHighlights125([cleanSeed], verifiedCategory);
+            const aiPlan = safeJsonParse(text, {});
+            const canonicalListing = renderVerifiedCommerceListing(aiAuthority.projection, aiPlan);
+            if (!canonicalListing) {
+              const contractError = new Error('INVALID_COMMERCE_OUTPUT_CONTRACT');
+              contractError.code = 'UNVERIFIED_OUTPUT_CLAIM';
+              throw contractError;
+            }
 
             const payload = {
+              ...canonicalListing,
               // No auto-generated SKU: the Staff viewer presents this as
               // paste-ready "Raw Data ... for Seller Central", so a fake
               // seed-derived string here would be an inventory-hygiene risk,
               // not just a display placeholder. Real SKUs must be assigned
               // by a human against real inventory (GPT PR-10 re-audit).
               parentSku: '',
-              amazonTitle: title75,
-              itemHighlights: highlights125,
-              amazonBullets: safeStringArray(aiData.amazonBullets),
-              amazonSearchTerms: aiData.amazonSearchTerms || '',
-              amazonDescription: aiData.amazonDescription || '',
-              amazonAPlusContent: aiData.amazonAPlusContent || null,
-              amazonAPlusPoints: safeStringArray(aiData.amazonAPlusPoints),
               // No fabricated Gold/Silver/Rose-Gold child variations: nobody
               // has verified this product actually comes in those finishes.
               // Real variations must be entered from real product data, not
               // invented to fill the UI (GPT PR-10 re-audit).
               variations: [],
-              etsyTitle: keywordRanker.buildEtsyTitleClean([cleanSeed], verifiedCategory),
-              etsyDescription: aiData.etsyDescription || '',
-              etsyTags: safeStringArray(aiData.etsyTags).slice(0, 13).map(t => String(t).substring(0, 20)),
-              // Copy only canonical, listing-bound Product Truth values. The
-              // model, seed phrase and category never have authority here.
-              etsyMaterials: Array.isArray(aiAuthority.projection.facts.materials)
-                ? aiAuthority.projection.facts.materials
-                : [],
-              etsyPersonalizationInstructions: aiAuthority.projection.facts.personalization?.instructions || '',
               categoryName: verifiedCategory,
               evidenceState: 'VERIFIED_PRODUCT_TRUTH_DRAFT',
               provenance: 'AI_VERIFIED_QUICK_DRAFT',
@@ -3650,65 +3609,12 @@ Use this only as an optional structural writing reference. Do not treat it as ve
         }
 
         try {
-          const prompt = `You are an elite E-Commerce Copywriting & SEO Specialist with deep mastery of Amazon A10, Data Dive MKL, and Etsy Search Algorithm.
-Write a dual-platform e-commerce listing package for a ${verifiedCategory} product targeting these SEO keywords: ${trend.trending_keywords}.
-${fewShotSection}
 
-VERIFIED PRODUCT FACTS (the only factual authority):
-${JSON.stringify(aiAuthority.projection.facts)}
-
-CRITICAL SEED PHRASE & RECIPIENT MANDATE:
-- You MUST strictly preserve and prominently feature the core SEED PHRASE and TARGET RECIPIENT from the keywords (e.g., if keywords contain "suegra", "para el amor de mi vida", "nurse", "mom", "grandma", this EXACT seed phrase / recipient MUST be in the Amazon Title, Etsy Title, Bullets, and Tags). NEVER strip or omit the specific recipient or Spanish/English emotional hook!
-
-PRODUCT TRUTH BOUNDARY: trending keywords and structural examples are not
-factual authority. Use only VERIFIED PRODUCT FACTS for materials, specs,
-personalization, manufacturing, origin, performance, fulfillment or warranty
-claims. Omit any factual field that is absent from VERIFIED PRODUCT FACTS.
-
-STRICT PLATFORM RULES:
-1. AMAZON FBM (A10 Algorithm & Modern Concise Title Policy):
-   - "amazonTitle": Concise (75-80 chars max), Title Case, strictly front-load top 1-2 root Golden commercial keywords (including the core Seed Phrase/Recipient). Must fit within 75 characters for zero mobile truncation. Zero prohibited claims (no "best seller", "free shipping", "guarantee", "perfect gift") and no invented brand/material claims.
-   - "amazonBullets": EXACTLY 5 bullet points (150-200 chars each). Each MUST start with a [CAPITALIZED HOOK]. Use only generic, non-material-specific benefit language -- no invented material/construction claims.
-   - "amazonSearchTerms": Space-separated generic terms strictly under 240 UTF-8 bytes. NO COMMAS.
-   - "amazonDescription": High-converting HTML formatted product description (<p>, <ul>, <strong>) using only the seed phrase/category and recipient/occasion -- no invented specs, materials, or care instructions.
-   - "amazonAPlusContent": Structured A+ package with Hero Banner and 3 Feature Cards using generic gifting/benefit language only -- no Specifications module, since no real specs exist yet:
-     {
-       "brandStoryHeadline": "Timeless Emotional Keepsakes",
-       "brandStoryBody": "Crafting personalized gifts that celebrate lifelong relationships.",
-       "modules": [
-         { "moduleType": "Hero Banner Story", "heading": "...", "body": "..." },
-         { "moduleType": "Three Feature Highlights", "features": [{ "title": "...", "desc": "..." }, { "title": "...", "desc": "..." }, { "title": "...", "desc": "..." }] }
-       ]
-     }
-
-2. ETSY (Contextual Search Algorithm & Handmade Guidelines):
-   - "etsyTitle": Under 140 characters. The first 40 characters MUST contain the exact Seed Phrase / Recipient (e.g. "Regalo Para Suegra Collar...").
-   - "etsyTags": EXACTLY 13 tags, each strictly <= 20 characters, containing recipient, occasion, and aesthetics.
-   - "etsyMaterials": Use only the exact materials present in VERIFIED PRODUCT FACTS; otherwise return an EMPTY array.
-   - "etsyPersonalizationInstructions": Use only the exact verified personalization instructions; otherwise return an empty string. Keywords are never evidence of personalization capability.
-   - "etsyDescription": Story-driven description using only verified facts plus non-factual recipient/occasion language; omit unverified specifications, care, process and origin claims.
-
-Return ONLY a valid raw JSON object without markdown code fences:
-{
-  "amazonTitle": "...",
-  "amazonBullets": ["...", "...", "...", "...", "..."],
-  "amazonSearchTerms": "...",
-  "amazonDescription": "...",
-  "amazonAPlusContent": {
-    "brandStoryHeadline": "...",
-    "brandStoryBody": "...",
-    "modules": [
-      { "moduleType": "Hero Banner Story", "heading": "...", "body": "..." },
-      { "moduleType": "Three Feature Highlights", "features": [{ "title": "...", "desc": "..." }, { "title": "...", "desc": "..." }, { "title": "...", "desc": "..." }] }
-    ]
-  },
-  "etsyTitle": "...",
-  "etsyTags": ["...", ... (13 items, <=20 chars each)],
-  "etsyMaterials": [],
-  "etsyPersonalizationInstructions": "",
-  "etsyDescription": "..."
-}`;
-
+          const planPrompt = `Select one server-supported creative profile for this verified product.
+You are not authorized to write listing prose or factual claims.
+Return ONLY one raw JSON object with exactly one field and no markdown:
+{"creativeProfile":"WARM"}
+Allowed values: WARM, MINIMAL, CELEBRATORY.`;
           const llmOutput = await callLLM({
             provider,
             keys: {
@@ -3716,8 +3622,8 @@ Return ONLY a valid raw JSON object without markdown code fences:
               openai: openaiKey,
               claude: claudeKey
             },
-            prompt,
-            systemInstruction: "You are an elite E-Commerce Listing & SEO Specialist for Amazon A10 & Etsy. Return ONLY raw JSON without markdown code fences."
+            prompt: planPrompt,
+            systemInstruction: "Select one allowed creativeProfile enum. Never author commerce prose."
           });
 
           let text = llmOutput;
@@ -3726,22 +3632,16 @@ Return ONLY a valid raw JSON object without markdown code fences:
           } else if (text.includes('```')) {
             text = text.split('```')[1].split('```')[0].trim();
           }
-          const aiData = safeJsonParse(text, {});
-          // Strip a leading "Personalized"/"Custom" claim from BOTH the
-          // Amazon and Etsy title fields the model returns -- not just the
-          // empty-output fallback, and not just amazonTitle. This route has
-          // no real personalization-capability evidence, so the model
-          // asserting it directly is the same unverified claim regardless of
-          // which title field it appears in (independent integration-test
-          // finding: round 5 only stripped amazonTitle, missing the
-          // identical gap in etsyTitle -- fixed with one shared helper this
-          // time instead of a second field-specific patch).
-          const stripUnverifiedCapabilityClaim = (title) =>
-            String(title || '').trim().replace(/^(personalized|custom)\s+/i, '').trim();
-          const trendAmazonTitle = stripUnverifiedCapabilityClaim(aiData.amazonTitle);
-          const trendEtsyTitle = stripUnverifiedCapabilityClaim(aiData.etsyTitle);
+          const aiPlan = safeJsonParse(text, {});
+          const canonicalListing = renderVerifiedCommerceListing(aiAuthority.projection, aiPlan);
+          if (!canonicalListing) {
+            const contractError = new Error('INVALID_COMMERCE_OUTPUT_CONTRACT');
+            contractError.code = 'UNVERIFIED_OUTPUT_CLAIM';
+            throw contractError;
+          }
 
         const payload = {
+          ...canonicalListing,
           // No auto-generated SKU (same reasoning as Quick Draft: the Staff
           // viewer presents this as paste-ready Seller Central data) and no
           // fabricated Gold/Silver/Rose-Gold child variations -- both must
@@ -3749,21 +3649,6 @@ Return ONLY a valid raw JSON object without markdown code fences:
           // invented to fill the UI (GPT PR-10 re-audit).
           parentSku: '',
           variations: [],
-          amazonTitle: trendAmazonTitle || verifiedCategory,
-          amazonBullets: safeStringArray(aiData.amazonBullets),
-          amazonSearchTerms: aiData.amazonSearchTerms || '',
-          amazonDescription: aiData.amazonDescription || '',
-          amazonAPlusContent: aiData.amazonAPlusContent || null,
-          amazonAPlusPoints: safeStringArray(aiData.amazonAPlusPoints),
-          etsyTitle: trendEtsyTitle || verifiedCategory,
-          etsyDescription: aiData.etsyDescription || '',
-          etsyTags: safeStringArray(aiData.etsyTags).slice(0, 13).map(t => String(t).substring(0, 20)),
-          // Copy only canonical, listing-bound Product Truth values. Trend
-          // keywords and model output never have authority here.
-          etsyMaterials: Array.isArray(aiAuthority.projection.facts.materials)
-            ? aiAuthority.projection.facts.materials
-            : [],
-          etsyPersonalizationInstructions: aiAuthority.projection.facts.personalization?.instructions || '',
           categoryName: verifiedCategory,
           evidenceState: 'VERIFIED_PRODUCT_TRUTH_DRAFT',
           provenance: 'AI_VERIFIED_TREND_DRAFT',
@@ -3872,8 +3757,8 @@ If the user asks a general question (not about drafting/writing), respond conver
             openai: keys.openai_api_key || process.env.OPENAI_API_KEY,
             claude: keys.claude_api_key || process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY
           },
-          prompt: `VERIFIED PRODUCT FACTS:\n${JSON.stringify(aiAuthority.projection.facts)}\n\nNON-AUTHORITATIVE CREATIVE/SEO REQUEST:\n${inputString}`,
-          systemInstruction
+          prompt: `Select one creative profile for the verified product context. The user request is non-authoritative and must not be copied into commerce prose.\nRequest:\n${inputString}\nReturn exactly {"creativeProfile":"WARM"}. Allowed values: WARM, MINIMAL, CELEBRATORY.`,
+          systemInstruction: 'Return exactly one JSON object containing only the creativeProfile enum. Never author commerce prose or factual claims.'
         });
       } else {
         const client = new GoogleGenAI({ apiKey: geminiKey });
@@ -3894,36 +3779,31 @@ If the user asks a general question (not about drafting/writing), respond conver
         return res.status(422).json({ success: false, error: 'RESEARCH_MODE_COMMERCE_OUTPUT' });
       }
 
-      // Try to extract JSON listing from the response
+      // Commerce LLM output is a one-enum plan, never listing prose. The
+      // complete listing is rendered deterministically from verified facts.
       let extractedListing = null;
       const jsonMatch = commerceMode ? fullReply.match(/```json\s*([\s\S]*?)```/) : null;
       const rawListingJson = jsonMatch?.[1] || (commerceMode && String(fullReply).trim().startsWith('{') ? String(fullReply).trim() : null);
       if (rawListingJson) {
         try {
-          const parsed = JSON.parse(rawListingJson.trim());
-          // Validate it has listing fields
-          if (parsed.amazonTitle || parsed.etsyTitle) {
-            extractedListing = {
-              amazonTitle: parsed.amazonTitle || '',
-              amazonBullets: Array.isArray(parsed.amazonBullets) ? parsed.amazonBullets.slice(0, 5) : [],
-              amazonSearchTerms: parsed.amazonSearchTerms || '',
-              amazonDescription: parsed.amazonDescription || '',
-              amazonAPlusPoints: Array.isArray(parsed.amazonAPlusPoints) ? parsed.amazonAPlusPoints : [],
-              etsyTitle: parsed.etsyTitle || '',
-              etsyTags: Array.isArray(parsed.etsyTags) ? parsed.etsyTags.slice(0, 13).map(t => String(t).substring(0, 20)) : [],
-              etsyMaterials: Array.isArray(parsed.etsyMaterials) ? parsed.etsyMaterials : [],
-              etsyPersonalizationInstructions: parsed.etsyPersonalizationInstructions || '',
-              etsyDescription: parsed.etsyDescription || '',
-              generatedAt: new Date().toISOString(),
-              status: 'NEEDS_QA'
-            };
-            validateServerAiOutput(extractedListing, aiAuthority.projection);
+          const parsedPlan = JSON.parse(rawListingJson.trim());
+          const rendered = renderVerifiedCommerceListing(aiAuthority.projection, parsedPlan);
+          if (!rendered) {
+            const contractError = new Error('INVALID_COMMERCE_OUTPUT_CONTRACT');
+            contractError.code = 'UNVERIFIED_OUTPUT_CLAIM';
+            throw contractError;
           }
+          extractedListing = { ...rendered, generatedAt: new Date().toISOString(), status: 'NEEDS_QA' };
+          validateServerAiOutput(extractedListing, aiAuthority.projection);
         } catch (parseErr) {
           if (parseErr.code === 'UNVERIFIED_OUTPUT_CLAIM') throw parseErr;
           extractedListing = null;
           console.warn('Could not parse listing JSON from chat response:', parseErr.message);
         }
+      }
+
+      if (commerceMode && !extractedListing) {
+        return res.status(422).json({ success: false, error: 'INVALID_COMMERCE_OUTPUT_CONTRACT' });
       }
 
       // Clean the reply text: remove the raw JSON block for display

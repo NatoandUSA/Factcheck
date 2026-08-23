@@ -12,6 +12,7 @@ const {
 const {
   buildVerifiedAiRequest,
   projectVerifiedAiInput,
+  renderVerifiedCommerceListing,
   validateModelClaims
 } = require('../src/utils/aiTruthBoundary.js');
 const { generateVerifiedBatchRow, prepareVerifiedBatchRow } = require('../src/utils/batchTruthBoundary.js');
@@ -68,7 +69,16 @@ assert.strictEqual(singleRequest.imageBase64, null, 'unverified image input must
 assert.strictEqual(validateModelClaims({ etsyDescription: 'Made in USA and ships in 24 hours.' }, projection).valid, false);
 assert.strictEqual(validateModelClaims({ etsyDescription: 'Organic linen with dishwasher-safe finish.' }, projection).valid, false, 'unlisted factual claims must fail deny-by-default validation');
 assert.strictEqual(validateModelClaims({ etsyDescription: 'Handwoven with a lifetime warranty.' }, projection).valid, false, 'novel claims must not bypass a finite blacklist');
-assert.strictEqual(validateModelClaims({ etsyDescription: 'A sweatshirt for everyday gifting.' }, projection).valid, true);
+assert.strictEqual(validateModelClaims({ etsyDescription: 'A sweatshirt for everyday gifting.' }, projection).valid, false, 'model-authored prose is never an authorized commerce artifact');
+for (const bypass of [
+  'Made from hemp and modal fabric.',
+  'Crafted in Vietnam by local makers.',
+  'Rated 4.9 by thousands of buyers.',
+  'Ready to ship tomorrow.',
+  'Microwave safe and food safe.'
+]) {
+  assert.strictEqual(validateModelClaims({ etsyDescription: bypass }, projection).valid, false, `novel unverified claim bypassed structural boundary: ${bypass}`);
+}
 
 const linenCard = makeProductTruthCard(productId, listingVersion, {
   facts: {
@@ -77,7 +87,7 @@ const linenCard = makeProductTruthCard(productId, listingVersion, {
   }
 });
 const linenProjection = projectVerifiedAiInput({ productId, listingVersion, productTruthCard: linenCard });
-assert.strictEqual(validateModelClaims({ etsyDescription: 'Organic linen gift' }, linenProjection).valid, true, 'exact verified facts must remain usable');
+assert.strictEqual(validateModelClaims({ etsyDescription: 'Organic linen gift' }, linenProjection).valid, false, 'even verified facts must be rendered by the canonical template rather than trusted as model prose');
 
 const fullModelOutput = {
   amazonTitle: 'Sweatshirt Gift for Family Everyday Style',
@@ -104,7 +114,12 @@ const fullModelOutput = {
   etsyPersonalizationInstructions: '',
   etsyDescription: 'A meaningful cotton sweatshirt gift for someone special.'
 };
-assert.strictEqual(validateModelClaims(fullModelOutput, projection).valid, true, 'realistic model-shaped generic copy with exact verified facts must pass');
+assert.strictEqual(validateModelClaims(fullModelOutput, projection).valid, false, 'legacy free-prose model output must fail the structural contract');
+const canonicalModelOutput = renderVerifiedCommerceListing(projection, { creativeProfile: 'WARM' });
+assert.ok(canonicalModelOutput, 'valid creative enum must render a commerce artifact');
+assert.strictEqual(validateModelClaims(canonicalModelOutput, projection).valid, true, 'canonical server-rendered output with exact verified facts must pass');
+assert.strictEqual(validateModelClaims({ ...canonicalModelOutput, warranty: 'forever' }, projection).valid, false, 'unknown output fields must fail closed');
+assert.strictEqual(renderVerifiedCommerceListing(projection, { creativeProfile: 'WARM', prose: 'Made from hemp' }), null, 'model plan must contain exactly one enum field');
 
 const appSource = fs.readFileSync(path.resolve(__dirname, '../src/App.jsx'), 'utf8');
 const singleSource = fs.readFileSync(path.resolve(__dirname, '../src/components/SingleListingGenerator.jsx'), 'utf8');

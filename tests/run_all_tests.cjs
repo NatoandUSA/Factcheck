@@ -1,4 +1,5 @@
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
+const fs = require('fs');
 const path = require('path');
 
 function runAllTests() {
@@ -62,7 +63,18 @@ const testFiles = [
   testFiles.forEach((file, idx) => {
     console.log(`[Test ${idx + 1}/${testFiles.length}] Executing ${file}...`);
     try {
-      const output = execSync(`node ${file}`, {
+      // Some deployment suites intentionally exercise cleanup paths. Restore
+      // the production artifact at the point where an HTTP test requires it,
+      // so canonical results do not depend on test order or a pre-existing
+      // dist directory.
+      if (file === 'tests/test_performance_and_latency.cjs' && !fs.existsSync(path.resolve(__dirname, '../dist/index.html'))) {
+        execFileSync(process.execPath, [path.resolve(__dirname, '../node_modules/vite/bin/vite.js'), 'build'], {
+          cwd: path.resolve(__dirname, '..'),
+          stdio: 'inherit',
+          timeout: 180000
+        });
+      }
+      const output = execFileSync(process.execPath, [file], {
         encoding: 'utf-8',
         cwd: path.resolve(__dirname, '..'),
         timeout: 180000,

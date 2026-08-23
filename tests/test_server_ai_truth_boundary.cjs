@@ -31,7 +31,7 @@ const poisonedListing = {
   etsyMaterials: ['organic linen']
 };
 
-let activeOutput = safeListing;
+let activeOutput = { creativeProfile: 'WARM' };
 let llmCalls = 0;
 const llmServicePath = require.resolve('../server/llmService');
 const llmService = require(llmServicePath);
@@ -156,12 +156,32 @@ async function main() {
     assert.strictEqual(await listingCount(), before);
     assert.strictEqual(await trendCount(), trendsBeforePoisonedOutput, 'Invalid model output must not persist a trend side effect');
 
-    activeOutput = safeListing;
+    for (const bypassClaim of [
+      'Made from hemp and modal fabric.',
+      'Crafted in Vietnam by local makers.',
+      'Rated 4.9 by thousands of buyers.',
+      'Ready to ship tomorrow.',
+      'Microwave safe and food safe.'
+    ]) {
+      const callsBeforeBypass = llmCalls;
+      activeOutput = { ...safeListing, etsyDescription: bypassClaim };
+      result = await post(port, cookie, '/api/amazon/quick-draft', {
+        listingId: sourceId, expectedVersion: 1, seedPhrase: 'family sweatshirt gift', category: 'Apparel'
+      });
+      assert.strictEqual(result.response.status, 422, bypassClaim);
+      assert.strictEqual(result.payload.error, 'UNVERIFIED_OUTPUT_CLAIM');
+      assert.strictEqual(llmCalls, callsBeforeBypass + 1);
+      assert.strictEqual(await listingCount(), before);
+      assert.strictEqual(await trendCount(), trendsBeforePoisonedOutput);
+    }
+
+    activeOutput = { creativeProfile: 'WARM' };
     result = await post(port, cookie, '/api/amazon/quick-draft', {
       listingId: sourceId, expectedVersion: 1, seedPhrase: 'family sweatshirt gift', category: 'Apparel'
     });
     assert.strictEqual(result.response.status, 200, JSON.stringify(result.payload));
     assert.strictEqual(await listingCount(), before + 1);
+    assert.deepStrictEqual(result.payload.listing.etsyMaterials, ['cotton']);
 
     activeOutput = poisonedListing;
     result = await post(port, cookie, '/api/chat', {
@@ -171,7 +191,7 @@ async function main() {
     assert.strictEqual(result.response.status, 422);
     assert.strictEqual(result.payload.error, 'UNVERIFIED_OUTPUT_CLAIM');
 
-    activeOutput = safeListing;
+    activeOutput = { creativeProfile: 'WARM' };
     result = await post(port, cookie, '/api/chat', {
       mode: 'COMMERCE_DRAFT', listingId: sourceId, expectedVersion: 1,
       messages: [{ role: 'user', content: 'Draft generic family gift copy' }]

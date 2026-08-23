@@ -6,6 +6,7 @@ export const {
   buildVerifiedAiRequest,
   isAuthorizedAiProjection,
   projectVerifiedAiInput,
+  renderVerifiedCommerceListing,
   validateModelClaims,
   verifiedSubject
 } = aiTruthBoundary;

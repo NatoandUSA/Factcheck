@@ -110,10 +110,10 @@ function run() {
   // the canonical, listing-bound Product Truth projection; seed/keywords and
   // aiData are never authority. The "Custom" fallback is also gone. ---
   assert.ok(!serverSrc.includes('`Custom ${trend.category}`'), 'trend-draft etsyTitle fallback must not imply a "Custom" capability with no evidence');
-  const canonicalPersonalizationCount = (serverSrc.match(/etsyPersonalizationInstructions: aiAuthority\.projection\.facts\.personalization\?\.instructions \|\| '',/g) || []).length;
-  assert.ok(canonicalPersonalizationCount >= 2, 'Quick Draft and trend-draft must source personalization only from the canonical verified projection');
+  const canonicalRendererCount = (serverSrc.match(/renderVerifiedCommerceListing\(aiAuthority\.projection,/g) || []).length;
+  assert.ok(canonicalRendererCount >= 3, 'All active commerce routes must render output from the canonical verified projection');
   assert.ok(!serverSrc.includes('etsyPersonalizationInstructions: aiData.etsyPersonalizationInstructions'), 'AI output must never authorize personalization capability');
-  console.log('🟢 server.js Quick Draft / trend-draft source personalization only from canonical Product Truth, and the "Custom" title fallback is gone.');
+  console.log('🟢 active server routes render personalization and commerce prose only from canonical Product Truth templates.');
 
   // --- 6. geminiService.js: sanitizer no longer injects fabricated A+ module
   // claims or category defaultMaterials as if they were confirmed facts ---

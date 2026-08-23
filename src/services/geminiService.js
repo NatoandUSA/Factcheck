@@ -38,7 +38,8 @@ export async function generateListingAI({
     occasion,
     tone,
     materials,
-    imageBase64
+    imageBase64,
+    verifiedProjection
   });
   return assertModelClaimsAuthorized(listing, verifiedProjection);
 }
@@ -46,7 +47,7 @@ export async function generateListingAI({
 /**
  * Direct Gemini API call with structured JSON prompt
  */
-async function callGeminiApi({ category, productBrief, occasion, tone, materials, imageBase64, marketData }) {
+async function callGeminiApi({ category, productBrief, occasion, tone, materials, imageBase64, marketData, verifiedProjection }) {
   const promptText = `
 You are an elite, world-class E-Commerce Listing & SEO Specialist with deep mastery of the Amazon A10 Algorithm, Data Dive MKL methodology, and Etsy Search Algorithm.
 
@@ -109,7 +110,12 @@ Return ONLY a valid raw JSON object (without markdown code fences) with the exac
     method: 'POST',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ messages: [{ role: 'user', content: promptText }] })
+    body: JSON.stringify({
+      mode: 'COMMERCE_DRAFT',
+      listingId: verifiedProjection.context.productId,
+      expectedVersion: verifiedProjection.context.listingVersion,
+      messages: [{ role: 'user', content: `Select a creative profile. Preferred tone: ${tone?.name || tone || 'warm'}.` }]
+    })
   });
   const data = await response.json();
   if (!response.ok) throw new Error(data.error || 'Backend AI request failed');

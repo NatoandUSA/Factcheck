@@ -106,14 +106,14 @@ function run() {
   console.log('🟢 server.js /api/chat no longer mandates fabricated materials/personalization, and no path auto-generates a fake parentSku or unconditional Personalized claim.');
 
   // --- 5d. server.js: Quick Draft / trend-draft must never trust the AI's
-  // own judgment on personalization capability -- a seed keyword is not
-  // evidence, so these fields are hard-coded empty regardless of model
-  // output, and the "Custom" title fallback (implying customization
-  // capability) is gone too (GPT PR-10 4th re-audit) ---
+  // own judgment on personalization capability. The only non-empty value is
+  // the canonical, listing-bound Product Truth projection; seed/keywords and
+  // aiData are never authority. The "Custom" fallback is also gone. ---
   assert.ok(!serverSrc.includes('`Custom ${trend.category}`'), 'trend-draft etsyTitle fallback must not imply a "Custom" capability with no evidence');
-  const personalizationHardcodedCount = (serverSrc.match(/etsyPersonalizationInstructions: '',/g) || []).length;
-  assert.ok(personalizationHardcodedCount >= 2, 'Quick Draft and trend-draft must both hard-code etsyPersonalizationInstructions empty, not trust AI inference from keywords');
-  console.log('🟢 server.js Quick Draft / trend-draft never trust AI-inferred personalization capability, and the "Custom" title fallback is gone.');
+  const canonicalPersonalizationCount = (serverSrc.match(/etsyPersonalizationInstructions: aiAuthority\.projection\.facts\.personalization\?\.instructions \|\| '',/g) || []).length;
+  assert.ok(canonicalPersonalizationCount >= 2, 'Quick Draft and trend-draft must source personalization only from the canonical verified projection');
+  assert.ok(!serverSrc.includes('etsyPersonalizationInstructions: aiData.etsyPersonalizationInstructions'), 'AI output must never authorize personalization capability');
+  console.log('🟢 server.js Quick Draft / trend-draft source personalization only from canonical Product Truth, and the "Custom" title fallback is gone.');
 
   // --- 6. geminiService.js: sanitizer no longer injects fabricated A+ module
   // claims or category defaultMaterials as if they were confirmed facts ---

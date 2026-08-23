@@ -1,31 +1,12 @@
 /**
  * Behavioral (not source-text) integration tests: drive real HTTP requests
  * through /api/chat, /api/amazon/quick-draft, and /api/trends/:id/draft with
- * a mocked LLM that deliberately returns fabricated Product Truth (materials,
- * personalization, SKU-implying claims) even when the request supplies no
- * real product facts. Proves the server does not trust that output for
- * fields it has no evidence for, regardless of what the model says.
- *
- * Scope, decided deliberately after an external review proposed a broader
- * version of this test:
- *
- * - Quick Draft and trend-draft are keyword-only routes with zero channel
- *   for real materials/personalization data, so their output for those two
- *   fields is now hard-coded server-side and independent of model
- *   compliance. Enforced and tested here as a hard requirement.
- * - /api/chat is a general-purpose Co-Pilot chat interface where a user CAN
- *   legitimately type real product facts ("this is 14k gold") into their own
- *   message. Hard-coding its materials/personalization fields empty would
- *   regress that legitimate use, not just block fabrication. There is no
- *   way to tell "the model invented this" apart from "the user typed this"
- *   without a second, semantically-verifying AI call -- a different and
- *   larger feature than this fix, and not something to add silently here.
- *   /api/chat's defense remains prompt-instruction-based (already hardened)
- *   plus the human Product Truth attestation required before any listing
- *   can publish. This is checked below as an informational probe, not a
- *   hard failure.
- * - Free-text fields (description, bullets, A+ content) are not scanned for
- *   an arbitrary forbidden-phrase list. A hardcoded blocklist is both
+ * a mocked LLM that deliberately returns fabricated Product Truth. Commerce
+ * routes now require a server-loaded, listing/version-bound Product Truth
+ * projection and validate the complete model output before persistence or
+ * response. Research chat must reject commerce-shaped JSON. Free-text fields
+ * are not scanned with an arbitrary catch-all forbidden-phrase list because
+ * such a blocklist is both
  *   trivially bypassed by rephrasing and a false-positive risk against real
  *   products that legitimately are made of the listed materials -- it is
  *   not a real defense, and was rejected rather than implemented.
@@ -183,6 +164,7 @@ async function main() {
   const port = server.address().port;
   process.env.ALLOWED_ORIGINS = `http://127.0.0.1:${port}`;
   const cookie = await login(port, amazonWorkspace.workspace_id);
+  const listingCountBefore = Number((await dbAll('SELECT COUNT(*) count FROM listings WHERE workspace_id = ?', [amazonWorkspace.workspace_id]))[0].count);
   const failures = [];
 
   async function check(name, fn) {
@@ -196,42 +178,31 @@ async function main() {
   }
 
   try {
-    // Informational only: /api/chat's materials/personalization defense is
-    // prompt-based by design (see file header). Logged, not asserted.
-    {
-      const { payload } = await request(port, cookie, '/api/chat', {
+    await check('Research chat rejects commerce-shaped model output', async () => {
+      const { response, payload } = await request(port, cookie, '/api/chat', {
         messages: [{
           role: 'user',
           content: 'Draft an SEO listing from keyword: gift necklace. No product materials or specs supplied.'
         }]
       });
-      const materialsLeaked = Array.isArray(payload?.listing?.etsyMaterials) && payload.listing.etsyMaterials.length > 0;
-      console.log(`INFO /api/chat prompt-based defense: materials ${materialsLeaked ? 'leaked (expected residual risk vs a non-compliant model)' : 'clean'}`);
-    }
+      assert.strictEqual(response.status, 422);
+      assert.strictEqual(payload.error, 'RESEARCH_MODE_COMMERCE_OUTPUT');
+    });
 
-    await check('Quick Draft rejects model-returned materials/personalization/SKU', async () => {
+    await check('Quick Draft without Product Truth authority makes zero LLM calls', async () => {
+      const callsBefore = llmCalls;
       const { response, payload } = await request(port, cookie, '/api/amazon/quick-draft', {
         seedPhrase: 'gift necklace',
         category: 'Jewelry',
         asins: []
       });
-      assert.strictEqual(response.status, 200, `Expected Quick Draft 200, got ${response.status}`);
-      assert(payload.listing, 'Expected Quick Draft listing response');
-      assertMaterialsEmpty(payload.listing, 'Quick Draft');
-      assertPersonalizationEmpty(payload.listing, 'Quick Draft');
-      assertSkuEmpty(payload.listing, 'Quick Draft');
-      assert.strictEqual(payload.listing.variations?.length || 0, 0, 'Quick Draft must not fabricate child variations');
-      // Quick Draft's title/highlights are built deterministically by
-      // keywordRanker, not the mocked model -- this is the app's OWN code
-      // fabricating capability claims, a different bug than untrusted model
-      // output (independent re-audit finding, round 6).
-      assertTitleNotUnconditionallyPersonalized(payload.listing, 'Quick Draft');
-      assert.ok(!/custom handmade gift/i.test(payload.listing.etsyTitle || ''), 'Quick Draft etsyTitle must not fabricate a "Custom Handmade Gift" claim');
-      assert.ok(!/multiple colors & sizes available/i.test(payload.listing.itemHighlights || ''), 'Quick Draft itemHighlights must not fabricate a variation-availability claim');
+      assert.strictEqual(response.status, 409, `Expected Quick Draft 409, got ${response.status}`);
+      assert.strictEqual(payload.error, 'PRODUCT_TRUTH_REQUIRED');
+      assert.strictEqual(llmCalls, callsBefore);
     });
 
     let trendDraftId = null;
-    await check('Trend-draft rejects model-returned materials/personalization/SKU/title', async () => {
+    await check('Trend-draft without Product Truth authority makes zero LLM calls', async () => {
       const insert = await dbRun(
         `INSERT INTO market_trends (category, trending_keywords, marketplace, tenant_id, workspace_id)
          VALUES (?, ?, ?, ?, ?)`,
@@ -239,27 +210,13 @@ async function main() {
       );
       trendDraftId = insert.lastID;
       const { response, payload } = await request(port, cookie, `/api/trends/${insert.lastID}/draft`, {});
-      assert.strictEqual(response.status, 200, `Expected trend-draft 200, got ${response.status}`);
-      assert(payload.listing, 'Expected trend-draft listing response');
-      assertMaterialsEmpty(payload.listing, 'Trend-draft');
-      assertPersonalizationEmpty(payload.listing, 'Trend-draft');
-      assertSkuEmpty(payload.listing, 'Trend-draft');
-      assertTitleNotUnconditionallyPersonalized(payload.listing, 'Trend-draft');
-      assert.strictEqual(payload.listing.variations?.length || 0, 0, 'Trend-draft must not fabricate child variations');
+      assert.strictEqual(response.status, 409, `Expected trend-draft 409, got ${response.status}`);
+      assert.strictEqual(payload.error, 'PRODUCT_TRUTH_REQUIRED');
     });
 
-    await check('Persisted Quick Draft / trend-draft rows contain no fabricated materials/personalization/SKU', async () => {
-      const rows = await dbAll(
-        `SELECT payload FROM listings WHERE workspace_id = ? ORDER BY id DESC LIMIT 2`,
-        [amazonWorkspace.workspace_id]
-      );
-      assert(rows.length >= 2, 'Expected Quick Draft and trend-draft rows in listings');
-      for (const row of rows) {
-        const listing = JSON.parse(row.payload);
-        assertMaterialsEmpty(listing, 'Persisted listing');
-        assertPersonalizationEmpty(listing, 'Persisted listing');
-        assertSkuEmpty(listing, 'Persisted listing');
-      }
+    await check('Rejected commerce routes make zero listing writes', async () => {
+      const countAfter = Number((await dbAll('SELECT COUNT(*) count FROM listings WHERE workspace_id = ?', [amazonWorkspace.workspace_id]))[0].count);
+      assert.strictEqual(countAfter, listingCountBefore);
     });
 
     console.log(`LLM_STUB_CALLS=${llmCalls}`);

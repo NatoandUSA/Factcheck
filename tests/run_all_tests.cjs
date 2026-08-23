@@ -9,6 +9,7 @@ function runAllTests() {
 const testFiles = [
     'tests/test_product_truth_core.cjs',
     'tests/test_ai_boundary_and_batch.cjs',
+    'tests/test_server_ai_truth_boundary.cjs',
     'tests/spec_hash_vector.test.cjs',
     'tests/security_controls_unit.test.cjs',
     'tests/listing_scope_migration.test.cjs',

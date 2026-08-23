@@ -158,37 +158,23 @@ async function main() {
       const { response, payload } = await http(port, amazonCookie, 'POST', '/api/chat', {
         messages: [{ role: 'user', content: 'Draft from keyword gift necklace. No real facts supplied.' }]
       });
-      assert.strictEqual(response.status, 200);
-      assert(payload.listing, 'Expected chat to return a draft listing');
-      assert.strictEqual(payload.listing.status, 'NEEDS_QA');
-      assert.strictEqual(payload.listing.approvedHash, undefined);
-      assert.strictEqual(payload.listing.workspaceId, undefined);
+      assert.strictEqual(response.status, 422);
+      assert.strictEqual(payload.error, 'RESEARCH_MODE_COMMERCE_OUTPUT');
       const after = (await dbAll('SELECT COUNT(*) AS n FROM listings WHERE workspace_id = ?', [amazon.workspace_id]))[0].n;
       assert.strictEqual(after, before, '/api/chat must not persist a listing automatically');
     });
 
-    await check('M2 Quick Draft ignores model control-plane/scope/approval fields', async () => {
+    await check('M2 Quick Draft rejects missing Product Truth before model control-plane fields', async () => {
       llmMode = 'raw';
       currentLLMRaw = JSON.stringify(controlPlanePoison);
       const { response, payload } = await http(port, amazonCookie, 'POST', '/api/amazon/quick-draft', {
         seedPhrase: 'gift necklace', category: 'Jewelry', asins: []
       });
-      assert.strictEqual(response.status, 200);
-      assert(payload.listing, 'Expected Quick Draft listing');
-      quickDraftListingId = payload.listingId;
-      assert.strictEqual(payload.listing.status, 'NEEDS_QA');
-
-      const row = await dbGet('SELECT * FROM listings WHERE id = ?', [payload.listingId]);
-      assert.strictEqual(row.tenant_id, amazon.tenant_id, 'tenant_id must be server-derived, not model-supplied');
-      assert.strictEqual(row.workspace_id, amazon.workspace_id, 'workspace_id must be server-derived');
-      assert.strictEqual(row.marketplace, 'AMAZON', 'marketplace must be server-derived, not overridable to ETSY');
-      assert.strictEqual(row.status, 'NEEDS_QA');
-      assert.strictEqual(row.approved_hash, null);
-      assert.strictEqual(row.approved_version, null);
-      assert.strictEqual(row.product_truth_notes, null);
+      assert.strictEqual(response.status, 409);
+      assert.strictEqual(payload.error, 'PRODUCT_TRUTH_REQUIRED');
     });
 
-    await check('M3 Trend-draft ignores model control-plane/scope/approval fields', async () => {
+    await check('M3 Trend-draft rejects missing Product Truth before model control-plane fields', async () => {
       llmMode = 'raw';
       currentLLMRaw = JSON.stringify(controlPlanePoison);
       const insert = await dbRun(
@@ -196,14 +182,8 @@ async function main() {
         ['Jewelry', 'gift necklace', 'AMAZON', amazon.tenant_id, amazon.workspace_id]
       );
       const { response, payload } = await http(port, amazonCookie, 'POST', `/api/trends/${insert.lastID}/draft`, {});
-      assert.strictEqual(response.status, 200);
-      const row = await dbGet('SELECT * FROM listings WHERE id = ?', [payload.listingId]);
-      assert.strictEqual(row.tenant_id, amazon.tenant_id);
-      assert.strictEqual(row.workspace_id, amazon.workspace_id);
-      assert.strictEqual(row.marketplace, 'AMAZON');
-      assert.strictEqual(row.status, 'NEEDS_QA');
-      assert.strictEqual(row.approved_hash, null);
-      assert.strictEqual(row.product_truth_notes, null);
+      assert.strictEqual(response.status, 409);
+      assert.strictEqual(payload.error, 'PRODUCT_TRUTH_REQUIRED');
     });
 
     await check('M5 Cross-marketplace requests are rejected before any LLM call', async () => {
@@ -223,7 +203,12 @@ async function main() {
     });
 
     await check('M6 Model-supplied approval/attestation fields cannot satisfy export or approval', async () => {
-      assert(quickDraftListingId, 'Quick Draft listing from M2 is required');
+      const inserted = await dbRun(
+        `INSERT INTO listings (tenant_id, workspace_id, marketplace, amazonTitle, etsyTitle, categoryName, status, authorId, payload)
+         VALUES (?, ?, 'AMAZON', 'Control Test', 'Control Test', 'Test', 'NEEDS_QA', 1, ?)`,
+        [amazon.tenant_id, amazon.workspace_id, JSON.stringify({ amazonTitle: 'Control Test', status: 'NEEDS_QA' })]
+      );
+      quickDraftListingId = inserted.lastID;
       const exportBefore = await http(port, amazonCookie, 'GET', `/api/listings/${quickDraftListingId}/export`);
       assert.strictEqual(exportBefore.response.status, 409);
       assert.strictEqual(exportBefore.payload.error, 'APPROVAL_INVALIDATED');
@@ -250,10 +235,8 @@ async function main() {
       const { response, payload } = await http(port, amazonCookie, 'POST', '/api/amazon/quick-draft', {
         seedPhrase: 'gift necklace', category: 'Jewelry', asins: []
       });
-      assert.notStrictEqual(response.status, 500, 'Model-controlled type confusion must not crash Quick Draft');
-      assert.strictEqual(response.status, 200);
-      assert(Array.isArray(payload.listing.etsyTags), 'etsyTags must normalize to an array');
-      assert(Array.isArray(payload.listing.amazonBullets), 'amazonBullets must normalize to an array');
+      assert.strictEqual(response.status, 409, 'Missing Product Truth must fail before model type confusion');
+      assert.strictEqual(payload.error, 'PRODUCT_TRUTH_REQUIRED');
     });
 
     await check('R2 Malformed (truncated) model JSON fails safely without fabricating truth', async () => {
@@ -262,9 +245,8 @@ async function main() {
       const { response, payload } = await http(port, amazonCookie, 'POST', '/api/amazon/quick-draft', {
         seedPhrase: 'gift necklace', category: 'Jewelry', asins: []
       });
-      assert.notStrictEqual(response.status, 500);
-      assert.strictEqual(payload.listing.status, 'NEEDS_QA');
-      assert.deepStrictEqual(payload.listing.etsyMaterials || [], []);
+      assert.strictEqual(response.status, 409);
+      assert.strictEqual(payload.error, 'PRODUCT_TRUTH_REQUIRED');
     });
 
     console.log(`LLM_STUB_CALLS=${llmCalls}`);

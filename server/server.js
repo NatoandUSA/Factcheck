@@ -35,6 +35,7 @@ const { runMigrations } = require('./database/migrations');
 const { encryptSecret, decryptSecret, maskSecret } = require('./security/secretBox');
 const { approvalHash } = require('./security/approval');
 const { validateProductTruthCard } = require('../shared/productTruth.cjs');
+const { projectVerifiedAiInput, validateModelClaims } = require('../shared/aiTruthBoundary.cjs');
 const { readFirstWorksheet } = require('./services/spreadsheetReader');
 const { UrlGuardError } = require('./security/urlGuard');
 const { resolveRuntimePaths } = require('./config/paths');
@@ -2284,6 +2285,51 @@ function safeJsonParse(str, fallback = {}) {
   }
 }
 
+function resolveServerAiAuthority(req, input = {}) {
+  const listingId = input.listingId ?? input.sourceListingId;
+  const expectedVersion = Number(input.expectedVersion);
+  if (!/^\d+$/.test(String(listingId || '')) || !Number.isInteger(expectedVersion) || expectedVersion < 1) {
+    return Promise.reject({ status: 409, error: 'PRODUCT_TRUTH_REQUIRED', message: 'listingId and expectedVersion are required for commerce AI generation.' });
+  }
+  return new Promise((resolve, reject) => {
+    db.get(
+      `SELECT id, listing_version, approved_version, status, product_truth_card, payload
+       FROM listings WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
+      [Number(listingId), req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+      (err, row) => {
+        if (err) return reject({ status: 500, error: 'DATABASE_ERROR' });
+        if (!row) return reject({ status: 404, error: 'LISTING_NOT_FOUND' });
+        if (row.listing_version !== expectedVersion) return reject({ status: 409, error: 'STALE_LISTING_VERSION' });
+        if (row.status !== 'PUBLISH_READY' || row.approved_version !== row.listing_version) {
+          return reject({ status: 409, error: 'PRODUCT_TRUTH_REQUIRED' });
+        }
+        const productTruthCard = safeJsonParse(row.product_truth_card, null);
+        const projection = projectVerifiedAiInput({
+          productTruthCard,
+          context: { productId: row.id, listingVersion: row.listing_version }
+        });
+        if (!projection.eligible) return reject({ status: 409, error: 'PRODUCT_TRUTH_REQUIRED' });
+        resolve({ row, projection });
+      }
+    );
+  });
+}
+
+function rejectAiAuthority(res, error) {
+  return res.status(error?.status || 409).json({ success: false, error: error?.error || 'PRODUCT_TRUTH_REQUIRED', message: error?.message });
+}
+
+function validateServerAiOutput(output, projection) {
+  const validation = validateModelClaims(output, projection);
+  if (!validation.valid) {
+    const error = new Error('UNVERIFIED_OUTPUT_CLAIM');
+    error.code = 'UNVERIFIED_OUTPUT_CLAIM';
+    error.claims = validation.claims;
+    throw error;
+  }
+  return output;
+}
+
 // A non-compliant model can return any JSON shape it wants for a field the
 // prompt asked to be an array (e.g. a comma-separated string instead of a
 // real array). Calling .slice()/.map() directly on that would 500 the whole
@@ -2886,29 +2932,35 @@ app.post('/api/amazon/quick-draft', requireAuth(db), requireRole(['OWNER', 'MANA
     return res.status(403).json({ success: false, error: 'MARKETPLACE_MISMATCH' });
   }
   const { projectId, seedPhrase, category, asins = [] } = req.body || {};
-  const projId = projectId ? parseInt(projectId, 10) : null;
 
   if (!seedPhrase || !String(seedPhrase).trim() || !category || !String(category).trim()) {
     return res.status(400).json({ success: false, error: 'INSUFFICIENT_EVIDENCE', message: 'seedPhrase and category are required' });
   }
 
+  let aiAuthority;
+  try {
+    aiAuthority = await resolveServerAiAuthority(req, req.body);
+  } catch (authorityError) {
+    return rejectAiAuthority(res, authorityError);
+  }
+
+  const seedIp = ipGuard.screenText(String(seedPhrase));
+  if (seedIp.verdict !== 'OK') {
+    return res.status(409).json({ success: false, error: 'IP_CLEARANCE_REQUIRED', ipVerdict: seedIp.verdict });
+  }
+
   try {
     const cleanSeed = seedPhrase.trim();
+    const verifiedCategory = typeof aiAuthority.projection.facts.productType === 'string'
+      ? aiAuthority.projection.facts.productType
+      : 'Verified Product';
     const asinNote = asins.length > 0 ? `Targeting Top 10 ASINs: ${asins.join(', ')}` : '';
-    const trendingKeywordsStr = `${cleanSeed}, personalized ${cleanSeed}, custom ${cleanSeed}, ${cleanSeed} gift, keepsake`;
-
-    // 1. Create or retrieve market trend entry
+    // Resolve project scope before calling the model. Do not persist either a
+    // trend or listing until the complete model-shaped payload passes the
+    // canonical output-claim validator.
     resolveActiveProjectId(db, req.user, req.body.projectId, (pErr, targetProjectId) => {
       if (pErr) return res.status(pErr.status || 400).json({ success: false, error: pErr.error, message: pErr.message });
-      db.run(
-        "INSERT INTO market_trends (category, trending_keywords, marketplace, tenant_id, workspace_id, project_id) VALUES (?, ?, ?, ?, ?, ?)",
-        [category, `${cleanSeed} (Amazon A10 Quick Batch)`, 'AMAZON', req.user.tenantId, req.user.workspaceId, targetProjectId],
-        function(trendErr) {
-          if (trendErr) return res.status(500).json({ error: trendErr.message });
-          const trendId = this.lastID;
-
-          // 2. Fetch API Keys
-          readWorkspaceLlmSettings(req.user, async (sErr, keys) => {
+      readWorkspaceLlmSettings(req.user, async (sErr, keys) => {
           if (sErr) return res.status(503).json({ success: false, error: 'SECRET_DECRYPTION_FAILED' });
 
           const provider = keys.active_llm_provider || 'GEMINI';
@@ -2917,13 +2969,11 @@ app.post('/api/amazon/quick-draft', requireAuth(db), requireRole(['OWNER', 'MANA
           const claudeKey = keys.claude_api_key || process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY;
 
           const prompt = `You are a world-class Amazon FBM/FBA Copywriting Specialist with deep mastery of Amazon A10 Algorithm and Data Dive MKL.
-Write a highly converting, policy-compliant Amazon listing for a ${category} product anchored on this Seed Phrase: "${cleanSeed}".
+Write a policy-compliant Amazon listing for a ${verifiedCategory} product anchored on this SEO Seed Phrase: "${cleanSeed}".
 ${asinNote}
 
-This is a QUICK SEO/COPY DRAFT from a keyword only -- no real product materials,
-specs, or personalization capability have been supplied. Do NOT invent specific
-material, dimension, or manufacturing facts; write copy that works regardless of
-the exact product, and leave fact fields empty for a human to fill in later.
+VERIFIED PRODUCT FACTS (the only factual authority):
+${JSON.stringify(aiAuthority.projection.facts)}
 
 CRITICAL RULES:
 1. "amazonTitle": Strictly 75-80 characters max. Title Case. Front-load the exact seed phrase "${cleanSeed}" in the first 75 characters. Zero prohibited claims (no "best seller", "free shipping", "guarantee", "perfect gift").
@@ -2933,9 +2983,9 @@ CRITICAL RULES:
 5. "amazonAPlusContent": Structured A+ package with Hero Banner and 3 Feature Cards using generic gifting/benefit language only -- no Specifications module, since no real specs exist yet.
 6. "etsyTitle": Under 140 chars, first 40 chars hook.
 7. "etsyTags": EXACTLY 13 tags, each <= 20 chars.
-8. "etsyMaterials": Return an EMPTY array -- no real materials were supplied, so none may be asserted.
-9. "etsyPersonalizationInstructions": Return an empty string unless the seed phrase itself specifies a personalization mechanic.
-10. "etsyDescription": Storytelling description using only the seed phrase/category and gifting occasion -- no invented specs, care instructions, or origin/workshop claims.
+8. "etsyMaterials": Use only the exact materials present in VERIFIED PRODUCT FACTS; otherwise return an EMPTY array.
+9. "etsyPersonalizationInstructions": Use only the exact verified personalization instructions; otherwise return an empty string. The seed phrase is never evidence of personalization capability.
+10. "etsyDescription": Storytelling description using only verified facts plus non-factual SEO/occasion language -- no invented specs, care instructions, or origin/workshop claims.
 
 Return ONLY raw JSON without markdown code fences:
 {
@@ -2975,8 +3025,8 @@ Return ONLY raw JSON without markdown code fences:
             const aiData = safeJsonParse(text, {});
 
 
-            const title75 = keywordRanker.buildAmazonTitle75([cleanSeed], category);
-            const highlights125 = keywordRanker.buildAmazonItemHighlights125([cleanSeed], category);
+            const title75 = keywordRanker.buildAmazonTitle75([cleanSeed], verifiedCategory);
+            const highlights125 = keywordRanker.buildAmazonItemHighlights125([cleanSeed], verifiedCategory);
 
             const payload = {
               // No auto-generated SKU: the Staff viewer presents this as
@@ -2997,45 +3047,55 @@ Return ONLY raw JSON without markdown code fences:
               // Real variations must be entered from real product data, not
               // invented to fill the UI (GPT PR-10 re-audit).
               variations: [],
-              etsyTitle: keywordRanker.buildEtsyTitleClean([cleanSeed], category),
+              etsyTitle: keywordRanker.buildEtsyTitleClean([cleanSeed], verifiedCategory),
               etsyDescription: aiData.etsyDescription || '',
               etsyTags: safeStringArray(aiData.etsyTags).slice(0, 13).map(t => String(t).substring(0, 20)),
-              // Hard-coded empty, not aiData-derived, for both fields: a seed
-              // keyword is no evidence of real materials or personalization
-              // capability, so the model's output is never trusted here no
-              // matter what it returns -- prompt wording alone was proven
-              // insufficient against a non-compliant model (independent
-              // integration-test finding, round 5).
-              etsyMaterials: [],
-              etsyPersonalizationInstructions: '',
-              categoryName: category,
-              evidenceState: 'DRAFT_WITH_LIMITED_EVIDENCE',
-              provenance: 'AI_SEO_QUICK_DRAFT',
+              // Copy only canonical, listing-bound Product Truth values. The
+              // model, seed phrase and category never have authority here.
+              etsyMaterials: Array.isArray(aiAuthority.projection.facts.materials)
+                ? aiAuthority.projection.facts.materials
+                : [],
+              etsyPersonalizationInstructions: aiAuthority.projection.facts.personalization?.instructions || '',
+              categoryName: verifiedCategory,
+              evidenceState: 'VERIFIED_PRODUCT_TRUTH_DRAFT',
+              provenance: 'AI_VERIFIED_QUICK_DRAFT',
+              sourceProductId: aiAuthority.row.id,
+              sourceListingVersion: aiAuthority.row.listing_version,
               generatedAt: new Date().toISOString(),
               status: 'NEEDS_QA'
             };
 
+            validateServerAiOutput(payload, aiAuthority.projection);
+
 
             db.run(
-              `INSERT INTO listings
-                (tenant_id, workspace_id, marketplace, project_id, amazonTitle, etsyTitle, categoryName, status, authorId, payload)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-              [req.user.tenantId, req.user.workspaceId, req.user.marketplace, projId, payload.amazonTitle, payload.etsyTitle, payload.categoryName, 'NEEDS_QA', req.user.userId, JSON.stringify(payload)],
-              function(insertErr) {
-                if (insertErr) return res.status(500).json({ error: insertErr.message });
-
-                res.json({
-                  success: true,
-                  listingId: this.lastID,
-                  listing: { ...payload, dbId: this.lastID }
-                });
+              "INSERT INTO market_trends (category, trending_keywords, marketplace, tenant_id, workspace_id, project_id) VALUES (?, ?, ?, ?, ?, ?)",
+              [verifiedCategory, `${cleanSeed} (Amazon A10 Quick Batch)`, 'AMAZON', req.user.tenantId, req.user.workspaceId, targetProjectId],
+              function onTrendInsert(trendErr) {
+                if (trendErr) return res.status(500).json({ error: trendErr.message });
+                db.run(
+                  `INSERT INTO listings
+                    (tenant_id, workspace_id, marketplace, project_id, amazonTitle, etsyTitle, categoryName, status, authorId, payload)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                  [req.user.tenantId, req.user.workspaceId, req.user.marketplace, targetProjectId, payload.amazonTitle, payload.etsyTitle, payload.categoryName, 'NEEDS_QA', req.user.userId, JSON.stringify(payload)],
+                  function onListingInsert(insertErr) {
+                    if (insertErr) return res.status(500).json({ error: insertErr.message });
+                    res.json({
+                      success: true,
+                      listingId: this.lastID,
+                      listing: { ...payload, dbId: this.lastID }
+                    });
+                  }
+                );
               }
             );
           } catch (llmErr) {
             console.error('Quick draft LLM error:', llmErr);
+            if (llmErr.code === 'UNVERIFIED_OUTPUT_CLAIM') {
+              return res.status(422).json({ success: false, error: llmErr.code, claims: llmErr.claims });
+            }
             res.status(500).json({ error: `AI Listing Generation Failed: ${llmErr.message}` });
           }
-        });
       });
     });
   } catch (err) {
@@ -3522,14 +3582,13 @@ app.get('/api/trends', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER
 });
 
 // API: Instantly Draft listing for a specific trend using Multi-LLM Gateway (Gemini / GPT-4o / Claude) + Few-Shot Learning
-app.post('/api/trends/:id/draft', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
+app.post('/api/trends/:id/draft', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
   const { id } = req.params;
   const { projectId } = req.body || {};
   if (projectId !== undefined && projectId !== null && !/^\d+$/.test(String(projectId))) {
     return res.status(400).json({ success: false, error: 'PROJECT_CONTEXT_REQUIRED' });
   }
   const hasProjectContext = projectId !== undefined && projectId !== null;
-
   db.get(
     hasProjectContext
       ? "SELECT * FROM market_trends WHERE id = ? AND project_id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?"
@@ -3537,8 +3596,21 @@ app.post('/api/trends/:id/draft', requireAuth(db), requireRole(['OWNER', 'MANAGE
     hasProjectContext
       ? [id, Number(projectId), req.user.tenantId, req.user.workspaceId, req.user.marketplace]
       : [id, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
-    (err, trend) => {
+    async (err, trend) => {
     if (err || !trend) return res.status(404).json({ error: 'Trend cluster not found' });
+    let aiAuthority;
+    try {
+      aiAuthority = await resolveServerAiAuthority(req, req.body);
+    } catch (authorityError) {
+      return rejectAiAuthority(res, authorityError);
+    }
+    const trendIp = ipGuard.screenText(`${trend.category || ''} ${trend.trending_keywords || ''}`);
+    if (trendIp.verdict !== 'OK') {
+      return res.status(409).json({ success: false, error: 'IP_CLEARANCE_REQUIRED', ipVerdict: trendIp.verdict });
+    }
+    const verifiedCategory = typeof aiAuthority.projection.facts.productType === 'string'
+      ? aiAuthority.projection.facts.productType
+      : 'Verified Product';
 
     // 1. Get LLM Settings
     readWorkspaceLlmSettings(req.user, (sErr, keys) => {
@@ -3579,16 +3651,19 @@ Use this only as an optional structural writing reference. Do not treat it as ve
 
         try {
           const prompt = `You are an elite E-Commerce Copywriting & SEO Specialist with deep mastery of Amazon A10, Data Dive MKL, and Etsy Search Algorithm.
-Write a highly converting, dual-platform e-commerce listing package for a ${trend.category} product targeting these curated keywords: ${trend.trending_keywords}.
+Write a dual-platform e-commerce listing package for a ${verifiedCategory} product targeting these SEO keywords: ${trend.trending_keywords}.
 ${fewShotSection}
+
+VERIFIED PRODUCT FACTS (the only factual authority):
+${JSON.stringify(aiAuthority.projection.facts)}
 
 CRITICAL SEED PHRASE & RECIPIENT MANDATE:
 - You MUST strictly preserve and prominently feature the core SEED PHRASE and TARGET RECIPIENT from the keywords (e.g., if keywords contain "suegra", "para el amor de mi vida", "nurse", "mom", "grandma", this EXACT seed phrase / recipient MUST be in the Amazon Title, Etsy Title, Bullets, and Tags). NEVER strip or omit the specific recipient or Spanish/English emotional hook!
 
-PRODUCT TRUTH BOUNDARY: this draft is generated from trending keywords only --
-no real product materials, specs, or manufacturing/origin facts have been
-supplied. Do NOT invent them; write copy that works regardless of the exact
-product and leave fact fields empty for a human to fill in later.
+PRODUCT TRUTH BOUNDARY: trending keywords and structural examples are not
+factual authority. Use only VERIFIED PRODUCT FACTS for materials, specs,
+personalization, manufacturing, origin, performance, fulfillment or warranty
+claims. Omit any factual field that is absent from VERIFIED PRODUCT FACTS.
 
 STRICT PLATFORM RULES:
 1. AMAZON FBM (A10 Algorithm & Modern Concise Title Policy):
@@ -3609,9 +3684,9 @@ STRICT PLATFORM RULES:
 2. ETSY (Contextual Search Algorithm & Handmade Guidelines):
    - "etsyTitle": Under 140 characters. The first 40 characters MUST contain the exact Seed Phrase / Recipient (e.g. "Regalo Para Suegra Collar...").
    - "etsyTags": EXACTLY 13 tags, each strictly <= 20 characters, containing recipient, occasion, and aesthetics.
-   - "etsyMaterials": Return an EMPTY array -- no real materials were supplied, so none may be asserted.
-   - "etsyPersonalizationInstructions": Return an empty string unless the keywords themselves specify a personalization mechanic.
-   - "etsyDescription": Story-driven description structured into: ✨ ITEM DETAILS and ✦ HOW TO ORDER only, using the recipient/occasion -- no SPECIFICATIONS, CARE INSTRUCTIONS, or WORKSHOP/origin claims, since none of that has been verified.
+   - "etsyMaterials": Use only the exact materials present in VERIFIED PRODUCT FACTS; otherwise return an EMPTY array.
+   - "etsyPersonalizationInstructions": Use only the exact verified personalization instructions; otherwise return an empty string. Keywords are never evidence of personalization capability.
+   - "etsyDescription": Story-driven description using only verified facts plus non-factual recipient/occasion language; omit unverified specifications, care, process and origin claims.
 
 Return ONLY a valid raw JSON object without markdown code fences:
 {
@@ -3674,29 +3749,31 @@ Return ONLY a valid raw JSON object without markdown code fences:
           // invented to fill the UI (GPT PR-10 re-audit).
           parentSku: '',
           variations: [],
-          amazonTitle: trendAmazonTitle || trend.category,
+          amazonTitle: trendAmazonTitle || verifiedCategory,
           amazonBullets: safeStringArray(aiData.amazonBullets),
           amazonSearchTerms: aiData.amazonSearchTerms || '',
           amazonDescription: aiData.amazonDescription || '',
           amazonAPlusContent: aiData.amazonAPlusContent || null,
           amazonAPlusPoints: safeStringArray(aiData.amazonAPlusPoints),
-          etsyTitle: trendEtsyTitle || trend.category,
+          etsyTitle: trendEtsyTitle || verifiedCategory,
           etsyDescription: aiData.etsyDescription || '',
           etsyTags: safeStringArray(aiData.etsyTags).slice(0, 13).map(t => String(t).substring(0, 20)),
-          // Hard-coded empty, not aiData-derived, for both fields: trending
-          // keywords are no evidence of real materials or personalization
-          // capability, so the model's output is never trusted here no
-          // matter what it returns -- prompt wording alone was proven
-          // insufficient against a non-compliant model (independent
-          // integration-test finding, round 5).
-          etsyMaterials: [],
-          etsyPersonalizationInstructions: '',
-          categoryName: trend.category,
-          evidenceState: 'DRAFT_WITH_LIMITED_EVIDENCE',
-          provenance: 'AI_SEO_TREND_DRAFT',
+          // Copy only canonical, listing-bound Product Truth values. Trend
+          // keywords and model output never have authority here.
+          etsyMaterials: Array.isArray(aiAuthority.projection.facts.materials)
+            ? aiAuthority.projection.facts.materials
+            : [],
+          etsyPersonalizationInstructions: aiAuthority.projection.facts.personalization?.instructions || '',
+          categoryName: verifiedCategory,
+          evidenceState: 'VERIFIED_PRODUCT_TRUTH_DRAFT',
+          provenance: 'AI_VERIFIED_TREND_DRAFT',
+          sourceProductId: aiAuthority.row.id,
+          sourceListingVersion: aiAuthority.row.listing_version,
           generatedAt: new Date().toISOString(),
           status: 'NEEDS_QA'
         };
+
+        validateServerAiOutput(payload, aiAuthority.projection);
 
         db.run(
           `INSERT INTO listings
@@ -3719,6 +3796,9 @@ Return ONLY a valid raw JSON object without markdown code fences:
         );
       } catch (genErr) {
         console.error('Manual draft error:', genErr);
+        if (genErr.code === 'UNVERIFIED_OUTPUT_CLAIM') {
+          return res.status(422).json({ success: false, error: genErr.code, claims: genErr.claims });
+        }
         res.status(500).json({ error: `AI Drafting failed: ${genErr.message}` });
       }
     });
@@ -3731,9 +3811,22 @@ app.post('/api/settings/apikey', requireAuth(db), requireRole(['OWNER']), (req, 
 });
 
 // API: Chat Co-Pilot
-app.post('/api/chat', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
-  const { messages } = req.body;
+app.post('/api/chat', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  const { messages, mode = 'RESEARCH' } = req.body || {};
   if (!messages || !Array.isArray(messages)) return res.status(400).json({ error: 'Messages required' });
+  const commerceMode = mode === 'COMMERCE_DRAFT';
+  let aiAuthority = null;
+  if (commerceMode) {
+    try {
+      aiAuthority = await resolveServerAiAuthority(req, req.body);
+    } catch (authorityError) {
+      return rejectAiAuthority(res, authorityError);
+    }
+    const chatIp = ipGuard.screenText(messages.map(message => message?.content || '').join(' '));
+    if (chatIp.verdict !== 'OK') {
+      return res.status(409).json({ success: false, error: 'IP_CLEARANCE_REQUIRED', ipVerdict: chatIp.verdict });
+    }
+  }
 
   readWorkspaceLlmSettings(req.user, async (err, keys) => {
     const geminiKey = keys?.gemini_api_key || process.env.GEMINI_API_KEY;
@@ -3743,49 +3836,71 @@ app.post('/api/chat', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER'
     }
 
     try {
-      const client = new GoogleGenAI({ apiKey: geminiKey });
       const inputString = messages.map(m => `${m.role.toUpperCase()}: ${m.content}`).join('\n\n');
-      
-      const interaction = await client.interactions.create({
-        model: 'gemini-3.6-flash',
-        input: inputString,
-        system_instruction: `You are an expert E-commerce Copywriter Co-Pilot for Amazon and Etsy.
+      const systemInstruction = `You are an expert E-commerce Copywriter Co-Pilot for Amazon and Etsy.
 
 CRITICAL RULES:
 1. NEVER ask clarifying questions. Always generate a complete listing immediately.
 2. When the user asks to draft, rewrite, or optimize a listing, you MUST include a JSON block in your response.
 3. The JSON block MUST be wrapped in \`\`\`json ... \`\`\` markers.
 4. You may include a brief intro sentence BEFORE the JSON block, but the JSON is MANDATORY.
-5. PRODUCT TRUTH BOUNDARY: unless the user's message states real materials, specs, or
-   personalization capability for this specific product, you have no real product facts.
-   Do not invent them. Write title/bullets/tags/description copy that works without
-   asserting unverified specifics.
+5. PRODUCT TRUTH BOUNDARY: user messages, keywords, titles, tags and model prose are
+   not factual authority. Use only the server-supplied VERIFIED PRODUCT FACTS.
 
 The JSON block MUST contain ALL of these fields:
 {
   "amazonTitle": "Concise (75-80 chars max), Title Case, mobile-first front-loaded",
-  "amazonBullets": ["5 bullets, each starting with [CAPITALIZED HOOK], using only facts the user actually gave you"],
+  "amazonBullets": ["5 bullets, each starting with [CAPITALIZED HOOK], using only server-verified facts"],
   "amazonSearchTerms": "space-separated backend keywords under 249 UTF-8 bytes",
   "amazonDescription": "<p>HTML formatted product description, no invented materials/specs/care</p>",
   "amazonAPlusPoints": ["3 highlight story blurbs, generic benefit language only if no real facts given"],
   "etsyTitle": "Under 140 chars, front-loaded keywords",
   "etsyTags": ["exactly 13 tags", "each under 20 chars"],
-  "etsyMaterials": "empty array [] unless the user stated real materials for this product",
-  "etsyPersonalizationInstructions": "empty string unless the user stated a real personalization mechanic",
-  "etsyDescription": "Story-driven description with Details and How to Order -- no Specifications/Care/Workshop claims unless the user supplied them"
+  "etsyMaterials": "exact verified materials only; otherwise empty array []",
+  "etsyPersonalizationInstructions": "exact verified personalization instructions only; otherwise empty string",
+  "etsyDescription": "Story-driven description with Details and How to Order -- no unverified Specifications/Care/Workshop claims"
 }
 
-If the user asks a general question (not about drafting/writing), respond conversationally WITHOUT a JSON block.`,
-      });
-      
-      const fullReply = interaction.output_text;
-      
+If the user asks a general question (not about drafting/writing), respond conversationally WITHOUT a JSON block.`;
+
+      let fullReply;
+      if (commerceMode) {
+        fullReply = await callLLM({
+          provider: keys.active_llm_provider || 'GEMINI',
+          keys: {
+            gemini: geminiKey,
+            openai: keys.openai_api_key || process.env.OPENAI_API_KEY,
+            claude: keys.claude_api_key || process.env.ANTHROPIC_API_KEY || process.env.CLAUDE_API_KEY
+          },
+          prompt: `VERIFIED PRODUCT FACTS:\n${JSON.stringify(aiAuthority.projection.facts)}\n\nNON-AUTHORITATIVE CREATIVE/SEO REQUEST:\n${inputString}`,
+          systemInstruction
+        });
+      } else {
+        const client = new GoogleGenAI({ apiKey: geminiKey });
+        const interaction = await client.interactions.create({
+          model: 'gemini-3.6-flash',
+          input: inputString,
+          system_instruction: `${systemInstruction}\nRESEARCH MODE: do not return a commerce listing JSON block.`
+        });
+        fullReply = interaction.output_text;
+      }
+
+      const researchReply = String(fullReply || '').trim();
+      const researchCommerceJson = !commerceMode && (
+        /```json\s*[\s\S]*?"(?:amazonTitle|etsyTitle)"[\s\S]*?```/i.test(researchReply) ||
+        (/^\{[\s\S]*\}$/.test(researchReply) && /"(?:amazonTitle|etsyTitle)"\s*:/i.test(researchReply))
+      );
+      if (researchCommerceJson) {
+        return res.status(422).json({ success: false, error: 'RESEARCH_MODE_COMMERCE_OUTPUT' });
+      }
+
       // Try to extract JSON listing from the response
       let extractedListing = null;
-      const jsonMatch = fullReply.match(/```json\s*([\s\S]*?)```/);
-      if (jsonMatch && jsonMatch[1]) {
+      const jsonMatch = commerceMode ? fullReply.match(/```json\s*([\s\S]*?)```/) : null;
+      const rawListingJson = jsonMatch?.[1] || (commerceMode && String(fullReply).trim().startsWith('{') ? String(fullReply).trim() : null);
+      if (rawListingJson) {
         try {
-          const parsed = JSON.parse(jsonMatch[1].trim());
+          const parsed = JSON.parse(rawListingJson.trim());
           // Validate it has listing fields
           if (parsed.amazonTitle || parsed.etsyTitle) {
             extractedListing = {
@@ -3802,15 +3917,18 @@ If the user asks a general question (not about drafting/writing), respond conver
               generatedAt: new Date().toISOString(),
               status: 'NEEDS_QA'
             };
+            validateServerAiOutput(extractedListing, aiAuthority.projection);
           }
         } catch (parseErr) {
+          if (parseErr.code === 'UNVERIFIED_OUTPUT_CLAIM') throw parseErr;
+          extractedListing = null;
           console.warn('Could not parse listing JSON from chat response:', parseErr.message);
         }
       }
 
       // Clean the reply text: remove the raw JSON block for display
       let displayReply = fullReply;
-      if (extractedListing) {
+      if (extractedListing && jsonMatch) {
         displayReply = fullReply.replace(/```json\s*[\s\S]*?```/, '').trim();
         if (!displayReply) {
           displayReply = '✅ Listing draft generated and loaded into the editor!';
@@ -3822,6 +3940,9 @@ If the user asks a general question (not about drafting/writing), respond conver
       res.json({ reply: displayReply, listing: extractedListing });
     } catch (apiError) {
       console.error('Chat API Error:', apiError);
+      if (apiError.code === 'UNVERIFIED_OUTPUT_CLAIM') {
+        return res.status(422).json({ success: false, error: apiError.code, claims: apiError.claims });
+      }
       res.status(500).json({ error: apiError.message });
     }
   });

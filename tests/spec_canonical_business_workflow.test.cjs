@@ -5,6 +5,7 @@
  */
 
 const assert = require("assert");
+const { makeProductTruthCard } = require('./helpers/productTruth.cjs');
 const path = require("path");
 const fs = require("fs");
 
@@ -121,6 +122,9 @@ async function runBusinessWorkflowTests() {
     // 4. Amazon Search Terms UTF-8 Byte Limit: 248 bytes PASS, 250 bytes FAIL
     console.log("\nTest 4: Amazon Search Terms: 248 UTF-8 bytes PASS vs 250 UTF-8 bytes FAIL...");
     const validListingTemplate = {
+      productId: 201,
+      listingVersion: 1,
+      productTruthCard: makeProductTruthCard(201, 1),
       marketplace: "AMAZON",
       productType: "STANDARD_PRINT_ON_DEMAND",
       amazonTitle: "Genuine Cotton Graphic Sweatshirt For Casual Wear",
@@ -151,6 +155,9 @@ async function runBusinessWorkflowTests() {
     // 5. Etsy Tags Invariants: 12 tags FAIL, 14 tags FAIL, 13 tags PASS, 21-char tag FAIL
     console.log("\nTest 5: Etsy Tags: 12 tags FAIL, 14 tags FAIL, 13 tags PASS, 21-char tag FAIL...");
     const validEtsyTemplate = {
+      productId: 202,
+      listingVersion: 1,
+      productTruthCard: makeProductTruthCard(202, 1),
       marketplace: "ETSY",
       productType: "STANDARD_PRINT_ON_DEMAND",
       etsyTitle: "Handcrafted Minimalist Wooden Desk Organizer Gift For Office",

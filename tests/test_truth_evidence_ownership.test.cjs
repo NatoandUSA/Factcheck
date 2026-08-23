@@ -13,6 +13,7 @@ const path = require('path');
 const http = require('http');
 const express = require('express');
 const { evaluatePublishGate } = require('../server/publishGate');
+const { makeProductTruthCard } = require('./helpers/productTruth.cjs');
 
 async function runTruthEvidenceOwnershipTests() {
   console.log('================================================================');
@@ -69,6 +70,9 @@ async function runTruthEvidenceOwnershipTests() {
 
   console.log('\nTest 3: Valid Amazon & Etsy listings with authoritative descriptions...');
   const validAmazon = {
+    productId: 101,
+    listingVersion: 1,
+    productTruthCard: makeProductTruthCard(101, 1),
     marketplace: 'AMAZON',
     status: 'MANAGER_APPROVED',
     amazonTitle: 'Custom Gold Bar Necklace for Women Personalised Name Gift',
@@ -91,6 +95,9 @@ async function runTruthEvidenceOwnershipTests() {
   assert.strictEqual(validAmazonResult.final_status || validAmazonResult.status, 'PUBLISH_READY');
 
   const validEtsy = {
+    productId: 102,
+    listingVersion: 1,
+    productTruthCard: makeProductTruthCard(102, 1),
     marketplace: 'ETSY',
     status: 'MANAGER_APPROVED',
     etsyTitle: 'Custom Gold Bar Necklace for Women Personalised Name Gift',

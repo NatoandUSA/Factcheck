@@ -17,6 +17,7 @@
 process.env.NODE_ENV = 'test';
 
 const assert = require('assert');
+const { makeProductTruthCard } = require('./helpers/productTruth.cjs');
 const { approvalHash } = require('../server/security/approval');
 const { app, db, databaseReady } = require('../server/server');
 
@@ -181,7 +182,7 @@ async function main() {
     await dbRun("UPDATE listings SET status = 'NEEDS_QA', payload = ? WHERE id = ?", [JSON.stringify(forgedLegacyPayload), amazonListingId]);
     const approvalAttempt = await request(port, `/api/listings/${amazonListingId}/approve`, amazonCookie, 'PATCH', {
       expectedVersion: 2,
-      productTruthNotes: 'I personally verified the product truth details.'
+      productTruthCard: makeProductTruthCard(amazonListingId, 2)
     });
     assert.strictEqual(approvalAttempt.status, 400, 'IP-4 protected legacy content must be denied at approval');
     assert.match(String(approvalAttempt.body.error || ''), /APPROVAL_DENIED/, 'IP-4 denial must be explicit');

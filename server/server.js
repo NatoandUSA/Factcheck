@@ -1671,18 +1671,31 @@ app.patch('/api/listings/:id/approve', requireAuth(db), requireRole(['OWNER', 'M
         }
       : productTruthCard;
     const truthContext = { productId: row.id, listingVersion: row.listing_version };
+    parsedPayload.status = 'MANAGER_APPROVED';
+    parsedPayload.productTruthCard = canonicalTruthCard;
+    parsedPayload.productId = row.id;
+    parsedPayload.listingVersion = row.listing_version;
+    parsedPayload.marketplace = row.marketplace;
+
+    // Preserve the canonical IP denial response even when IP clearance also
+    // makes the Product Truth Card invalid. This keeps the strongest blocking
+    // reason visible and prevents a structured-card error from masking it.
+    if (ipScreening.result.verdict === 'BLOCK') {
+      const blockedGate = publishGate.evaluatePublishGate(parsedPayload);
+      return res.status(400).json({
+        error: `APPROVAL_DENIED: Cannot publish listing with status "${blockedGate.final_status}".`,
+        reasons: blockedGate.reasons,
+        publishGate: blockedGate
+      });
+    }
+
     const truthValidation = validateProductTruthCard(canonicalTruthCard, truthContext);
     if (!truthValidation.valid) {
       return res.status(400).json({ success: false, error: 'PRODUCT_TRUTH_CARD_INVALID', reasons: truthValidation.errors });
     }
 
     // C5B Fix: Evaluate via Canonical Publish Gate (Fail-Closed)
-    parsedPayload.status = 'MANAGER_APPROVED';
     parsedPayload.productTruthNotes = truthNotes;
-    parsedPayload.productTruthCard = canonicalTruthCard;
-    parsedPayload.productId = row.id;
-    parsedPayload.listingVersion = row.listing_version;
-    parsedPayload.marketplace = row.marketplace;
     const gateRes = publishGate.evaluatePublishGate(parsedPayload);
 
     // Strictly reject any status other than PUBLISH_READY

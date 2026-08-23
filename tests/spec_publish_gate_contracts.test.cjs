@@ -8,6 +8,7 @@ process.env.NODE_ENV = 'test';
 const assert = require('assert');
 const { app, db, databaseReady } = require('../server/server');
 const { evaluatePublishGate, MIN_NET_PROFIT, MIN_NET_MARGIN } = require('../server/publishGate');
+const { makeProductTruthCard } = require('./helpers/productTruth.cjs');
 
 function dbAll(sql, params = []) {
   return new Promise((resolve, reject) => db.all(sql, params, (err, rows) => err ? reject(err) : resolve(rows)));
@@ -46,6 +47,9 @@ async function runPublishGateContractSuite() {
 
   // --- PART 1: DIRECT UNIT GATE ASSERTIONS ---
   const validAmazonListing = {
+    productId: 301,
+    listingVersion: 1,
+    productTruthCard: makeProductTruthCard(301, 1),
     marketplace: 'AMAZON',
     status: 'MANAGER_APPROVED',
     amazonTitle: 'Custom Gold Bar Necklace for Women Personalised Name Gift',
@@ -117,6 +121,9 @@ async function runPublishGateContractSuite() {
 
   // Etsy Title Authority (Dual title payload uses etsyTitle first for Etsy marketplace contract)
   const etsyDualListing = {
+    productId: 302,
+    listingVersion: 1,
+    productTruthCard: makeProductTruthCard(302, 1),
     marketplace: 'ETSY',
     productType: 'APPAREL',
     status: 'MANAGER_APPROVED',
@@ -196,7 +203,7 @@ async function runPublishGateContractSuite() {
     const spoofApproveRes = await fetch(`http://127.0.0.1:${port}/api/listings/${spoofedListing.id}/approve`, {
       method: 'PATCH',
       headers: { Cookie: ownerCookie, 'Content-Type': 'application/json', Origin: `http://127.0.0.1:${port}` },
-      body: JSON.stringify({ expectedVersion: 1, productTruthNotes: 'Testing server marketplace authority.' })
+      body: JSON.stringify({ expectedVersion: 1, productTruthCard: makeProductTruthCard(spoofedListing.id, 1) })
     });
     assert.strictEqual(spoofApproveRes.status, 400, 'Server must reject spoofed Etsy payload on Amazon workspace DB row');
     const spoofBody = await spoofApproveRes.json();
@@ -260,7 +267,7 @@ async function runPublishGateContractSuite() {
     const approveTermsRes = await fetch(`http://127.0.0.1:${port}/api/listings/${missingTermsListing.id}/approve`, {
       method: 'PATCH',
       headers: { Cookie: ownerCookie, 'Content-Type': 'application/json', Origin: `http://127.0.0.1:${port}` },
-      body: JSON.stringify({ expectedVersion: 2, productTruthNotes: 'Testing missing search terms rejection.' })
+      body: JSON.stringify({ expectedVersion: 2, productTruthCard: makeProductTruthCard(missingTermsListing.id, 2) })
     });
     assert.strictEqual(approveTermsRes.status, 400, 'Missing search terms must be rejected via HTTP 400');
     const termsBody = await approveTermsRes.json();
@@ -297,7 +304,7 @@ async function runPublishGateContractSuite() {
     const approveMissingFinRes = await fetch(`http://127.0.0.1:${port}/api/listings/${missingFinListing.id}/approve`, {
       method: 'PATCH',
       headers: { Cookie: ownerCookie, 'Content-Type': 'application/json', Origin: `http://127.0.0.1:${port}` },
-      body: JSON.stringify({ expectedVersion: 1, productTruthNotes: 'Testing missing financial figures rejection.' })
+      body: JSON.stringify({ expectedVersion: 1, productTruthCard: makeProductTruthCard(missingFinListing.id, 1) })
     });
     assert.strictEqual(approveMissingFinRes.status, 400, 'Listing without financial figures must be rejected via HTTP 400');
     const missingFinBody = await approveMissingFinRes.json();
@@ -335,7 +342,7 @@ async function runPublishGateContractSuite() {
     const approveValidRes = await fetch(`http://127.0.0.1:${port}/api/listings/${validListingRow.id}/approve`, {
       method: 'PATCH',
       headers: { Cookie: ownerCookie, 'Content-Type': 'application/json', Origin: `http://127.0.0.1:${port}` },
-      body: JSON.stringify({ expectedVersion: 1, productTruthNotes: 'Verified full valid listing with financial figures.' })
+      body: JSON.stringify({ expectedVersion: 1, productTruthCard: makeProductTruthCard(validListingRow.id, 1) })
     });
     assert.strictEqual(approveValidRes.status, 200, 'Full valid listing with financial figures must reach PUBLISH_READY');
     const validApproveBody = await approveValidRes.json();
@@ -397,7 +404,7 @@ async function runPublishGateContractSuite() {
     const etsyApproveSpoofRes = await fetch(`http://127.0.0.1:${port}/api/listings/${etsySpoofListing.id}/approve`, {
       method: 'PATCH',
       headers: { Cookie: ownerEtsyCookie, 'Content-Type': 'application/json', Origin: `http://127.0.0.1:${port}` },
-      body: JSON.stringify({ expectedVersion: 2, productTruthNotes: 'Testing Etsy server row authority.' })
+      body: JSON.stringify({ expectedVersion: 2, productTruthCard: makeProductTruthCard(etsySpoofListing.id, 2) })
     });
     assert.strictEqual(etsyApproveSpoofRes.status, 400, 'Server must enforce Etsy 13 tags contract on Etsy DB row');
     const etsySpoofBody = await etsyApproveSpoofRes.json();
@@ -428,7 +435,7 @@ async function runPublishGateContractSuite() {
     const etsyValidApproveRes = await fetch(`http://127.0.0.1:${port}/api/listings/${etsyValidListing.id}/approve`, {
       method: 'PATCH',
       headers: { Cookie: ownerEtsyCookie, 'Content-Type': 'application/json', Origin: `http://127.0.0.1:${port}` },
-      body: JSON.stringify({ expectedVersion: 1, productTruthNotes: 'Verified Etsy product details.' })
+      body: JSON.stringify({ expectedVersion: 1, productTruthCard: makeProductTruthCard(etsyValidListing.id, 1) })
     });
     assert.strictEqual(etsyValidApproveRes.status, 200, 'Valid Etsy listing must reach PUBLISH_READY without Amazon bullets');
     console.log('  🟢 HTTP Matrix 4 (Etsy DB Row Symmetry): Server DB row.marketplace (ETSY) enforced, ignoring payload Amazon claims.');

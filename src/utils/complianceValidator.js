@@ -1,4 +1,4 @@
-import { BANNED_AMAZON_TERMS } from '../data/categoryPresets';
+import { BANNED_AMAZON_TERMS } from '../data/categoryPresets.js';
 
 /**
  * Calculates exact UTF-8 byte length for a string (Amazon Search Terms limit: 249 bytes)

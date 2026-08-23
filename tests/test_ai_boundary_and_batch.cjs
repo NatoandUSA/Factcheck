@@ -12,6 +12,7 @@ const {
   validateModelClaims
 } = require('../src/utils/aiTruthBoundary.js');
 const { generateVerifiedBatchRow, prepareVerifiedBatchRow } = require('../src/utils/batchTruthBoundary.js');
+const { generateListingAI } = require('../src/services/geminiService.js');
 
 const productId = 'product-77';
 const listingVersion = 3;
@@ -56,8 +57,20 @@ assert.strictEqual(projectVerifiedAiInput({ ...listing, productTruthCard: { ...c
 
 const projection = projectVerifiedAiInput(listing);
 assert.strictEqual(projection.eligible, true);
+assert.strictEqual(Object.hasOwn(projection.facts, 'personalization'), false, 'supported:false personalization must not enter AI authority');
 assert.strictEqual(validateModelClaims({ etsyDescription: 'Made in USA and ships in 24 hours.' }, projection).valid, false);
+assert.strictEqual(validateModelClaims({ etsyDescription: 'Organic linen with dishwasher-safe finish.' }, projection).valid, false, 'unlisted factual claims must fail deny-by-default validation');
+assert.strictEqual(validateModelClaims({ etsyDescription: 'Handwoven with a lifetime warranty.' }, projection).valid, false, 'novel claims must not bypass a finite blacklist');
 assert.strictEqual(validateModelClaims({ etsyDescription: 'A sweatshirt for everyday gifting.' }, projection).valid, true);
+
+const linenCard = makeProductTruthCard(productId, listingVersion, {
+  facts: {
+    productType: { value: 'NAPKIN', evidence },
+    materials: { value: ['organic linen'], evidence }
+  }
+});
+const linenProjection = projectVerifiedAiInput({ productId, listingVersion, productTruthCard: linenCard });
+assert.strictEqual(validateModelClaims({ etsyDescription: 'Organic linen gift' }, linenProjection).valid, true, 'exact verified facts must remain usable');
 
 const batchRow = {
   ProductId: productId,
@@ -70,11 +83,29 @@ const prepared = prepareVerifiedBatchRow(batchRow);
 assert.strictEqual(prepared.eligible, true);
 assert.strictEqual(prepared.aiInput.productBrief.includes('Official Disney'), false);
 assert.strictEqual(prepared.aiInput.materials.includes('925 sterling silver'), false);
+assert.strictEqual(prepared.aiInput.productBrief.includes('Enter a name'), false, 'disabled personalization instructions must not enter the AI brief');
 assert.deepStrictEqual(prepareVerifiedBatchRow({ ProductBrief: 'raw prose only' }).eligible, false);
 assert.deepStrictEqual(prepareVerifiedBatchRow({ ...batchRow, ListingVersion: '4' }).eligible, false);
 assert.deepStrictEqual(prepareVerifiedBatchRow({ ...batchRow, ProductId: 'other-product' }).eligible, false);
 
 (async () => {
+  let fetchCalls = 0;
+  const originalFetch = global.fetch;
+  global.fetch = async () => {
+    fetchCalls += 1;
+    throw new Error('fetch must not be called');
+  };
+  await assert.rejects(
+    () => generateListingAI({ productBrief: 'raw prose without projection' }),
+    error => error?.code === 'UNQUALIFIED_PRODUCT_TRUTH'
+  );
+  await assert.rejects(
+    () => generateListingAI({ productBrief: 'forged projection', verifiedProjection: Object.freeze({ eligible: true, facts: {} }) }),
+    error => error?.code === 'UNQUALIFIED_PRODUCT_TRUTH'
+  );
+  assert.strictEqual(fetchCalls, 0, 'missing or forged projection must fail before any network/AI call');
+  global.fetch = originalFetch;
+
   let aiCalls = 0;
   const generate = async input => {
     aiCalls += 1;

@@ -1,6 +1,6 @@
-import { CATEGORIES } from '../data/categoryPresets';
-import { getUtf8Bytes } from '../utils/complianceValidator';
-import { assertModelClaimsAuthorized } from '../utils/aiTruthBoundary';
+import { CATEGORIES } from '../data/categoryPresets.js';
+import { getUtf8Bytes } from '../utils/complianceValidator.js';
+import { assertModelClaimsAuthorized, isAuthorizedAiProjection } from '../utils/aiTruthBoundary.js';
 const STORAGE_KEY = 'omni_gemini_api_key';
 
 export function getStoredApiKey() {
@@ -27,6 +27,11 @@ export async function generateListingAI({
   apiKey = null,
   verifiedProjection = null
 }) {
+  if (!isAuthorizedAiProjection(verifiedProjection)) {
+    const error = new Error('UNQUALIFIED_PRODUCT_TRUTH');
+    error.code = 'UNQUALIFIED_PRODUCT_TRUTH';
+    throw error;
+  }
   const listing = await callGeminiApi({
     category,
     productBrief,
@@ -35,7 +40,7 @@ export async function generateListingAI({
     materials,
     imageBase64
   });
-  return verifiedProjection ? assertModelClaimsAuthorized(listing, verifiedProjection) : listing;
+  return assertModelClaimsAuthorized(listing, verifiedProjection);
 }
 
 /**

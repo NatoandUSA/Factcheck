@@ -1,12 +1,11 @@
-import { isIpCleared, projectVerifiedFacts, validateProductTruthCard } from '../../shared/productTruth.js';
+import { getVerifiedPersonalization, isIpCleared, projectVerifiedFacts, validateProductTruthCard } from '../../shared/productTruth.js';
 
-const CLAIM_RULES = Object.freeze([
-  { kind: 'ORIGIN', patterns: [/\bmade in (?:the )?u\.?s\.?a\b/i, /\baustin workshop\b/i, /\busa workshop\b/i] },
-  { kind: 'MATERIAL', patterns: [/\bsolid gold\b/i, /\b925 sterling silver\b/i, /\b100% cotton\b/i, /\boptical(?:-grade)? acrylic\b/i, /\bbeechwood\b/i] },
-  { kind: 'FULFILLMENT', patterns: [/\bships? in 24\s*(?:hours?|h)\b/i, /\b24\s*(?:hour|h) shipping\b/i, /\barrival guarantee\b/i] },
-  { kind: 'PERFORMANCE', patterns: [/\bwaterproof\b/i, /\bfade[- ]proof\b/i, /\bshatterproof\b/i, /\bdrop[- ]tested\b/i] },
-  { kind: 'SOCIAL_PROOF', patterns: [/\bbest[ -]?seller\b/i, /\bfive[- ]star\b/i, /\b5\s*(?:gold\s*)?stars?\b/i, /\bquality exceeded all expectations\b/i] },
-  { kind: 'PERSONALIZATION', patterns: [/\benter (?:your )?(?:custom )?(?:name|names|date|song title)\b/i, /\bwe (?:will )?personalize\b/i] }
+const AUTHORIZED_PROJECTIONS = new WeakSet();
+const SAFE_NON_FACTUAL_TOKENS = new Set([
+  'a', 'an', 'and', 'as', 'at', 'be', 'by', 'choice', 'description', 'details',
+  'everyday', 'for', 'from', 'gift', 'gifting', 'in', 'is', 'it', 'item', 'love',
+  'meaningful', 'of', 'or', 'p', 'product', 'someone', 'special', 'strong', 'the',
+  'this', 'to', 'use', 'with', 'your'
 ]);
 
 function listingContext(listing) {
@@ -18,6 +17,7 @@ function listingContext(listing) {
 
 function flattenStrings(value, output = []) {
   if (typeof value === 'string') output.push(value);
+  else if (typeof value === 'number' || typeof value === 'boolean') output.push(String(value));
   else if (Array.isArray(value)) value.forEach(item => flattenStrings(item, output));
   else if (value && typeof value === 'object') Object.values(value).forEach(item => flattenStrings(item, output));
   return output;
@@ -31,7 +31,17 @@ export function projectVerifiedAiInput(listingOrEnvelope) {
   if (!validation.valid || !isIpCleared(card, context)) {
     return Object.freeze({ eligible: false, code: 'UNQUALIFIED_PRODUCT_TRUTH', facts: Object.freeze({}), context });
   }
-  return Object.freeze({ eligible: true, code: 'VERIFIED_PRODUCT_TRUTH', facts: projectVerifiedFacts(card, context), context });
+  const facts = { ...projectVerifiedFacts(card, context) };
+  const personalization = getVerifiedPersonalization(card, context);
+  if (personalization) facts.personalization = personalization;
+  else delete facts.personalization;
+  const projection = Object.freeze({ eligible: true, code: 'VERIFIED_PRODUCT_TRUTH', facts: Object.freeze(facts), context });
+  AUTHORIZED_PROJECTIONS.add(projection);
+  return projection;
+}
+
+export function isAuthorizedAiProjection(projection) {
+  return Boolean(projection?.eligible) && AUTHORIZED_PROJECTIONS.has(projection);
 }
 
 export function verifiedSubject(projection) {
@@ -42,16 +52,13 @@ export function verifiedSubject(projection) {
 }
 
 export function validateModelClaims(output, projection) {
-  if (!projection?.eligible) return { valid: false, errors: ['UNQUALIFIED_PRODUCT_TRUTH'], claims: [] };
-  const outputText = flattenStrings(output).join(' ');
-  const authorityText = flattenStrings(projection.facts).join(' ');
-  const claims = [];
-  for (const rule of CLAIM_RULES) {
-    for (const pattern of rule.patterns) {
-      const match = outputText.match(pattern);
-      if (match && !pattern.test(authorityText)) claims.push({ kind: rule.kind, value: match[0] });
-    }
-  }
+  if (!isAuthorizedAiProjection(projection)) return { valid: false, errors: ['UNQUALIFIED_PRODUCT_TRUTH'], claims: [] };
+  const tokenize = value => new Set(flattenStrings(value).join(' ').toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu) || []);
+  const outputTokens = tokenize(output);
+  const authorityTokens = tokenize(projection.facts);
+  const claims = [...outputTokens]
+    .filter(token => !authorityTokens.has(token) && !SAFE_NON_FACTUAL_TOKENS.has(token))
+    .map(value => ({ kind: 'UNAUTHORIZED_TOKEN', value }));
   return { valid: claims.length === 0, errors: claims.length ? ['UNVERIFIED_OUTPUT_CLAIM'] : [], claims };
 }
 
@@ -66,4 +73,4 @@ export function assertModelClaimsAuthorized(output, projection) {
   return output;
 }
 
-export const AI_CLAIM_RULES = CLAIM_RULES;
+export const AI_SAFE_NON_FACTUAL_TOKENS = Object.freeze([...SAFE_NON_FACTUAL_TOKENS]);

@@ -50,7 +50,8 @@ function runAllTests() {
     'tests/test_legacy_migration_integrity.test.cjs',
     'tests/test_workflow_truth_ui_contract.cjs',
     'tests/test_audit_fixes_014a1f4.cjs',
-    'tests/test_smart_pull_hardening.cjs'
+    'tests/test_smart_pull_hardening.cjs',
+    'tests/test_zero_fabrication_boundary.cjs'
   ];
 
   let passedCount = 0;

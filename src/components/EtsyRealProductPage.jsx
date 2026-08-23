@@ -180,23 +180,25 @@ export default function EtsyRealProductPage({ listing, onShowToast }) {
               </div>
             </div>
 
-            {/* Personalization Section */}
-            <div style={{ background: '#f8f8f8', padding: '14px', borderRadius: '8px', border: '1px solid #e1e3df' }}>
-              <label style={{ display: 'block', fontWeight: 700, fontSize: '0.85rem', marginBottom: '4px', color: '#222' }}>
-                Add your personalization:
-              </label>
-              <div style={{ fontSize: '0.75rem', color: '#595959', marginBottom: '8px' }}>
-                Enter custom names, date, or song title for laser engraving (Max 250 characters):
+            {/* Personalization Section (Strictly verified only) */}
+            {listing.personalizationSupported || listing.personalizationInstructions ? (
+              <div style={{ background: '#f8f8f8', padding: '14px', borderRadius: '8px', border: '1px solid #e1e3df' }}>
+                <label style={{ display: 'block', fontWeight: 700, fontSize: '0.85rem', marginBottom: '4px', color: '#222' }}>
+                  Add your personalization:
+                </label>
+                <div style={{ fontSize: '0.75rem', color: '#595959', marginBottom: '8px' }}>
+                  {listing.personalizationInstructions || 'Enter your custom details below:'}
+                </div>
+                <textarea
+                  rows={2}
+                  className="form-input"
+                  style={{ width: '100%', fontSize: '0.85rem', background: '#fff' }}
+                  placeholder="Enter personalization details as instructed..."
+                  value={customText}
+                  onChange={(e) => setCustomText(e.target.value)}
+                />
               </div>
-              <textarea
-                rows={2}
-                className="form-input"
-                style={{ width: '100%', fontSize: '0.85rem', background: '#fff' }}
-                placeholder="Example: Sarah & David, EST. 2024, 'Perfect' by Ed Sheeran"
-                value={customText}
-                onChange={(e) => setCustomText(e.target.value)}
-              />
-            </div>
+            ) : null}
 
             {/* Actions */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>

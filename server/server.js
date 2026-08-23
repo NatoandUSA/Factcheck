@@ -2536,7 +2536,10 @@ app.post('/api/etsy/feed-search-results', requireAuth(db), requireRole(['OWNER',
           parsedSellers.push({
             id: `fed-search-${item.id?.replace(/^lst:/, '') || idx}-${Date.now()}`,
             title: item.title,
-            shopName: country ? `Etsy Seller (${country})` : 'Etsy Search Result',
+            shopName: null,
+            sourceLabel: 'YTRENDS_MCP_SEARCH',
+            shopCountry: country,
+            shopNameEvidenceState: 'UNKNOWN',
             country: country,
             url: item.url,
             price: price,
@@ -2563,7 +2566,10 @@ app.post('/api/etsy/feed-search-results', requireAuth(db), requireRole(['OWNER',
           parsedSellers.push({
             id: `fed-hot-${lst.listing_id}-${Date.now()}`,
             title: lst.title,
-            shopName: lst.shop_country ? `Etsy Seller (${lst.shop_country})` : 'Etsy Top Seller',
+            shopName: null,
+            sourceLabel: 'YTRENDS_MCP_HOT',
+            shopCountry: lst.shop_country || null,
+            shopNameEvidenceState: 'UNKNOWN',
             country: lst.shop_country,
             url: `https://www.etsy.com/listing/${lst.listing_id}`,
             price: lst.price_usd ? `$${lst.price_usd}` : null,
@@ -2595,7 +2601,10 @@ app.post('/api/etsy/feed-search-results', requireAuth(db), requireRole(['OWNER',
       parsedSellers.push({
         id: `fed-${matchId ? matchId[1] : idx}-${Date.now()}`,
         title: line,
-        shopName: 'Etsy Web Live',
+        shopName: null,
+        sourceLabel: 'ETSY_SEARCH_PAGE_RAW',
+        shopCountry: null,
+        shopNameEvidenceState: 'UNKNOWN',
         country: null,
         url: line,
         price: null,
@@ -2617,14 +2626,13 @@ app.post('/api/etsy/feed-search-results', requireAuth(db), requireRole(['OWNER',
     let views = null;
     let country = null;
 
-    const priceMatch = line.match(/(\$|\£|\€)?\s*([0-9]+(\.[0-9]{1,2})?)\s*(USD|GBP|EUR)?/i);
-    if (priceMatch && Number(priceMatch[2]) > 0) {
-      price = `$${priceMatch[2]}`;
-    }
+    const priceMatch = line.match(/\$([0-9.]+)/);
+    if (priceMatch) price = `$${priceMatch[1]}`;
 
-    const soldMatch = line.match(/([0-9+]+)\s*Sold/i);
+    const soldMatch = line.match(/([0-9.]+k?)\s*Sold/i);
     if (soldMatch) {
-      sold = parseInt(soldMatch[1], 10) || null;
+      const sStr = soldMatch[1].toLowerCase();
+      sold = sStr.endsWith('k') ? Math.round(parseFloat(sStr) * 1000) : parseInt(sStr, 10);
     }
 
     const viewsMatch = line.match(/([0-9.]+k?)\s*Views/i);
@@ -2648,7 +2656,10 @@ app.post('/api/etsy/feed-search-results', requireAuth(db), requireRole(['OWNER',
       parsedSellers.push({
         id: `fed-${idx}-${Date.now()}`,
         title: cleanTitle,
-        shopName: country ? `Etsy Seller (${country})` : null,
+        shopName: null,
+        sourceLabel: 'STAFF_MANUAL_PASTE',
+        shopCountry: country,
+        shopNameEvidenceState: 'UNKNOWN',
         country: country,
         url: null,
         price: price,

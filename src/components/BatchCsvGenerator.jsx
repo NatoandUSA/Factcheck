@@ -76,11 +76,16 @@ export default function BatchCsvGenerator({ onShowToast, onSaveListing }) {
 
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
-      const categoryObj = CATEGORIES.find(c => c.id.toLowerCase() === (row.Category || '').toLowerCase()) || CATEGORIES[0];
+      const categoryObj = CATEGORIES.find(c => c.id.toLowerCase() === (row.Category || '').toLowerCase()) || { id: 'custom', name: row.Category || 'Custom Item' };
       const toneObj = TONES[0];
-      const occasion = row.Occasion || OCCASIONS[0];
-      const brief = row.ProductBrief || categoryObj.sampleBrief;
-      const materials = row.Materials ? row.Materials.split(',').map(s => s.trim()) : categoryObj.defaultMaterials;
+      const occasion = row.Occasion || '';
+      const brief = (row.ProductBrief || '').trim();
+      const materials = row.Materials ? row.Materials.split(',').map(s => s.trim()).filter(Boolean) : [];
+
+      if (!brief) {
+        setRows(prev => prev.map((r, idx) => idx === i ? { ...r, status: 'error', errorMsg: 'INSUFFICIENT_PRODUCT_TRUTH: ProductBrief is required.' } : r));
+        continue;
+      }
 
       // Update row status to running
       setRows(prev => prev.map((r, idx) => idx === i ? { ...r, status: 'generating' } : r));

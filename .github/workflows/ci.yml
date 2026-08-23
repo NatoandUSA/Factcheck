@@ -37,5 +37,5 @@ jobs:
       # The performance contract serves the production SPA from dist/.
       # Build it before the suite so CI tests the same artifact boundary as
       # the production runtime rather than a missing static directory.
-      - name: Run Canonical Test Suite (44/44 Test Files)
+      - name: Run Canonical Test Suite (45/45 Test Files)
         run: npm test

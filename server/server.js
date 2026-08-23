@@ -834,16 +834,28 @@ app.post('/api/owner/users', requireAuth(db), requireRole(['OWNER']), async (req
 
 // GET /api/evidence - Authoritative Research Evidence Ledger
 app.get('/api/evidence', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
-  db.all(
-    `SELECT * FROM research_evidence
-     WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ?
-     ORDER BY created_at DESC`,
-    [req.user.tenantId, req.user.workspaceId, req.user.marketplace],
-    (err, rows) => {
-      if (err) return res.status(500).json({ success: false, error: err.message });
-      res.json({ success: true, count: (rows || []).length, evidence: rows || [] });
-    }
-  );
+  const sendRows = (project) => {
+    const scoped = project ? ' AND project_id = ?' : '';
+    const params = [req.user.tenantId, req.user.workspaceId, req.user.marketplace];
+    if (project) params.push(project.id);
+    db.all(
+      `SELECT * FROM research_evidence
+       WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ?${scoped}
+       ORDER BY created_at DESC`,
+      params,
+      (err, rows) => {
+        if (err) return res.status(500).json({ success: false, error: err.message });
+        res.json({ success: true, projectId: project?.id || null, count: (rows || []).length, evidence: rows || [] });
+      }
+    );
+  };
+  if (req.query.projectId !== undefined) {
+    return parseAndValidateProject(db, req, req.query.projectId, (err, project) => {
+      if (err) return res.status(err.status).json({ success: false, error: err.error, message: err.message });
+      sendRows(project);
+    });
+  }
+  sendRows(null);
 });
 
 const ALLOWED_EVIDENCE_SOURCES = [
@@ -920,6 +932,18 @@ function parseAndValidateProject(db, req, rawProjectId, callback) {
 function requireProjectContext(req, rawProjectId) {
   return new Promise((resolve, reject) => {
     parseAndValidateProject(db, req, rawProjectId, (err, project) => err ? reject(err) : resolve(project));
+  });
+}
+
+function persistSmartPullArtifact(req, project, source, seedPhrase, artifact) {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `INSERT INTO research_evidence (tenant_id, workspace_id, marketplace, project_id, seed_phrase, source, actor_id, evidence_state, metadata)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'OBSERVED', ?)`,
+      [req.user.tenantId, req.user.workspaceId, req.user.marketplace, project.id, seedPhrase, source, req.user.userId,
+        JSON.stringify({ kind: 'SMART_PULL_ARTIFACT_V1', ...artifact })],
+      function(err) { if (err) reject(err); else resolve(this.lastID); }
+    );
   });
 }
 
@@ -2659,7 +2683,7 @@ app.post('/api/research/smart-pull', requireAuth(db), requireRole(['OWNER', 'MAN
       evidenceState: 'INPUT_ONLY_UNVERIFIED'
     }));
     const synthesis = analyticsEngine.synthesizeNicheIntelligence({ seedPhrase: searchSeed, listings, keywords: [], unitCost: parsedUnitCost });
-    return res.json({
+    const responsePayload = {
       ...synthesis,
       projectId: project.id,
       marketplace: 'AMAZON',
@@ -2671,7 +2695,16 @@ app.post('/api/research/smart-pull', requireAuth(db), requireRole(['OWNER', 'MAN
       contentHash: crypto.createHash('sha256').update(JSON.stringify({ projectId: project.id, asins })).digest('hex'),
       providerResults: { amazonLiveConnector: 'NOT_INVOKED' },
       listings
-    });
+    };
+    try {
+      responsePayload.evidenceId = await persistSmartPullArtifact(req, project, 'STAFF_MANUAL_ASSERTION', searchSeed, {
+        contentHash: responsePayload.contentHash, provider: responsePayload.provider, providerResults: responsePayload.providerResults,
+        evidenceState: responsePayload.evidenceState, observedAt: null, importedAt, response: responsePayload
+      });
+    } catch (err) {
+      return res.status(500).json({ success: false, error: 'EVIDENCE_PERSIST_FAILED' });
+    }
+    return res.json(responsePayload);
   }
 
   const [searchResult, hotResult] = await Promise.allSettled([
@@ -2729,7 +2762,7 @@ app.post('/api/research/smart-pull', requireAuth(db), requireRole(['OWNER', 'MAN
     search: searchResult.status === 'fulfilled' ? (searchRows.length ? 'SUCCESS' : 'EMPTY') : 'FAILED',
     hotListings: hotResult.status === 'fulfilled' ? (hotRows.length ? 'SUCCESS' : 'EMPTY') : 'FAILED'
   };
-  return res.json({
+  const responsePayload = {
     ...synthesis,
     projectId: project.id,
     marketplace: 'ETSY',
@@ -2741,7 +2774,16 @@ app.post('/api/research/smart-pull', requireAuth(db), requireRole(['OWNER', 'MAN
     contentHash: crypto.createHash('sha256').update(JSON.stringify({ searchRows, hotRows })).digest('hex'),
     providerResults,
     listings: listings.slice(0, 30)
-  });
+  };
+  try {
+    responsePayload.evidenceId = await persistSmartPullArtifact(req, project, 'MCP_RETRIEVAL', searchSeed, {
+      contentHash: responsePayload.contentHash, provider: responsePayload.provider, providerResults,
+      evidenceState: responsePayload.evidenceState, observedAt: null, importedAt, response: responsePayload
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: 'EVIDENCE_PERSIST_FAILED' });
+  }
+  return res.json(responsePayload);
 });
 
 // API: Amazon Quick Draft (Works directly from Seed Phrase, 10 ASINs, or Cerebro)

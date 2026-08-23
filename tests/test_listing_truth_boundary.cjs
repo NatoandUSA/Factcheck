@@ -164,6 +164,11 @@ function run() {
   assert.ok(!simulatorSrc.includes('B0CHILD01'), 'live listing viewer must not fabricate placeholder child ASINs');
   console.log('🟢 ProductListingPageSimulator.jsx (the live listing viewer) has no fabricated ASIN/SKU/price fallback.');
 
+  const etsyViewerSrc = fs.readFileSync(path.resolve(__dirname, '../src/components/EtsyRealProductPage.jsx'), 'utf8');
+  assert.ok(etsyViewerSrc.includes('generateEtsyListingImagePrompts(listing)'), 'Etsy viewer must pass the evidence-bearing listing object to the canonical image generator');
+  assert.ok(!etsyViewerSrc.includes('generateEtsyListingImagePrompts(listing.etsyTitle'), 'Etsy viewer must not pass raw title/tags as factual prompt inputs');
+  console.log('🟢 Etsy viewer image prompts consume the evidence-bearing listing object, not raw strings.');
+
   console.log('\n================================================================');
   console.log('  🟢 LISTING TRUTH BOUNDARY REGRESSION SUITE PASSED');
   console.log('================================================================');

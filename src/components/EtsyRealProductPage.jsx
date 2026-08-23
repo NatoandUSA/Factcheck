@@ -29,7 +29,9 @@ export default function EtsyRealProductPage({ listing, onShowToast }) {
     );
   }
 
-  const etsyPrompts = generateEtsyListingImagePrompts(listing.etsyTitle, listing.categoryName, (listing.etsyTags || []).join(' '));
+  // The generator owns Product Truth validation and verified projection.
+  // Never pass raw title/tags as factual prompt inputs.
+  const etsyPrompts = generateEtsyListingImagePrompts(listing);
 
   const copyPrompt = (text, idx, label = 'Đã copy prompt ảnh!') => {
     navigator.clipboard.writeText(text);

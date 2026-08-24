@@ -1,4 +1,8 @@
 const crypto = require('crypto');
+const Papa = require('papaparse');
+const cheerio = require('cheerio');
+
+const MAX_IMPORTED_LISTINGS = 500;
 
 const METRIC_LABELS = new Set([
   'total views',
@@ -97,6 +101,10 @@ function isLikelyTitle(value) {
   const text = normalizeLine(value);
   if (text.length < 8) return false;
   if (METRIC_LABELS.has(text.toLowerCase())) return false;
+  // Browser copy often starts with a HeyEtsy metric card (for example
+  // "233+ Sold" or "8.6K USD") before the actual Etsy listing card. Those
+  // values are useful only when attached to a real listing, never as titles.
+  if (/^[~]?[\d.,]+\s*[kKmM]?\+?\s*(?:sold|views|usd|vnd)$/i.test(text)) return false;
   if (/(?:\$|₫).*\b(?:sold|views)\b/i.test(text)) return false;
   return !/^(by|from shop|tags|tags copy suggestions|categories copy|no tags found|market|add to cart|go to shop|more like this|add to favorites)$/i.test(text);
 }
@@ -269,6 +277,39 @@ function aggregateTagSuggestions(sellers) {
   return [...frequency.values()].sort((a, b) => b.count - a.count || a.firstSeen - b.firstSeen);
 }
 
+function dedupeAndRank(sellers) {
+  const unique = [];
+  const seen = new Set();
+  let duplicatesRemoved = 0;
+  for (const seller of sellers) {
+    const identity = [seller.url, seller.title, seller.shopName, seller.priceAmount, seller.priceCurrency]
+      .map(value => String(value ?? '').trim().toLowerCase()).join('|');
+    if (seen.has(identity)) {
+      duplicatesRemoved += 1;
+      continue;
+    }
+    seen.add(identity);
+    unique.push({ ...seller, sourceRank: unique.length + 1, id: `pasted-${unique.length + 1}` });
+  }
+  return { sellers: unique.slice(0, MAX_IMPORTED_LISTINGS), parsedCount: unique.length, duplicatesRemoved };
+}
+
+function finalizeParsedInput({ normalizedRaw, parserVersion, searchContext, sellers, inputFormat }) {
+  const deduped = dedupeAndRank(sellers);
+  return {
+    parserVersion,
+    inputFormat,
+    contentHash: crypto.createHash('sha256').update(normalizedRaw.trim()).digest('hex'),
+    searchContext,
+    sellers: deduped.sellers,
+    parsedCount: deduped.parsedCount,
+    returnedCount: deduped.sellers.length,
+    duplicatesRemoved: deduped.duplicatesRemoved,
+    truncated: deduped.parsedCount > MAX_IMPORTED_LISTINGS,
+    tagSuggestions: aggregateTagSuggestions(deduped.sellers)
+  };
+}
+
 function parseHeyEtsyPastedText(rawText) {
   const normalizedRaw = decodeEntities(rawText).replace(/\r\n?/g, '\n');
   const lines = normalizedRaw.split('\n').map(normalizeLine).filter(Boolean);
@@ -289,32 +330,164 @@ function parseHeyEtsyPastedText(rawText) {
   if (current.length > 0) blocks.push(current);
 
   const parsed = blocks.map((block, index) => parseListingBlock(block, index + 1)).filter(Boolean);
-  const sellers = [];
-  const seen = new Set();
-  let duplicatesRemoved = 0;
-  for (const seller of parsed) {
-    const identity = [seller.title, seller.shopName, seller.priceAmount, seller.priceCurrency]
-      .map(value => String(value ?? '').trim().toLowerCase()).join('|');
-    if (seen.has(identity)) {
-      duplicatesRemoved += 1;
-      continue;
-    }
-    seen.add(identity);
-    sellers.push({ ...seller, sourceRank: sellers.length + 1, id: `pasted-${sellers.length + 1}` });
-  }
-
-  const contentHash = crypto.createHash('sha256').update(normalizedRaw.trim()).digest('hex');
-  return {
+  return finalizeParsedInput({
+    normalizedRaw,
     parserVersion: 'HEYETSY_PASTED_TEXT_V1',
-    contentHash,
+    inputFormat: 'HEYETSY_TEXT',
     searchContext: parseSearchContext(headerLines),
-    sellers: sellers.slice(0, 30),
-    parsedCount: sellers.length,
-    returnedCount: Math.min(sellers.length, 30),
-    duplicatesRemoved,
-    truncated: sellers.length > 30,
-    tagSuggestions: aggregateTagSuggestions(sellers)
+    sellers: parsed
+  });
+}
+
+function csvValue(row, ...names) {
+  for (const name of names) {
+    const value = row?.[name];
+    if (value !== undefined && value !== null && String(value).trim() !== '') return String(value).trim();
+  }
+  return null;
+}
+
+function splitSuggestions(value) {
+  if (isUnknown(value)) return [];
+  return String(value).split(/[,;|]/).map(normalizeLine).filter(Boolean);
+}
+
+function parseCsvListing(row, index) {
+  const title = csvValue(row, 'title', 'Title', 'listing_title');
+  if (!title) return null;
+  const priceRaw = csvValue(row, 'price', 'Price', 'price_display');
+  const numericPrice = parseNumberEvidence(csvValue(row, 'price_num', 'price_amount', 'Price $') || priceRaw);
+  const originalRaw = csvValue(row, 'price_was', 'original_price', 'price_was_display');
+  const originalNumeric = parseNumberEvidence(originalRaw);
+  const rating = parseNumberEvidence(csvValue(row, 'rating', 'Rating'));
+  const reviews = parseNumberEvidence(csvValue(row, 'reviews', 'review_count', 'Review Count'));
+  const sourceRank = parseNumberEvidence(csvValue(row, 'rank_position', 'rank', 'position')).value || index + 1;
+  const currency = csvValue(row, 'currency', 'price_currency') || null;
+  const seller = {
+    id: `csv-${sourceRank}`,
+    sourceRank,
+    title,
+    shopName: csvValue(row, 'shop', 'shop_name', 'Shop'),
+    shopNameEvidenceState: csvValue(row, 'shop', 'shop_name', 'Shop') ? 'STAFF_FILE_CSV' : 'UNKNOWN',
+    sourceLabel: 'STAFF_FILE_ETSY_CSV',
+    rating: rating.value,
+    reviewCount: reviews.value,
+    price: priceRaw,
+    priceAmount: numericPrice.value,
+    priceCurrency: currency,
+    originalPrice: originalRaw,
+    originalPriceAmount: originalNumeric.value,
+    discountPercent: parseNumberEvidence(csvValue(row, 'he_discount_pct', 'discount_pct')).value,
+    totalViews: parseNumberEvidence(csvValue(row, 'he_views', 'total_views')).value,
+    avgViews: parseNumberEvidence(csvValue(row, 'he_views_avg', 'avg_view')).value,
+    views24h: parseNumberEvidence(csvValue(row, 'views_24h', 'he_views_24h')).value,
+    totalSold: parseNumberEvidence(csvValue(row, 'he_sold', 'total_sold')).value,
+    sold24h: parseNumberEvidence(csvValue(row, 'sold_24h', 'he_sold_24h')).value,
+    revenue: parseNumberEvidence(csvValue(row, 'he_revenue_usd', 'revenue_usd')).value,
+    revenueCurrency: csvValue(row, 'he_revenue_usd', 'revenue_usd') ? 'USD' : null,
+    revenueApproximate: false,
+    revenueRaw: csvValue(row, 'he_revenue_usd', 'revenue_usd'),
+    favorites: parseNumberEvidence(csvValue(row, 'he_favorites', 'favorites')).value,
+    favoriteRate: parseNumberEvidence(csvValue(row, 'he_fav_pct', 'favorite_rate')).value,
+    favoriteRateApproximate: false,
+    conversionRate: parseNumberEvidence(csvValue(row, 'conversion_pct', 'conversion_rate')).value,
+    conversionRateApproximate: false,
+    createdDate: null,
+    createdRaw: csvValue(row, 'he_created', 'created'),
+    updatedRaw: csvValue(row, 'he_updated', 'updated'),
+    tags: splitSuggestions(csvValue(row, 'he_tags', 'tags')),
+    tagSource: csvValue(row, 'he_tags', 'tags') ? 'STAFF_FILE_CSV_SUGGESTION' : 'NO_TAGS_REPORTED',
+    categories: splitSuggestions(csvValue(row, 'he_categories', 'categories')),
+    country: csvValue(row, 'country'),
+    shopCountry: csvValue(row, 'country'),
+    url: csvValue(row, 'url', 'listing_url'),
+    evidenceSource: 'STAFF_MANUAL_ASSERTION',
+    evidenceState: 'UNVERIFIED_INPUT',
+    evidenceProvider: 'ETSY_SEARCH_CSV',
+    isSynthetic: false,
+    selected: true,
+    rawBlock: JSON.stringify(row)
   };
+  return seller;
+}
+
+function parseEtsySearchCsv(rawText) {
+  const normalizedRaw = decodeEntities(rawText).replace(/\r\n?/g, '\n');
+  const result = Papa.parse(normalizedRaw, { header: true, skipEmptyLines: 'greedy' });
+  if (result.errors.some(error => error.code === 'MissingQuotes' || error.code === 'UndetectableDelimiter')) {
+    throw new Error('CSV_PARSE_FAILED');
+  }
+  return finalizeParsedInput({
+    normalizedRaw,
+    parserVersion: 'ETSY_SEARCH_CSV_V1',
+    inputFormat: 'CSV',
+    searchContext: { appliedFilters: [], unappliedFilters: [], resultCount: result.data.length, pageContainsAds: false, sortMode: null },
+    sellers: result.data.map(parseCsvListing).filter(Boolean)
+  });
+}
+
+function parseEtsySearchHtml(rawText) {
+  const normalizedRaw = decodeEntities(rawText).replace(/\r\n?/g, '\n');
+  const $ = cheerio.load(normalizedRaw);
+  const sellers = [];
+  $('script[type="application/ld+json"]').each((_, element) => {
+    let payload;
+    try { payload = JSON.parse($(element).text()); } catch (_) { return; }
+    const list = Array.isArray(payload) ? payload : [payload];
+    for (const itemList of list) {
+      const entries = itemList?.['@type'] === 'ItemList' ? itemList.itemListElement : [];
+      for (const entry of entries || []) {
+        const item = entry?.item || {};
+        const offers = Array.isArray(item.offers) ? item.offers[0] : (item.offers || {});
+        const rank = Number(entry.position);
+        if (!item.name) continue;
+        sellers.push({
+          id: `html-${Number.isFinite(rank) ? rank : sellers.length + 1}`,
+          sourceRank: Number.isFinite(rank) ? rank : sellers.length + 1,
+          title: normalizeLine(item.name),
+          shopName: normalizeLine(item.brand?.name) || null,
+          shopNameEvidenceState: item.brand?.name ? 'STAFF_FILE_HTML' : 'UNKNOWN',
+          sourceLabel: 'STAFF_FILE_ETSY_HTML',
+          rating: null,
+          reviewCount: null,
+          price: offers.price != null ? String(offers.price) : null,
+          priceAmount: parseNumberEvidence(offers.price).value,
+          priceCurrency: normalizeLine(offers.priceCurrency) || null,
+          originalPrice: offers.priceSpecification?.price != null ? String(offers.priceSpecification.price) : null,
+          originalPriceAmount: parseNumberEvidence(offers.priceSpecification?.price).value,
+          discountPercent: null,
+          totalViews: null, avgViews: null, views24h: null, totalSold: null, sold24h: null,
+          revenue: null, revenueCurrency: null, revenueApproximate: false, revenueRaw: null,
+          favorites: null, favoriteRate: null, favoriteRateApproximate: false,
+          conversionRate: null, conversionRateApproximate: false,
+          createdDate: null, createdRaw: null, updatedRaw: null,
+          tags: [], tagSource: 'NO_TAGS_REPORTED', categories: [], country: null, shopCountry: null,
+          url: normalizeLine(item.url) || null,
+          evidenceSource: 'STAFF_MANUAL_ASSERTION',
+          evidenceState: 'UNVERIFIED_INPUT',
+          evidenceProvider: 'ETSY_SEARCH_HTML',
+          isSynthetic: false,
+          selected: true,
+          rawBlock: JSON.stringify(entry)
+        });
+      }
+    }
+  });
+  return finalizeParsedInput({
+    normalizedRaw,
+    parserVersion: 'ETSY_SEARCH_HTML_JSONLD_V1',
+    inputFormat: 'HTML',
+    searchContext: { appliedFilters: [], unappliedFilters: [], resultCount: null, pageContainsAds: false, sortMode: null },
+    sellers
+  });
+}
+
+function parseEtsySearchInput(rawText, inputFormat = 'AUTO') {
+  const requested = String(inputFormat || 'AUTO').trim().toUpperCase();
+  const trimmed = String(rawText || '').trim();
+  if (requested === 'CSV' || (requested === 'AUTO' && /^[^\n]+,[^\n]+\r?\n/.test(trimmed))) return parseEtsySearchCsv(rawText);
+  if (requested === 'HTML' || (requested === 'AUTO' && /^\s*<(?:!doctype|html)/i.test(trimmed))) return parseEtsySearchHtml(rawText);
+  return parseHeyEtsyPastedText(rawText);
 }
 
 module.exports = {
@@ -322,5 +495,8 @@ module.exports = {
   isUnknown,
   parseNumberEvidence,
   parseMoney,
-  parseHeyEtsyPastedText
+  parseHeyEtsyPastedText,
+  parseEtsySearchCsv,
+  parseEtsySearchHtml,
+  parseEtsySearchInput
 };

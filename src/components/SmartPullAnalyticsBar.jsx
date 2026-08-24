@@ -77,6 +77,7 @@ export default function SmartPullAnalyticsBar({ marketplace = 'ETSY', activeProj
   const tags = intelligence?.tagAnalytics?.selected13Tags || [];
   const economics = intelligence?.priceAnalytics?.economics || {};
   const isAmazonInputOnly = intelligence?.evidenceState === 'INPUT_ONLY_UNVERIFIED';
+  const isPartial = intelligence?.evidenceState === 'PARTIAL_EVIDENCE';
 
   return (
     <section className="studio-panel" style={{ padding: '20px', borderLeft: '4px solid #4f46e5' }}>
@@ -87,7 +88,7 @@ export default function SmartPullAnalyticsBar({ marketplace = 'ETSY', activeProj
           </h3>
           <p style={{ margin: '5px 0 0', color: 'var(--text-secondary)', fontSize: '0.82rem' }}>
             {marketplace === 'ETSY'
-              ? 'Truy xuất Etsy MCP; tag quan sát và phrase suy ra được tách riêng.'
+              ? 'Nhập seed hoặc URL Etsy. Hệ thống gọi MCP, lưu artifact theo project, rồi tách dữ liệu quan sát khỏi phrase suy ra.'
               : 'Xác nhận ASIN do staff nhập. Chưa có Amazon live connector.'}
           </p>
         </div>
@@ -100,8 +101,14 @@ export default function SmartPullAnalyticsBar({ marketplace = 'ETSY', activeProj
         <input value={queryInput} onChange={event => setQueryInput(event.target.value)} placeholder={marketplace === 'ETSY' ? 'Etsy search URL hoặc seed phrase' : 'Danh sách ASIN'} />
         <input type="number" min="0" max="100000" step="0.01" value={unitCostInput} onChange={event => setUnitCostInput(event.target.value)} placeholder="Unit cost (optional)" />
         <button className="btn btn-primary" onClick={handleSmartPull} disabled={loading || !activeProjectId || !queryInput.trim()}>
-          {loading ? <RefreshCw size={16} className="spinner" /> : <Database size={16} />} {loading ? 'Đang tải…' : 'Pull & Analyze'}
+          {loading ? <RefreshCw size={16} className="spinner" /> : <Database size={16} />} {loading ? 'Đang kéo MCP…' : 'Kéo MCP & phân tích'}
         </button>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '8px', marginTop: '12px', fontSize: '0.75rem' }}>
+        <div style={{ padding: '9px', borderRadius: '8px', background: '#eff6ff' }}><b>Input</b><br />Seed/URL + unit cost tùy chọn.</div>
+        <div style={{ padding: '9px', borderRadius: '8px', background: '#f0fdf4' }}><b>Output</b><br />Artifact MCP, tags quan sát, phrase suy ra và so sánh giá.</div>
+        <div style={{ padding: '9px', borderRadius: '8px', background: '#fff7ed' }}><b>Không làm</b><br />Không tạo Product Truth, không publish, không tự mở Gate.</div>
       </div>
 
       {intelligence && (
@@ -111,6 +118,7 @@ export default function SmartPullAnalyticsBar({ marketplace = 'ETSY', activeProj
             <div style={{ fontSize: '0.78rem', marginTop: '4px' }}>
               Provider: {intelligence.provider} · observedAt: {intelligence.observedAt || 'UNKNOWN'} · importedAt: {intelligence.importedAt}
             </div>
+            {isPartial && <div style={{ fontSize: '0.78rem', marginTop: '7px', color: '#9a3412' }}><b>Next:</b> dữ liệu provider hiện chưa đủ hoàn chỉnh để accept. Bạn vẫn có thể đọc output phân tích; hãy retry MCP khi cần một record đủ điều kiện Gate.</div>}
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '10px' }}>

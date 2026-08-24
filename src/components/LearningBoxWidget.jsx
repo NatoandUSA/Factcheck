@@ -57,6 +57,11 @@ export default function LearningBoxWidget({ platform = 'AMAZON', onShowToast, sc
     if (inputMode === 'text' && !rawText.trim()) return;
     if (inputMode === 'seller' && !selectedSeller) return;
 
+    if (isAmazon && inputMode === 'seller') {
+      onShowToast?.('Xray đã được nạp ở Stage 1 để benchmark/batch/Cerebro. Một row Xray không có đầy đủ title + bullets + description, nên không gửi nó vào “Học DNA”; hãy dùng Link hoặc Văn bản mẫu đầy đủ khi muốn tạo template cấu trúc.');
+      return;
+    }
+
     setLearning(true);
     try {
       const res = await fetch('/api/learning/analyze', {
@@ -210,15 +215,16 @@ export default function LearningBoxWidget({ platform = 'AMAZON', onShowToast, sc
                   </option>
                 ))}
               </select>
-              <button
-                type="submit"
-                disabled={learning || !selectedSeller}
-                className="btn btn-primary"
-                style={{ background: themeColor, fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px', minWidth: '140px', justifyContent: 'center' }}
-              >
-                {learning ? <RefreshCw size={15} className="spinner" /> : <Sparkles size={15} />}
-                <span>{learning ? 'Đang phân tích...' : '🧠 Học DNA'}</span>
-              </button>
+              {isAmazon ? (
+                <div style={{ minWidth: '210px', padding: '8px 10px', borderRadius: '8px', background: '#eff6ff', color: '#075985', fontSize: '0.74rem', lineHeight: 1.35 }}>
+                  <b>Xray benchmark đã nạp.</b><br />Dùng Stage 1 để batch ASIN/Cerebro; cần link hoặc text listing đầy đủ mới học DNA.
+                </div>
+              ) : (
+                <button type="submit" disabled={learning || !selectedSeller} className="btn btn-primary" style={{ background: themeColor, fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px', minWidth: '140px', justifyContent: 'center' }}>
+                  {learning ? <RefreshCw size={15} className="spinner" /> : <Sparkles size={15} />}
+                  <span>{learning ? 'Đang phân tích...' : '🧠 Học DNA'}</span>
+                </button>
+              )}
             </div>
           )
         ) : inputMode === 'url' ? (

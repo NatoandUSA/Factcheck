@@ -41,23 +41,34 @@ export default function ProjectEvidenceGate({ activeProject, onTransition, onSho
 
   if (!activeProject) return null;
   const accepted = evidence.filter(row => row.evidence_state === 'ACCEPTED');
+  const acceptedQualified = accepted.filter(row => row.acceptanceEligibility?.eligible === true);
   const pending = evidence.filter(row => row.evidence_state !== 'ACCEPTED');
-  const canAdvance = activeProject.state === 'EVIDENCE_INTAKE' && accepted.length > 0;
+  const canAdvance = activeProject.state === 'EVIDENCE_INTAKE' && acceptedQualified.length > 0;
 
   return (
     <section className="studio-panel" style={{ padding: '14px 18px', borderLeft: `4px solid ${accent}`, background: '#f8fafc' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
         <div>
           <strong><ShieldCheck size={16} style={{ verticalAlign: 'middle', marginRight: '6px', color: accent }} />Gate evidence — Project #{activeProject.id}</strong>
-          <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginTop: '3px' }}>State: <b>{activeProject.state}</b> · {accepted.length} accepted · {pending.length} pending/observed.</div>
+          <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginTop: '3px' }}>State: <b>{activeProject.state}</b> · {acceptedQualified.length} accepted đủ điều kiện · {accepted.length - acceptedQualified} accepted không đủ điều kiện · {pending.length} pending/observed.</div>
         </div>
         <div style={{ display: 'flex', gap: '8px' }}>
           <button className="btn btn-secondary btn-sm" onClick={reload} disabled={loading}>{loading ? <RefreshCw size={14} className="spinner" /> : <RefreshCw size={14} />} Tải evidence</button>
           {activeProject.state === 'EVIDENCE_INTAKE' && <button className="btn btn-primary btn-sm" onClick={() => onTransition?.('RESEARCH_ACCEPTED')} disabled={!canAdvance} title={!canAdvance ? 'Cần ít nhất một evidence đủ điều kiện đã được accept.' : undefined} style={{ background: accent }}><CheckCircle2 size={14} /> Chuyển sang Research</button>}
         </div>
       </div>
-      {pending.length > 0 && <div style={{ marginTop: '10px', display: 'grid', gap: '6px' }}>{pending.slice(0, 5).map(row => <div key={row.id} style={{ padding: '8px 10px', borderRadius: '8px', border: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', gap: '10px', alignItems: 'center', fontSize: '0.78rem' }}><span>#{row.id} · {row.source} · {row.evidence_state}</span><button className="btn btn-secondary btn-sm" onClick={() => accept(row.id)} disabled={actingId === row.id}>{actingId === row.id ? 'Đang accept…' : 'Accept evidence'}</button></div>)}</div>}
-      {activeProject.state === 'EVIDENCE_INTAKE' && !canAdvance && <div style={{ marginTop: '10px', color: '#92400e', fontSize: '0.78rem' }}><CircleAlert size={14} style={{ verticalAlign: 'middle', marginRight: '5px' }} />Sau upload/MCP pull: accept evidence phù hợp trước; server sẽ từ chối evidence không đủ điều kiện. Không có bypass.</div>}
+      {activeProject.state === 'EVIDENCE_INTAKE' && <div style={{ marginTop: '10px', padding: '10px', borderRadius: '8px', background: '#fff7ed', color: '#7c2d12', fontSize: '0.78rem', lineHeight: 1.45 }}>
+        <b>Gate này không đánh giá “dữ liệu có nhiều hay ít”.</b> Xray/Cerebro, CSV/HTML Etsy và paste HeyEtsy vẫn dùng được cho phân tích pattern, keyword và draft có kiểm soát. Để chuyển sang Research Accepted, cần ít nhất một record mà <b>server</b> xác nhận đủ điều kiện; UI không thể tự nâng trạng thái.
+      </div>}
+      {pending.length > 0 && <div style={{ marginTop: '10px', display: 'grid', gap: '8px' }}>{pending.slice(0, 10).map(row => {
+        const eligible = row.acceptanceEligibility?.eligible === true;
+        const reason = row.acceptanceEligibility?.message || 'Đang tải điều kiện accept từ server.';
+        return <div key={row.id} style={{ padding: '10px', borderRadius: '8px', border: `1px solid ${eligible ? '#bbf7d0' : '#fed7aa'}`, background: eligible ? '#f0fdf4' : '#fffaf0', display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'center', fontSize: '0.78rem' }}>
+          <div><b>#{row.id} · {row.source} · {row.evidence_state}</b><div style={{ marginTop: '3px', color: eligible ? '#166534' : '#9a3412' }}>{eligible ? 'Có thể được OWNER/MANAGER accept.' : reason}</div></div>
+          <button className="btn btn-secondary btn-sm" onClick={() => accept(row.id)} disabled={!eligible || actingId === row.id} title={eligible ? 'Yêu cầu server accept record này.' : reason}>{actingId === row.id ? 'Đang accept…' : eligible ? 'Accept evidence' : 'Không đủ điều kiện'}</button>
+        </div>;
+      })}</div>}
+      {activeProject.state === 'EVIDENCE_INTAKE' && !canAdvance && <div style={{ marginTop: '10px', color: '#92400e', fontSize: '0.78rem' }}><CircleAlert size={14} style={{ verticalAlign: 'middle', marginRight: '5px' }} />Bước kế tiếp: đọc lý do cạnh từng record. Nếu là MCP `PARTIAL_EVIDENCE`, retry khi provider trả retrieval hoàn chỉnh; nếu là staff file/paste, dùng nó cho analysis chứ không cố accept.</div>}
     </section>
   );
 }

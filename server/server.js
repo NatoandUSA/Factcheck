@@ -39,7 +39,7 @@ const { projectVerifiedAiInput, renderVerifiedCommerceListing, validateModelClai
 const { readFirstWorksheet } = require('./services/spreadsheetReader');
 const { UrlGuardError } = require('./security/urlGuard');
 const { resolveRuntimePaths } = require('./config/paths');
-const { parseHeyEtsyPastedText } = require('./etsyPastedSearchParser');
+const { parseEtsySearchInput } = require('./etsyPastedSearchParser');
 
 // Make crashes visible instead of dying silently with no trace (systemd will
 // still restart the process via Restart=always; this just ensures the cause
@@ -86,6 +86,18 @@ const upload = multer({
   fileFilter(req, file, cb) {
     const allowed = /\.(xlsx|csv|html?)$/i.test(file.originalname || '');
     cb(allowed ? null : new Error('UNSUPPORTED_UPLOAD_TYPE'), allowed);
+  }
+});
+
+// Search-result source files are parsed entirely in memory. A preview must not
+// leave a server-side file behind; the browser sends the same selected file
+// again for the explicit confirm request.
+const etsySearchUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024, files: 1 },
+  fileFilter(req, file, cb) {
+    const allowed = /\.(csv|html?|txt)$/i.test(file.originalname || '');
+    cb(allowed ? null : new Error('UNSUPPORTED_ETSY_SEARCH_FILE'), allowed);
   }
 });
 
@@ -849,7 +861,20 @@ app.get('/api/evidence', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELL
       params,
       (err, rows) => {
         if (err) return res.status(500).json({ success: false, error: err.message });
-        res.json({ success: true, projectId: project?.id || null, count: (rows || []).length, evidence: rows || [] });
+        const evidence = (rows || []).map(row => {
+          const eligibility = getEvidenceAcceptanceEligibility(row);
+          // This is display guidance only. The POST acceptance endpoint
+          // independently recomputes the same decision from the DB row.
+          return {
+            ...row,
+            acceptanceEligibility: {
+              eligible: eligibility.eligible,
+              error: eligibility.error || null,
+              message: eligibility.message || (eligibility.eligible ? 'Evidence này có thể được OWNER/MANAGER accept.' : null)
+            }
+          };
+        });
+        res.json({ success: true, projectId: project?.id || null, count: evidence.length, evidence });
       }
     );
   };
@@ -2579,23 +2604,23 @@ app.post('/api/etsy/batch-learn', requireAuth(db), requireRole(['OWNER', 'MANAGE
   });
 });
 
-// POST /api/etsy/feed-search-results - Two-phase, project-bound parser for
-// staff-pasted Etsy/HeyEtsy search-result text. This route never invokes MCP
-// and never treats a URL as if the linked page had been fetched. Preview makes
-// zero writes; confirm reparses the same raw evidence and stores an immutable,
-// hashed Staff assertion in the selected project's evidence ledger.
-app.post('/api/etsy/feed-search-results', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+// Two-phase, project-bound parser for staff supplied Etsy search-result
+// text/CSV/HTML. It never invokes MCP and never treats a URL as fetched data.
+// Preview is DB and filesystem zero-write; confirm reparses the same input and
+// stores a hashed staff assertion in the selected project's evidence ledger.
+async function handleEtsySearchResultFeed(req, res, supplied = {}) {
   if (req.user.marketplace !== 'ETSY') {
     return res.status(403).json({ success: false, error: 'MARKETPLACE_MISMATCH', message: 'Tác vụ này yêu cầu Session Workspace Etsy.' });
   }
-  const { rawText, seed = '', projectId, confirm = false } = req.body || {};
+  const { rawText, seed = '', projectId, inputFormat = 'AUTO', sourceFileName = null } = { ...(req.body || {}), ...supplied };
+  const confirm = supplied.confirm ?? (req.body?.confirm === true || String(req.body?.confirm || '').toLowerCase() === 'true');
   if (!rawText || typeof rawText !== 'string' || !rawText.trim()) {
-    return res.status(400).json({ success: false, error: 'MISSING_RAW_TEXT', message: 'Vui lòng dán nội dung text đã copy từ trang kết quả Etsy/HeyEtsy.' });
+    return res.status(400).json({ success: false, error: 'MISSING_SEARCH_INPUT', message: 'Hãy dán text hoặc chọn file CSV/HTML của trang kết quả Etsy.' });
   }
-  if (rawText.length > 250000) {
-    return res.status(413).json({ success: false, error: 'PASTED_TEXT_TOO_LARGE', message: 'Pasted search-result text must be 250 KB or smaller.' });
+  if (rawText.length > 5 * 1024 * 1024) {
+    return res.status(413).json({ success: false, error: 'SEARCH_INPUT_TOO_LARGE', message: 'Search-result input must be 5 MB or smaller.' });
   }
-  if (/^\s*https?:\/\//i.test(rawText.trim()) && !/\n/.test(rawText.trim())) {
+  if (!sourceFileName && /^\s*https?:\/\//i.test(rawText.trim()) && !/\n/.test(rawText.trim())) {
     return res.status(422).json({
       success: false,
       error: 'PASTED_RESULT_TEXT_REQUIRED',
@@ -2608,12 +2633,17 @@ app.post('/api/etsy/feed-search-results', requireAuth(db), requireRole(['OWNER',
   } catch (err) {
     return res.status(err.status || 500).json({ success: false, error: err.error || 'PROJECT_CONTEXT_ERROR', message: err.message });
   }
-  const parsed = parseHeyEtsyPastedText(rawText);
+  let parsed;
+  try {
+    parsed = parseEtsySearchInput(rawText, inputFormat);
+  } catch (error) {
+    return res.status(422).json({ success: false, error: error.message || 'SEARCH_INPUT_PARSE_FAILED', message: 'Không thể đọc định dạng file. Hãy dùng CSV, HTML Etsy đã lưu, hoặc toàn bộ text HeyEtsy.' });
+  }
   if (!parsed.sellers.length) {
     return res.status(422).json({
       success: false,
       error: 'INSUFFICIENT_STRUCTURED_LISTINGS',
-      message: 'Không tìm thấy listing block hợp lệ. Hãy copy toàn bộ kết quả có Title, Shop, metrics/tags và marker HeyEtsy.com.'
+      message: 'Không tìm thấy listing hợp lệ. CSV cần cột title; HTML Etsy cần ItemList JSON-LD; text HeyEtsy cần listing block đầy đủ.'
     });
   }
 
@@ -2627,7 +2657,7 @@ app.post('/api/etsy/feed-search-results', requireAuth(db), requireRole(['OWNER',
   for (let start = 0; start < parsed.sellers.length; start += 10) {
     batches.push({
       batchNumber: Math.floor(start / 10) + 1,
-      rationale: 'Grouped in pasted source order only; no sales/revenue ranking is inferred.',
+      rationale: 'Grouped in source order only; no sales/revenue ranking is inferred.',
       sellers: parsed.sellers.slice(start, start + 10)
     });
   }
@@ -2638,17 +2668,19 @@ app.post('/api/etsy/feed-search-results', requireAuth(db), requireRole(['OWNER',
     committed: confirm === true,
     source: 'STAFF_MANUAL_ASSERTION',
     evidenceState: 'UNVERIFIED_INPUT',
-    provider: 'HEYETSY_PASTED_TEXT',
+    provider: parsed.inputFormat === 'CSV' ? 'ETSY_SEARCH_CSV' : parsed.inputFormat === 'HTML' ? 'ETSY_SEARCH_HTML' : 'HEYETSY_PASTED_TEXT',
     observedAt: null,
     importedAt,
     seed: cleanSeed || null,
     parserVersion: parsed.parserVersion,
+    inputFormat: parsed.inputFormat,
+    sourceFileName: sourceFileName ? path.basename(String(sourceFileName)) : null,
     contentHash: parsed.contentHash,
     searchContext: parsed.searchContext,
     sellers: parsed.sellers,
     batches,
     keywords,
-    keywordSource: 'HEYETSY_COPY_SUGGESTION',
+    keywordSource: parsed.inputFormat === 'HEYETSY_TEXT' ? 'HEYETSY_COPY_SUGGESTION' : 'STAFF_FILE_TAG_SUGGESTION',
     count: parsed.sellers.length,
     duplicatesRemoved: parsed.duplicatesRemoved,
     truncated: parsed.truncated,
@@ -2662,15 +2694,20 @@ app.post('/api/etsy/feed-search-results', requireAuth(db), requireRole(['OWNER',
     parserVersion: parsed.parserVersion,
     contentHash: parsed.contentHash,
     evidenceState: 'UNVERIFIED_INPUT',
-    provider: 'HEYETSY_PASTED_TEXT',
+    provider: responsePayload.provider,
+    inputFormat: parsed.inputFormat,
+    sourceFileName: responsePayload.sourceFileName,
     observedAt: null,
     importedAt,
     searchContext: parsed.searchContext,
     sellers: parsed.sellers,
     keywordCandidates: keywords,
-    keywordSource: 'HEYETSY_COPY_SUGGESTION',
+    keywordSource: responsePayload.keywordSource,
     ordering: 'SOURCE_ORDER_NOT_PERFORMANCE_RANK',
-    rawText: rawText.trim()
+    // Text remains in the audit record. Large file uploads retain their
+    // canonical parsed projection and hash instead of duplicating megabytes
+    // of HTML inside SQLite metadata.
+    ...(sourceFileName ? {} : { rawText: rawText.trim() })
   };
 
   db.get(
@@ -2695,6 +2732,22 @@ app.post('/api/etsy/feed-search-results', requireAuth(db), requireRole(['OWNER',
       );
     }
   );
+}
+
+app.post('/api/etsy/feed-search-results', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
+  handleEtsySearchResultFeed(req, res);
+});
+
+app.post('/api/etsy/feed-search-results-file', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), etsySearchUpload.single('searchResultsFile'), (req, res) => {
+  if (!req.file?.buffer) return res.status(400).json({ success: false, error: 'MISSING_SEARCH_FILE', message: 'Chọn một file CSV, HTML hoặc TXT trước khi xem preview.' });
+  const extension = path.extname(req.file.originalname || '').toLowerCase();
+  const inputFormat = extension === '.csv' ? 'CSV' : /\.html?$/i.test(extension) ? 'HTML' : 'HEYETSY_TEXT';
+  handleEtsySearchResultFeed(req, res, {
+    rawText: req.file.buffer.toString('utf8'),
+    inputFormat,
+    sourceFileName: req.file.originalname,
+    confirm: String(req.body?.confirm || '').toLowerCase() === 'true'
+  });
 });
 
 // POST /api/research/smart-pull - Project-bound market evidence analysis.

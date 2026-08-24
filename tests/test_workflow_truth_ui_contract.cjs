@@ -6,6 +6,7 @@ const read = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
 const etsy = read('src/components/EtsyWorkspace.jsx');
 const amazon = read('src/components/AmazonWorkspace.jsx');
 const server = read('server/server.js');
+const pastedParser = read('server/etsyPastedSearchParser.js');
 
 for (const [name, source] of [['Etsy', etsy], ['Amazon', amazon]]) {
   assert.ok(source.includes('Active Project (bắt buộc)'), `${name} must expose an explicit project selector`);
@@ -19,10 +20,12 @@ assert.ok(etsy.includes("const transitioned = await handleTransition('RESEARCH_A
 assert.ok(etsy.includes("await handleTransition('DNA_ACCEPTED')"), 'Etsy DNA acceptance must call the server transition');
 assert.ok(amazon.includes("await handleTransition('DNA_ACCEPTED')"), 'Amazon DNA acceptance must call the server transition');
 
-assert.ok(server.includes("evidenceState: liveEvidenceCount > 0 ? 'MIXED_EVIDENCE' : 'UNVERIFIED_INPUT'"), 'Composite feed response must distinguish mixed evidence from observed evidence');
+assert.ok(server.includes("provider: 'HEYETSY_PASTED_TEXT'"), 'Pasted feed response must identify its third-party Staff-paste provider');
+assert.ok(server.includes("evidenceState: 'UNVERIFIED_INPUT'"), 'Pasted feed response must remain unverified');
+assert.strictEqual(server.includes("source: liveEvidenceCount > 0 ? 'ETSY_FEED_COMPOSITE'"), false, 'Paste and MCP evidence must not be silently combined');
 assert.ok(server.includes('observedAt: null'), 'Unknown provider observation time must remain null');
-assert.ok(server.includes("evidenceProvider: 'STAFF_PASTED_TEXT'"), 'Staff-pasted sellers must retain their unverified provider label');
-assert.ok(server.includes("evidenceProvider: 'YTRENDS_MCP'"), 'Live sellers must retain their MCP provider label');
+assert.ok(pastedParser.includes("evidenceProvider: 'HEYETSY_PASTED_TEXT'"), 'Staff-pasted sellers must retain their unverified provider label');
+assert.ok(server.includes("provider: 'YTRENDS_MCP'"), 'Live Smart Pull responses must retain their MCP provider label');
 assert.ok(server.includes("evidenceState: 'RETRIEVED_NO_OBSERVED_AT'"), 'MCP retrieval without provider observation time must not claim OBSERVED');
 assert.strictEqual(etsy.includes("evidenceState: 'OBSERVED'"), false, 'Client must consume server provenance rather than invent OBSERVED state');
 assert.ok(etsy.includes('Number(t.project_id) === Number(requestedProjectId)'), 'Etsy trends must be scoped to the selected project');

@@ -39,6 +39,7 @@ const { projectVerifiedAiInput, renderVerifiedCommerceListing, validateModelClai
 const { readFirstWorksheet } = require('./services/spreadsheetReader');
 const { UrlGuardError } = require('./security/urlGuard');
 const { resolveRuntimePaths } = require('./config/paths');
+const { parseHeyEtsyPastedText } = require('./etsyPastedSearchParser');
 
 // Make crashes visible instead of dying silently with no trace (systemd will
 // still restart the process via Restart=always; this just ensures the cause
@@ -943,6 +944,7 @@ function requireProjectContext(req, rawProjectId) {
 // staff-entered ASINs and partial provider responses stay observable but can
 // never be promoted to ACCEPTED merely by a ledger action.
 const SMART_PULL_ARTIFACT_KIND = 'SMART_PULL_ARTIFACT_V1';
+const ETSY_SEARCH_PASTE_ARTIFACT_KIND = 'ETSY_SEARCH_PASTE_V1';
 const ACCEPTABLE_SMART_PULL_STATES = new Set([
   'RETRIEVED_NO_OBSERVED_AT',
   'VERIFIED_RETRIEVED'
@@ -960,6 +962,13 @@ function parseEvidenceMetadata(evidence) {
 
 function getEvidenceAcceptanceEligibility(evidence) {
   const metadata = parseEvidenceMetadata(evidence);
+  if (metadata.kind === ETSY_SEARCH_PASTE_ARTIFACT_KIND) {
+    return {
+      eligible: false,
+      error: 'UNQUALIFIED_STAFF_PASTED_EVIDENCE',
+      message: 'Staff-pasted HeyEtsy/search text is retained for analysis and audit, but it is not independently verified evidence and cannot satisfy Research Accepted.'
+    };
+  }
   if (metadata.kind !== SMART_PULL_ARTIFACT_KIND) return { eligible: true };
 
   const state = metadata.evidenceState;
@@ -2568,221 +2577,122 @@ app.post('/api/etsy/batch-learn', requireAuth(db), requireRole(['OWNER', 'MANAGE
   });
 });
 
-// POST /api/etsy/feed-search-results - Parse raw text / HTML / URLs from Etsy search result page
+// POST /api/etsy/feed-search-results - Two-phase, project-bound parser for
+// staff-pasted Etsy/HeyEtsy search-result text. This route never invokes MCP
+// and never treats a URL as if the linked page had been fetched. Preview makes
+// zero writes; confirm reparses the same raw evidence and stores an immutable,
+// hashed Staff assertion in the selected project's evidence ledger.
 app.post('/api/etsy/feed-search-results', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
   if (req.user.marketplace !== 'ETSY') {
     return res.status(403).json({ success: false, error: 'MARKETPLACE_MISMATCH', message: 'Tác vụ này yêu cầu Session Workspace Etsy.' });
   }
-  const { rawText, seed = '' } = req.body || {};
+  const { rawText, seed = '', projectId, confirm = false } = req.body || {};
   if (!rawText || typeof rawText !== 'string' || !rawText.trim()) {
-    return res.status(400).json({ success: false, error: 'MISSING_RAW_TEXT', message: 'Vui lòng dán nội dung hoặc URL từ trang kết quả Etsy.' });
+    return res.status(400).json({ success: false, error: 'MISSING_RAW_TEXT', message: 'Vui lòng dán nội dung text đã copy từ trang kết quả Etsy/HeyEtsy.' });
+  }
+  if (rawText.length > 250000) {
+    return res.status(413).json({ success: false, error: 'PASTED_TEXT_TOO_LARGE', message: 'Pasted search-result text must be 250 KB or smaller.' });
+  }
+  if (/^\s*https?:\/\//i.test(rawText.trim()) && !/\n/.test(rawText.trim())) {
+    return res.status(422).json({
+      success: false,
+      error: 'PASTED_RESULT_TEXT_REQUIRED',
+      message: 'Đây là luồng Paste Text. URL không được xem là dữ liệu đã fetch; hãy dùng Project-bound Smart Pull cho URL/seed hoặc copy toàn bộ search result text.'
+    });
+  }
+  let project;
+  try {
+    project = await requireProjectContext(req, projectId);
+  } catch (err) {
+    return res.status(err.status || 500).json({ success: false, error: err.error || 'PROJECT_CONTEXT_ERROR', message: err.message });
+  }
+  const parsed = parseHeyEtsyPastedText(rawText);
+  if (!parsed.sellers.length) {
+    return res.status(422).json({
+      success: false,
+      error: 'INSUFFICIENT_STRUCTURED_LISTINGS',
+      message: 'Không tìm thấy listing block hợp lệ. Hãy copy toàn bộ kết quả có Title, Shop, metrics/tags và marker HeyEtsy.com.'
+    });
   }
 
-  const lines = rawText.split('\n').map(l => l.trim()).filter(Boolean);
-  const parsedSellers = [];
-  const parsedKeywords = [];
-  let liveEvidenceCount = 0;
-
-  let searchSeed = seed;
-  const searchUrlMatch = rawText.match(/https?:\/\/(?:www\.)?etsy\.com\/[^\s]*[?&]q=([^&#\s]+)/i);
-  if (searchUrlMatch) {
-    searchSeed = decodeURIComponent(searchUrlMatch[1].replace(/\+/g, ' ')).trim();
+  const keywords = parsed.tagSuggestions
+    .map(item => item.tag)
+    .filter(tag => tag.length >= 3 && tag.length <= 20 && ipGuard.screenText(tag).verdict !== 'BLOCK')
+    .slice(0, 13);
+  const importedAt = new Date().toISOString();
+  const cleanSeed = String(seed || project.seed_phrase || '').trim();
+  const batches = [];
+  for (let start = 0; start < parsed.sellers.length; start += 10) {
+    batches.push({
+      batchNumber: Math.floor(start / 10) + 1,
+      rationale: 'Grouped in pasted source order only; no sales/revenue ranking is inferred.',
+      sellers: parsed.sellers.slice(start, start + 10)
+    });
   }
-
-  const addTag = (val) => {
-    if (!val || typeof val !== 'string') return;
-    const clean = val.replace(/^[#\s]+|[#\s]+$/g, '').trim().toLowerCase();
-    if (clean.length >= 3 && clean.length <= 20 && !parsedKeywords.includes(clean)) {
-      const screen = ipGuard.screenText(clean);
-      if (screen.verdict !== 'BLOCK') parsedKeywords.push(clean);
-    } else if (clean.length > 20) {
-      // Sub-token decomposition: extract words/chunks <= 20 chars
-      const subWords = clean.split(/[\s,–—|-]+/).filter(w => w.length >= 3 && w.length <= 20);
-      subWords.forEach(sw => {
-        if (!parsedKeywords.includes(sw)) {
-          const screen = ipGuard.screenText(sw);
-          if (screen.verdict !== 'BLOCK') parsedKeywords.push(sw);
-        }
-      });
-    }
+  const responsePayload = {
+    success: true,
+    projectId: project.id,
+    preview: confirm !== true,
+    committed: confirm === true,
+    source: 'STAFF_MANUAL_ASSERTION',
+    evidenceState: 'UNVERIFIED_INPUT',
+    provider: 'HEYETSY_PASTED_TEXT',
+    observedAt: null,
+    importedAt,
+    seed: cleanSeed || null,
+    parserVersion: parsed.parserVersion,
+    contentHash: parsed.contentHash,
+    searchContext: parsed.searchContext,
+    sellers: parsed.sellers,
+    batches,
+    keywords,
+    keywordSource: 'HEYETSY_COPY_SUGGESTION',
+    count: parsed.sellers.length,
+    duplicatesRemoved: parsed.duplicatesRemoved,
+    truncated: parsed.truncated,
+    ordering: 'SOURCE_ORDER_NOT_PERFORMANCE_RANK'
   };
 
-  if (searchSeed && String(searchSeed).trim().length >= 3) {
-    addTag(String(searchSeed).trim());
-  }
+  if (confirm !== true) return res.json(responsePayload);
 
-  // If an Etsy Search URL or query seed is present, fetch live listings via MCP
-  if (searchSeed) {
-    try {
-      const [searchRes, hotRes] = await Promise.allSettled([
-        ytrendsMcp.callTool('ytrends_search', { query: searchSeed, limit: 30 }),
-        ytrendsMcp.callTool('ytrends_find_hot_listings', { search: searchSeed, limit: 30 })
-      ]);
-
-      if (searchRes.status === 'fulfilled' && Array.isArray(searchRes.value?.data?.results)) {
-        searchRes.value.data.results.forEach((item, idx) => {
-          let price = null;
-          let country = null;
-          if (item.snippet) {
-            const priceMatch = item.snippet.match(/\$([0-9.]+)/);
-            if (priceMatch) price = `$${priceMatch[1]}`;
-            const countryMatch = item.snippet.match(/([A-Z]{2})\s+shop/i);
-            if (countryMatch) country = countryMatch[1].toUpperCase();
-          }
-          parsedSellers.push({
-            id: `fed-search-${item.id?.replace(/^lst:/, '') || idx}-${Date.now()}`,
-            title: item.title,
-            shopName: null,
-            sourceLabel: 'YTRENDS_MCP_SEARCH',
-            shopCountry: country,
-            shopNameEvidenceState: 'UNKNOWN',
-            country: country,
-            url: item.url,
-            price: price,
-            views24h: null,
-            sold24h: null,
-            favorites: null,
-            evidenceSource: 'ETSY_MCP_LIVE',
-            evidenceState: 'RETRIEVED_NO_OBSERVED_AT',
-            evidenceProvider: 'YTRENDS_MCP',
-            isSynthetic: false,
-            selected: true
-          });
-          liveEvidenceCount += 1;
-          if (item.title) {
-            const decoded = item.title.replace(/&#39;/g, "'").replace(/&amp;/g, '&');
-            const chunks = decoded.split(/[,|\-–—:]/).map(c => c.trim());
-            chunks.forEach(addTag);
-          }
-        });
-      }
-
-      if (hotRes.status === 'fulfilled' && Array.isArray(hotRes.value?.data?.listings)) {
-        hotRes.value.data.listings.forEach((lst) => {
-          parsedSellers.push({
-            id: `fed-hot-${lst.listing_id}-${Date.now()}`,
-            title: lst.title,
-            shopName: null,
-            sourceLabel: 'YTRENDS_MCP_HOT',
-            shopCountry: lst.shop_country || null,
-            shopNameEvidenceState: 'UNKNOWN',
-            country: lst.shop_country,
-            url: `https://www.etsy.com/listing/${lst.listing_id}`,
-            price: lst.price_usd ? `$${lst.price_usd}` : null,
-            views24h: lst.views_24h,
-            sold24h: lst.sold_24h,
-            conversionRate: lst.conversion_rate ? Number((lst.conversion_rate * 100).toFixed(2)) : null,
-            favorites: lst.favorites,
-            evidenceSource: 'ETSY_MCP_LIVE',
-            evidenceState: 'RETRIEVED_NO_OBSERVED_AT',
-            evidenceProvider: 'YTRENDS_MCP',
-            isSynthetic: false,
-            selected: true
-          });
-          liveEvidenceCount += 1;
-          if (Array.isArray(lst.tags)) {
-            lst.tags.forEach(addTag);
-          }
-        });
-      }
-    } catch (mcpErr) {
-      console.warn('Live search fetch error in feed:', mcpErr.message);
-    }
-  }
-
-  lines.forEach((line, idx) => {
-    // 1. Direct Listing URL format
-    if (line.startsWith('http://') || line.startsWith('https://')) {
-      const matchId = line.match(/listing\/(\d+)/);
-      parsedSellers.push({
-        id: `fed-${matchId ? matchId[1] : idx}-${Date.now()}`,
-        title: line,
-        shopName: null,
-        sourceLabel: 'ETSY_SEARCH_PAGE_RAW',
-        shopCountry: null,
-        shopNameEvidenceState: 'UNKNOWN',
-        country: null,
-        url: line,
-        price: null,
-        views24h: null,
-        sold24h: null,
-        favorites: null,
-        evidenceSource: 'ETSY_SEARCH_PAGE_RAW',
-        evidenceState: 'UNVERIFIED_INPUT',
-        evidenceProvider: 'STAFF_PASTED_TEXT',
-        isSynthetic: false,
-        selected: true
-      });
-      return;
-    }
-
-    // 2. Extract Price, Sold, Views, Country from HeyEtsy cards
-    let price = null;
-    let sold = null;
-    let views = null;
-    let country = null;
-
-    const priceMatch = line.match(/\$([0-9.]+)/);
-    if (priceMatch) price = `$${priceMatch[1]}`;
-
-    const soldMatch = line.match(/([0-9.]+k?)\s*Sold/i);
-    if (soldMatch) {
-      const sStr = soldMatch[1].toLowerCase();
-      sold = sStr.endsWith('k') ? Math.round(parseFloat(sStr) * 1000) : parseInt(sStr, 10);
-    }
-
-    const viewsMatch = line.match(/([0-9.]+k?)\s*Views/i);
-    if (viewsMatch) {
-      const vStr = viewsMatch[1].toLowerCase();
-      views = vStr.endsWith('k') ? Math.round(parseFloat(vStr) * 1000) : parseInt(vStr, 10);
-    }
-
-    const countryMatch = line.match(/\b(US|UK|VN|CA|AU|DE|FR)\b/i);
-    if (countryMatch) {
-      country = countryMatch[1].toUpperCase();
-    }
-
-    // 3. Extract keywords/tags from chunking
-    const chunks = line.replace(/(\$\S+|\d+\s*Sold|\d+\s*Views|\d+\s*years)/gi, '').split(/[,|\-–—\t:]/).map(c => c.trim()).filter(Boolean);
-    chunks.forEach(c => addTag(c));
-
-    // 4. Listing Card Title row
-    const cleanTitle = line.replace(/(\$\S+|\d+\s*Sold|\d+\s*Views|\d+\s*years)/gi, '').trim();
-    if (cleanTitle.length >= 8 && !/^(views|sold|favorites|created|updated|bestseller|popular now|hot)$/i.test(cleanTitle)) {
-      parsedSellers.push({
-        id: `fed-${idx}-${Date.now()}`,
-        title: cleanTitle,
-        shopName: null,
-        sourceLabel: 'STAFF_MANUAL_PASTE',
-        shopCountry: country,
-        shopNameEvidenceState: 'UNKNOWN',
-        country: country,
-        url: null,
-        price: price,
-        views24h: views,
-        sold24h: sold,
-        favorites: null,
-        evidenceSource: 'ETSY_SEARCH_PAGE_RAW',
-        evidenceState: 'UNVERIFIED_INPUT',
-        evidenceProvider: 'STAFF_PASTED_TEXT',
-        isSynthetic: false,
-        selected: true
-      });
-    }
-  });
-
-  res.json({
-    success: true,
-    source: liveEvidenceCount > 0 ? 'ETSY_FEED_COMPOSITE' : 'ETSY_SEARCH_PAGE_RAW',
-    evidenceState: liveEvidenceCount > 0 ? 'MIXED_EVIDENCE' : 'UNVERIFIED_INPUT',
-    provider: liveEvidenceCount > 0 ? 'YTRENDS_MCP+STAFF_PASTED_TEXT' : 'STAFF_PASTED_TEXT',
+  const metadata = {
+    kind: ETSY_SEARCH_PASTE_ARTIFACT_KIND,
+    parserVersion: parsed.parserVersion,
+    contentHash: parsed.contentHash,
+    evidenceState: 'UNVERIFIED_INPUT',
+    provider: 'HEYETSY_PASTED_TEXT',
     observedAt: null,
-    importedAt: new Date().toISOString(),
-    seed: searchSeed || null,
-    sellers: parsedSellers.slice(0, 30),
-    keywords: parsedKeywords.slice(0, 13),
-    count: parsedSellers.length
-  });
+    importedAt,
+    searchContext: parsed.searchContext,
+    sellers: parsed.sellers,
+    keywordCandidates: keywords,
+    keywordSource: 'HEYETSY_COPY_SUGGESTION',
+    ordering: 'SOURCE_ORDER_NOT_PERFORMANCE_RANK',
+    rawText: rawText.trim()
+  };
+
+  db.get(
+    `SELECT id FROM research_evidence
+     WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ? AND project_id = ?
+       AND source = 'STAFF_MANUAL_ASSERTION' AND metadata LIKE ?
+     ORDER BY id DESC LIMIT 1`,
+    [req.user.tenantId, req.user.workspaceId, req.user.marketplace, project.id, `%\"contentHash\":\"${parsed.contentHash}\"%`],
+    (lookupErr, existing) => {
+      if (lookupErr) return res.status(500).json({ success: false, error: 'EVIDENCE_LOOKUP_FAILED' });
+      if (existing) return res.json({ ...responsePayload, evidenceId: existing.id, duplicateSubmission: true });
+
+      db.run(
+        `INSERT INTO research_evidence
+          (tenant_id, workspace_id, marketplace, project_id, seed_phrase, source, actor_id, evidence_state, metadata)
+         VALUES (?, ?, ?, ?, ?, 'STAFF_MANUAL_ASSERTION', ?, 'OBSERVED', ?)`,
+        [req.user.tenantId, req.user.workspaceId, req.user.marketplace, project.id, cleanSeed || project.seed_phrase, req.user.userId, JSON.stringify(metadata)],
+        function(insertErr) {
+          if (insertErr) return res.status(500).json({ success: false, error: 'EVIDENCE_PERSIST_FAILED' });
+          res.json({ ...responsePayload, evidenceId: this.lastID, duplicateSubmission: false });
+        }
+      );
+    }
+  );
 });
 
 // POST /api/research/smart-pull - Project-bound market evidence analysis.

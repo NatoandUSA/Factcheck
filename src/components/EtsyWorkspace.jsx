@@ -27,6 +27,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
   const [projects, setProjects] = useState([]);
   const [isFeedModalOpen, setIsFeedModalOpen] = useState(false);
   const [feedRawText, setFeedRawText] = useState('');
+  const [feedPreview, setFeedPreview] = useState(null);
   const [feedSubmitting, setFeedSubmitting] = useState(false);
   const [scannedSellers, setScannedSellers] = useState([]);
   const fileInputRef = useRef(null);
@@ -39,10 +40,11 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
     setTrends([]);
     setUploadStatus(null);
     setFeedRawText('');
+    setFeedPreview(null);
     setSeedPhrase(activeProject?.seed_phrase || '');
   }, [activeProject?.id]);
 
-  const handleFeedSearchResults = async () => {
+  const handleFeedSearchResults = async ({ confirm = false } = {}) => {
     if (!activeProject?.id) {
       if (onShowToast) onShowToast('Hãy chọn Active Project trước khi nạp Etsy Feed.');
       return;
@@ -61,12 +63,19 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
         body: JSON.stringify({
           rawText: feedRawText,
           seed: seedPhrase.trim(),
-          projectId: requestedProjectId
+          projectId: requestedProjectId,
+          confirm
         })
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || data.error || 'Failed to feed Etsy search data');
       if (activeProjectIdRef.current !== requestedProjectId) return;
+
+      if (data.preview && !data.committed) {
+        setFeedPreview(data);
+        if (onShowToast) onShowToast(`Đã parse ${data.sellers?.length || 0} listing blocks. Hãy kiểm tra Preview trước khi lưu.`);
+        return;
+      }
 
       if (data.seed) {
         setSeedPhrase(data.seed);
@@ -86,9 +95,10 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
           trendingKeywordsStr: data.keywords.join(', ')
         });
       }
-      if (onShowToast) onShowToast(`✓ Đã kéo thành công ${data.sellers?.length || 0} seller evidence & ${data.keywords?.length || 0} tags từ Etsy!`);
+      if (onShowToast) onShowToast(`✓ Đã lưu ${data.sellers?.length || 0} listing evidence vào Project #${requestedProjectId}. Tags được ghi rõ là HeyEtsy suggestions.`);
       setIsFeedModalOpen(false);
       setFeedRawText('');
+      setFeedPreview(null);
     } catch (err) {
       if (onShowToast) onShowToast(`Lỗi nạp dữ liệu: ${err.message}`);
     } finally {
@@ -418,7 +428,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
               cursor: 'pointer',
               marginTop: '15px'
             }}
-            title="Dán link listing, copy text kết quả tìm kiếm Etsy, hoặc danh sách từ khóa"
+            title="Copy toàn bộ text kết quả Etsy/HeyEtsy, xem Preview rồi lưu vào Active Project"
           >
             <Sparkles size={16} color="#059669" />
             <span>📥 Feed Trang Kết Quả Etsy</span>
@@ -731,7 +741,9 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
           padding: '20px'
         }}>
           <div style={{
-            maxWidth: '650px',
+            maxWidth: '1050px',
+            maxHeight: '90vh',
+            overflowY: 'auto',
             width: '100%',
             backgroundColor: '#ffffff',
             borderRadius: '16px',
@@ -745,11 +757,11 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
                   <Sparkles size={20} />
                 </div>
                 <h3 style={{ margin: 0, fontSize: '1.15rem', color: '#0f172a', fontWeight: 800 }}>
-                  🔗 Tự Động Kéo Dữ Liệu Từ Link Tìm Kiếm Etsy
+                  📋 Nạp Text Kết Quả Etsy/HeyEtsy Vào Project
                 </h3>
               </div>
               <button
-                onClick={() => setIsFeedModalOpen(false)}
+                onClick={() => { setIsFeedModalOpen(false); setFeedPreview(null); }}
                 style={{ background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', color: '#64748b' }}
               >
                 ✕
@@ -757,31 +769,88 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
             </div>
 
             <p style={{ fontSize: '0.85rem', color: '#475569', margin: '0 0 14px 0', lineHeight: 1.5 }}>
-              Chỉ cần copy đường link trang tìm kiếm Etsy (hoặc các link listing cụ thể) dán vào đây. Hệ thống sẽ tự động bóc tách từ khóa hạt nhân, cào <b>30 Sellers thực tế</b> và <b>13 Tags chuẩn 100%</b>!
+              Copy toàn bộ nội dung search result có các listing block và marker <b>HeyEtsy.com</b>, sau đó xem Preview trước khi lưu.
+              Dữ liệu được giữ theo <b>thứ tự nguồn</b>; dấu “–” là UNKNOWN. Tag được ghi là <b>HeyEtsy suggestion</b>, không phải Etsy tag đã xác minh.
             </p>
 
-            <textarea
-              value={feedRawText}
-              onChange={(e) => setFeedRawText(e.target.value)}
-              placeholder="Dán link trang tìm kiếm Etsy hoặc các link listing tại đây...&#10;Ví dụ:&#10;https://www.etsy.com/search?q=para%20mi%20hija&ref=search_bar&#10;https://www.etsy.com/listing/4463297405"
-              rows={6}
-              style={{
-                width: '100%',
-                borderRadius: '10px',
-                border: '1px solid #cbd5e1',
-                padding: '12px',
-                fontSize: '0.85rem',
-                fontFamily: 'inherit',
-                marginBottom: '14px',
-                outline: 'none',
-                boxSizing: 'border-box'
-              }}
-            />
+            <div style={{ marginBottom: '14px', padding: '9px 12px', borderRadius: '8px', background: '#eef2ff', color: '#3730a3', fontSize: '0.78rem', fontWeight: 700 }}>
+              Active Project: {activeProject?.id ? `#${activeProject.id} — ${activeProject.name || activeProject.seed_phrase}` : 'Chưa chọn Project'} · URL/seed live dùng Project-bound Smart Pull, không dùng ô Paste Text này.
+            </div>
+
+            {!feedPreview ? (
+              <textarea
+                value={feedRawText}
+                onChange={(e) => { setFeedRawText(e.target.value); setFeedPreview(null); }}
+                placeholder={'Dán toàn bộ text search result tại đây…\n\nVí dụ cấu trúc:\n413 results, with ads\nMost relevant\nSearch results\n[Listing title]\n[Listing title]\n4.7\n(113)\nBy\n[Shop name]\n…\nHeyEtsy.com'}
+                rows={12}
+                style={{
+                  width: '100%',
+                  borderRadius: '10px',
+                  border: '1px solid #cbd5e1',
+                  padding: '12px',
+                  fontSize: '0.85rem',
+                  fontFamily: 'inherit',
+                  marginBottom: '14px',
+                  outline: 'none',
+                  boxSizing: 'border-box'
+                }}
+              />
+            ) : (
+              <div style={{ marginBottom: '16px', display: 'grid', gap: '12px' }}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', fontSize: '0.78rem' }}>
+                  <span className="badge">Parsed: {feedPreview.count} listings</span>
+                  <span className="badge">Results page: {feedPreview.searchContext?.resultCount ?? 'UNKNOWN'}</span>
+                  <span className="badge">Sort: {feedPreview.searchContext?.sortMode || 'UNKNOWN'}</span>
+                  <span className="badge">Contains ads: {feedPreview.searchContext?.pageContainsAds ? 'YES' : 'UNKNOWN/NO'}</span>
+                  <span className="badge">Duplicates removed: {feedPreview.duplicatesRemoved || 0}</span>
+                  <span className="badge">Tags suggestions: {feedPreview.keywords?.length || 0}</span>
+                </div>
+                <div style={{ overflowX: 'auto', border: '1px solid #cbd5e1', borderRadius: '10px' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.76rem', textAlign: 'left' }}>
+                    <thead>
+                      <tr style={{ background: '#f8fafc', borderBottom: '1px solid #cbd5e1' }}>
+                        <th style={{ padding: '8px' }}>Rank nguồn</th>
+                        <th style={{ padding: '8px' }}>Listing / Shop</th>
+                        <th style={{ padding: '8px' }}>Rating</th>
+                        <th style={{ padding: '8px' }}>Giá</th>
+                        <th style={{ padding: '8px' }}>Total Views</th>
+                        <th style={{ padding: '8px' }}>Total Sold</th>
+                        <th style={{ padding: '8px' }}>24h</th>
+                        <th style={{ padding: '8px' }}>Tags</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(feedPreview.sellers || []).map(seller => (
+                        <tr key={seller.id} style={{ borderBottom: '1px solid #e2e8f0' }}>
+                          <td style={{ padding: '8px', fontWeight: 800 }}>#{seller.sourceRank}</td>
+                          <td style={{ padding: '8px', minWidth: '260px' }}>
+                            <div style={{ fontWeight: 700 }}>{seller.title || 'UNKNOWN'}</div>
+                            <div style={{ color: '#64748b' }}>{seller.shopName || 'Shop UNKNOWN'}</div>
+                          </td>
+                          <td style={{ padding: '8px' }}>{seller.rating ?? '—'} ({seller.reviewCount ?? '—'})</td>
+                          <td style={{ padding: '8px' }}>{seller.price || '—'}</td>
+                          <td style={{ padding: '8px' }}>{seller.totalViews ?? '—'}</td>
+                          <td style={{ padding: '8px' }}>{seller.totalSold ?? '—'}</td>
+                          <td style={{ padding: '8px' }}>Views {seller.views24h ?? '—'} / Sold {seller.sold24h ?? '—'}</td>
+                          <td style={{ padding: '8px' }}>{seller.tags?.length || 0}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div style={{ fontSize: '0.76rem', color: '#92400e', background: '#fffbeb', padding: '9px 11px', borderRadius: '8px' }}>
+                  Preview chưa ghi dữ liệu. “Most relevant” có thể chứa quảng cáo; hệ thống không gọi các dòng này là Top Seller và không xếp hạng lại khi metric UNKNOWN.
+                </div>
+              </div>
+            )}
 
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <button
                 type="button"
-                onClick={() => setFeedRawText('https://www.etsy.com/search?q=para%20mi%20hija&ref=search_bar')}
+                onClick={() => {
+                  if (feedPreview) setFeedPreview(null);
+                  else setFeedRawText('');
+                }}
                 style={{
                   background: '#f1f5f9',
                   border: '1px solid #e2e8f0',
@@ -792,35 +861,35 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
                   cursor: 'pointer'
                 }}
               >
-                + Thử link mẫu: para mi hija
+                {feedPreview ? '← Sửa nội dung paste' : 'Xóa nội dung'}
               </button>
               <div style={{ display: 'flex', gap: '10px' }}>
                 <button
-                  onClick={() => setIsFeedModalOpen(false)}
+                  onClick={() => { setIsFeedModalOpen(false); setFeedPreview(null); }}
                   className="btn btn-secondary"
                   style={{ padding: '8px 16px', borderRadius: '8px' }}
                 >
                   Hủy bỏ
                 </button>
-                <button
-                  onClick={handleFeedSearchResults}
-                  disabled={feedSubmitting || !feedRawText.trim()}
-                  className="btn btn-primary"
-                  style={{
-                    background: '#059669',
-                    color: '#fff',
-                    fontWeight: 700,
-                    padding: '8px 20px',
-                    borderRadius: '8px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                    cursor: (feedSubmitting || !feedRawText.trim()) ? 'not-allowed' : 'pointer'
-                  }}
-                >
-                  <Zap size={16} />
-                  <span>{feedSubmitting ? 'Đang kéo dữ liệu...' : '⚡ Tự Động Kéo Dữ Liệu'}</span>
-                </button>
+                {!feedPreview ? (
+                  <button
+                    onClick={() => handleFeedSearchResults({ confirm: false })}
+                    disabled={feedSubmitting || !feedRawText.trim() || !activeProject?.id}
+                    className="btn btn-primary"
+                    style={{ background: '#059669', color: '#fff', fontWeight: 700, padding: '8px 20px', borderRadius: '8px' }}
+                  >
+                    <Zap size={16} /> {feedSubmitting ? 'Đang phân tích…' : 'Phân tích & Xem trước'}
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => handleFeedSearchResults({ confirm: true })}
+                    disabled={feedSubmitting || !activeProject?.id}
+                    className="btn btn-primary"
+                    style={{ background: '#059669', color: '#fff', fontWeight: 700, padding: '8px 20px', borderRadius: '8px' }}
+                  >
+                    <Database size={16} /> {feedSubmitting ? 'Đang lưu…' : `Xác nhận lưu ${feedPreview.count} listings`}
+                  </button>
+                )}
               </div>
             </div>
           </div>

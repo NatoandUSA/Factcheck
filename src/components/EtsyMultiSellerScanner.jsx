@@ -38,7 +38,8 @@ export default function EtsyMultiSellerScanner({ seedPhrase, category, onShowToa
   useEffect(() => {
     if (Array.isArray(initialSellers) && initialSellers.length > 0) {
       setSellers(initialSellers);
-      setEvidenceMessage(`Đã nạp ${initialSellers.length} Top Sellers từ nguồn Live Etsy MCP!`);
+      const source = initialSellers[0]?.evidenceProvider || initialSellers[0]?.evidenceSource || 'UNKNOWN_SOURCE';
+      setEvidenceMessage(`Đã nạp ${initialSellers.length} listing evidence từ ${source}. Thứ tự hiển thị không mặc định là performance ranking.`);
     } else {
       setSellers([]);
       setSynthesizedResult(null);

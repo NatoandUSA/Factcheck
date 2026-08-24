@@ -20,7 +20,9 @@ assert.ok(etsy.includes("const transitioned = await handleTransition('RESEARCH_A
 assert.ok(etsy.includes("await handleTransition('DNA_ACCEPTED')"), 'Etsy DNA acceptance must call the server transition');
 assert.ok(amazon.includes("await handleTransition('DNA_ACCEPTED')"), 'Amazon DNA acceptance must call the server transition');
 
-assert.ok(server.includes("provider: 'HEYETSY_PASTED_TEXT'"), 'Pasted feed response must identify its third-party Staff-paste provider');
+assert.ok(server.includes("parsed.inputFormat === 'CSV' ? 'ETSY_SEARCH_CSV'"), 'CSV feed response must preserve its staff-file provider');
+assert.ok(server.includes("parsed.inputFormat === 'HTML' ? 'ETSY_SEARCH_HTML'"), 'HTML feed response must preserve its staff-file provider');
+assert.ok(server.includes(": 'HEYETSY_PASTED_TEXT'"), 'HeyEtsy text feed response must preserve its third-party staff-paste provider');
 assert.ok(server.includes("evidenceState: 'UNVERIFIED_INPUT'"), 'Pasted feed response must remain unverified');
 assert.strictEqual(server.includes("source: liveEvidenceCount > 0 ? 'ETSY_FEED_COMPOSITE'"), false, 'Paste and MCP evidence must not be silently combined');
 assert.ok(server.includes('observedAt: null'), 'Unknown provider observation time must remain null');

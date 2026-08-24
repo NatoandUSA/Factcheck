@@ -328,6 +328,7 @@ async function waitForEtsyOwner() {
     assert.strictEqual(preview.body.preview, true);
     assert.strictEqual(preview.body.committed, false);
     assert.strictEqual(preview.body.projectId, projectId);
+    assert.strictEqual(preview.body.provider, 'HEYETSY_PASTED_TEXT');
     assert.strictEqual(preview.body.count, 4);
     assert.deepStrictEqual(preview.body.batches.map(batch => batch.sellers.length), [4]);
     assert.strictEqual(preview.body.ordering, 'SOURCE_ORDER_NOT_PERFORMANCE_RANK');
@@ -344,9 +345,24 @@ async function waitForEtsyOwner() {
     const filePreview = await filePreviewResponse.json();
     assert.strictEqual(filePreviewResponse.status, 200);
     assert.strictEqual(filePreview.inputFormat, 'CSV');
+    assert.strictEqual(filePreview.provider, 'ETSY_SEARCH_CSV');
     assert.strictEqual(filePreview.sourceFileName, 'para-mi-hija.csv');
     assert.strictEqual(filePreview.count, 2);
     assert.strictEqual((await dbAll('SELECT id FROM research_evidence')).length, countBefore, 'File preview must make zero DB writes');
+
+    const htmlPreviewForm = new FormData();
+    htmlPreviewForm.append('searchResultsFile', new Blob([HTML_SAMPLE], { type: 'text/html' }), 'para-mi-hija.html');
+    htmlPreviewForm.append('seed', 'para mi hija');
+    htmlPreviewForm.append('projectId', String(projectId));
+    htmlPreviewForm.append('confirm', 'false');
+    const htmlPreviewResponse = await fetch(base + '/api/etsy/feed-search-results-file', {
+      method: 'POST', headers: { Origin: base, Cookie: `omni_session=${session.rawToken}` }, body: htmlPreviewForm
+    });
+    const htmlPreview = await htmlPreviewResponse.json();
+    assert.strictEqual(htmlPreviewResponse.status, 200);
+    assert.strictEqual(htmlPreview.inputFormat, 'HTML');
+    assert.strictEqual(htmlPreview.provider, 'ETSY_SEARCH_HTML');
+    assert.strictEqual((await dbAll('SELECT id FROM research_evidence')).length, countBefore, 'HTML preview must make zero DB writes');
 
     const committed = await post('/api/etsy/feed-search-results', { rawText: SAMPLE, seed: 'para mi hija', projectId, confirm: true });
     assert.strictEqual(committed.status, 200);

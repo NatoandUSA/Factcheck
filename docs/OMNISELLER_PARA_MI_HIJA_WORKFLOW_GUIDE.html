@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OmniSeller Studio — Quy trình para mi hija</title>
+  <style>
+    :root { --ink:#10233f; --muted:#52637a; --line:#d9e3ef; --blue:#087fc7; --orange:#eb5a10; --green:#0c9b61; --amber:#a65b00; --red:#b42318; --bg:#f6f9fc; }
+    * { box-sizing:border-box } body { margin:0; color:var(--ink); background:var(--bg); font:15px/1.55 Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; }
+    main { width:min(1180px,calc(100% - 32px)); margin:0 auto; padding:36px 0 70px; }
+    h1,h2,h3 { line-height:1.2 } h1 { font-size:clamp(29px,4vw,46px); margin:0 0 12px } h2 { margin:42px 0 14px; font-size:25px } h3 { margin:0 0 8px; font-size:16px } p { margin:8px 0 } .lead { font-size:18px; color:var(--muted); max-width:850px }.eyebrow,.tag { display:inline-block; border-radius:999px; font-size:12px; font-weight:800; letter-spacing:.02em; padding:4px 9px; }.eyebrow { background:#e6f4ff; color:#056aa8 }.tag { background:#eef2f7; color:#405166 }.hero { padding:42px; border-radius:22px; color:white; background:linear-gradient(130deg,#073a70,#087fc7 56%,#01a6a0); box-shadow:0 17px 38px #0b4c7d2e }.hero .lead { color:#ddf3ff }.notice { border-left:4px solid var(--amber); background:#fff8e8; padding:14px 16px; border-radius:10px; margin:18px 0 }.danger { border-color:var(--red); background:#fff4f2 }.ok { border-color:var(--green); background:#effcf6 }.grid { display:grid; gap:14px }.three { grid-template-columns:repeat(3,minmax(0,1fr)) }.two { grid-template-columns:repeat(2,minmax(0,1fr)) }.card { background:white; border:1px solid var(--line); border-radius:14px; padding:18px; box-shadow:0 4px 15px #172a4210 }.card.blue { border-top:4px solid var(--blue) }.card.orange { border-top:4px solid var(--orange) }.card.green { border-top:4px solid var(--green) }.metric { font-size:28px; font-weight:850; color:var(--blue) }.flow { display:grid; grid-template-columns:repeat(5,1fr); gap:8px; align-items:stretch }.step { position:relative; padding:16px; border:1px solid var(--line); background:#fff; border-radius:12px; font-weight:750 }.step small { display:block; margin-top:4px; font-weight:500; color:var(--muted) }.step:not(:last-child)::after { content:'→'; position:absolute; right:-16px; top:35%; z-index:2; color:#71829a; font-size:24px }.lane { display:grid; grid-template-columns:150px 1fr; gap:14px; margin:11px 0; padding:16px; background:#fff; border:1px solid var(--line); border-radius:13px }.lane h3 { margin-top:2px }.lane.analysis { border-left:5px solid var(--blue) }.lane.gate { border-left:5px solid var(--orange) }.lane.publish { border-left:5px solid var(--green) } ul,ol { padding-left:22px } li { margin:6px 0 } code { border-radius:5px; background:#eef2f7; padding:2px 5px; color:#29384c; font-size:.92em }.table-wrap { overflow:auto; border:1px solid var(--line); border-radius:12px; background:white } table { width:100%; border-collapse:collapse; min-width:760px } th,td { padding:11px 12px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top } th { background:#f0f6fb; font-size:13px }.yes { color:#087c4b; font-weight:800 }.no { color:#b42318; font-weight:800 }.unknown { color:#7b5360; font-weight:800 }.callout { color:#075985; background:#eff8ff; padding:13px 15px; border-radius:10px }.checklist { counter-reset:item; list-style:none; padding:0 }.checklist li { counter-increment:item; padding:10px 12px 10px 48px; position:relative; border-bottom:1px solid var(--line) }.checklist li::before { content:counter(item); position:absolute; left:10px; top:10px; width:26px; height:26px; display:grid; place-items:center; border-radius:50%; color:white; background:var(--blue); font-weight:800 }.footer { margin-top:42px; color:var(--muted); font-size:13px }.mono { font:13px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace; white-space:pre-wrap; background:#10233f; color:#dff4ff; padding:16px; border-radius:12px } @media(max-width:800px){ .hero{padding:25px}.three,.two,.flow{grid-template-columns:1fr}.step:not(:last-child)::after{content:'↓'; left:calc(50% - 8px); right:auto; bottom:-25px; top:auto}.lane{grid-template-columns:1fr} }
+  </style>
+</head>
+<body>
+<main>
+  <section class="hero">
+    <span class="eyebrow">Operator handbook · ví dụ thật: para mi hija</span>
+    <h1>Nhập đúng dữ liệu, hiểu đúng gate, không lặp lại upload</h1>
+    <p class="lead">OmniSeller có ba loại công việc khác nhau: phân tích thị trường, xác nhận research, và Product Truth/publish. Các ảnh lỗi trước đây xuất phát từ việc giao diện trộn ba việc này vào cùng một nút.</p>
+  </section>
+
+  <div class="notice ok"><b>Kết quả audit dữ liệu đã cung cấp.</b> Xray có <b>19 ASIN × 32 cột</b>; Cerebro có <b>1,099 keyword × 40 cột</b>; CSV Etsy có <b>63 listing</b>; HTML Etsy có <b>12 listing JSON-LD</b>. Những dữ liệu này hoàn toàn đủ để benchmark, phân loại ASIN, phân tích keyword và pattern. Chúng không tự là Product Truth hoặc evidence đủ điều kiện Research Accepted.</div>
+
+  <h2>1. Câu trả lời ngắn: “đủ dữ liệu” nghĩa là gì?</h2>
+  <div class="table-wrap"><table><thead><tr><th>Mục tiêu</th><th>Dữ liệu đủ</th><th>Không cần</th><th>Kết quả</th></tr></thead><tbody>
+    <tr><td><b>Phân tích Amazon</b></td><td>Xray có ASIN + title/price/sales/BSR; Cerebro có keyword + search volume/CPR.</td><td>Không cần Product Truth.</td><td class="yes">Đủ với file Hija.</td></tr>
+    <tr><td><b>Phân tích Etsy</b></td><td>CSV/HTML/HeyEtsy có title, shop, giá hoặc metrics đã quan sát.</td><td>Không cần gọi MCP để đọc file đã có.</td><td class="yes">Đủ: CSV 63 dòng là nguồn ưu tiên.</td></tr>
+    <tr><td><b>Qua Research Gate</b></td><td>Ít nhất 1 record project-bound mà <b>server</b> xác nhận đủ điều kiện, rồi OWNER/MANAGER accept.</td><td>Nhiều ASIN/keyword hay nhiều dòng CSV không thay thế điều kiện này.</td><td class="unknown">Phụ thuộc trạng thái retrieval thực tế.</td></tr>
+    <tr><td><b>Product Truth / Publish</b></td><td>Product Truth Card VERIFIED, binding product/version, approval hash/version, IP CLEARED và PUBLISH_READY.</td><td>Không dùng data đối thủ, Xray hay Etsy paste để suy diễn facts sản phẩm của mình.</td><td class="no">Chưa mở chỉ nhờ research.</td></tr>
+  </tbody></table></div>
+
+  <h2>2. Ba lane không được trộn</h2>
+  <div class="lane analysis"><h3>Lane A<br><span class="tag">Analysis</span></h3><div><b>Input:</b> Xray, Cerebro, CSV Etsy, HTML Etsy, clipboard HeyEtsy, hoặc output MCP. <b>Được dùng để:</b> batch ASIN, keyword map, so giá, pattern title/tag, controlled draft. <b>Trạng thái:</b> staff input/observed/unknown được hiển thị đúng; số <code>0</code> không đổi thành UNKNOWN. <b>Không tạo:</b> Product Truth, approval hoặc publish.</div></div>
+  <div class="lane gate"><h3>Lane B<br><span class="tag">Research Gate</span></h3><div><b>Mục đích:</b> xác định project có record research hợp lệ hay chưa. Nút <em>Accept evidence</em> chỉ bật khi API ledger trả về <code>acceptanceEligibility.eligible=true</code>. Record staff file/paste sẽ được giữ audit nhưng hiển thị lý do không đủ điều kiện thay vì cho bấm rồi lỗi.</div></div>
+  <div class="lane publish"><h3>Lane C<br><span class="tag">Product / Publish</span></h3><div><b>Hoàn toàn tách biệt.</b> Chỉ dữ liệu sản phẩm của bạn đã được xác minh mới đi vào Product Truth. Sau đó mới có IP screening, approval version/hash, trạng thái <code>PUBLISH_READY</code> và quyền publish riêng theo listing.</div></div>
+
+  <h2>3. Quy trình Etsy rõ ràng cho <em>para mi hija</em></h2>
+  <div class="flow">
+    <div class="step">0. Tạo/chọn Project<small>Marketplace Etsy + seed <code>para mi hija</code>.</small></div>
+    <div class="step">1. Nạp file<small>Ưu tiên CSV; HTML là fallback; text là lựa chọn cuối.</small></div>
+    <div class="step">2. Xem Preview<small>Kiểm title/shop/price/UNKNOWN trước khi lưu.</small></div>
+    <div class="step">3. Lưu analysis artifact<small>Hash + project binding + source provenance.</small></div>
+    <div class="step">4. Chọn next lane<small>Phân tích tiếp hoặc evidence gate; không publish.</small></div>
+  </div>
+  <ol class="checklist">
+    <li><b>Active Project.</b> Chọn project Etsy đúng. Không có project thì tạo project trước; không nhập data vào workspace mơ hồ.</li>
+    <li><b>Chọn “Nạp kết quả Etsy”.</b> Bấm <em>Chọn file</em> → chọn <code>etsy_search_results_para_mi_hija_2026-08-24.csv</code>. Đây là nguồn tốt nhất vì 63 rows đã có title/shop/URL/price và rank nguồn.</li>
+    <li><b>Phân tích & Xem trước.</b> Preview không ghi DB hoặc file. Kỳ vọng: 63 listing, source <code>CSV</code>, title/shop/price hiện đúng. Giá CSV không có cột currency thì UI giữ currency UNKNOWN; HTML cùng kỳ có thể cho VND từ JSON-LD.</li>
+    <li><b>Xác nhận lưu.</b> Hệ thống tạo một <code>STAFF_MANUAL_ASSERTION</code> có hash và <code>UNVERIFIED_INPUT</code>, gắn project. Nhấn lại cùng nội dung là idempotent, không tạo record trùng.</li>
+    <li><b>Dùng output.</b> Mở Stage Research để đọc pattern title, price range, tag suggestion (nếu file có tag) và dùng làm candidate draft/keyword. Không nhấn Accept staff-file vì gate sẽ giải thích record không độc lập xác minh.</li>
+  </ol>
+
+  <div class="grid two">
+    <div class="card orange"><h3>Pull & Analyze thực hiện gì?</h3><ul><li>Input là seed/URL Etsy và unit cost tùy chọn.</li><li>Gọi Etsy MCP, persist một artifact <b>theo Active Project</b>.</li><li>Output: số record provider trả về, tag quan sát, phrase suy ra, so sánh giá–cost.</li><li>Không tạo listing publish, không ghi Product Truth, không tự mở gate.</li></ul></div>
+    <div class="card blue"><h3>Vì sao màn hình nói PARTIAL_EVIDENCE?</h3><ul><li>Provider đã trả một phần data (ví dụ 3 records, 0 tags).</li><li>Output vẫn có thể đọc như analysis; không được gọi là “đủ verified”.</li><li>Muốn qua Research Gate: retry MCP khi provider có retrieval hoàn chỉnh/hash hợp lệ, sau đó xem eligibility tại Gate.</li><li>Không đổi state bằng tay và không bấm accept staff paste.</li></ul></div>
+  </div>
+
+  <h2>4. Cách đọc Gate ở ảnh Project #2</h2>
+  <div class="table-wrap"><table><thead><tr><th>Record thấy trên UI</th><th>Ý nghĩa</th><th>Việc đúng</th></tr></thead><tbody>
+    <tr><td><code>STAFF_MANUAL_ASSERTION · OBSERVED</code></td><td>CSV/HTML/HeyEtsy mà staff đã cung cấp. Nó được lưu để phân tích/audit.</td><td>Đọc/so sánh pattern; <b>không accept</b> vì không độc lập xác minh.</td></tr>
+    <tr><td><code>MCP_RETRIEVAL · PARTIAL_EVIDENCE</code></td><td>MCP có response nhưng chưa hoàn chỉnh/hợp lệ cho acceptance.</td><td>Không accept; retry khi cần research evidence đủ điều kiện.</td></tr>
+    <tr><td><code>MCP_RETRIEVAL · RETRIEVED_NO_OBSERVED_AT</code> hoặc <code>VERIFIED_RETRIEVED</code> + hash</td><td>Có thể đủ điều kiện theo rule server.</td><td>Gate bật Accept cho OWNER/MANAGER; sau accept mới chuyển Research Accepted.</td></tr>
+  </tbody></table></div>
+  <div class="notice"><b>Không phải lỗi “thiếu data”.</b> Ở ảnh bạn có 2 records nhưng cả hai đều không đủ điều kiện <em>acceptance</em>: một là staff assertion; một là MCP partial. Sửa đúng là hiển thị lý do và next action, không hạ rule để cho qua gate.</div>
+
+  <h2>5. Quy trình Amazon với Xray + Cerebro Hija</h2>
+  <div class="grid three">
+    <div class="card blue"><div class="metric">19</div><h3>ASIN Xray</h3><p>Upload <code>Xray_Hija.xlsx</code> sau khi chọn project. Hệ thống giữ fields source snapshot, dedupe, lọc/batch tối đa 10 ASIN cho Cerebro.</p></div>
+    <div class="card orange"><div class="metric">1,099</div><h3>Keyword Cerebro</h3><p>Upload <code>Cerebro_Hija.xlsx</code> để lọc/map keyword. Dùng Search Volume, CPR, competing products, ranks làm research signal.</p></div>
+    <div class="card green"><div class="metric">0</div><h3>Không upload lại</h3><p>Đổi giữa Stage 1/2 không xóa session Xray. Chỉ đổi Active Project hoặc reload mới xóa display snapshot để tránh lẫn project.</p></div>
+  </div>
+  <ol class="checklist">
+    <li>Chọn/tạo Amazon project với seed phrase phù hợp.</li>
+    <li>Stage 1 → nạp Xray. Kết quả đúng là danh sách ASIN + batch, không phải Product Truth.</li>
+    <li>Xuất/copy batch 10 ASIN cho Cerebro; nạp Cerebro để lấy keyword map.</li>
+    <li>Ở Stage 2, Xray được xem là <b>benchmark</b>. Không dùng nút “Học DNA” với row Xray đơn lẻ vì row đó thường không có full listing title/bullets/description. Muốn học cấu trúc DNA, dán link hoặc text listing đầy đủ.</li>
+    <li>Research Gate vẫn cần evidence đủ điều kiện riêng; Product Truth của listing của bạn là lane khác.</li>
+  </ol>
+
+  <h2>6. Dữ liệu được xử lý ở đâu?</h2>
+  <div class="table-wrap"><table><thead><tr><th>Nguồn</th><th>Parser / xử lý</th><th>Persist</th><th>Được dùng cho</th></tr></thead><tbody>
+    <tr><td>CSV Etsy</td><td><code>ETSY_SEARCH_CSV_V1</code>; title, shop, price, reviews, metrics/tags có mặt; giữ null khi file trống.</td><td>1 hashed artifact, project-bound.</td><td>Pattern/keyword/analysis.</td></tr>
+    <tr><td>HTML Etsy</td><td><code>ETSY_SEARCH_HTML_JSONLD_V1</code>; ItemList JSON-LD, title/shop/price/currency/url.</td><td>1 hashed artifact, project-bound.</td><td>Fallback khi không có CSV.</td></tr>
+    <tr><td>Clipboard HeyEtsy</td><td><code>HEYETSY_PASTED_TEXT_V1</code>; bỏ metric-only cards như <code>233+ Sold</code> để không thành title.</td><td>1 hashed artifact, project-bound.</td><td>Pattern/tag suggestion nếu source có tag.</td></tr>
+    <tr><td>Smart Pull MCP</td><td>Provider retrieval; state hiển thị ngay trên card.</td><td>1 Smart Pull artifact project-bound.</td><td>Research analysis; chỉ complete hashed retrieval mới có thể đủ Gate.</td></tr>
+    <tr><td>Xray/Cerebro</td><td>ASIN batcher và keyword flow; source snapshot hiển thị provenance.</td><td>Session/project-scoped workflow data.</td><td>Benchmark, batch, keyword research.</td></tr>
+  </tbody></table></div>
+
+  <h2>7. Release safety: việc nào chưa được làm?</h2>
+  <div class="mono">Không publish Etsy/Amazon thật.
+Không dùng dữ liệu đối thủ để khai Product Truth sản phẩm của bạn.
+Không coi staff CSV/HTML/paste là verified evidence.
+Không tự chuyển EVIDENCE_INTAKE → RESEARCH_ACCEPTED.
+Không mở PUBLISH_READY nếu thiếu Product Truth/version/hash/IP gates.</div>
+
+  <h2>8. Vai trò từng GPT sau thay đổi</h2>
+  <div class="grid three">
+    <div class="card blue"><h3>GPT1 — Product Truth</h3><p>Review exact diff cho evidence eligibility, workflow transition, Product Truth, approval/version/hash/IP và publish gate. Xác nhận import file không mở bypass.</p></div>
+    <div class="card orange"><h3>GPT2 — MCP / Runtime</h3><p>Review provenance file vs MCP, credential boundary và chạy Node 22 + native SQLite + HTTP/DB/full suite trên exact SHA mới.</p></div>
+    <div class="card green"><h3>GPT3 — Integration</h3><p>Implement parser/UI/docs, chạy build/targeted regression, đóng gói exact candidate và tổng hợp verdict. Không deploy/publish nếu chưa có quyền riêng.</p></div>
+  </div>
+  <p class="footer">Guide v3 · generated for the supplied <em>para mi hija</em> inputs · data provenance remains explicit; absence of a field means UNKNOWN, not zero.</p>
+</main>
+</body>
+</html>

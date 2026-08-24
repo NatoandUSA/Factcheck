@@ -4,7 +4,7 @@ const path = require('path');
 
 process.env.NODE_ENV = 'test';
 
-const { parseHeyEtsyPastedText } = require('../server/etsyPastedSearchParser');
+const { parseHeyEtsyPastedText, parseEtsySearchCsv, parseEtsySearchHtml } = require('../server/etsyPastedSearchParser');
 const { app, db, databaseReady } = require('../server/server');
 const { createSessionRecord } = require('../server/security/session');
 
@@ -202,6 +202,12 @@ Categories Copy
 Jewelry, Necklaces, Pendant Necklaces
 HeyEtsy.com`;
 
+const CSV_SAMPLE = `listing_id,title,shop,price,price_num,reviews,he_views,he_sold,he_tags,he_categories,url,rank_position
+1001,"Para Mi Hija Necklace",Fantasticgiftsltd,"1,145,896",1145896,119,25136,1610,"para mi hija|hija necklace","Jewelry, Necklaces",https://www.etsy.com/listing/1001,3
+1002,"Daughter Gift",SecondShop,"815,152",815152,0,0,0,,,https://www.etsy.com/listing/1002,4`;
+
+const HTML_SAMPLE = `<!doctype html><html><head><script type="application/ld+json">{"@context":"https://schema.org","@type":"ItemList","itemListElement":[{"@type":"ListItem","position":2,"item":{"@type":"Product","name":"Para Mi Hija Necklace","url":"https://www.etsy.com/listing/1001","brand":{"@type":"Brand","name":"Fantasticgiftsltd"},"offers":{"@type":"Offer","price":"1145896","priceCurrency":"VND"}}}]}</script></head></html>`;
+
 const dbAll = (sql, params = []) => new Promise((resolve, reject) => db.all(sql, params, (err, rows) => err ? reject(err) : resolve(rows)));
 const createSession = (userId, workspaceId, tenantId) => new Promise((resolve, reject) => {
   createSessionRecord(db, userId, workspaceId, tenantId, (err, session) => err ? reject(err) : resolve(session));
@@ -268,6 +274,24 @@ async function waitForEtsyOwner() {
   assert(parsed.tagSuggestions.some(item => item.tag === 'para mi hija'));
   console.log('  🟢 Block parser: exact 4 listings, VND/metrics/tags/context preserved, noise excluded.');
 
+  const csv = parseEtsySearchCsv(CSV_SAMPLE);
+  assert.strictEqual(csv.inputFormat, 'CSV');
+  assert.strictEqual(csv.sellers.length, 2);
+  assert.strictEqual(csv.sellers[0].sourceRank, 1, 'Source order must not be replaced by a claimed performance rank');
+  assert.strictEqual(csv.sellers[0].priceAmount, 1145896);
+  assert.strictEqual(csv.sellers[0].totalViews, 25136);
+  assert.strictEqual(csv.sellers[1].reviewCount, 0, 'CSV zero must stay a numeric zero');
+  assert.strictEqual(csv.sellers[1].totalViews, 0, 'CSV zero must not become UNKNOWN');
+  assert.strictEqual(csv.sellers[0].evidenceState, 'UNVERIFIED_INPUT');
+
+  const html = parseEtsySearchHtml(HTML_SAMPLE);
+  assert.strictEqual(html.inputFormat, 'HTML');
+  assert.strictEqual(html.sellers.length, 1);
+  assert.strictEqual(html.sellers[0].title, 'Para Mi Hija Necklace');
+  assert.strictEqual(html.sellers[0].priceCurrency, 'VND');
+  assert.strictEqual(html.sellers[0].evidenceState, 'UNVERIFIED_INPUT');
+  console.log('  🟢 CSV/HTML parser: source fields preserved, zero/UNKNOWN separated, all inputs remain unverified.');
+
   await databaseReady;
   const owner = await waitForEtsyOwner();
   let server;
@@ -309,6 +333,21 @@ async function waitForEtsyOwner() {
     assert.strictEqual(preview.body.ordering, 'SOURCE_ORDER_NOT_PERFORMANCE_RANK');
     assert.strictEqual((await dbAll('SELECT id FROM research_evidence')).length, countBefore, 'Preview must make zero DB writes');
 
+    const filePreviewForm = new FormData();
+    filePreviewForm.append('searchResultsFile', new Blob([CSV_SAMPLE], { type: 'text/csv' }), 'para-mi-hija.csv');
+    filePreviewForm.append('seed', 'para mi hija');
+    filePreviewForm.append('projectId', String(projectId));
+    filePreviewForm.append('confirm', 'false');
+    const filePreviewResponse = await fetch(base + '/api/etsy/feed-search-results-file', {
+      method: 'POST', headers: { Origin: base, Cookie: `omni_session=${session.rawToken}` }, body: filePreviewForm
+    });
+    const filePreview = await filePreviewResponse.json();
+    assert.strictEqual(filePreviewResponse.status, 200);
+    assert.strictEqual(filePreview.inputFormat, 'CSV');
+    assert.strictEqual(filePreview.sourceFileName, 'para-mi-hija.csv');
+    assert.strictEqual(filePreview.count, 2);
+    assert.strictEqual((await dbAll('SELECT id FROM research_evidence')).length, countBefore, 'File preview must make zero DB writes');
+
     const committed = await post('/api/etsy/feed-search-results', { rawText: SAMPLE, seed: 'para mi hija', projectId, confirm: true });
     assert.strictEqual(committed.status, 200);
     assert.strictEqual(committed.body.committed, true);
@@ -322,10 +361,33 @@ async function waitForEtsyOwner() {
     assert.strictEqual(metadata.sellers.length, 4);
     assert.strictEqual(metadata.rawText.includes('413 results, with ads'), true);
 
+    const fileConfirmForm = new FormData();
+    fileConfirmForm.append('searchResultsFile', new Blob([CSV_SAMPLE], { type: 'text/csv' }), 'para-mi-hija.csv');
+    fileConfirmForm.append('seed', 'para mi hija');
+    fileConfirmForm.append('projectId', String(projectId));
+    fileConfirmForm.append('confirm', 'true');
+    const fileCommitResponse = await fetch(base + '/api/etsy/feed-search-results-file', {
+      method: 'POST', headers: { Origin: base, Cookie: `omni_session=${session.rawToken}` }, body: fileConfirmForm
+    });
+    const fileCommitted = await fileCommitResponse.json();
+    assert.strictEqual(fileCommitResponse.status, 200);
+    assert.strictEqual(fileCommitted.committed, true);
+    const fileRows = await dbAll('SELECT metadata FROM research_evidence WHERE id = ?', [fileCommitted.evidenceId]);
+    const fileMetadata = JSON.parse(fileRows[0].metadata);
+    assert.strictEqual(fileMetadata.inputFormat, 'CSV');
+    assert.strictEqual(fileMetadata.sourceFileName, 'para-mi-hija.csv');
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(fileMetadata, 'rawText'), false, 'Large file payload must not be duplicated into SQLite metadata');
+
     const duplicate = await post('/api/etsy/feed-search-results', { rawText: SAMPLE, seed: 'para mi hija', projectId, confirm: true });
     assert.strictEqual(duplicate.body.evidenceId, committed.body.evidenceId);
     assert.strictEqual(duplicate.body.duplicateSubmission, true);
-    assert.strictEqual((await dbAll('SELECT id FROM research_evidence')).length, countBefore + 1, 'Duplicate confirm must be idempotent');
+    assert.strictEqual((await dbAll('SELECT id FROM research_evidence')).length, countBefore + 2, 'Duplicate confirm must be idempotent');
+
+    const ledgerResponse = await fetch(`${base}/api/evidence?projectId=${projectId}`, { headers: { Origin: base, Cookie: `omni_session=${session.rawToken}` } });
+    const ledger = await ledgerResponse.json();
+    const pastedLedgerRow = ledger.evidence.find(row => row.id === committed.body.evidenceId);
+    assert.strictEqual(pastedLedgerRow.acceptanceEligibility.eligible, false);
+    assert.strictEqual(pastedLedgerRow.acceptanceEligibility.error, 'UNQUALIFIED_STAFF_PASTED_EVIDENCE');
 
     const accept = await post(`/api/evidence/${committed.body.evidenceId}/accept`, { reason: 'attempt to accept pasted evidence' });
     assert.strictEqual(accept.status, 409);
@@ -335,7 +397,9 @@ async function waitForEtsyOwner() {
     const ui = fs.readFileSync(path.join(__dirname, '../src/components/EtsyWorkspace.jsx'), 'utf8');
     assert(ui.includes('Phân tích & Xem trước'));
     assert(ui.includes('Xác nhận lưu'));
-    assert(ui.includes('URL/seed live dùng Project-bound Smart Pull'));
+    assert(ui.includes('feed-search-results-file'));
+    assert(ui.includes('CSV / HTML / TXT'));
+    assert(ui.includes('Smart Pull dùng URL/seed để hỏi MCP'));
     assert(!ui.includes('30 Sellers thực tế'));
     assert(!ui.includes('13 Tags chuẩn 100%'));
     console.log('  🟢 UI contract: two-phase preview/confirm and truth-safe source wording present.');

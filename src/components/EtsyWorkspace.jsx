@@ -29,10 +29,12 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
   const [projects, setProjects] = useState([]);
   const [isFeedModalOpen, setIsFeedModalOpen] = useState(false);
   const [feedRawText, setFeedRawText] = useState('');
+  const [feedFile, setFeedFile] = useState(null);
   const [feedPreview, setFeedPreview] = useState(null);
   const [feedSubmitting, setFeedSubmitting] = useState(false);
   const [scannedSellers, setScannedSellers] = useState([]);
   const fileInputRef = useRef(null);
+  const feedFileInputRef = useRef(null);
   const activeProjectIdRef = useRef(null);
   activeProjectIdRef.current = activeProject?.id || null;
 
@@ -42,6 +44,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
     setTrends([]);
     setUploadStatus(null);
     setFeedRawText('');
+    setFeedFile(null);
     setFeedPreview(null);
     setSeedPhrase(activeProject?.seed_phrase || '');
   }, [activeProject?.id]);
@@ -52,23 +55,31 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
       return;
     }
     const requestedProjectId = activeProject.id;
-    if (!feedRawText.trim()) {
-      if (onShowToast) onShowToast('Vui lòng dán nội dung kết quả tìm kiếm hoặc URL từ trang Etsy!');
+    if (!feedFile && !feedRawText.trim()) {
+      if (onShowToast) onShowToast('Chọn CSV/HTML/TXT hoặc dán toàn bộ nội dung kết quả tìm kiếm.');
       return;
     }
     setFeedSubmitting(true);
     try {
-      const res = await fetch('/api/etsy/feed-search-results', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          rawText: feedRawText,
-          seed: seedPhrase.trim(),
-          projectId: requestedProjectId,
-          confirm
-        })
-      });
+      const request = feedFile
+        ? (() => {
+            const body = new FormData();
+            body.append('searchResultsFile', feedFile);
+            body.append('seed', seedPhrase.trim());
+            body.append('projectId', String(requestedProjectId));
+            body.append('confirm', String(confirm));
+            return { url: '/api/etsy/feed-search-results-file', options: { method: 'POST', credentials: 'include', body } };
+          })()
+        : {
+            url: '/api/etsy/feed-search-results',
+            options: {
+              method: 'POST',
+              credentials: 'include',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ rawText: feedRawText, seed: seedPhrase.trim(), projectId: requestedProjectId, confirm })
+            }
+          };
+      const res = await fetch(request.url, request.options);
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || data.error || 'Failed to feed Etsy search data');
       if (activeProjectIdRef.current !== requestedProjectId) return;
@@ -100,6 +111,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
       if (onShowToast) onShowToast(`✓ Đã lưu ${data.sellers?.length || 0} listing evidence vào Project #${requestedProjectId}. Tags được ghi rõ là HeyEtsy suggestions.`);
       setIsFeedModalOpen(false);
       setFeedRawText('');
+      setFeedFile(null);
       setFeedPreview(null);
     } catch (err) {
       if (onShowToast) onShowToast(`Lỗi nạp dữ liệu: ${err.message}`);
@@ -440,10 +452,10 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
             opacity: activeProject ? 1 : 0.6,
               marginTop: '15px'
             }}
-            title="Copy toàn bộ text kết quả Etsy/HeyEtsy, xem Preview rồi lưu vào Active Project"
+            title="Nạp CSV, HTML, TXT hoặc text Etsy/HeyEtsy; luôn xem Preview trước khi lưu"
           >
             <Sparkles size={16} color="#059669" />
-            <span>📥 Feed Trang Kết Quả Etsy</span>
+            <span>📥 Nạp kết quả Etsy</span>
           </button>
 
           <button
@@ -784,11 +796,11 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
                   <Sparkles size={20} />
                 </div>
                 <h3 style={{ margin: 0, fontSize: '1.15rem', color: '#0f172a', fontWeight: 800 }}>
-                  📋 Nạp Text Kết Quả Etsy/HeyEtsy Vào Project
+                  📋 Nạp kết quả Etsy vào Project
                 </h3>
               </div>
               <button
-                onClick={() => { setIsFeedModalOpen(false); setFeedPreview(null); }}
+                onClick={() => { setIsFeedModalOpen(false); setFeedPreview(null); setFeedFile(null); }}
                 style={{ background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', color: '#64748b' }}
               >
                 ✕
@@ -796,18 +808,32 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
             </div>
 
             <p style={{ fontSize: '0.85rem', color: '#475569', margin: '0 0 14px 0', lineHeight: 1.5 }}>
-              Copy toàn bộ nội dung search result có các listing block và marker <b>HeyEtsy.com</b>, sau đó xem Preview trước khi lưu.
-              Dữ liệu được giữ theo <b>thứ tự nguồn</b>; dấu “–” là UNKNOWN. Tag được ghi là <b>HeyEtsy suggestion</b>, không phải Etsy tag đã xác minh, Product Truth hoặc publish evidence.
+              Ưu tiên chọn <b>CSV export</b> hoặc <b>HTML Etsy đã lưu</b>; clipboard HeyEtsy vẫn được hỗ trợ. Dữ liệu giữ <b>thứ tự nguồn</b>, giữ số <b>0</b> khác với UNKNOWN và không tự được gọi là “Top Seller”. Chúng dùng để phân tích pattern/keyword, không tự thành Product Truth hay publish evidence.
             </p>
 
             <div style={{ marginBottom: '14px', padding: '9px 12px', borderRadius: '8px', background: '#eef2ff', color: '#3730a3', fontSize: '0.78rem', fontWeight: 700 }}>
-              Active Project: {activeProject?.id ? `#${activeProject.id} — ${activeProject.name || activeProject.seed_phrase}` : 'Chưa chọn Project'} · URL/seed live dùng Project-bound Smart Pull, không dùng ô Paste Text này.
+              Active Project: {activeProject?.id ? `#${activeProject.id} — ${activeProject.name || activeProject.seed_phrase}` : 'Chưa chọn Project'} · Smart Pull dùng URL/seed để hỏi MCP; hộp này dùng file/text bạn đã thu thập.
             </div>
 
             {!feedPreview ? (
+              <>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '8px', marginBottom: '14px', fontSize: '0.76rem' }}>
+                  <div style={{ padding: '10px', borderRadius: '8px', background: '#ecfdf5', border: '1px solid #a7f3d0' }}><b>1. Chọn nguồn</b><br />CSV / HTML / TXT hoặc paste.</div>
+                  <div style={{ padding: '10px', borderRadius: '8px', background: '#eff6ff', border: '1px solid #bfdbfe' }}><b>2. Xem Preview</b><br />Kiểm tra title, shop, giá và UNKNOWN.</div>
+                  <div style={{ padding: '10px', borderRadius: '8px', background: '#fff7ed', border: '1px solid #fed7aa' }}><b>3. Xác nhận lưu</b><br />Lưu artifact audit có hash, không mở publish.</div>
+                </div>
+                <input ref={feedFileInputRef} type="file" accept=".csv,.html,.htm,.txt,text/csv,text/html,text/plain" onChange={(event) => { setFeedFile(event.target.files?.[0] || null); setFeedRawText(''); setFeedPreview(null); }} style={{ display: 'none' }} />
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '12px', marginBottom: '12px', border: '1px dashed #34d399', borderRadius: '10px', background: '#f0fdf4' }}>
+                  <FileSpreadsheet size={20} color="#059669" />
+                  <div style={{ flex: 1, fontSize: '0.8rem' }}><b>{feedFile ? feedFile.name : 'Chưa chọn file'}</b><br /><span style={{ color: '#475569' }}>CSV export phù hợp để giữ toàn bộ dòng kết quả; HTML Etsy đã lưu dùng ItemList có sẵn.</span></div>
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => feedFileInputRef.current?.click()}>Chọn file</button>
+                  {feedFile && <button type="button" className="btn btn-secondary btn-sm" onClick={() => { setFeedFile(null); if (feedFileInputRef.current) feedFileInputRef.current.value = ''; }}>Bỏ file</button>}
+                </div>
+                <div style={{ fontSize: '0.75rem', fontWeight: 800, color: '#64748b', marginBottom: '6px' }}>Hoặc dán text HeyEtsy (không cần khi đã chọn file)</div>
               <textarea
                 value={feedRawText}
-                onChange={(e) => { setFeedRawText(e.target.value); setFeedPreview(null); }}
+                disabled={Boolean(feedFile)}
+                onChange={(e) => { setFeedRawText(e.target.value); setFeedFile(null); setFeedPreview(null); }}
                 placeholder={'Dán toàn bộ text search result tại đây…\n\nVí dụ cấu trúc:\n413 results, with ads\nMost relevant\nSearch results\n[Listing title]\n[Listing title]\n4.7\n(113)\nBy\n[Shop name]\n…\nHeyEtsy.com'}
                 rows={12}
                 style={{
@@ -822,10 +848,12 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
                   boxSizing: 'border-box'
                 }}
               />
+              </>
             ) : (
               <div style={{ marginBottom: '16px', display: 'grid', gap: '12px' }}>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', fontSize: '0.78rem' }}>
                   <span className="badge">Parsed: {feedPreview.count} listings</span>
+                  <span className="badge">Nguồn: {feedPreview.inputFormat}{feedPreview.sourceFileName ? ` · ${feedPreview.sourceFileName}` : ''}</span>
                   <span className="badge">Results page: {feedPreview.searchContext?.resultCount ?? 'UNKNOWN'}</span>
                   <span className="badge">Sort: {feedPreview.searchContext?.sortMode || 'UNKNOWN'}</span>
                   <span className="badge">Contains ads: {feedPreview.searchContext?.pageContainsAds ? 'YES' : 'UNKNOWN/NO'}</span>
@@ -866,7 +894,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
                   </table>
                 </div>
                 <div style={{ fontSize: '0.76rem', color: '#92400e', background: '#fffbeb', padding: '9px 11px', borderRadius: '8px' }}>
-                  Preview chưa ghi dữ liệu. “Most relevant” có thể chứa quảng cáo; hệ thống không gọi các dòng này là Top Seller và không xếp hạng lại khi metric UNKNOWN.
+                  Preview chưa ghi DB hoặc file. “Most relevant” có thể chứa quảng cáo; hệ thống không gọi các dòng này là Top Seller và không xếp hạng lại khi metric UNKNOWN. Khi lưu, đây vẫn là `UNVERIFIED_INPUT`, không phải evidence đủ điều kiện Research Accepted.
                 </div>
               </div>
             )}
@@ -876,7 +904,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
                 type="button"
                 onClick={() => {
                   if (feedPreview) setFeedPreview(null);
-                  else setFeedRawText('');
+                  else { setFeedRawText(''); setFeedFile(null); if (feedFileInputRef.current) feedFileInputRef.current.value = ''; }
                 }}
                 style={{
                   background: '#f1f5f9',
@@ -892,7 +920,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
               </button>
               <div style={{ display: 'flex', gap: '10px' }}>
                 <button
-                  onClick={() => { setIsFeedModalOpen(false); setFeedPreview(null); }}
+                onClick={() => { setIsFeedModalOpen(false); setFeedPreview(null); setFeedFile(null); }}
                   className="btn btn-secondary"
                   style={{ padding: '8px 16px', borderRadius: '8px' }}
                 >
@@ -901,7 +929,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
                 {!feedPreview ? (
                   <button
                     onClick={() => handleFeedSearchResults({ confirm: false })}
-                    disabled={feedSubmitting || !feedRawText.trim() || !activeProject?.id}
+                    disabled={feedSubmitting || (!feedFile && !feedRawText.trim()) || !activeProject?.id}
                     className="btn btn-primary"
                     style={{ background: '#059669', color: '#fff', fontWeight: 700, padding: '8px 20px', borderRadius: '8px' }}
                   >

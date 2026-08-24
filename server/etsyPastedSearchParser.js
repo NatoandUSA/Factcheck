@@ -352,6 +352,17 @@ function splitSuggestions(value) {
   return String(value).split(/[,;|]/).map(normalizeLine).filter(Boolean);
 }
 
+// Preserve a source-reported yes/no value without treating an absent field as
+// false. This distinction matters in exports where a blank badge is simply
+// unknown, not proof that a listing lacks the badge.
+function parseBooleanEvidence(value) {
+  if (isUnknown(value)) return null;
+  const normalized = normalizeLine(value).toLowerCase();
+  if (['1', 'true', 'yes', 'y', 'on'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'n', 'off'].includes(normalized)) return false;
+  return null;
+}
+
 function parseCsvListing(row, index) {
   const title = csvValue(row, 'title', 'Title', 'listing_title');
   if (!title) return null;
@@ -365,6 +376,7 @@ function parseCsvListing(row, index) {
   const currency = csvValue(row, 'currency', 'price_currency') || null;
   const seller = {
     id: `csv-${sourceRank}`,
+    listingId: csvValue(row, 'listing_id', 'listingId', 'Listing ID'),
     sourceRank,
     title,
     shopName: csvValue(row, 'shop', 'shop_name', 'Shop'),
@@ -378,6 +390,12 @@ function parseCsvListing(row, index) {
     originalPrice: originalRaw,
     originalPriceAmount: originalNumeric.value,
     discountPercent: parseNumberEvidence(csvValue(row, 'he_discount_pct', 'discount_pct')).value,
+    ageDays: parseNumberEvidence(csvValue(row, 'age_days', 'listing_age_days')).value,
+    shopDailySold: parseNumberEvidence(csvValue(row, 'shop_daily_sold')).value,
+    isStarSeller: parseBooleanEvidence(csvValue(row, 'star_seller')),
+    isAd: parseBooleanEvidence(csvValue(row, 'ad')),
+    isBestSeller: parseBooleanEvidence(csvValue(row, 'bestseller')),
+    hasFreeShipping: parseBooleanEvidence(csvValue(row, 'free_shipping')),
     totalViews: parseNumberEvidence(csvValue(row, 'he_views', 'total_views')).value,
     avgViews: parseNumberEvidence(csvValue(row, 'he_views_avg', 'avg_view')).value,
     views24h: parseNumberEvidence(csvValue(row, 'views_24h', 'he_views_24h')).value,
@@ -401,6 +419,12 @@ function parseCsvListing(row, index) {
     country: csvValue(row, 'country'),
     shopCountry: csvValue(row, 'country'),
     url: csvValue(row, 'url', 'listing_url'),
+    keywordContext: csvValue(row, 'keyword_context'),
+    keywordMatchType: csvValue(row, 'keyword_match_type'),
+    keywordMatchConfidence: parseNumberEvidence(csvValue(row, 'keyword_match_confidence')).value,
+    proofScopeHint: csvValue(row, 'proof_scope_hint'),
+    evidenceRouteHint: csvValue(row, 'evidence_route_hint'),
+    dataUseHint: csvValue(row, 'data_use_hint'),
     evidenceSource: 'STAFF_MANUAL_ASSERTION',
     evidenceState: 'UNVERIFIED_INPUT',
     evidenceProvider: 'ETSY_SEARCH_CSV',
@@ -490,6 +514,42 @@ function parseEtsySearchInput(rawText, inputFormat = 'AUTO') {
   return parseHeyEtsyPastedText(rawText);
 }
 
+// Multi-page CSV/HTML exports are one staff-supplied research artifact. Each
+// input remains labelled with its original provider and file name; only the
+// combined projection is de-duplicated for analysis convenience.
+function parseEtsySearchInputs(inputs) {
+  const normalizedInputs = (inputs || []).map((input, index) => ({
+    rawText: String(input?.rawText || ''),
+    inputFormat: input?.inputFormat || 'AUTO',
+    sourceFileName: input?.sourceFileName || null,
+    sourcePage: index + 1
+  })).filter(input => input.rawText.trim());
+  if (!normalizedInputs.length) throw new Error('MISSING_SEARCH_INPUT');
+  if (normalizedInputs.length === 1) return parseEtsySearchInput(normalizedInputs[0].rawText, normalizedInputs[0].inputFormat);
+
+  const parsedInputs = normalizedInputs.map(input => ({ input, parsed: parseEtsySearchInput(input.rawText, input.inputFormat) }));
+  const sellers = parsedInputs.flatMap(({ input, parsed }) => parsed.sellers.map(seller => ({
+    ...seller,
+    sourceFileName: input.sourceFileName,
+    sourcePage: input.sourcePage
+  })));
+  const sourceFiles = parsedInputs.map(({ input, parsed }) => ({
+    name: input.sourceFileName || `Pasted input ${input.sourcePage}`,
+    inputFormat: parsed.inputFormat,
+    parsedCount: parsed.parsedCount,
+    returnedCount: parsed.returnedCount
+  }));
+  const normalizedRaw = normalizedInputs.map(input => `--- ${input.sourceFileName || `input-${input.sourcePage}`} ---\n${input.rawText.trim()}`).join('\n');
+  const result = finalizeParsedInput({
+    normalizedRaw,
+    parserVersion: 'ETSY_SEARCH_MULTI_INPUT_V1',
+    inputFormat: 'MULTI_FILE',
+    searchContext: { appliedFilters: [], unappliedFilters: [], resultCount: sellers.length, pageContainsAds: false, sortMode: null, sourceFiles },
+    sellers
+  });
+  return { ...result, sourceFiles };
+}
+
 module.exports = {
   decodeEntities,
   isUnknown,
@@ -498,5 +558,7 @@ module.exports = {
   parseHeyEtsyPastedText,
   parseEtsySearchCsv,
   parseEtsySearchHtml,
-  parseEtsySearchInput
+  parseEtsySearchInput,
+  parseEtsySearchInputs,
+  parseBooleanEvidence
 };

@@ -39,7 +39,7 @@ const { projectVerifiedAiInput, renderVerifiedCommerceListing, validateModelClai
 const { readFirstWorksheet } = require('./services/spreadsheetReader');
 const { UrlGuardError } = require('./security/urlGuard');
 const { resolveRuntimePaths } = require('./config/paths');
-const { parseEtsySearchInput } = require('./etsyPastedSearchParser');
+const { parseEtsySearchInput, parseEtsySearchInputs } = require('./etsyPastedSearchParser');
 
 // Make crashes visible instead of dying silently with no trace (systemd will
 // still restart the process via Restart=always; this just ensures the cause
@@ -82,7 +82,7 @@ const storage = multer.diskStorage({
 });
 const upload = multer({
   storage,
-  limits: { fileSize: 60 * 1024 * 1024, files: 1 },
+  limits: { fileSize: 60 * 1024 * 1024, files: 20 },
   fileFilter(req, file, cb) {
     const allowed = /\.(xlsx|csv|html?)$/i.test(file.originalname || '');
     cb(allowed ? null : new Error('UNSUPPORTED_UPLOAD_TYPE'), allowed);
@@ -94,7 +94,7 @@ const upload = multer({
 // again for the explicit confirm request.
 const etsySearchUpload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 5 * 1024 * 1024, files: 1 },
+  limits: { fileSize: 5 * 1024 * 1024, files: 10 },
   fileFilter(req, file, cb) {
     const allowed = /\.(csv|html?|txt)$/i.test(file.originalname || '');
     cb(allowed ? null : new Error('UNSUPPORTED_ETSY_SEARCH_FILE'), allowed);
@@ -970,6 +970,7 @@ function requireProjectContext(req, rawProjectId) {
 // never be promoted to ACCEPTED merely by a ledger action.
 const SMART_PULL_ARTIFACT_KIND = 'SMART_PULL_ARTIFACT_V1';
 const ETSY_SEARCH_PASTE_ARTIFACT_KIND = 'ETSY_SEARCH_PASTE_V1';
+const AMAZON_XRAY_ARTIFACT_KIND = 'AMAZON_XRAY_REPORT_V1';
 const ACCEPTABLE_SMART_PULL_STATES = new Set([
   'RETRIEVED_NO_OBSERVED_AT',
   'VERIFIED_RETRIEVED'
@@ -987,11 +988,11 @@ function parseEvidenceMetadata(evidence) {
 
 function getEvidenceAcceptanceEligibility(evidence) {
   const metadata = parseEvidenceMetadata(evidence);
-  if (metadata.kind === ETSY_SEARCH_PASTE_ARTIFACT_KIND) {
+  if (metadata.kind === ETSY_SEARCH_PASTE_ARTIFACT_KIND || metadata.kind === AMAZON_XRAY_ARTIFACT_KIND) {
     return {
       eligible: false,
       error: 'UNQUALIFIED_STAFF_PASTED_EVIDENCE',
-      message: 'Staff-pasted HeyEtsy/search text is retained for analysis and audit, but it is not independently verified evidence and cannot satisfy Research Accepted.'
+      message: 'Staff-supplied report data is retained for analysis and audit, but it is not independently verified evidence and cannot satisfy Research Accepted.'
     };
   }
   if (metadata.kind !== SMART_PULL_ARTIFACT_KIND) return { eligible: true };
@@ -2612,15 +2613,17 @@ async function handleEtsySearchResultFeed(req, res, supplied = {}) {
   if (req.user.marketplace !== 'ETSY') {
     return res.status(403).json({ success: false, error: 'MARKETPLACE_MISMATCH', message: 'Tác vụ này yêu cầu Session Workspace Etsy.' });
   }
-  const { rawText, seed = '', projectId, inputFormat = 'AUTO', sourceFileName = null } = { ...(req.body || {}), ...supplied };
+  const { rawText, seed = '', projectId, inputFormat = 'AUTO', sourceFileName = null, inputs = null } = { ...(req.body || {}), ...supplied };
   const confirm = supplied.confirm ?? (req.body?.confirm === true || String(req.body?.confirm || '').toLowerCase() === 'true');
-  if (!rawText || typeof rawText !== 'string' || !rawText.trim()) {
+  const normalizedInputs = Array.isArray(inputs) && inputs.length ? inputs : [{ rawText, inputFormat, sourceFileName }];
+  const totalInputSize = normalizedInputs.reduce((total, item) => total + Buffer.byteLength(String(item?.rawText || ''), 'utf8'), 0);
+  if (!normalizedInputs.some(item => typeof item?.rawText === 'string' && item.rawText.trim())) {
     return res.status(400).json({ success: false, error: 'MISSING_SEARCH_INPUT', message: 'Hãy dán text hoặc chọn file CSV/HTML của trang kết quả Etsy.' });
   }
-  if (rawText.length > 5 * 1024 * 1024) {
-    return res.status(413).json({ success: false, error: 'SEARCH_INPUT_TOO_LARGE', message: 'Search-result input must be 5 MB or smaller.' });
+  if (totalInputSize > 30 * 1024 * 1024) {
+    return res.status(413).json({ success: false, error: 'SEARCH_INPUT_TOO_LARGE', message: 'Tổng input search-result phải từ 30 MB trở xuống (mỗi file tối đa 5 MB).' });
   }
-  if (!sourceFileName && /^\s*https?:\/\//i.test(rawText.trim()) && !/\n/.test(rawText.trim())) {
+  if (normalizedInputs.length === 1 && !sourceFileName && /^\s*https?:\/\//i.test(String(rawText).trim()) && !/\n/.test(String(rawText).trim())) {
     return res.status(422).json({
       success: false,
       error: 'PASTED_RESULT_TEXT_REQUIRED',
@@ -2635,7 +2638,7 @@ async function handleEtsySearchResultFeed(req, res, supplied = {}) {
   }
   let parsed;
   try {
-    parsed = parseEtsySearchInput(rawText, inputFormat);
+    parsed = normalizedInputs.length > 1 ? parseEtsySearchInputs(normalizedInputs) : parseEtsySearchInput(rawText, inputFormat);
   } catch (error) {
     return res.status(422).json({ success: false, error: error.message || 'SEARCH_INPUT_PARSE_FAILED', message: 'Không thể đọc định dạng file. Hãy dùng CSV, HTML Etsy đã lưu, hoặc toàn bộ text HeyEtsy.' });
   }
@@ -2668,13 +2671,14 @@ async function handleEtsySearchResultFeed(req, res, supplied = {}) {
     committed: confirm === true,
     source: 'STAFF_MANUAL_ASSERTION',
     evidenceState: 'UNVERIFIED_INPUT',
-    provider: parsed.inputFormat === 'CSV' ? 'ETSY_SEARCH_CSV' : parsed.inputFormat === 'HTML' ? 'ETSY_SEARCH_HTML' : 'HEYETSY_PASTED_TEXT',
+    provider: parsed.inputFormat === 'CSV' ? 'ETSY_SEARCH_CSV' : parsed.inputFormat === 'HTML' ? 'ETSY_SEARCH_HTML' : parsed.inputFormat === 'MULTI_FILE' ? 'ETSY_SEARCH_MULTI_FILE' : 'HEYETSY_PASTED_TEXT',
     observedAt: null,
     importedAt,
     seed: cleanSeed || null,
     parserVersion: parsed.parserVersion,
     inputFormat: parsed.inputFormat,
     sourceFileName: sourceFileName ? path.basename(String(sourceFileName)) : null,
+    sourceFiles: parsed.sourceFiles || (sourceFileName ? [{ name: path.basename(String(sourceFileName)), inputFormat: parsed.inputFormat, parsedCount: parsed.parsedCount, returnedCount: parsed.returnedCount }] : []),
     contentHash: parsed.contentHash,
     searchContext: parsed.searchContext,
     sellers: parsed.sellers,
@@ -2697,6 +2701,7 @@ async function handleEtsySearchResultFeed(req, res, supplied = {}) {
     provider: responsePayload.provider,
     inputFormat: parsed.inputFormat,
     sourceFileName: responsePayload.sourceFileName,
+    sourceFiles: responsePayload.sourceFiles,
     observedAt: null,
     importedAt,
     searchContext: parsed.searchContext,
@@ -2707,7 +2712,7 @@ async function handleEtsySearchResultFeed(req, res, supplied = {}) {
     // Text remains in the audit record. Large file uploads retain their
     // canonical parsed projection and hash instead of duplicating megabytes
     // of HTML inside SQLite metadata.
-    ...(sourceFileName ? {} : { rawText: rawText.trim() })
+    ...(sourceFileName || normalizedInputs.length > 1 ? {} : { rawText: rawText.trim() })
   };
 
   db.get(
@@ -2738,14 +2743,97 @@ app.post('/api/etsy/feed-search-results', requireAuth(db), requireRole(['OWNER',
   handleEtsySearchResultFeed(req, res);
 });
 
-app.post('/api/etsy/feed-search-results-file', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), etsySearchUpload.single('searchResultsFile'), (req, res) => {
-  if (!req.file?.buffer) return res.status(400).json({ success: false, error: 'MISSING_SEARCH_FILE', message: 'Chọn một file CSV, HTML hoặc TXT trước khi xem preview.' });
-  const extension = path.extname(req.file.originalname || '').toLowerCase();
-  const inputFormat = extension === '.csv' ? 'CSV' : /\.html?$/i.test(extension) ? 'HTML' : 'HEYETSY_TEXT';
+// Read-only projection of staff imported Etsy search files. This endpoint is
+// deliberately separate from the authority ledger: it makes valuable CSV/HTML
+// fields available to the analysis workspace without changing acceptance,
+// Product Truth, or publish eligibility.
+app.get('/api/projects/:projectId/etsy-search-imports', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
+  if (req.user.marketplace !== 'ETSY') return res.status(403).json({ success: false, error: 'MARKETPLACE_MISMATCH' });
+  parseAndValidateProject(db, req, req.params.projectId, (projectErr, project) => {
+    if (projectErr) return res.status(projectErr.status).json({ success: false, error: projectErr.error, message: projectErr.message });
+    db.all(
+      `SELECT id, seed_phrase, source, evidence_state, metadata, created_at
+       FROM research_evidence
+       WHERE tenant_id = ? AND workspace_id = ? AND marketplace = 'ETSY' AND project_id = ?
+         AND source = 'STAFF_MANUAL_ASSERTION' AND metadata LIKE ?
+       ORDER BY id ASC`,
+      [req.user.tenantId, req.user.workspaceId, project.id, `%"kind":"${ETSY_SEARCH_PASTE_ARTIFACT_KIND}"%`],
+      (queryErr, rows) => {
+        if (queryErr) return res.status(500).json({ success: false, error: 'ETSY_IMPORT_READ_FAILED' });
+        const imports = (rows || []).map(row => {
+          let metadata = {};
+          try { metadata = JSON.parse(row.metadata || '{}'); } catch (_) { /* corrupted metadata is not usable */ }
+          const sellers = Array.isArray(metadata.sellers) ? metadata.sellers.map(({ rawBlock, ...seller }) => seller) : [];
+          return {
+            evidenceId: row.id,
+            importedAt: metadata.importedAt || row.created_at,
+            contentHash: metadata.contentHash || null,
+            provider: metadata.provider || 'HEYETSY_PASTED_TEXT',
+            inputFormat: metadata.inputFormat || null,
+            sourceFiles: Array.isArray(metadata.sourceFiles) ? metadata.sourceFiles : [],
+            ordering: metadata.ordering || 'SOURCE_ORDER_NOT_PERFORMANCE_RANK',
+            sellerCount: sellers.length,
+            sellers
+          };
+        });
+        const sellers = imports.flatMap(item => item.sellers);
+        const countKnown = key => sellers.filter(seller => seller[key] !== null && seller[key] !== undefined && seller[key] !== '').length;
+        res.json({
+          success: true,
+          projectId: project.id,
+          imports,
+          sellers,
+          analysis: {
+            listingCount: sellers.length,
+            importCount: imports.length,
+            coverage: {
+              listingId: countKnown('listingId'), title: countKnown('title'), shop: countKnown('shopName'),
+              price: countKnown('priceAmount'), reviews: countKnown('reviewCount'), rating: countKnown('rating'),
+              tags: sellers.filter(seller => Array.isArray(seller.tags) && seller.tags.length).length,
+              categories: sellers.filter(seller => Array.isArray(seller.categories) && seller.categories.length).length,
+              views: countKnown('totalViews'), sold: countKnown('totalSold'), revenue: countKnown('revenue'),
+              favorites: countKnown('favorites'), conversion: countKnown('conversionRate')
+            }
+          },
+          authority: 'STAFF_MANUAL_ASSERTION / UNVERIFIED_INPUT — available for research analysis only; never an acceptance or publish authority.'
+        });
+      }
+    );
+  });
+});
+
+app.get('/api/projects/:projectId/amazon-xray-imports', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
+  if (req.user.marketplace !== 'AMAZON') return res.status(403).json({ success: false, error: 'MARKETPLACE_MISMATCH' });
+  parseAndValidateProject(db, req, req.params.projectId, (projectErr, project) => {
+    if (projectErr) return res.status(projectErr.status).json({ success: false, error: projectErr.error, message: projectErr.message });
+    db.all(`SELECT id, metadata, created_at FROM research_evidence WHERE tenant_id = ? AND workspace_id = ? AND marketplace = 'AMAZON' AND project_id = ? AND source = 'STAFF_MANUAL_ASSERTION' AND metadata LIKE ? ORDER BY id ASC`,
+      [req.user.tenantId, req.user.workspaceId, project.id, `%"kind":"${AMAZON_XRAY_ARTIFACT_KIND}"%`], (queryErr, rows) => {
+        if (queryErr) return res.status(500).json({ success: false, error: 'XRAY_IMPORT_READ_FAILED' });
+        const imports = (rows || []).map(row => {
+          let metadata = {}; try { metadata = JSON.parse(row.metadata || '{}'); } catch (_) { /* invalid metadata omitted */ }
+          return { evidenceId: row.id, importedAt: metadata.reportProvenance?.ingestedAt || row.created_at, contentHash: metadata.contentHash || null, sellers: Array.isArray(metadata.sellers) ? metadata.sellers : [] };
+        });
+        res.json({ success: true, projectId: project.id, imports, sellers: imports.flatMap(item => item.sellers), authority: 'STAFF_MANUAL_ASSERTION / UNVERIFIED_INPUT — analysis benchmark only.' });
+      });
+  });
+});
+
+app.post('/api/etsy/feed-search-results-file', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), etsySearchUpload.fields([{ name: 'searchResultsFile', maxCount: 10 }, { name: 'searchResultsFiles', maxCount: 10 }]), (req, res) => {
+  const files = [...(req.files?.searchResultsFile || []), ...(req.files?.searchResultsFiles || [])];
+  if (!files.length) return res.status(400).json({ success: false, error: 'MISSING_SEARCH_FILE', message: 'Chọn ít nhất một file CSV, HTML hoặc TXT trước khi xem preview.' });
+  const inputs = files.map(file => {
+    const extension = path.extname(file.originalname || '').toLowerCase();
+    return {
+      rawText: file.buffer.toString('utf8'),
+      inputFormat: extension === '.csv' ? 'CSV' : /\.html?$/i.test(extension) ? 'HTML' : 'HEYETSY_TEXT',
+      sourceFileName: file.originalname
+    };
+  });
   handleEtsySearchResultFeed(req, res, {
-    rawText: req.file.buffer.toString('utf8'),
-    inputFormat,
-    sourceFileName: req.file.originalname,
+    rawText: inputs[0].rawText,
+    inputFormat: inputs[0].inputFormat,
+    sourceFileName: inputs.length === 1 ? inputs[0].sourceFileName : null,
+    inputs,
     confirm: String(req.body?.confirm || '').toLowerCase() === 'true'
   });
 });
@@ -3200,10 +3288,8 @@ const handleReportUpload = async (req, res) => {
         captureTime: null,
         tenantId: req.user.tenantId,
         workspaceId: req.user.workspaceId,
-        // This report is not persisted as a project evidence record by this
-        // endpoint, so it must not claim a project binding from client input.
         projectId: null,
-        projectBinding: 'NOT_PERSISTED',
+        projectBinding: 'PENDING_PROJECT_BINDING',
         artifacts: uploadedFiles.map(file => ({
           fileName: file.originalname,
           sha256: crypto.createHash('sha256').update(fs.readFileSync(file.path)).digest('hex')
@@ -3255,20 +3341,34 @@ const handleReportUpload = async (req, res) => {
         shopName: item.seller || null
       }));
 
-      return res.json({
-        success: true,
-        isXray: true,
-        reportType: 'HELIUM10_XRAY',
-        fileNames,
-        filesUploadedCount: uploadedFiles.length,
-        seedKeyword: batchResult.seedKeyword,
-        totalInputAsins: batchResult.totalInputAsins,
-        totalCleanAsins: batchResult.totalCleanAsins,
-        rejectedCount: batchResult.rejectedCount,
-        batchCount: batchResult.batchCount,
-        batches: batchResult.batches,
-        xraySellers,
-        reportProvenance
+      // Xray rows are valuable, but they must survive a refresh and remain
+      // scoped to the project that received them. Persist them as a hashed
+      // STAFF_MANUAL_ASSERTION analysis artifact, never as qualifying evidence.
+      return resolveActiveProjectId(db, req.user, req.body.projectId, (projectErr, targetProjectId) => {
+        if (projectErr) return res.status(projectErr.status || 400).json({ success: false, error: projectErr.error, message: projectErr.message });
+        if (!targetProjectId) return res.status(400).json({ success: false, error: 'MISSING_PROJECT_ID', message: 'Chọn Active Project trước khi nạp Xray.' });
+        reportProvenance.projectId = targetProjectId;
+        reportProvenance.projectBinding = 'PROJECT_BOUND';
+        const contentHash = crypto.createHash('sha256').update(JSON.stringify(xraySellers)).digest('hex');
+        const metadata = {
+          kind: AMAZON_XRAY_ARTIFACT_KIND,
+          evidenceState: 'UNVERIFIED_INPUT',
+          contentHash,
+          reportType: 'HELIUM10_XRAY',
+          reportProvenance,
+          sellers: xraySellers,
+          ordering: 'SOURCE_ORDER_NOT_PERFORMANCE_RANK'
+        };
+        db.get(`SELECT id FROM research_evidence WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ? AND project_id = ? AND source = 'STAFF_MANUAL_ASSERTION' AND metadata LIKE ? ORDER BY id DESC LIMIT 1`,
+          [req.user.tenantId, req.user.workspaceId, targetMarketplace, targetProjectId, `%"contentHash":"${contentHash}"%`],
+          (lookupErr, existing) => {
+            if (lookupErr) return res.status(500).json({ success: false, error: 'XRAY_ARTIFACT_LOOKUP_FAILED' });
+            const respond = evidenceId => res.json({ success: true, isXray: true, reportType: 'HELIUM10_XRAY', fileNames, filesUploadedCount: uploadedFiles.length, seedKeyword: batchResult.seedKeyword, totalInputAsins: batchResult.totalInputAsins, totalCleanAsins: batchResult.totalCleanAsins, rejectedCount: batchResult.rejectedCount, batchCount: batchResult.batchCount, batches: batchResult.batches, xraySellers, reportProvenance, projectId: targetProjectId, evidenceId, evidenceState: 'UNVERIFIED_INPUT' });
+            if (existing) return respond(existing.id);
+            db.run(`INSERT INTO research_evidence (tenant_id, workspace_id, marketplace, project_id, seed_phrase, source, actor_id, evidence_state, metadata) VALUES (?, ?, ?, ?, ?, 'STAFF_MANUAL_ASSERTION', ?, 'OBSERVED', ?)`,
+              [req.user.tenantId, req.user.workspaceId, targetMarketplace, targetProjectId, seedKeyword, req.user.userId, JSON.stringify(metadata)],
+              function(insertErr) { if (insertErr) return res.status(500).json({ success: false, error: 'XRAY_ARTIFACT_PERSIST_FAILED' }); respond(this.lastID); });
+          });
       });
     }
 

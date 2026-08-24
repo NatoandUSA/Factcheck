@@ -53,6 +53,8 @@ const ROUTES = [
   { method: 'POST', path: '/api/etsy/batch-learn', public: false },
   { method: 'POST', path: '/api/etsy/feed-search-results', public: false },
   { method: 'POST', path: '/api/etsy/feed-search-results-file', public: false },
+  { method: 'GET', path: '/api/projects/:projectId/etsy-search-imports', public: false },
+  { method: 'GET', path: '/api/projects/:projectId/amazon-xray-imports', public: false },
   { method: 'POST', path: '/api/research/smart-pull', public: false },
   { method: 'POST', path: '/api/amazon/quick-draft', public: false },
   { method: 'GET', path: '/api/master-keywords', public: false },

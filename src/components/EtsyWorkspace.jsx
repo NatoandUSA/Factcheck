@@ -29,10 +29,11 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
   const [projects, setProjects] = useState([]);
   const [isFeedModalOpen, setIsFeedModalOpen] = useState(false);
   const [feedRawText, setFeedRawText] = useState('');
-  const [feedFile, setFeedFile] = useState(null);
+  const [feedFiles, setFeedFiles] = useState([]);
   const [feedPreview, setFeedPreview] = useState(null);
   const [feedSubmitting, setFeedSubmitting] = useState(false);
   const [scannedSellers, setScannedSellers] = useState([]);
+  const [importedResearch, setImportedResearch] = useState({ sellers: [], analysis: null, imports: [] });
   const fileInputRef = useRef(null);
   const feedFileInputRef = useRef(null);
   const activeProjectIdRef = useRef(null);
@@ -44,7 +45,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
     setTrends([]);
     setUploadStatus(null);
     setFeedRawText('');
-    setFeedFile(null);
+    setFeedFiles([]);
     setFeedPreview(null);
     setSeedPhrase(activeProject?.seed_phrase || '');
   }, [activeProject?.id]);
@@ -55,16 +56,16 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
       return;
     }
     const requestedProjectId = activeProject.id;
-    if (!feedFile && !feedRawText.trim()) {
+    if (feedFiles.length === 0 && !feedRawText.trim()) {
       if (onShowToast) onShowToast('Chọn CSV/HTML/TXT hoặc dán toàn bộ nội dung kết quả tìm kiếm.');
       return;
     }
     setFeedSubmitting(true);
     try {
-      const request = feedFile
+      const request = feedFiles.length
         ? (() => {
             const body = new FormData();
-            body.append('searchResultsFile', feedFile);
+            feedFiles.forEach(file => body.append('searchResultsFiles', file));
             body.append('seed', seedPhrase.trim());
             body.append('projectId', String(requestedProjectId));
             body.append('confirm', String(confirm));
@@ -111,8 +112,9 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
       if (onShowToast) onShowToast(`✓ Đã lưu ${data.sellers?.length || 0} listing evidence vào Project #${requestedProjectId}. Tags được ghi rõ là HeyEtsy suggestions.`);
       setIsFeedModalOpen(false);
       setFeedRawText('');
-      setFeedFile(null);
+      setFeedFiles([]);
       setFeedPreview(null);
+      fetchData();
     } catch (err) {
       if (onShowToast) onShowToast(`Lỗi nạp dữ liệu: ${err.message}`);
     } finally {
@@ -145,11 +147,15 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
   const fetchData = async () => {
     if (!activeProject?.id) {
       setTrends([]);
+      setImportedResearch({ sellers: [], analysis: null, imports: [] });
       return;
     }
     const requestedProjectId = activeProject.id;
     try {
-      const trendsRes = await fetch('/api/trends', { credentials: 'include' });
+      const [trendsRes, importsRes] = await Promise.all([
+        fetch('/api/trends', { credentials: 'include' }),
+        fetch(`/api/projects/${encodeURIComponent(requestedProjectId)}/etsy-search-imports`, { credentials: 'include' })
+      ]);
       if (trendsRes.ok) {
         const trendsData = await trendsRes.json();
         if (activeProjectIdRef.current !== requestedProjectId) return;
@@ -159,6 +165,12 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
           && t.keywords_detailed
         ));
         setTrends(etsyTrends);
+      }
+      if (importsRes.ok) {
+        const importsData = await importsRes.json();
+        if (activeProjectIdRef.current !== requestedProjectId) return;
+        setImportedResearch(importsData);
+        if (Array.isArray(importsData.sellers) && importsData.sellers.length) setScannedSellers(importsData.sellers);
       }
     } catch (e) {
       console.warn('Failed to fetch Etsy workspace data', e);
@@ -534,7 +546,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
           <button
             className={`command-stage-tab ${activeStage === 'research' ? 'active-etsy' : ''}`}
             onClick={() => setActiveStage('research')}
-            disabled={!activeProject || activeProject.state === 'EVIDENCE_INTAKE'}
+            disabled={!activeProject}
         >
           <Brain size={18} />
           <span>🧠 Stage 2: Nghiên Cứu Sâu & Học DNA Đối Thủ (Research Hub)</span>
@@ -681,6 +693,23 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
             <LearningBoxWidget platform="ETSY" onShowToast={onShowToast} scannedSellers={scannedSellers} />
           </div>
 
+          <div className="studio-panel" style={{ padding: '18px', borderLeft: '4px solid #059669' }}>
+            <h4 style={{ margin: 0 }}>Dữ liệu Etsy đã nạp — Pattern Lab</h4>
+            <p style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>Các trường từ CSV/HTML được lưu theo Active Project để phân tích pattern, keyword và benchmark. Chúng không thay Product Truth, acceptance hoặc publish authority.</p>
+            <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', fontSize: '0.82rem' }}>
+              <span><b>{importedResearch.analysis?.listingCount || 0}</b> listings</span>
+              <span>Price <b>{importedResearch.analysis?.coverage?.price || 0}</b></span>
+              <span>Reviews <b>{importedResearch.analysis?.coverage?.reviews || 0}</b></span>
+              <span>Tags <b>{importedResearch.analysis?.coverage?.tags || 0}</b></span>
+              <span>Views/Sold <b>{importedResearch.analysis?.coverage?.views || 0}/{importedResearch.analysis?.coverage?.sold || 0}</b></span>
+            </div>
+            {(importedResearch.sellers || []).slice(0, 8).map((seller, index) => <details key={`${seller.id}-${index}`} style={{ marginTop: '8px', borderTop: '1px solid var(--border-subtle)', paddingTop: '8px' }}>
+              <summary><b>#{seller.sourceRank || index + 1} {seller.title}</b> — {seller.shopName || 'Shop UNKNOWN'} · {seller.price || 'Price UNKNOWN'} · {seller.reviewCount ?? 'Reviews UNKNOWN'}</summary>
+              <div style={{ marginTop: '6px', fontSize: '0.78rem' }}>Listing ID: {seller.listingId || 'UNKNOWN'} · Views: {seller.totalViews ?? 'UNKNOWN'} · Sold: {seller.totalSold ?? 'UNKNOWN'} · Revenue: {seller.revenue ?? 'UNKNOWN'} · Tags: {(seller.tags || []).join(', ') || 'UNKNOWN'}</div>
+            </details>)}
+            {(importedResearch.sellers || []).length > 8 && <div style={{ marginTop: '8px', fontSize: '0.78rem' }}>Đang xem 8/{importedResearch.sellers.length}; toàn bộ dòng vẫn có trong artifact audit.</div>}
+          </div>
+
           {/* Stage 2 Acceptance Gate */}
           <div className="studio-panel" style={{ padding: '20px 24px', borderLeft: '4px solid #ea580c', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#fff7ed', borderRadius: '12px' }}>
             <div>
@@ -800,7 +829,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
                 </h3>
               </div>
               <button
-                onClick={() => { setIsFeedModalOpen(false); setFeedPreview(null); setFeedFile(null); }}
+                onClick={() => { setIsFeedModalOpen(false); setFeedPreview(null); setFeedFiles([]); }}
                 style={{ background: 'none', border: 'none', fontSize: '1.2rem', cursor: 'pointer', color: '#64748b' }}
               >
                 ✕
@@ -822,18 +851,18 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
                   <div style={{ padding: '10px', borderRadius: '8px', background: '#eff6ff', border: '1px solid #bfdbfe' }}><b>2. Xem Preview</b><br />Kiểm tra title, shop, giá và UNKNOWN.</div>
                   <div style={{ padding: '10px', borderRadius: '8px', background: '#fff7ed', border: '1px solid #fed7aa' }}><b>3. Xác nhận lưu</b><br />Lưu artifact audit có hash, không mở publish.</div>
                 </div>
-                <input ref={feedFileInputRef} type="file" accept=".csv,.html,.htm,.txt,text/csv,text/html,text/plain" onChange={(event) => { setFeedFile(event.target.files?.[0] || null); setFeedRawText(''); setFeedPreview(null); }} style={{ display: 'none' }} />
+                <input ref={feedFileInputRef} type="file" multiple accept=".csv,.html,.htm,.txt,text/csv,text/html,text/plain" onChange={(event) => { setFeedFiles(Array.from(event.target.files || [])); setFeedRawText(''); setFeedPreview(null); }} style={{ display: 'none' }} />
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '12px', marginBottom: '12px', border: '1px dashed #34d399', borderRadius: '10px', background: '#f0fdf4' }}>
                   <FileSpreadsheet size={20} color="#059669" />
-                  <div style={{ flex: 1, fontSize: '0.8rem' }}><b>{feedFile ? feedFile.name : 'Chưa chọn file'}</b><br /><span style={{ color: '#475569' }}>CSV export phù hợp để giữ toàn bộ dòng kết quả; HTML Etsy đã lưu dùng ItemList có sẵn.</span></div>
-                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => feedFileInputRef.current?.click()}>Chọn file</button>
-                  {feedFile && <button type="button" className="btn btn-secondary btn-sm" onClick={() => { setFeedFile(null); if (feedFileInputRef.current) feedFileInputRef.current.value = ''; }}>Bỏ file</button>}
+                  <div style={{ flex: 1, fontSize: '0.8rem' }}><b>{feedFiles.length ? `${feedFiles.length} file: ${feedFiles.map(file => file.name).join(', ')}` : 'Chưa chọn file'}</b><br /><span style={{ color: '#475569' }}>Có thể chọn nhiều trang CSV/HTML/TXT; thứ tự chọn được giữ, duplicate chỉ được loại khi cùng listing.</span></div>
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => feedFileInputRef.current?.click()}>Chọn nhiều file</button>
+                  {feedFiles.length > 0 && <button type="button" className="btn btn-secondary btn-sm" onClick={() => { setFeedFiles([]); if (feedFileInputRef.current) feedFileInputRef.current.value = ''; }}>Bỏ file</button>}
                 </div>
                 <div style={{ fontSize: '0.75rem', fontWeight: 800, color: '#64748b', marginBottom: '6px' }}>Hoặc dán text HeyEtsy (không cần khi đã chọn file)</div>
               <textarea
                 value={feedRawText}
-                disabled={Boolean(feedFile)}
-                onChange={(e) => { setFeedRawText(e.target.value); setFeedFile(null); setFeedPreview(null); }}
+                disabled={feedFiles.length > 0}
+                onChange={(e) => { setFeedRawText(e.target.value); setFeedFiles([]); setFeedPreview(null); }}
                 placeholder={'Dán toàn bộ text search result tại đây…\n\nVí dụ cấu trúc:\n413 results, with ads\nMost relevant\nSearch results\n[Listing title]\n[Listing title]\n4.7\n(113)\nBy\n[Shop name]\n…\nHeyEtsy.com'}
                 rows={12}
                 style={{
@@ -854,6 +883,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', fontSize: '0.78rem' }}>
                   <span className="badge">Parsed: {feedPreview.count} listings</span>
                   <span className="badge">Nguồn: {feedPreview.inputFormat}{feedPreview.sourceFileName ? ` · ${feedPreview.sourceFileName}` : ''}</span>
+                  {feedPreview.sourceFiles?.length > 0 && <span className="badge">Files/pages: {feedPreview.sourceFiles.map(file => file.name).join(' · ')}</span>}
                   <span className="badge">Results page: {feedPreview.searchContext?.resultCount ?? 'UNKNOWN'}</span>
                   <span className="badge">Sort: {feedPreview.searchContext?.sortMode || 'UNKNOWN'}</span>
                   <span className="badge">Contains ads: {feedPreview.searchContext?.pageContainsAds ? 'YES' : 'UNKNOWN/NO'}</span>
@@ -871,6 +901,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
                         <th style={{ padding: '8px' }}>Total Views</th>
                         <th style={{ padding: '8px' }}>Total Sold</th>
                         <th style={{ padding: '8px' }}>24h</th>
+                        <th style={{ padding: '8px' }}>Chi tiết nguồn</th>
                         <th style={{ padding: '8px' }}>Tags</th>
                       </tr>
                     </thead>
@@ -887,6 +918,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
                           <td style={{ padding: '8px' }}>{seller.totalViews ?? '—'}</td>
                           <td style={{ padding: '8px' }}>{seller.totalSold ?? '—'}</td>
                           <td style={{ padding: '8px' }}>Views {seller.views24h ?? '—'} / Sold {seller.sold24h ?? '—'}</td>
+                          <td style={{ padding: '8px' }}>ID {seller.listingId || '—'}<br />{seller.isStarSeller === true ? 'Star seller' : ''}{seller.isBestSeller === true ? ' · Bestseller' : ''}{seller.isAd === true ? ' · Ad' : ''}{seller.hasFreeShipping === true ? ' · Free ship' : ''}<br />Revenue {seller.revenue ?? '—'} · Fav {seller.favorites ?? '—'} · CVR {seller.conversionRate ?? '—'}</td>
                           <td style={{ padding: '8px' }}>{seller.tags?.length || 0}</td>
                         </tr>
                       ))}
@@ -904,7 +936,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
                 type="button"
                 onClick={() => {
                   if (feedPreview) setFeedPreview(null);
-                  else { setFeedRawText(''); setFeedFile(null); if (feedFileInputRef.current) feedFileInputRef.current.value = ''; }
+                  else { setFeedRawText(''); setFeedFiles([]); if (feedFileInputRef.current) feedFileInputRef.current.value = ''; }
                 }}
                 style={{
                   background: '#f1f5f9',
@@ -920,7 +952,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
               </button>
               <div style={{ display: 'flex', gap: '10px' }}>
                 <button
-                onClick={() => { setIsFeedModalOpen(false); setFeedPreview(null); setFeedFile(null); }}
+                onClick={() => { setIsFeedModalOpen(false); setFeedPreview(null); setFeedFiles([]); }}
                   className="btn btn-secondary"
                   style={{ padding: '8px 16px', borderRadius: '8px' }}
                 >
@@ -929,7 +961,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
                 {!feedPreview ? (
                   <button
                     onClick={() => handleFeedSearchResults({ confirm: false })}
-                    disabled={feedSubmitting || (!feedFile && !feedRawText.trim()) || !activeProject?.id}
+                    disabled={feedSubmitting || (feedFiles.length === 0 && !feedRawText.trim()) || !activeProject?.id}
                     className="btn btn-primary"
                     style={{ background: '#059669', color: '#fff', fontWeight: 700, padding: '8px 20px', borderRadius: '8px' }}
                   >

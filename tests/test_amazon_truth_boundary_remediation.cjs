@@ -99,7 +99,9 @@ async function main() {
   assert.ok(!pipeline.includes('omni_amazon_xray_sellers'), 'Pipeline must not persist Xray evidence in browser storage.');
   assert.ok(!workspace.includes('omni_amazon_xray_sellers'), 'Workspace must not restore unscoped Xray browser storage.');
   assert.ok(!learningBox.includes('omni_amazon_xray_sellers'), 'Learning Box must not read unscoped Xray browser storage.');
-  assert.ok(workspace.includes('setXraySellers([]);'), 'Workspace must clear display-only Xray rows on project-context change.');
+  assert.ok(workspace.includes('amazon-xray-imports'), 'Workspace must restore project-scoped Xray imports after refresh.');
+  assert.ok(server.includes("kind: AMAZON_XRAY_ARTIFACT_KIND"), 'Xray imports must be persisted as a named analysis artifact.');
+  assert.ok(server.includes("evidenceState: 'UNVERIFIED_INPUT'"), 'Xray imports must remain unverified staff input.');
   assert.ok(!server.includes('Amazon Top Seller (${item.asin})'), 'Server must not manufacture a Top Seller title.');
   assert.ok(!server.includes('PREMIUM QUALITY'), 'Learning Box must not manufacture generic product bullet claims.');
   assert.ok(pipeline.includes('Imported Staff Xray report — snapshot, not live verified.'), 'Rich Xray UI must disclose report provenance.');

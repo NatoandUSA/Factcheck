@@ -4,7 +4,7 @@ const path = require('path');
 
 process.env.NODE_ENV = 'test';
 
-const { parseHeyEtsyPastedText, parseEtsySearchCsv, parseEtsySearchHtml } = require('../server/etsyPastedSearchParser');
+const { parseHeyEtsyPastedText, parseEtsySearchCsv, parseEtsySearchHtml, parseEtsySearchInputs } = require('../server/etsyPastedSearchParser');
 const { app, db, databaseReady } = require('../server/server');
 const { createSessionRecord } = require('../server/security/session');
 
@@ -202,9 +202,9 @@ Categories Copy
 Jewelry, Necklaces, Pendant Necklaces
 HeyEtsy.com`;
 
-const CSV_SAMPLE = `listing_id,title,shop,price,price_num,reviews,he_views,he_sold,he_tags,he_categories,url,rank_position
-1001,"Para Mi Hija Necklace",Fantasticgiftsltd,"1,145,896",1145896,119,25136,1610,"para mi hija|hija necklace","Jewelry, Necklaces",https://www.etsy.com/listing/1001,3
-1002,"Daughter Gift",SecondShop,"815,152",815152,0,0,0,,,https://www.etsy.com/listing/1002,4`;
+const CSV_SAMPLE = `listing_id,title,shop,price,price_num,reviews,star_seller,ad,bestseller,free_shipping,he_views,he_sold,he_tags,he_categories,keyword_context,keyword_match_type,keyword_match_confidence,proof_scope_hint,evidence_route_hint,data_use_hint,url,rank_position
+1001,"Para Mi Hija Necklace",Fantasticgiftsltd,"1,145,896",1145896,119,true,false,1,0,25136,1610,"para mi hija|hija necklace","Jewelry, Necklaces",para mi hija,exact,95,listing,staff_import,pattern_only,https://www.etsy.com/listing/1001,3
+1002,"Daughter Gift",SecondShop,"815,152",815152,0,,,,,0,0,,,,,,,,,,https://www.etsy.com/listing/1002,4`;
 
 const HTML_SAMPLE = `<!doctype html><html><head><script type="application/ld+json">{"@context":"https://schema.org","@type":"ItemList","itemListElement":[{"@type":"ListItem","position":2,"item":{"@type":"Product","name":"Para Mi Hija Necklace","url":"https://www.etsy.com/listing/1001","brand":{"@type":"Brand","name":"Fantasticgiftsltd"},"offers":{"@type":"Offer","price":"1145896","priceCurrency":"VND"}}}]}</script></head></html>`;
 
@@ -280,9 +280,23 @@ async function waitForEtsyOwner() {
   assert.strictEqual(csv.sellers[0].sourceRank, 1, 'Source order must not be replaced by a claimed performance rank');
   assert.strictEqual(csv.sellers[0].priceAmount, 1145896);
   assert.strictEqual(csv.sellers[0].totalViews, 25136);
+  assert.strictEqual(csv.sellers[0].listingId, '1001');
+  assert.strictEqual(csv.sellers[0].isStarSeller, true);
+  assert.strictEqual(csv.sellers[0].isAd, false);
+  assert.strictEqual(csv.sellers[0].isBestSeller, true);
+  assert.strictEqual(csv.sellers[0].hasFreeShipping, false);
+  assert.strictEqual(csv.sellers[0].keywordMatchConfidence, 95);
   assert.strictEqual(csv.sellers[1].reviewCount, 0, 'CSV zero must stay a numeric zero');
   assert.strictEqual(csv.sellers[1].totalViews, 0, 'CSV zero must not become UNKNOWN');
   assert.strictEqual(csv.sellers[0].evidenceState, 'UNVERIFIED_INPUT');
+
+  const mergedCsv = parseEtsySearchInputs([
+    { rawText: CSV_SAMPLE, inputFormat: 'CSV', sourceFileName: 'page-1.csv' },
+    { rawText: CSV_SAMPLE, inputFormat: 'CSV', sourceFileName: 'page-2.csv' }
+  ]);
+  assert.strictEqual(mergedCsv.inputFormat, 'MULTI_FILE');
+  assert.strictEqual(mergedCsv.sellers.length, 2, 'multi-page duplicates must not be double-counted');
+  assert.strictEqual(mergedCsv.sourceFiles.length, 2, 'source files must remain auditable');
 
   const html = parseEtsySearchHtml(HTML_SAMPLE);
   assert.strictEqual(html.inputFormat, 'HTML');
@@ -393,6 +407,14 @@ async function waitForEtsyOwner() {
     assert.strictEqual(fileMetadata.inputFormat, 'CSV');
     assert.strictEqual(fileMetadata.sourceFileName, 'para-mi-hija.csv');
     assert.strictEqual(Object.prototype.hasOwnProperty.call(fileMetadata, 'rawText'), false, 'Large file payload must not be duplicated into SQLite metadata');
+
+    const importsResponse = await fetch(`${base}/api/projects/${projectId}/etsy-search-imports`, { headers: { Origin: base, Cookie: `omni_session=${session.rawToken}` } });
+    const imports = await importsResponse.json();
+    assert.strictEqual(importsResponse.status, 200);
+    assert.strictEqual(imports.analysis.listingCount, 6, 'saved rows from each artifact must be reusable after reload');
+    const importedCsvRow = imports.sellers.find(seller => seller.listingId === '1001');
+    assert(importedCsvRow, 'CSV listing ID must survive the persisted projection');
+    assert.strictEqual(importedCsvRow.isStarSeller, true);
 
     const duplicate = await post('/api/etsy/feed-search-results', { rawText: SAMPLE, seed: 'para mi hija', projectId, confirm: true });
     assert.strictEqual(duplicate.body.evidenceId, committed.body.evidenceId);

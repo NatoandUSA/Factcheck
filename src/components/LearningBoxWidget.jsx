@@ -15,6 +15,7 @@ export default function LearningBoxWidget({ platform = 'AMAZON', onShowToast, sc
   const [learning, setLearning] = useState(false);
   const [templates, setTemplates] = useState([]);
   const [activeTemplate, setActiveTemplate] = useState(null);
+  const [referenceBenchmark, setReferenceBenchmark] = useState(null);
 
   const isAmazon = platform === 'AMAZON';
   const themeColor = isAmazon ? '#0284c7' : '#ea580c';
@@ -58,7 +59,15 @@ export default function LearningBoxWidget({ platform = 'AMAZON', onShowToast, sc
     if (inputMode === 'seller' && !selectedSeller) return;
 
     if (isAmazon && inputMode === 'seller') {
-      onShowToast?.('Xray đã được nạp ở Stage 1 để benchmark/batch/Cerebro. Một row Xray không có đầy đủ title + bullets + description, nên không gửi nó vào “Học DNA”; hãy dùng Link hoặc Văn bản mẫu đầy đủ khi muốn tạo template cấu trúc.');
+      setReferenceBenchmark({
+        title: selectedSeller.title || 'UNKNOWN', asin: selectedSeller.asin || 'UNKNOWN', price: selectedSeller.price ?? null,
+        sales: selectedSeller.sales ?? null, revenue: selectedSeller.revenue ?? null,
+        rating: selectedSeller.ratingValue ?? selectedSeller.ratings ?? null,
+        reviews: selectedSeller.reviewCount ?? selectedSeller.ratingCount ?? null,
+        bsr: selectedSeller.bsr ?? null, category: selectedSeller.category ?? null,
+        flags: [selectedSeller.isBestSeller ? 'Best Seller (source-reported)' : null, selectedSeller.isSponsored ? 'Sponsored (source-reported)' : null].filter(Boolean)
+      });
+      onShowToast?.('Đã tạo Xray benchmark từ row đã chọn. Đây là phân tích dữ liệu nguồn, không phải DNA template hoặc Product Truth.');
       return;
     }
 
@@ -273,6 +282,13 @@ export default function LearningBoxWidget({ platform = 'AMAZON', onShowToast, sc
           </div>
         )}
       </form>
+
+      {referenceBenchmark && <div style={{ background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: '10px', padding: '12px', fontSize: '0.82rem' }}>
+        <b>📊 Xray benchmark — source-reported row</b><br />
+        {referenceBenchmark.title} · ASIN {referenceBenchmark.asin}<br />
+        Price: {referenceBenchmark.price ?? 'UNKNOWN'} · Sales: {referenceBenchmark.sales ?? 'UNKNOWN'} · Revenue: {referenceBenchmark.revenue ?? 'UNKNOWN'} · Reviews: {referenceBenchmark.reviews ?? 'UNKNOWN'} · BSR: {referenceBenchmark.bsr ?? 'UNKNOWN'}<br />
+        <span style={{ color: '#475569' }}>Dùng để so sánh title/category/price-position. Muốn “Học DNA” phải dán listing text đầy đủ (title + bullets + description).</span>
+      </div>}
 
       {/* Learned Templates Library */}
       {templates.length > 0 && (

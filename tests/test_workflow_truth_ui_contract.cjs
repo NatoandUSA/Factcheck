@@ -12,7 +12,8 @@ for (const [name, source] of [['Etsy', etsy], ['Amazon', amazon]]) {
   assert.ok(source.includes('Active Project (bắt buộc)'), `${name} must expose an explicit project selector`);
   assert.ok(source.includes('<option value="">— Chọn project —</option>'), `${name} must default to no project`);
   assert.strictEqual(source.includes('setActiveProject(data.projects[0])'), false, `${name} must not silently select the first project`);
-  assert.ok(source.includes("disabled={!activeProject || activeProject.state === 'EVIDENCE_INTAKE'}"), `${name} research stage must remain gated by server project state`);
+  assert.ok(source.includes('disabled={!activeProject}'), `${name} research analysis must require an explicit project`);
+  assert.ok(source.includes("'RESEARCH_ACCEPTED'"), `${name} must retain the canonical server authority state for transitions`);
   assert.ok(source.includes("'MKL_FROZEN'"), `${name} MKL stage must reference the canonical server state`);
 }
 

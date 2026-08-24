@@ -45,7 +45,7 @@ export default function SmartPullAnalyticsBar({ marketplace = 'ETSY', activeProj
       return;
     }
     if (!queryInput.trim()) {
-      onShowToast?.('Vui lòng nhập từ khóa, URL tìm kiếm hoặc ASIN.');
+      onShowToast?.(marketplace === 'AMAZON' ? 'Amazon Smart Pull không có live connector: hãy nạp Xray/Cerebro hoặc dùng seed/search context.' : 'Vui lòng nhập seed phrase hoặc URL tìm kiếm Etsy.');
       return;
     }
     const requestedProjectId = activeProjectId;
@@ -89,7 +89,7 @@ export default function SmartPullAnalyticsBar({ marketplace = 'ETSY', activeProj
           <p style={{ margin: '5px 0 0', color: 'var(--text-secondary)', fontSize: '0.82rem' }}>
             {marketplace === 'ETSY'
               ? 'Nhập seed hoặc URL Etsy. Hệ thống gọi MCP, lưu artifact theo project, rồi tách dữ liệu quan sát khỏi phrase suy ra.'
-              : 'Xác nhận ASIN do staff nhập. Chưa có Amazon live connector.'}
+              : 'Amazon hiện không có live connector. ASIN đơn lẻ không được “kéo MCP”; hãy nạp Xray/Cerebro ở Stage 1 để tạo benchmark, hoặc dùng link/văn bản listing đầy đủ cho DNA reference.'}
           </p>
         </div>
         <div style={{ fontSize: '0.78rem', fontWeight: 800 }}>
@@ -98,7 +98,7 @@ export default function SmartPullAnalyticsBar({ marketplace = 'ETSY', activeProj
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 150px auto', gap: '10px', marginTop: '16px' }}>
-        <input value={queryInput} onChange={event => setQueryInput(event.target.value)} placeholder={marketplace === 'ETSY' ? 'Etsy search URL hoặc seed phrase' : 'Danh sách ASIN'} />
+        <input value={queryInput} onChange={event => setQueryInput(event.target.value)} placeholder={marketplace === 'ETSY' ? 'Etsy search URL hoặc seed phrase' : 'Seed/search context (không phải live ASIN pull)'} />
         <input type="number" min="0" max="100000" step="0.01" value={unitCostInput} onChange={event => setUnitCostInput(event.target.value)} placeholder="Unit cost (optional)" />
         <button className="btn btn-primary" onClick={handleSmartPull} disabled={loading || !activeProjectId || !queryInput.trim()}>
           {loading ? <RefreshCw size={16} className="spinner" /> : <Database size={16} />} {loading ? 'Đang kéo MCP…' : 'Kéo MCP & phân tích'}
@@ -106,8 +106,8 @@ export default function SmartPullAnalyticsBar({ marketplace = 'ETSY', activeProj
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '8px', marginTop: '12px', fontSize: '0.75rem' }}>
-        <div style={{ padding: '9px', borderRadius: '8px', background: '#eff6ff' }}><b>Input</b><br />Seed/URL + unit cost tùy chọn.</div>
-        <div style={{ padding: '9px', borderRadius: '8px', background: '#f0fdf4' }}><b>Output</b><br />Artifact MCP, tags quan sát, phrase suy ra và so sánh giá.</div>
+        <div style={{ padding: '9px', borderRadius: '8px', background: '#eff6ff' }}><b>Input</b><br />{marketplace === 'ETSY' ? 'Seed/URL Etsy + unit cost tùy chọn.' : 'Seed/context; ASIN/Xray đi qua Stage 1.'}</div>
+        <div style={{ padding: '9px', borderRadius: '8px', background: '#f0fdf4' }}><b>Output</b><br />{marketplace === 'ETSY' ? 'Artifact MCP, tags quan sát, phrase suy ra và so sánh giá.' : 'Staff input analysis only; không có Amazon MCP fetch.'}</div>
         <div style={{ padding: '9px', borderRadius: '8px', background: '#fff7ed' }}><b>Không làm</b><br />Không tạo Product Truth, không publish, không tự mở Gate.</div>
       </div>
 

@@ -20,10 +20,9 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
   const [activeProject, setActiveProject] = useState(null);
   const [projects, setProjects] = useState([]);
 
-  // Workflow Evidence State shared across Stages
-  // Xray data is held only in the active workspace React state. Browser-wide
-  // storage is not an authority for research evidence because it cannot bind
-  // a record to the active tenant, workspace, project, or seed.
+  // Workflow research state. Xray remains a staff-supplied benchmark and is
+  // never publish authority, but the server now stores it project-scoped so a
+  // refresh does not discard a costly report upload.
   const [xraySellers, setXraySellers] = useState([]);
   const [cerebroKeywords, setCerebroKeywords] = useState([]);
   const [cerebroSummary, setCerebroSummary] = useState(null);
@@ -35,12 +34,21 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
     setXraySellers(Array.isArray(sellers) ? sellers : []);
   }, []);
 
-  // Uploaded Xray rows are display-only session state. They must not survive a
-  // project context change or become an authority for Learning Box/publish flow.
   useEffect(() => {
     setXraySellers([]);
     setCerebroKeywords([]);
     setCerebroSummary(null);
+  }, [activeProject?.id]);
+
+  const fetchXrayImports = React.useCallback(async () => {
+    if (!activeProject?.id) return;
+    const requestedProjectId = activeProject.id;
+    try {
+      const res = await fetch(`/api/projects/${encodeURIComponent(requestedProjectId)}/amazon-xray-imports`, { credentials: 'include' });
+      const data = await res.json();
+      if (!res.ok || activeProjectIdRef.current !== requestedProjectId) return;
+      if (Array.isArray(data.sellers) && data.sellers.length) setXraySellers(data.sellers);
+    } catch (_) { /* optional restoration must not invent report rows */ }
   }, [activeProject?.id]);
 
   const fetchProjects = React.useCallback(async () => {
@@ -98,7 +106,8 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
   React.useEffect(() => {
     fetchProjects();
     fetchLatestTrend();
-  }, [fetchProjects, fetchLatestTrend]);
+    fetchXrayImports();
+  }, [fetchProjects, fetchLatestTrend, fetchXrayImports]);
 
   const handleTransition = async (targetState) => {
     if (!activeProject) return;
@@ -332,7 +341,7 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
         <button
           className={`command-stage-tab ${activeStage === 'research' ? 'active-amazon' : ''}`}
           onClick={() => setActiveStage('research')}
-          disabled={!activeProject || activeProject.state === 'EVIDENCE_INTAKE'}
+          disabled={!activeProject}
         >
           <Brain size={18} />
           <span>🧠 Stage 2: Nghiên Cứu Sâu & Học DNA Đối Thủ (Research Hub)</span>
@@ -393,7 +402,7 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
                 🧠 Stage 2: Competitor DNA & Trend Research
               </div>
               <div style={{ fontSize: '0.8rem', color: '#0284c7', marginTop: '2px' }}>
-                Xray có {xraySellers.length} ASIN candidate trong phiên này. Chọn link/text để học cấu trúc; sau đó accept evidence hợp lệ trước khi chấp nhận DNA.
+                Xray có {xraySellers.length} ASIN candidate trong phiên này. Xem benchmark/pattern từ row Xray ngay tại đây; chỉ Link hoặc văn bản listing đầy đủ mới tạo DNA template. Accept evidence vẫn là gate riêng.
               </div>
             </div>
 

@@ -74,7 +74,7 @@ run_external_rehearsal() {
     "$SERVICE_DB_PATH" "$backup_dir/app.db" "$backup_dir/rehearsal.db" "$backup_dir/rehearsal-report.json"
 }
 verify_migration_compatibility_evidence() {
-  local evidence runbook_sha db_path_sha
+  local evidence runbook_sha db_path_sha nonce
   evidence="${MIGRATION_COMPATIBILITY_EVIDENCE:-}"
   [[ -n "$evidence" && "$evidence" = /* && "$evidence" = "$STATE_DIR"/* ]] || die "root-owned migration compatibility evidence under STATE_DIR is required"
   absolute_external_path "$evidence" MIGRATION_COMPATIBILITY_EVIDENCE
@@ -82,30 +82,32 @@ verify_migration_compatibility_evidence() {
   [[ "$(stat -c '%U:%a' "$evidence")" = "root:444" ]] || die "migration compatibility evidence must be root-owned mode 0444"
   runbook_sha="$(tr -d '\r\n' < "$RUNBOOK_ID_FILE")"
   db_path_sha="$(printf %s "$SERVICE_DB_PATH" | sha256sum | awk '{print $1}')"
-  BASELINE_SHA="$BASELINE_SHA" TARGET_SHA="$TARGET_SHA" RUNBOOK_SHA="$runbook_sha" DB_PATH_SHA="$db_path_sha" EVIDENCE="$evidence" node -e '
-    const fs=require("fs"); const r=JSON.parse(fs.readFileSync(process.env.EVIDENCE,"utf8"));
-    const now=Date.now(), created=Date.parse(r.createdAt), expires=Date.parse(r.expiresAt);
+  nonce="$(BASELINE_SHA="$BASELINE_SHA" TARGET_SHA="$TARGET_SHA" RUNBOOK_SHA="$runbook_sha" DB_PATH_SHA="$db_path_sha" EVIDENCE="$evidence" node -e '
+    const fs=require("fs"); const report=JSON.parse(fs.readFileSync(process.env.EVIDENCE,"utf8"));
+    const now=Date.now(), created=Date.parse(report.createdAt), expires=Date.parse(report.expiresAt);
     const required=[
-      r.result==="PASS", r.sourceReadOnly===true,
-      r.targetMigrationStatus==="NO_SCHEMA_OR_MIGRATION_CHANGE",
-      r.authorityDigestMatch===true, r.schemaDigestMatch===true,
-      r.baselineSchemaCompatibility==="PASS", r.disposableCleanup===true,
-      r.migration007==="PRESENT", r.migration008==="PRESENT",
-      r.productTruthCardColumn==="PRESENT", r.sourceIntegrity==="ok",
-      r.baselineSha===process.env.BASELINE_SHA, r.targetSha===process.env.TARGET_SHA,
-      r.runbookSha===process.env.RUNBOOK_SHA, r.sourceDbPathSha256===process.env.DB_PATH_SHA,
-      typeof r.authorityDigest==="string" && /^[0-9a-f]{64}$/.test(r.authorityDigest),
-      typeof r.schemaDigest==="string" && /^[0-9a-f]{64}$/.test(r.schemaDigest),
-      typeof r.nonce==="string" && /^[0-9a-f]{32,}$/.test(r.nonce),
+      report.result==="PASS", report.sourceReadOnly===true,
+      report.targetMigrationStatus==="NO_SCHEMA_OR_MIGRATION_CHANGE",
+      report.authorityDigestMatch===true, report.schemaDigestMatch===true,
+      report.baselineSchemaCompatibility==="PASS", report.disposableCleanup===true,
+      report.migration007==="PRESENT", report.migration008==="PRESENT",
+      report.productTruthCardColumn==="PRESENT", report.sourceIntegrity==="ok",
+      report.baselineSha===process.env.BASELINE_SHA, report.targetSha===process.env.TARGET_SHA,
+      report.runbookSha===process.env.RUNBOOK_SHA, report.sourceDbPathSha256===process.env.DB_PATH_SHA,
+      typeof report.authorityDigest==="string" && /^[0-9a-f]{64}$/.test(report.authorityDigest),
+      typeof report.schemaDigest==="string" && /^[0-9a-f]{64}$/.test(report.schemaDigest),
+      typeof report.nonce==="string" && /^[0-9a-f]{32,}$/.test(report.nonce),
       Number.isFinite(created) && Number.isFinite(expires) && now>=created && now<=expires && expires-created<=15*60*1000
-    ]; if (!required.every(Boolean)) process.exit(1);' || die "migration compatibility evidence does not bind this baseline/target/runbook/runtime DB"
+    ]; if (!required.every(Boolean)) process.exit(1); process.stdout.write(report.nonce);')" || die "migration compatibility evidence does not bind this baseline/target/runbook/runtime DB"
   NODE_PATH="${RUNBOOK_DIR}/node_modules" MIGRATIONS_MODULE="$EXTERNAL_MIGRATIONS" DB="$SERVICE_DB_PATH" HELPER="$EXTERNAL_HELPER" EVIDENCE="$evidence" node -e '
-    const fs=require("fs"), e=JSON.parse(fs.readFileSync(process.env.EVIDENCE,"utf8")), h=require(process.env.HELPER), s=h.sqlite3;
-    const d=new s.Database(process.env.DB,s.OPEN_READONLY,e=>{if(e)throw e;
-      d.get("PRAGMA integrity_check",(e,i)=>{if(e||!i||i.integrity_check!=="ok")process.exit(1);
-        d.all("SELECT id FROM schema_migrations WHERE id IN (?,?) ORDER BY id",["007_listing_product_truth_attestation","008_listing_product_truth_card"],(e,rows)=>{if(e||rows.length!==2)process.exit(1);
-          d.all("PRAGMA table_info(listings)",(e,cols)=>{if(e||!cols.some(c=>c.name==="product_truth_card"))process.exit(1);
-            Promise.all([h.authoritySnapshot(d),h.schemaSnapshot(d)]).then(([a,schema])=>d.close(err=>process.exit(err||a.sha256!==e.authorityDigest||schema.sha256!==e.schemaDigest?1:0))).catch(()=>process.exit(1));});});});});' || die "live migration/schema/authority digest recheck failed"
+    const fs=require("fs"), report=JSON.parse(fs.readFileSync(process.env.EVIDENCE,"utf8")), h=require(process.env.HELPER), s=h.sqlite3;
+    const d=new s.Database(process.env.DB,s.OPEN_READONLY,err=>{if(err)throw err;
+      d.get("PRAGMA integrity_check",(err,i)=>{if(err||!i||i.integrity_check!=="ok")process.exit(1);
+        d.all("SELECT id FROM schema_migrations WHERE id IN (?,?) ORDER BY id",["007_listing_product_truth_attestation","008_listing_product_truth_card"],(err,rows)=>{if(err||rows.length!==2)process.exit(1);
+          d.all("PRAGMA table_info(listings)",(err,cols)=>{if(err||!cols.some(c=>c.name==="product_truth_card"))process.exit(1);
+            Promise.all([h.authoritySnapshot(d),h.schemaSnapshot(d)]).then(([a,schema])=>d.close(err=>process.exit(err||a.sha256!==report.authorityDigest||schema.sha256!==report.schemaDigest?1:0))).catch(()=>process.exit(1));});});});});' || die "live migration/schema/authority digest recheck failed"
+  sudo install -d -o root -g root -m 0700 "${STATE_DIR}/migration-evidence-nonces"
+  sudo bash -c 'set -Eeuo pipefail; ledger="$1"; nonce="$2"; exec 9>"${ledger}/.lock"; flock -n 9; test ! -e "${ledger}/${nonce}"; : > "${ledger}/${nonce}"; chmod 0400 "${ledger}/${nonce}"' _ "${STATE_DIR}/migration-evidence-nonces" "$nonce" || die "migration evidence nonce already consumed or ledger unavailable"
 }
 service_env_value() {
   local pid="$1" key="$2"

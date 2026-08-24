@@ -11,6 +11,12 @@ RELEASES_DIR="${BASE_DIR}/omniseller-releases"
 CURRENT_SYMLINK="${BASE_DIR}/omniseller-current"
 STATE_DIR="${BASE_DIR}/omniseller-state"
 BACKUP_DIR="${STATE_DIR}/backups"
+OPS_ROOT="${BASE_DIR}/omniseller-ops"
+RUNBOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+EXTERNAL_HELPER="${RUNBOOK_DIR}/vps_backup_rehearsal.cjs"
+EXTERNAL_MIGRATIONS="${RUNBOOK_DIR}/server/database/migrations.js"
+RUNBOOK_MANIFEST="${RUNBOOK_DIR}/ops-manifest.sha256"
+RUNBOOK_ID_FILE="${RUNBOOK_DIR}/RUNBOOK_GIT_SHA"
 SERVICE="omniseller-web"
 TARGET_SHA="${1:-}"
 BASELINE_SHA=""
@@ -38,6 +44,34 @@ absolute_external_path() {
   local value="$1" label="$2"
   [[ "$value" = /* ]] || die "${label} must be absolute"
   case "$value" in "$WORKTREE_REPO"/*|"$RELEASES_DIR"/*) die "${label} must be outside repository/releases";; esac
+}
+validate_external_helper() {
+  local declared_sha actual_dir
+  actual_dir="$(canonical_path "$RUNBOOK_DIR")"
+  [[ "$actual_dir" = "$OPS_ROOT"/* ]] || die "runbook must execute from root-owned OPS_ROOT"
+  absolute_external_path "$actual_dir" RUNBOOK_DIR
+  [[ -f "$EXTERNAL_HELPER" && -r "$EXTERNAL_HELPER" && -x "$EXTERNAL_HELPER" ]] || die "external helper missing or not readable/executable"
+  [[ -f "$EXTERNAL_MIGRATIONS" && -r "$EXTERNAL_MIGRATIONS" ]] || die "external migrations module missing or unreadable"
+  [[ -f "$RUNBOOK_MANIFEST" && -r "$RUNBOOK_MANIFEST" ]] || die "external helper manifest missing or unreadable"
+  [[ -f "$RUNBOOK_ID_FILE" && -r "$RUNBOOK_ID_FILE" ]] || die "runbook identity file missing or unreadable"
+  declared_sha="$(tr -d '\r\n' < "$RUNBOOK_ID_FILE")"
+  [[ "$declared_sha" =~ ^[0-9a-f]{40}$ ]] || die "runbook identity is not a full SHA"
+  [[ "$(stat -c '%U:%a' "$actual_dir")" = "root:755" ]] || die "OPS_ROOT runbook directory must be root-owned mode 0755"
+  [[ "$(stat -c '%U:%a' "$EXTERNAL_HELPER")" = "root:555" ]] || die "external helper must be root-owned mode 0555"
+  [[ "$(stat -c '%U:%a' "$RUNBOOK_MANIFEST")" = "root:444" ]] || die "external manifest must be root-owned mode 0444"
+  [[ "$(stat -c '%U:%a' "$RUNBOOK_ID_FILE")" = "root:444" ]] || die "runbook identity file must be root-owned mode 0444"
+  (cd "$actual_dir" && sha256sum -c "$(basename "$RUNBOOK_MANIFEST")") || die "external helper manifest checksum failed"
+  grep -Fqx "# RUNBOOK_GIT_SHA=${declared_sha}" "$RUNBOOK_MANIFEST" || die "manifest is not bound to runbook identity"
+  export PATH="/home/etsy/.nvm/versions/node/v22.23.2/bin:$PATH"
+  [[ "$(node -p "process.versions.node.split('.')[0]")" = 22 ]] || die "Node 22 required for external helper"
+  NODE_PATH="${actual_dir}/node_modules" node --check "$EXTERNAL_HELPER" >/dev/null || die "external helper syntax check failed"
+  NODE_PATH="${actual_dir}/node_modules" node --check "$EXTERNAL_MIGRATIONS" >/dev/null || die "external migrations syntax check failed"
+  NODE_PATH="${actual_dir}/node_modules" node -e "require.resolve('sqlite3')" >/dev/null || die "external helper sqlite3 dependency unavailable"
+  NODE_PATH="${actual_dir}/node_modules" node -e "require('sqlite3')" >/dev/null || die "external helper sqlite3 native binding unavailable"
+}
+run_external_rehearsal() {
+  NODE_PATH="${RUNBOOK_DIR}/node_modules" MIGRATIONS_MODULE="$EXTERNAL_MIGRATIONS" node "$EXTERNAL_HELPER" \
+    "$SERVICE_DB_PATH" "$backup_dir/app.db" "$backup_dir/rehearsal.db" "$backup_dir/rehearsal-report.json"
 }
 service_env_value() {
   local pid="$1" key="$2"
@@ -148,6 +182,10 @@ BASELINE_SHA="$(tr -d '\r\n' < "$CURRENT_SYMLINK/REVISION")"
 BASELINE_RELEASE_DIR="$RELEASES_DIR/$BASELINE_SHA"
 [[ -f "$BASELINE_RELEASE_DIR/MANIFEST.json" ]] || die "baseline immutable release missing"
 
+# This is a pre-stop gate. The helper and its Node 22 sqlite dependency are
+# installed in OPS_ROOT, never copied into the immutable target release.
+validate_external_helper
+
 runtime_contract "${STATE_DIR}/runtime-contract.before"
 [[ -z "${OMNI_DB_PATH:-}" || "$OMNI_DB_PATH" = "$SERVICE_DB_PATH" ]] || die "shell DB path differs from systemd DB path"
 
@@ -208,8 +246,10 @@ archive="${backup_dir}.tar.gz"
 verify_dir="${backup_dir}.verify"
 mkdir -p "$backup_dir"
 export PATH="/home/etsy/.nvm/versions/node/v22.23.2/bin:$PATH"
-node "$TARGET_RELEASE_DIR/scripts/vps_backup_rehearsal.cjs" \
-  "$SERVICE_DB_PATH" "$backup_dir/app.db" "$backup_dir/rehearsal.db" "$backup_dir/rehearsal-report.json"
+if ! run_external_rehearsal; then
+  rollback_or_abort
+  exit 1
+fi
 cp "${STATE_DIR}/runtime-contract.before" "$backup_dir/runtime-contract.before"
 
 # All DB handles are closed before this point. Manifest is relative and final.

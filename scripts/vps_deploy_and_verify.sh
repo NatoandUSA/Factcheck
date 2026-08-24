@@ -84,6 +84,7 @@ verify_migration_compatibility_evidence() {
   db_path_sha="$(printf %s "$SERVICE_DB_PATH" | sha256sum | awk '{print $1}')"
   BASELINE_SHA="$BASELINE_SHA" TARGET_SHA="$TARGET_SHA" RUNBOOK_SHA="$runbook_sha" DB_PATH_SHA="$db_path_sha" EVIDENCE="$evidence" node -e '
     const fs=require("fs"); const r=JSON.parse(fs.readFileSync(process.env.EVIDENCE,"utf8"));
+    const now=Date.now(), created=Date.parse(r.createdAt), expires=Date.parse(r.expiresAt);
     const required=[
       r.result==="PASS", r.sourceReadOnly===true,
       r.targetMigrationStatus==="NO_SCHEMA_OR_MIGRATION_CHANGE",
@@ -92,13 +93,19 @@ verify_migration_compatibility_evidence() {
       r.migration007==="PRESENT", r.migration008==="PRESENT",
       r.productTruthCardColumn==="PRESENT", r.sourceIntegrity==="ok",
       r.baselineSha===process.env.BASELINE_SHA, r.targetSha===process.env.TARGET_SHA,
-      r.runbookSha===process.env.RUNBOOK_SHA, r.sourceDbPathSha256===process.env.DB_PATH_SHA
+      r.runbookSha===process.env.RUNBOOK_SHA, r.sourceDbPathSha256===process.env.DB_PATH_SHA,
+      typeof r.authorityDigest==="string" && /^[0-9a-f]{64}$/.test(r.authorityDigest),
+      typeof r.schemaDigest==="string" && /^[0-9a-f]{64}$/.test(r.schemaDigest),
+      typeof r.nonce==="string" && /^[0-9a-f]{32,}$/.test(r.nonce),
+      Number.isFinite(created) && Number.isFinite(expires) && now>=created && now<=expires && expires-created<=15*60*1000
     ]; if (!required.every(Boolean)) process.exit(1);' || die "migration compatibility evidence does not bind this baseline/target/runbook/runtime DB"
-  NODE_PATH="${RUNBOOK_DIR}/node_modules" DB="$SERVICE_DB_PATH" node -e '
-    const s=require("sqlite3").verbose(); const d=new s.Database(process.env.DB,s.OPEN_READONLY,e=>{if(e)throw e;
+  NODE_PATH="${RUNBOOK_DIR}/node_modules" MIGRATIONS_MODULE="$EXTERNAL_MIGRATIONS" DB="$SERVICE_DB_PATH" HELPER="$EXTERNAL_HELPER" EVIDENCE="$evidence" node -e '
+    const fs=require("fs"), e=JSON.parse(fs.readFileSync(process.env.EVIDENCE,"utf8")), h=require(process.env.HELPER), s=h.sqlite3;
+    const d=new s.Database(process.env.DB,s.OPEN_READONLY,e=>{if(e)throw e;
       d.get("PRAGMA integrity_check",(e,i)=>{if(e||!i||i.integrity_check!=="ok")process.exit(1);
         d.all("SELECT id FROM schema_migrations WHERE id IN (?,?) ORDER BY id",["007_listing_product_truth_attestation","008_listing_product_truth_card"],(e,rows)=>{if(e||rows.length!==2)process.exit(1);
-          d.all("PRAGMA table_info(listings)",(e,cols)=>{if(e||!cols.some(c=>c.name==="product_truth_card"))process.exit(1);d.close(e=>process.exit(e?1:0));});});});});' || die "live migration/schema recheck failed"
+          d.all("PRAGMA table_info(listings)",(e,cols)=>{if(e||!cols.some(c=>c.name==="product_truth_card"))process.exit(1);
+            Promise.all([h.authoritySnapshot(d),h.schemaSnapshot(d)]).then(([a,schema])=>d.close(err=>process.exit(err||a.sha256!==e.authorityDigest||schema.sha256!==e.schemaDigest?1:0))).catch(()=>process.exit(1));});});});});' || die "live migration/schema/authority digest recheck failed"
 }
 service_env_value() {
   local pid="$1" key="$2"

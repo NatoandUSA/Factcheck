@@ -12,15 +12,6 @@ const sqlite3 = require('sqlite3').verbose();
 const { runMigrations } = require(process.env.MIGRATIONS_MODULE || '../server/database/migrations');
 
 const [sourceDb, snapshotDb, rehearsalDb, reportPath] = process.argv.slice(2);
-if (![sourceDb, snapshotDb, rehearsalDb, reportPath].every(Boolean)) {
-  throw new Error('Usage: vps_backup_rehearsal.cjs <source-db> <snapshot-db> <rehearsal-db> <report.json>');
-}
-for (const candidate of [sourceDb, snapshotDb, rehearsalDb, reportPath]) {
-  if (!path.isAbsolute(candidate)) throw new Error(`Absolute path required: ${candidate}`);
-}
-if (fs.existsSync(snapshotDb) || fs.existsSync(rehearsalDb)) {
-  throw new Error('Snapshot and rehearsal destinations must not already exist');
-}
 
 const sha256 = (value) => crypto.createHash('sha256').update(value).digest('hex');
 const sqlString = (value) => `'${String(value).replace(/'/g, "''")}'`;
@@ -109,6 +100,15 @@ async function schemaSnapshot(db) {
 }
 
 async function main() {
+  if (![sourceDb, snapshotDb, rehearsalDb, reportPath].every(Boolean)) {
+    throw new Error('Usage: vps_backup_rehearsal.cjs <source-db> <snapshot-db> <rehearsal-db> <report.json>');
+  }
+  for (const candidate of [sourceDb, snapshotDb, rehearsalDb, reportPath]) {
+    if (!path.isAbsolute(candidate)) throw new Error(`Absolute path required: ${candidate}`);
+  }
+  if (fs.existsSync(snapshotDb) || fs.existsSync(rehearsalDb)) {
+    throw new Error('Snapshot and rehearsal destinations must not already exist');
+  }
   fs.mkdirSync(path.dirname(snapshotDb), { recursive: true });
   fs.mkdirSync(path.dirname(reportPath), { recursive: true });
 
@@ -168,7 +168,10 @@ async function main() {
   console.log('CANONICAL_SNAPSHOT_REHEARSAL=PASS');
 }
 
-main().catch((error) => {
-  console.error(`CANONICAL_SNAPSHOT_REHEARSAL=FAIL: ${error.stack || error.message}`);
-  process.exit(1);
-});
+module.exports = { authoritySnapshot, schemaSnapshot, integrity, open, close, sqlite3 };
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(`CANONICAL_SNAPSHOT_REHEARSAL=FAIL: ${error.stack || error.message}`);
+    process.exit(1);
+  });
+}

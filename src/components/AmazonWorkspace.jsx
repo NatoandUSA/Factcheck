@@ -9,6 +9,8 @@ import MasterKeywordTable from './MasterKeywordTable';
 import UnifiedIpGateModal from './UnifiedIpGateModal';
 import MarketBenchmarkWidget from './MarketBenchmarkWidget';
 import SmartPullAnalyticsBar from './SmartPullAnalyticsBar';
+import ProjectSetupCard from './ProjectSetupCard';
+import ProjectEvidenceGate from './ProjectEvidenceGate';
 
 export default function AmazonWorkspace({ onSelectListing, onApproveListing, onShowToast }) {
   const [seedPhrase, setSeedPhrase] = useState('');
@@ -48,9 +50,19 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
       if (res.ok && data.success && Array.isArray(data.projects)) {
         setProjects(data.projects);
         setActiveProject(prev => prev ? (data.projects.find(project => project.id === prev.id) || null) : null);
+        return data.projects;
       }
     } catch (e) {}
+    return [];
   }, []);
+
+  const handleProjectCreated = async ({ id, seedPhrase: createdSeed }) => {
+    const loaded = await fetchProjects();
+    const project = loaded.find(item => Number(item.id) === Number(id));
+    setActiveProject(project || null);
+    setSeedPhrase(createdSeed);
+    setActiveStage('workflow');
+  };
 
   // Also load latest trend if available to populate cerebroSummary
   const fetchLatestTrend = React.useCallback(async () => {
@@ -104,8 +116,10 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
       if (onShowToast) onShowToast(`✓ Chuyển trạng thái dự án sang ${data.state} thành công!`);
       setActiveProject(prev => prev?.id === requestedProjectId ? ({ ...prev, state: data.state }) : prev);
       fetchProjects();
+      return true;
     } catch (err) {
       if (onShowToast) onShowToast(`⚠ Transition error: ${err.message}`);
+      return false;
     }
   };
 
@@ -113,6 +127,10 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
   const handleGenerateListing = async () => {
     if (!activeProject?.id) {
       if (onShowToast) onShowToast('⚠️ Hãy chọn Active Project trước khi tạo listing.');
+      return;
+    }
+    if (!['MKL_FROZEN', 'DRAFT_GENERATED', 'PRODUCT_TRUTH_VERIFIED', 'PRODUCT_TRUTH_CONFIRMED', 'VALIDATED', 'MANAGER_APPROVED', 'PUBLISH_READY'].includes(activeProject.state)) {
+      onShowToast?.('Hoàn tất Evidence → Research → DNA → Freeze MKL trước khi tạo draft.');
       return;
     }
     const trendId = cerebroSummary?.trendId;
@@ -171,7 +189,9 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
             value={activeProject?.id || ''}
             onChange={(event) => {
               const selectedId = Number(event.target.value);
-              setActiveProject(projects.find(project => project.id === selectedId) || null);
+              const selected = projects.find(project => project.id === selectedId) || null;
+              setActiveProject(selected);
+              setSeedPhrase(selected?.seed_phrase || '');
               setActiveStage('workflow');
             }}
             style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid #7dd3fc', background: '#fff' }}
@@ -256,11 +276,7 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
         {activeProject && (
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', background: '#0284c7', color: '#fff', padding: '6px 14px', borderRadius: '10px', fontSize: '0.82rem', fontWeight: 800 }}>
             <span>📌 Active Project #{activeProject.id}: <u style={{ textUnderlineOffset: '3px' }}>{activeProject.state}</u></span>
-            {activeProject.state === 'EVIDENCE_INTAKE' && (
-              <button onClick={() => handleTransition('RESEARCH_ACCEPTED')} style={{ background: '#fff', color: '#0284c7', border: 'none', padding: '3px 10px', borderRadius: '6px', cursor: 'pointer', fontWeight: 800 }}>
-                Accept Research →
-              </button>
-            )}
+            {activeProject.state === 'EVIDENCE_INTAKE' && <span style={{ fontSize: '0.72rem' }}>Accept evidence ở Gate bên dưới</span>}
             {activeProject.state === 'RESEARCH_ACCEPTED' && (
               <button onClick={() => handleTransition('DNA_ACCEPTED')} style={{ background: '#fff', color: '#0284c7', border: 'none', padding: '3px 10px', borderRadius: '6px', cursor: 'pointer', fontWeight: 800 }}>
                 Accept DNA →
@@ -275,6 +291,8 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
         )}
       </div>
 
+      {!activeProject && <ProjectSetupCard marketplace="AMAZON" seedPhrase={seedPhrase} onCreated={handleProjectCreated} onShowToast={onShowToast} />}
+
       <SmartPullAnalyticsBar
         marketplace="AMAZON"
         activeProjectId={activeProject?.id || null}
@@ -285,6 +303,8 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
           setActiveStage('workflow');
         }}
       />
+
+      <ProjectEvidenceGate activeProject={activeProject} onTransition={handleTransition} onShowToast={onShowToast} />
 
       {/* 0. Market Benchmark & Go/No-Go Decision Gate (Pre-Listing Validation) */}
       <MarketBenchmarkWidget 
@@ -333,7 +353,7 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
       {/* ======================================================== */}
 
       {/* STAGE 1: 4-STEP PIPELINE WORKFLOW */}
-      {activeStage === 'workflow' && (
+      <div style={{ display: activeStage === 'workflow' ? 'block' : 'none' }}>
         <AmazonPipelineWorkflow
           seedPhrase={seedPhrase}
           selectedCategory={selectedCategory}
@@ -349,7 +369,7 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
           onGenerateListingDirect={handleGenerateListing}
           isDrafting={drafting}
         />
-      )}
+      </div>
 
       {/* STAGE 2: DEEP RESEARCH & DNA MIRROR (2-COLUMN GRID) */}
       {activeStage === 'research' && (
@@ -361,7 +381,7 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
             {/* Amazon Learning Box accepts URL/text only until project-bound server evidence exists. */}
             <LearningBoxWidget 
               platform="AMAZON" 
-              scannedSellers={[]}
+              scannedSellers={xraySellers}
               onShowToast={onShowToast} 
             />
           </div>
@@ -370,17 +390,17 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
           <div className="studio-panel" style={{ padding: '20px 24px', borderLeft: '4px solid #0284c7', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#f0f9ff', borderRadius: '12px', flexWrap: 'wrap', gap: '12px' }}>
             <div>
               <div style={{ fontWeight: 800, fontSize: '1rem', color: '#0369a1' }}>
-                🧠 Stage 2: Competitor DNA & Trend Recheck Completed
+                🧠 Stage 2: Competitor DNA & Trend Research
               </div>
               <div style={{ fontSize: '0.8rem', color: '#0284c7', marginTop: '2px' }}>
-                Xác nhận từ khóa hạt nhân "{seedPhrase}" và DNA đối thủ ({xraySellers.length} ASINs đã quét) sẵn sàng cho MKL & Sinh Listing.
+                Xray có {xraySellers.length} ASIN candidate trong phiên này. Chọn link/text để học cấu trúc; sau đó accept evidence hợp lệ trước khi chấp nhận DNA.
               </div>
             </div>
 
             <div style={{ display: 'flex', gap: '10px' }}>
               <button
                 onClick={handleGenerateListing}
-                disabled={drafting}
+                disabled={drafting || !['MKL_FROZEN', 'DRAFT_GENERATED', 'PRODUCT_TRUTH_VERIFIED', 'PRODUCT_TRUTH_CONFIRMED', 'VALIDATED', 'MANAGER_APPROVED', 'PUBLISH_READY'].includes(activeProject?.state)}
                 className="btn btn-primary"
                 style={{ background: '#16a34a', fontWeight: 800, padding: '10px 20px', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}
               >
@@ -396,6 +416,7 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
                     onShowToast('Project phải ở trạng thái RESEARCH_ACCEPTED trước khi chấp nhận DNA.');
                   }
                 }}
+                disabled={activeProject?.state !== 'RESEARCH_ACCEPTED'}
                 className="btn btn-primary"
                 style={{ background: '#0284c7', fontWeight: 800, padding: '10px 20px', borderRadius: '8px', cursor: 'pointer' }}
               >

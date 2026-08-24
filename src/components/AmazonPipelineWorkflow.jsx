@@ -48,6 +48,10 @@ export default function AmazonPipelineWorkflow({
   // B1: Handle Feed Xray — Supports Multi-File Upload
   const handleXrayUpload = async (fileList) => {
     if (!fileList || (fileList.length === 0 && !fileList[0])) return;
+    if (!activeProjectId) {
+      onShowToast?.('Tạo hoặc chọn Active Project trước khi nạp Xray để dữ liệu được bind đúng project.');
+      return;
+    }
     const filesArray = Array.from(fileList);
     setXrayLoading(true);
     setXrayFiles(filesArray);
@@ -96,6 +100,10 @@ export default function AmazonPipelineWorkflow({
   // B3: Handle Feed Cerebro Report — Supports Multi-File Upload
   const handleCerebroUpload = async (fileList) => {
     if (!fileList || (fileList.length === 0 && !fileList[0])) return;
+    if (!activeProjectId) {
+      onShowToast?.('Tạo hoặc chọn Active Project trước khi nạp Cerebro để dữ liệu được bind đúng project.');
+      return;
+    }
     const filesArray = Array.from(fileList);
     setCerebroLoading(true);
     setCerebroFiles(filesArray);
@@ -173,6 +181,7 @@ export default function AmazonPipelineWorkflow({
   };
 
   const activeBatch = batches[activeBatchIndex] || (batches.length > 0 ? batches[0] : null);
+  const canUpload = Boolean(activeProjectId);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
@@ -256,22 +265,25 @@ export default function AmazonPipelineWorkflow({
           </div>
         </div>
 
+        {!canUpload && <div style={{ marginBottom: '12px', padding: '10px 12px', borderRadius: '8px', background: '#fffbeb', color: '#92400e', fontSize: '0.82rem' }}>Bắt đầu bằng “Tạo project” ở đầu trang. Sau khi project được chọn, upload Xray sẽ được bind đúng marketplace/workspace/project.</div>}
+
         <div 
-          onDragOver={(e) => { e.preventDefault(); setIsXrayDragging(true); }}
+          onDragOver={(e) => { if (!canUpload) return; e.preventDefault(); setIsXrayDragging(true); }}
           onDragLeave={() => setIsXrayDragging(false)}
           onDrop={(e) => {
             e.preventDefault();
             setIsXrayDragging(false);
-            if (e.dataTransfer.files?.length) handleXrayUpload(e.dataTransfer.files);
+            if (canUpload && e.dataTransfer.files?.length) handleXrayUpload(e.dataTransfer.files);
           }}
-          onClick={() => xrayInputRef.current?.click()}
+          onClick={() => canUpload && xrayInputRef.current?.click()}
           style={{
             border: `2px dashed ${isXrayDragging ? '#0284c7' : '#93c5fd'}`,
             background: isXrayDragging ? '#e0f2fe' : '#f0f9ff',
             padding: '24px',
             borderRadius: '12px',
             textAlign: 'center',
-            cursor: 'pointer',
+            cursor: canUpload ? 'pointer' : 'not-allowed',
+            opacity: canUpload ? 1 : 0.65,
             transition: 'all 0.15s ease'
           }}
         >
@@ -279,6 +291,7 @@ export default function AmazonPipelineWorkflow({
             type="file" 
             ref={xrayInputRef} 
             multiple
+            disabled={!canUpload}
             onChange={(e) => { if (e.target.files?.length) handleXrayUpload(e.target.files); }}
             accept=".xlsx,.xls,.csv,.html"
             style={{ display: 'none' }}
@@ -553,22 +566,25 @@ export default function AmazonPipelineWorkflow({
           )}
         </div>
 
+        {!canUpload && <div style={{ marginBottom: '12px', padding: '10px 12px', borderRadius: '8px', background: '#fffbeb', color: '#92400e', fontSize: '0.82rem' }}>Cerebro chỉ nhận sau khi Active Project được chọn.</div>}
+
         <div 
-          onDragOver={(e) => { e.preventDefault(); setIsCerebroDragging(true); }}
+          onDragOver={(e) => { if (!canUpload) return; e.preventDefault(); setIsCerebroDragging(true); }}
           onDragLeave={() => setIsCerebroDragging(false)}
           onDrop={(e) => {
             e.preventDefault();
             setIsCerebroDragging(false);
-            if (e.dataTransfer.files?.length) handleCerebroUpload(e.dataTransfer.files);
+            if (canUpload && e.dataTransfer.files?.length) handleCerebroUpload(e.dataTransfer.files);
           }}
-          onClick={() => cerebroInputRef.current?.click()}
+          onClick={() => canUpload && cerebroInputRef.current?.click()}
           style={{
             border: `2px dashed ${isCerebroDragging ? '#16a34a' : '#86efac'}`,
             background: isCerebroDragging ? '#dcfce7' : '#f0fdf4',
             padding: '24px',
             borderRadius: '12px',
             textAlign: 'center',
-            cursor: 'pointer',
+            cursor: canUpload ? 'pointer' : 'not-allowed',
+            opacity: canUpload ? 1 : 0.65,
             transition: 'all 0.15s ease'
           }}
         >
@@ -576,6 +592,7 @@ export default function AmazonPipelineWorkflow({
             type="file" 
             ref={cerebroInputRef} 
             multiple
+            disabled={!canUpload}
             onChange={(e) => { if (e.target.files?.length) handleCerebroUpload(e.target.files); }}
             accept=".xlsx,.xls,.csv,.html"
             style={{ display: 'none' }}

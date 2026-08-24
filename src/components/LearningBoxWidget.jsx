@@ -115,7 +115,7 @@ export default function LearningBoxWidget({ platform = 'AMAZON', onShowToast, sc
             </div>
             <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '2px' }}>
               {isAmazon 
-                ? 'Dán link Amazon có thể truy xuất hoặc văn bản nguồn. Xray snapshot không tự trở thành evidence cho Learning Box hay listing.'
+                ? 'Dán link Amazon/văn bản nguồn, hoặc chọn ASIN từ Xray để làm mẫu DNA. Xray chỉ là staff snapshot: dùng cho cấu trúc tham khảo, không tự thành Product Truth, approval hay publish evidence.'
                 : 'Dán link Etsy / Shop text đối thủ để tham chiếu cấu trúc; không tạo Product Truth hay bằng chứng publish.'}
             </div>
           </div>
@@ -183,7 +183,7 @@ export default function LearningBoxWidget({ platform = 'AMAZON', onShowToast, sc
             }}
           >
             <Users size={14} />
-            <span>{isAmazon ? `Chọn Từ ASINs Xray (${effectiveSellers.length})` : `Chọn Từ Sellers Đã Quét (${effectiveSellers.length})`}</span>
+            <span>{isAmazon ? `ASIN Xray tham khảo (${effectiveSellers.length})` : `Chọn Từ Sellers Đã Quét (${effectiveSellers.length})`}</span>
           </button>
         </div>
       </div>
@@ -193,7 +193,7 @@ export default function LearningBoxWidget({ platform = 'AMAZON', onShowToast, sc
         {inputMode === 'seller' ? (
           effectiveSellers.length === 0 ? (
             <div style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: '8px', padding: '12px 16px', color: '#92400e', fontSize: '0.85rem' }}>
-              ⚠️ Chưa có ASIN nào được nạp từ báo cáo Xray. Vui lòng quay lại <strong>Stage 1 (Bước 1)</strong> để tải file Helium 10 Xray, hoặc chuyển sang tab <strong>"Dán Link Amazon/ASIN"</strong> để học DNA trực tiếp từ đường link.
+              ⚠️ Chưa có ASIN Xray trong phiên này. Upload Xray ở Stage 1 hoặc dùng tab <strong>“Dán Link Amazon/ASIN”</strong>. Chuyển stage không yêu cầu upload lại; chỉ đổi project hoặc reload trang mới xóa session snapshot.
             </div>
           ) : (
             <div style={{ display: 'flex', gap: '10px' }}>
@@ -203,7 +203,7 @@ export default function LearningBoxWidget({ platform = 'AMAZON', onShowToast, sc
                 value={selectedSellerId}
                 onChange={(e) => setSelectedSellerId(e.target.value)}
               >
-                <option value="">-- {isAmazon ? 'Chọn 1 ASIN đối thủ từ báo cáo Xray Stage 1' : 'Chọn 1 seller đã quét ở Stage 1'} --</option>
+                <option value="">-- {isAmazon ? 'Chọn 1 ASIN Xray để học cấu trúc (không phải evidence)' : 'Chọn 1 seller đã quét ở Stage 1'} --</option>
                 {effectiveSellers.map(s => (
                   <option key={s.id || s.asin} value={s.id || s.asin}>
                     {s.asin ? `[${s.asin}] ` : ''}{s.title ? s.title.slice(0, 55) : 'Amazon Product'} {s.price ? `• ${s.price}` : ''} {s.sales ? `• ${s.sales} sales` : ''}

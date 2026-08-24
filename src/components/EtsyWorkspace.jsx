@@ -9,6 +9,8 @@ import MasterKeywordTable from './MasterKeywordTable';
 import UnifiedIpGateModal from './UnifiedIpGateModal';
 import MarketBenchmarkWidget from './MarketBenchmarkWidget';
 import SmartPullAnalyticsBar from './SmartPullAnalyticsBar';
+import ProjectSetupCard from './ProjectSetupCard';
+import ProjectEvidenceGate from './ProjectEvidenceGate';
 import { parseJsonResponse } from '../utils/apiResponse';
 
 export default function EtsyWorkspace({ onSelectListing, onApproveListing, onShowToast, onViewHistory }) {
@@ -114,9 +116,19 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
       if (res.ok && data.success && Array.isArray(data.projects)) {
         setProjects(data.projects);
         setActiveProject(prev => prev ? (data.projects.find(project => project.id === prev.id) || null) : null);
+        return data.projects;
       }
     } catch (e) {}
+    return [];
   }, []);
+
+  const handleProjectCreated = async ({ id, seedPhrase: createdSeed }) => {
+    const loaded = await fetchProjects();
+    const project = loaded.find(item => Number(item.id) === Number(id));
+    setActiveProject(project || null);
+    setSeedPhrase(createdSeed);
+    setActiveStage('workflow');
+  };
 
   const fetchData = async () => {
     if (!activeProject?.id) {
@@ -310,7 +322,9 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
             value={activeProject?.id || ''}
             onChange={(event) => {
               const selectedId = Number(event.target.value);
-              setActiveProject(projects.find(project => project.id === selectedId) || null);
+              const selected = projects.find(project => project.id === selectedId) || null;
+              setActiveProject(selected);
+              setSeedPhrase(selected?.seed_phrase || '');
               setActiveStage('workflow');
             }}
             style={{ padding: '8px 12px', borderRadius: '8px', border: '1px solid #fdba74', background: '#fff' }}
@@ -394,11 +408,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
           {activeProject && (
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', background: '#ea580c', color: '#fff', padding: '6px 14px', borderRadius: '10px', fontSize: '0.82rem', fontWeight: 800, marginTop: '15px' }}>
               <span>📌 Active Project #{activeProject.id}: <u style={{ textUnderlineOffset: '3px' }}>{activeProject.state}</u></span>
-              {activeProject.state === 'EVIDENCE_INTAKE' && (
-                <button onClick={() => handleTransition('RESEARCH_ACCEPTED')} style={{ background: '#fff', color: '#ea580c', border: 'none', padding: '3px 10px', borderRadius: '6px', cursor: 'pointer', fontWeight: 800 }}>
-                  Accept Research →
-                </button>
-              )}
+              {activeProject.state === 'EVIDENCE_INTAKE' && <span style={{ fontSize: '0.72rem' }}>Accept evidence ở Gate bên dưới</span>}
               {activeProject.state === 'RESEARCH_ACCEPTED' && (
                 <button onClick={() => handleTransition('DNA_ACCEPTED')} style={{ background: '#fff', color: '#ea580c', border: 'none', padding: '3px 10px', borderRadius: '6px', cursor: 'pointer', fontWeight: 800 }}>
                   Accept DNA →
@@ -413,7 +423,8 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
           )}
 
           <button
-            onClick={() => setIsFeedModalOpen(true)}
+            onClick={() => activeProject ? setIsFeedModalOpen(true) : onShowToast?.('Tạo hoặc chọn Active Project trước khi mở Etsy Feed.')}
+            disabled={!activeProject}
             style={{
               background: '#ecfdf5',
               border: '1px solid #6ee7b7',
@@ -425,7 +436,8 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
               display: 'flex',
               alignItems: 'center',
               gap: '6px',
-              cursor: 'pointer',
+            cursor: activeProject ? 'pointer' : 'not-allowed',
+            opacity: activeProject ? 1 : 0.6,
               marginTop: '15px'
             }}
             title="Copy toàn bộ text kết quả Etsy/HeyEtsy, xem Preview rồi lưu vào Active Project"
@@ -436,7 +448,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
 
           <button
             onClick={handleMcpPull}
-            disabled={mcpPulling || !seedPhrase.trim()}
+            disabled={mcpPulling || !activeProject || !seedPhrase.trim()}
             className="btn btn-primary"
             style={{
               background: '#ea580c',
@@ -446,7 +458,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
               display: 'flex',
               alignItems: 'center',
               gap: '8px',
-              cursor: (mcpPulling || !seedPhrase.trim()) ? 'not-allowed' : 'pointer',
+              cursor: (mcpPulling || !activeProject || !seedPhrase.trim()) ? 'not-allowed' : 'pointer',
               marginTop: '15px',
               boxShadow: '0 4px 12px rgba(234, 88, 12, 0.25)'
             }}
@@ -456,6 +468,8 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
           </button>
         </div>
       </div>
+
+      {!activeProject && <ProjectSetupCard marketplace="ETSY" seedPhrase={seedPhrase} onCreated={handleProjectCreated} onShowToast={onShowToast} accent="#ea580c" />}
 
       <SmartPullAnalyticsBar
         marketplace="ETSY"
@@ -479,6 +493,8 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
           setActiveStage('workflow');
         }}
       />
+
+      <ProjectEvidenceGate activeProject={activeProject} onTransition={handleTransition} onShowToast={onShowToast} accent="#ea580c" />
 
       {/* 0. Market Benchmark & Go/No-Go Decision Gate (Pre-Listing Validation) */}
       <MarketBenchmarkWidget 
@@ -527,8 +543,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
       {/* ======================================================== */}
 
       {/* STAGE 1: WORKFLOW ENGINE */}
-      {activeStage === 'workflow' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+      <div style={{ display: activeStage === 'workflow' ? 'flex' : 'none', flexDirection: 'column', gap: '20px' }}>
           
           {/* Top Sellers Deep Reverse-Engineer Scanner */}
           <EtsyMultiSellerScanner
@@ -558,12 +573,24 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
                 <button
                   className="btn btn-primary btn-sm"
                   onClick={async () => {
+                    if (!activeProject) {
+                      onShowToast?.('Tạo hoặc chọn Active Project trước khi chuyển Stage 2.');
+                      return;
+                    }
                     if (activeProject?.state === 'EVIDENCE_INTAKE') {
                       const transitioned = await handleTransition('RESEARCH_ACCEPTED');
                       if (!transitioned) return;
+                      setActiveStage('research');
+                      return;
+                    }
+                    if (activeProject.state !== 'RESEARCH_ACCEPTED') {
+                      onShowToast?.('Accept evidence đủ điều kiện trước khi vào Research DNA.');
+                      return;
                     }
                     setActiveStage('research');
                   }}
+                  disabled={!activeProject || !mcpResult}
+                  title={!activeProject ? 'Chọn Active Project trước.' : !mcpResult ? 'Nạp observed research từ MCP hoặc Etsy Feed trước.' : undefined}
                   style={{ background: '#c2410c', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 800, cursor: 'pointer' }}
                 >
                   <span>➡️ Chốt Evidence Stage 1 & Chuyển Sang Stage 2 (Research DNA)</span>
@@ -630,7 +657,6 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
 
           </div>
         </div>
-      )}
 
       {/* STAGE 2: DEEP RESEARCH & DNA MIRROR (2-COLUMN GRID) */}
       {activeStage === 'research' && (
@@ -647,10 +673,10 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
           <div className="studio-panel" style={{ padding: '20px 24px', borderLeft: '4px solid #ea580c', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#fff7ed', borderRadius: '12px' }}>
             <div>
               <div style={{ fontWeight: 800, fontSize: '1rem', color: '#c2410c' }}>
-                🧠 Stage 2: Competitor DNA & Trend Recheck Completed
+                🧠 Stage 2: Competitor DNA & Trend Research
               </div>
               <div style={{ fontSize: '0.8rem', color: '#ea580c', marginTop: '2px' }}>
-                Xác nhận từ khóa hạt nhân "{seedPhrase}" và mẫu listing Etsy từ 30 benchmark sellers đã được duyệt đưa vào MKL.
+                Review dữ liệu observed trước khi accept DNA. Chỉ evidence đã accept và project ở RESEARCH_ACCEPTED mới mở bước này.
               </div>
             </div>
 
@@ -662,13 +688,14 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
                   onShowToast('Project phải ở trạng thái RESEARCH_ACCEPTED trước khi chấp nhận DNA.');
                 }
               }}
+              disabled={activeProject?.state !== 'RESEARCH_ACCEPTED'}
               className="btn btn-primary"
               style={{ background: '#ea580c', fontWeight: 800, padding: '10px 20px', borderRadius: '8px', cursor: 'pointer' }}
             >
               <span>➡️ Chấp Nhận Research DNA (sau đó Freeze MKL để mở Stage 3)</span>
             </button>
-          </div>
         </div>
+      </div>
       )}
 
       {/* STAGE 3: MASTER KEYWORD INTELLIGENCE */}
@@ -770,7 +797,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
 
             <p style={{ fontSize: '0.85rem', color: '#475569', margin: '0 0 14px 0', lineHeight: 1.5 }}>
               Copy toàn bộ nội dung search result có các listing block và marker <b>HeyEtsy.com</b>, sau đó xem Preview trước khi lưu.
-              Dữ liệu được giữ theo <b>thứ tự nguồn</b>; dấu “–” là UNKNOWN. Tag được ghi là <b>HeyEtsy suggestion</b>, không phải Etsy tag đã xác minh.
+              Dữ liệu được giữ theo <b>thứ tự nguồn</b>; dấu “–” là UNKNOWN. Tag được ghi là <b>HeyEtsy suggestion</b>, không phải Etsy tag đã xác minh, Product Truth hoặc publish evidence.
             </p>
 
             <div style={{ marginBottom: '14px', padding: '9px 12px', borderRadius: '8px', background: '#eef2ff', color: '#3730a3', fontSize: '0.78rem', fontWeight: 700 }}>

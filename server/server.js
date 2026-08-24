@@ -1111,7 +1111,9 @@ app.get('/api/projects', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELL
 // POST /api/projects - Create new research project
 app.post('/api/projects', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
   const { name, seedPhrase, referenceAsin } = req.body || {};
-  if (!name || !seedPhrase) {
+  const projectName = typeof name === 'string' ? name.trim() : '';
+  const normalizedSeedPhrase = typeof seedPhrase === 'string' ? seedPhrase.trim() : '';
+  if (!projectName || !normalizedSeedPhrase) {
     return res.status(400).json({ success: false, error: 'MISSING_FIELDS', message: 'Project name and seedPhrase are required.' });
   }
 
@@ -1122,8 +1124,8 @@ app.post('/api/projects', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SEL
       req.user.tenantId,
       req.user.workspaceId,
       req.user.marketplace,
-      String(name).trim(),
-      String(seedPhrase).trim(),
+      projectName,
+      normalizedSeedPhrase,
       referenceAsin ? String(referenceAsin).trim() : null,
       req.user.userId
     ],

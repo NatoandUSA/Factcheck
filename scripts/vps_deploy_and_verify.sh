@@ -73,6 +73,33 @@ run_external_rehearsal() {
   NODE_PATH="${RUNBOOK_DIR}/node_modules" MIGRATIONS_MODULE="$EXTERNAL_MIGRATIONS" node "$EXTERNAL_HELPER" \
     "$SERVICE_DB_PATH" "$backup_dir/app.db" "$backup_dir/rehearsal.db" "$backup_dir/rehearsal-report.json"
 }
+verify_migration_compatibility_evidence() {
+  local evidence runbook_sha db_path_sha
+  evidence="${MIGRATION_COMPATIBILITY_EVIDENCE:-}"
+  [[ -n "$evidence" && "$evidence" = /* && "$evidence" = "$STATE_DIR"/* ]] || die "root-owned migration compatibility evidence under STATE_DIR is required"
+  absolute_external_path "$evidence" MIGRATION_COMPATIBILITY_EVIDENCE
+  [[ -f "$evidence" && -r "$evidence" ]] || die "migration compatibility evidence missing or unreadable"
+  [[ "$(stat -c '%U:%a' "$evidence")" = "root:444" ]] || die "migration compatibility evidence must be root-owned mode 0444"
+  runbook_sha="$(tr -d '\r\n' < "$RUNBOOK_ID_FILE")"
+  db_path_sha="$(printf %s "$SERVICE_DB_PATH" | sha256sum | awk '{print $1}')"
+  BASELINE_SHA="$BASELINE_SHA" TARGET_SHA="$TARGET_SHA" RUNBOOK_SHA="$runbook_sha" DB_PATH_SHA="$db_path_sha" EVIDENCE="$evidence" node -e '
+    const fs=require("fs"); const r=JSON.parse(fs.readFileSync(process.env.EVIDENCE,"utf8"));
+    const required=[
+      r.result==="PASS", r.sourceReadOnly===true,
+      r.targetMigrationStatus==="NO_SCHEMA_OR_MIGRATION_CHANGE",
+      r.authorityDigestMatch===true, r.schemaDigestMatch===true,
+      r.baselineSchemaCompatibility==="PASS", r.disposableCleanup===true,
+      r.migration007==="PRESENT", r.migration008==="PRESENT",
+      r.productTruthCardColumn==="PRESENT", r.sourceIntegrity==="ok",
+      r.baselineSha===process.env.BASELINE_SHA, r.targetSha===process.env.TARGET_SHA,
+      r.runbookSha===process.env.RUNBOOK_SHA, r.sourceDbPathSha256===process.env.DB_PATH_SHA
+    ]; if (!required.every(Boolean)) process.exit(1);' || die "migration compatibility evidence does not bind this baseline/target/runbook/runtime DB"
+  NODE_PATH="${RUNBOOK_DIR}/node_modules" DB="$SERVICE_DB_PATH" node -e '
+    const s=require("sqlite3").verbose(); const d=new s.Database(process.env.DB,s.OPEN_READONLY,e=>{if(e)throw e;
+      d.get("PRAGMA integrity_check",(e,i)=>{if(e||!i||i.integrity_check!=="ok")process.exit(1);
+        d.all("SELECT id FROM schema_migrations WHERE id IN (?,?) ORDER BY id",["007_listing_product_truth_attestation","008_listing_product_truth_card"],(e,rows)=>{if(e||rows.length!==2)process.exit(1);
+          d.all("PRAGMA table_info(listings)",(e,cols)=>{if(e||!cols.some(c=>c.name==="product_truth_card"))process.exit(1);d.close(e=>process.exit(e?1:0));});});});});' || die "live migration/schema recheck failed"
+}
 service_env_value() {
   local pid="$1" key="$2"
   tr '\0' '\n' < "/proc/${pid}/environ" | sed -n "s/^${key}=//p" | head -n1
@@ -210,8 +237,8 @@ if cmp -s "$BASELINE_RELEASE_DIR/server/database/migrations.js" "$TARGET_RELEASE
   COMPATIBILITY_STATUS="BASELINE_AND_TARGET_MIGRATIONS_IDENTICAL"
 else
   DATABASE_MIGRATION_STATUS="MIGRATION_CHANGE_DETECTED"
-  COMPATIBILITY_STATUS="REQUIRES_EXPLICIT_APPROVAL"
-  die "migration change requires separate compatibility/restore authorization"
+  verify_migration_compatibility_evidence
+  COMPATIBILITY_STATUS="ROOT_OWNED_COMPATIBILITY_EVIDENCE_VERIFIED"
 fi
 
 # Arm recovery before stop: systemd may report a stop error after the service

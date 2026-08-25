@@ -40,6 +40,7 @@ const { readFirstWorksheet } = require('./services/spreadsheetReader');
 const { UrlGuardError } = require('./security/urlGuard');
 const { resolveRuntimePaths } = require('./config/paths');
 const { parseEtsySearchInput } = require('./etsyPastedSearchParser');
+const { buildEvidenceHealth } = require('./evidenceHealth');
 
 // Make crashes visible instead of dying silently with no trace (systemd will
 // still restart the process via Restart=always; this just ensures the cause
@@ -885,6 +886,30 @@ app.get('/api/evidence', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELL
     });
   }
   sendRows(null);
+});
+
+// Project-scoped, read-only data-health projection. This endpoint intentionally
+// does not return acceptance eligibility and cannot mutate project state.
+app.get('/api/projects/:projectId/evidence-health', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
+  parseAndValidateProject(db, req, req.params.projectId, (projectErr, project) => {
+    if (projectErr) return res.status(projectErr.status).json({ success: false, error: projectErr.error, message: projectErr.message });
+    db.all(
+      `SELECT id, source, evidence_state, metadata, created_at
+       FROM research_evidence
+       WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ? AND project_id = ?
+       ORDER BY id ASC`,
+      [req.user.tenantId, req.user.workspaceId, req.user.marketplace, project.id],
+      (queryErr, rows) => {
+        if (queryErr) return res.status(500).json({ success: false, error: 'EVIDENCE_HEALTH_READ_FAILED' });
+        res.json({
+          success: true,
+          projectId: project.id,
+          marketplace: project.marketplace,
+          health: buildEvidenceHealth(rows || [])
+        });
+      }
+    );
+  });
 });
 
 const ALLOWED_EVIDENCE_SOURCES = [

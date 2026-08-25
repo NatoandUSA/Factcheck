@@ -33,10 +33,23 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
   const [feedPreview, setFeedPreview] = useState(null);
   const [feedSubmitting, setFeedSubmitting] = useState(false);
   const [scannedSellers, setScannedSellers] = useState([]);
+  const [evidenceHealth, setEvidenceHealth] = useState(null);
   const fileInputRef = useRef(null);
   const feedFileInputRef = useRef(null);
   const activeProjectIdRef = useRef(null);
   activeProjectIdRef.current = activeProject?.id || null;
+
+  const refreshEvidenceHealth = React.useCallback(async (projectId) => {
+    if (!projectId) return;
+    try {
+      const response = await fetch(`/api/projects/${encodeURIComponent(projectId)}/evidence-health`, { credentials: 'include' });
+      const payload = await parseJsonResponse(response);
+      if (response.ok && payload.success && activeProjectIdRef.current === projectId) setEvidenceHealth(payload.health || null);
+    } catch (_) {
+      // Evidence Health is guidance only. A failed refresh never changes
+      // evidence or workflow state.
+    }
+  }, []);
 
   useEffect(() => {
     setMcpResult(null);
@@ -46,6 +59,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
     setFeedRawText('');
     setFeedFile(null);
     setFeedPreview(null);
+    setEvidenceHealth(null);
     setSeedPhrase(activeProject?.seed_phrase || '');
   }, [activeProject?.id]);
 
@@ -113,6 +127,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
       setFeedRawText('');
       setFeedFile(null);
       setFeedPreview(null);
+      await refreshEvidenceHealth(requestedProjectId);
     } catch (err) {
       if (onShowToast) onShowToast(`Lỗi nạp dữ liệu: ${err.message}`);
     } finally {
@@ -145,9 +160,11 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
   const fetchData = async () => {
     if (!activeProject?.id) {
       setTrends([]);
+      setEvidenceHealth(null);
       return;
     }
     const requestedProjectId = activeProject.id;
+    await refreshEvidenceHealth(requestedProjectId);
     try {
       const trendsRes = await fetch('/api/trends', { credentials: 'include' });
       if (trendsRes.ok) {
@@ -168,7 +185,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
   useEffect(() => {
     fetchData();
     fetchProjects();
-  }, [fetchProjects, activeProject?.id]);
+  }, [fetchProjects, activeProject?.id, refreshEvidenceHealth]);
   const handleTransition = async (targetState) => {
     if (!activeProject) return;
     const requestedProjectId = activeProject.id;
@@ -679,6 +696,26 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
             
             {/* Etsy Learning Box */}
             <LearningBoxWidget platform="ETSY" onShowToast={onShowToast} scannedSellers={scannedSellers} />
+          </div>
+
+          <div className="studio-panel" style={{ padding: '18px', borderLeft: '4px solid #2563eb' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
+              <div><h4 style={{ margin: 0 }}>Evidence Health — Project research</h4><p style={{ margin: '5px 0 0', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Bạn đang có dữ liệu gì, thiếu gì và cần làm gì tiếp. Chỉ hiển thị tình trạng dữ liệu, không chấm điểm hoặc đổi workflow.</p></div>
+              <span style={{ fontSize: '0.76rem', fontWeight: 800, color: '#1d4ed8' }}>{evidenceHealth?.scope || 'READ_ONLY_RESEARCH_STATUS'}</span>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(205px, 1fr))', gap: '9px', marginTop: '12px' }}>
+              {(evidenceHealth?.layers || []).map(layer => <div key={layer.key} style={{ border: '1px solid #bfdbfe', borderRadius: '8px', padding: '10px', background: '#f8fbff' }}>
+                <div style={{ fontWeight: 800, fontSize: '0.8rem' }}>{layer.label}</div>
+                <div style={{ marginTop: '3px', color: layer.state === 'MAPPED' ? '#047857' : '#64748b', fontWeight: 700, fontSize: '0.75rem' }}>{layer.state} · {layer.count}</div>
+                <div style={{ marginTop: '5px', fontSize: '0.7rem', color: '#475569' }}><b>Source:</b> {Array.isArray(layer.provenance) ? layer.provenance.join(', ') : layer.provenance}</div>
+                <div style={{ marginTop: '3px', fontSize: '0.7rem', color: '#475569' }}><b>DB:</b> {(layer.dbStates || []).join(', ')} · <b>Semantic:</b> {(layer.semanticStates || []).join(', ')}</div>
+                {(layer.dbStates || []).includes('OBSERVED') && <div style={{ marginTop: '3px', fontSize: '0.7rem', color: '#9a3412' }}><b>OBSERVED</b> = đã ghi nhận trong evidence ledger, không đồng nghĩa dữ liệu đã được xác minh độc lập.</div>}
+                <div style={{ marginTop: '3px', fontSize: '0.7rem', color: '#475569' }}><b>Observed:</b> {layer.observedAt} · <b>Imported:</b> {layer.importedAt}</div>
+                <div style={{ marginTop: '5px', fontSize: '0.7rem', color: '#475569' }}>{layer.allowedUse}</div>
+              </div>)}
+            </div>
+            {evidenceHealth && <><div style={{ marginTop: '10px', fontSize: '0.75rem' }}><b>Freshness:</b> observed {evidenceHealth.freshness?.observedAt || 'UNKNOWN'} · imported {evidenceHealth.freshness?.importedAt || 'UNKNOWN'} · capture {evidenceHealth.freshness?.oldestCaptureAt || 'UNKNOWN'} → {evidenceHealth.freshness?.newestCaptureAt || 'UNKNOWN'}</div><div style={{ marginTop: '5px', fontSize: '0.75rem' }}><b>Field coverage:</b> {Object.entries(evidenceHealth.fieldCoverage || {}).map(([field, value]) => `${field}: ${value.known}/${value.total} (${value.coveragePercent}%, ${value.status})`).join(' · ') || 'UNKNOWN'}</div></>}
+            {(evidenceHealth?.actions || []).length > 0 && <div style={{ marginTop: '9px', padding: '9px', borderRadius: '7px', background: '#fff7ed', fontSize: '0.75rem' }}><b>Next action:</b> {evidenceHealth.actions[0]}</div>}
           </div>
 
           {/* Stage 2 Acceptance Gate */}

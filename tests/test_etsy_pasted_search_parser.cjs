@@ -399,6 +399,20 @@ async function waitForEtsyOwner() {
     assert.strictEqual(duplicate.body.duplicateSubmission, true);
     assert.strictEqual((await dbAll('SELECT id FROM research_evidence')).length, countBefore + 2, 'Duplicate confirm must be idempotent');
 
+    const healthBefore = (await dbAll('SELECT id FROM research_evidence')).length;
+    const healthResponse = await fetch(`${base}/api/projects/${projectId}/evidence-health`, { headers: { Origin: base, Cookie: `omni_session=${session.rawToken}` } });
+    const health = await healthResponse.json();
+    assert.strictEqual(healthResponse.status, 200);
+    assert.strictEqual(health.health.contractVersion, 'EVIDENCE_HEALTH_V1');
+    assert.strictEqual(health.health.scope, 'READ_ONLY_RESEARCH_STATUS');
+    const searchHealth = health.health.layers.find(layer => layer.key === 'search_capture');
+    assert.strictEqual(searchHealth.state, 'MAPPED');
+    assert.deepStrictEqual(searchHealth.dbStates, ['OBSERVED']);
+    assert.deepStrictEqual(searchHealth.semanticStates, ['UNVERIFIED_INPUT'], 'Health must report semantic input state without promoting staff data.');
+    assert.strictEqual(health.health.fieldCoverage.title.total, 6);
+    assert.strictEqual(health.health.fieldCoverage.title.status, 'KNOWN');
+    assert.strictEqual((await dbAll('SELECT id FROM research_evidence')).length, healthBefore, 'Evidence health must be read-only.');
+
     const ledgerResponse = await fetch(`${base}/api/evidence?projectId=${projectId}`, { headers: { Origin: base, Cookie: `omni_session=${session.rawToken}` } });
     const ledger = await ledgerResponse.json();
     const pastedLedgerRow = ledger.evidence.find(row => row.id === committed.body.evidenceId);
@@ -415,6 +429,8 @@ async function waitForEtsyOwner() {
     assert(ui.includes('Xác nhận lưu'));
     assert(ui.includes('feed-search-results-file'));
     assert(ui.includes('CSV / HTML / TXT'));
+    assert(ui.includes('Evidence Health — Project research'));
+    assert(ui.includes('OBSERVED</b> = đã ghi nhận trong evidence ledger'));
     assert(ui.includes('Smart Pull dùng URL/seed để hỏi MCP'));
     assert(!ui.includes('30 Sellers thực tế'));
     assert(!ui.includes('13 Tags chuẩn 100%'));

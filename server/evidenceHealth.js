@@ -32,6 +32,17 @@ function coverage(rows, selector) {
   return { known, total, coveragePercent: total ? Number(((known / total) * 100).toFixed(2)) : 0, status: known === 0 ? 'UNKNOWN' : known === total ? 'KNOWN' : 'PARTIAL' };
 }
 
+function coverageGroup(rows, fields) {
+  const perField = Object.fromEntries(Object.entries(fields).map(([key, selector]) => [key, coverage(rows, selector)]));
+  const totals = Object.values(perField).reduce((acc, item) => ({ known: acc.known + item.known, total: acc.total + item.total }), { known: 0, total: 0 });
+  return {
+    ...totals,
+    coveragePercent: totals.total ? Number(((totals.known / totals.total) * 100).toFixed(2)) : 0,
+    status: totals.known === 0 ? 'UNKNOWN' : totals.known === totals.total ? 'KNOWN' : 'PARTIAL',
+    fields: perField
+  };
+}
+
 function normalizeTimestamp(value) {
   if (typeof value !== 'string') return null;
   const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?(Z|[+-]\d{2}:\d{2})$/.exec(value.trim());
@@ -94,7 +105,20 @@ function buildEvidenceHealth(rows) {
   const fieldCoverage = {
     listingId: coverage(searchListings, row => isKnown(row.listingId)), title: coverage(searchListings, row => isKnown(row.title)), shop: coverage(searchListings, row => isKnown(row.shopName)), price: coverage(searchListings, row => isKnown(row.priceAmount)),
     tags: coverage(searchListings, row => Array.isArray(row.tags) && row.tags.length > 0), categories: coverage(searchListings, row => Array.isArray(row.categories) && row.categories.length > 0), country: coverage(searchListings, row => isKnown(row.country)), ageDays: coverage(searchListings, row => isKnown(row.ageDays)),
-    views24h: coverage(searchListings, row => isKnown(row.views24h)), sold24h: coverage(searchListings, row => isKnown(row.sold24h)), totalViews: coverage(searchListings, row => isKnown(row.totalViews)), totalSold: coverage(searchListings, row => isKnown(row.totalSold)), conversion: coverage(searchListings, row => isKnown(row.conversionRate))
+    views24h: coverage(searchListings, row => isKnown(row.views24h)), sold24h: coverage(searchListings, row => isKnown(row.sold24h)), totalViews: coverage(searchListings, row => isKnown(row.totalViews)), totalSold: coverage(searchListings, row => isKnown(row.totalSold)), conversion: coverage(searchListings, row => isKnown(row.conversionRate)),
+    revenue: coverage(searchListings, row => isKnown(row.revenue)), reviewCount: coverage(searchListings, row => isKnown(row.reviewCount)), rating: coverage(searchListings, row => isKnown(row.rating)), shopDailySold: coverage(searchListings, row => isKnown(row.shopDailySold)),
+    isAd: coverage(searchListings, row => isKnown(row.badges?.isAd?.value)), isBestseller: coverage(searchListings, row => isKnown(row.badges?.isBestseller?.value)), isStarSeller: coverage(searchListings, row => isKnown(row.badges?.isStarSeller?.value)), hasFreeShipping: coverage(searchListings, row => isKnown(row.badges?.hasFreeShipping?.value)),
+    listingCreatedAt: coverage(searchListings, row => isKnown(row.listingCreatedAt)), listingUpdatedAt: coverage(searchListings, row => isKnown(row.listingUpdatedAt)),
+    keywordContext: coverage(searchListings, row => isKnown(row.sourceHints?.keywordContext?.value)), keywordMatchType: coverage(searchListings, row => isKnown(row.sourceHints?.keywordMatchType?.value)), keywordMatchConfidence: coverage(searchListings, row => isKnown(row.sourceHints?.keywordMatchConfidence?.value)), proofScopeHint: coverage(searchListings, row => isKnown(row.sourceHints?.proofScopeHint?.value)), dataUseHint: coverage(searchListings, row => isKnown(row.sourceHints?.dataUseHint?.value))
+  };
+  const fieldGroups = {
+    identity: coverageGroup(searchListings, { listingId: row => isKnown(row.listingId), title: row => isKnown(row.title), shop: row => isKnown(row.shopName), country: row => isKnown(row.country) }),
+    commercialMetrics: coverageGroup(searchListings, { price: row => isKnown(row.priceAmount), reviews: row => isKnown(row.reviewCount), rating: row => isKnown(row.rating), revenue: row => isKnown(row.revenue), conversion: row => isKnown(row.conversionRate) }),
+    trafficSales: coverageGroup(searchListings, { views24h: row => isKnown(row.views24h), sold24h: row => isKnown(row.sold24h), totalViews: row => isKnown(row.totalViews), totalSold: row => isKnown(row.totalSold), shopDailySold: row => isKnown(row.shopDailySold) }),
+    badgeOffer: coverageGroup(searchListings, { isAd: row => isKnown(row.badges?.isAd?.value), isBestseller: row => isKnown(row.badges?.isBestseller?.value), isStarSeller: row => isKnown(row.badges?.isStarSeller?.value), hasFreeShipping: row => isKnown(row.badges?.hasFreeShipping?.value) }),
+    keywordContext: coverageGroup(searchListings, { tags: row => Array.isArray(row.tags) && row.tags.length > 0, categories: row => Array.isArray(row.categories) && row.categories.length > 0, keywordContext: row => isKnown(row.sourceHints?.keywordContext?.value) }),
+    listingFreshness: coverageGroup(searchListings, { listingCreatedAt: row => isKnown(row.listingCreatedAt), listingUpdatedAt: row => isKnown(row.listingUpdatedAt) }),
+    sourceHints: coverageGroup(searchListings, { keywordMatchType: row => isKnown(row.sourceHints?.keywordMatchType?.value), keywordMatchConfidence: row => isKnown(row.sourceHints?.keywordMatchConfidence?.value), proofScopeHint: row => isKnown(row.sourceHints?.proofScopeHint?.value), dataUseHint: row => isKnown(row.sourceHints?.dataUseHint?.value) })
   };
   const observed = dateBounds(artifacts.map(({ metadata }) => metadata.observedAt));
   const imported = dateBounds(artifacts.map(({ metadata }) => metadata.importedAt));
@@ -105,7 +129,7 @@ function buildEvidenceHealth(rows) {
   if (searchListings.length && fieldCoverage.tags.status === 'UNKNOWN') actions.push('Nạp tag từ nguồn hoặc kiểm tra listing; không tạo tag từ khoảng trống.');
   if (searchListings.length && (fieldCoverage.views24h.status === 'UNKNOWN' || fieldCoverage.sold24h.status === 'UNKNOWN')) actions.push('Bổ sung views_24h/sold_24h hoặc snapshot lần hai để đánh giá traction theo thời gian.');
   if (unmapped.length) actions.push('Map artifact kind/source to an Evidence Health adapter before relying on its fields.');
-  return { contractVersion: 'EVIDENCE_HEALTH_V1', scope: 'READ_ONLY_RESEARCH_STATUS', summary: { evidenceRecords: safeRows.length, searchArtifacts: searchArtifacts.length, searchListings: searchListings.length, malformedMetadata: artifacts.filter(item => item.malformed).length }, freshness: { observedAt: observed.newest, importedAt: imported.newest, oldestCaptureAt: capture.oldest, newestCaptureAt: capture.newest }, layers, fieldCoverage, actions };
+  return { contractVersion: 'EVIDENCE_HEALTH_V1', scope: 'READ_ONLY_RESEARCH_STATUS', summary: { evidenceRecords: safeRows.length, searchArtifacts: searchArtifacts.length, searchListings: searchListings.length, malformedMetadata: artifacts.filter(item => item.malformed).length }, freshness: { observedAt: observed.newest, importedAt: imported.newest, oldestCaptureAt: capture.oldest, newestCaptureAt: capture.newest }, layers, fieldCoverage, fieldGroups, actions };
 }
 
 module.exports = { buildEvidenceHealth, isKnown, matchesLayer, normalizeTimestamp };

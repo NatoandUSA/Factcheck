@@ -202,9 +202,9 @@ Categories Copy
 Jewelry, Necklaces, Pendant Necklaces
 HeyEtsy.com`;
 
-const CSV_SAMPLE = `listing_id,title,shop,price,price_num,reviews,he_views,he_sold,he_tags,he_categories,url,rank_position
-1001,"Para Mi Hija Necklace",Fantasticgiftsltd,"1,145,896",1145896,119,25136,1610,"para mi hija|hija necklace","Jewelry, Necklaces",https://www.etsy.com/listing/1001,3
-1002,"Daughter Gift",SecondShop,"815,152",815152,0,0,0,,,https://www.etsy.com/listing/1002,4`;
+const CSV_SAMPLE = `listing_id,title,shop,price,price_num,reviews,he_views,he_sold,he_tags,he_categories,url,rank_position,ad,bestseller,star_seller,free_shipping,sold_24h,views_24h,shop_daily_sold,keyword_context,proof_scope_hint,data_use_hint,he_created
+1001,"Para Mi Hija Necklace",Fantasticgiftsltd,"1,145,896",1145896,119,25136,1610,"para mi hija|hija necklace","Jewelry, Necklaces",https://www.etsy.com/listing/1001,3,0,1,false,no,0,0,0,"para mi hija",source-hint,pattern-only,not-a-date
+1002,"Daughter Gift",SecondShop,"815,152",815152,0,0,0,,,https://www.etsy.com/listing/1002,4,1,0,true,yes,,,,,,`;
 
 const HTML_SAMPLE = `<!doctype html><html><head><script type="application/ld+json">{"@context":"https://schema.org","@type":"ItemList","itemListElement":[{"@type":"ListItem","position":2,"item":{"@type":"Product","name":"Para Mi Hija Necklace","url":"https://www.etsy.com/listing/1001","brand":{"@type":"Brand","name":"Fantasticgiftsltd"},"offers":{"@type":"Offer","price":"1145896","priceCurrency":"VND"}}}]}</script></head></html>`;
 
@@ -279,9 +279,23 @@ async function waitForEtsyOwner() {
   assert.strictEqual(csv.sellers.length, 2);
   assert.strictEqual(csv.sellers[0].sourceRank, 1, 'Source order must not be replaced by a claimed performance rank');
   assert.strictEqual(csv.sellers[0].priceAmount, 1145896);
+  assert.strictEqual(csv.sellers[0].listingId, '1001', 'External Etsy listing_id must survive separately from internal row identity');
+  assert.strictEqual(csv.sellers[0].sourceRowId, 'csv-row-1');
+  assert.notStrictEqual(csv.sellers[0].listingId, csv.sellers[0].id, 'External listing_id must never become the internal row id');
   assert.strictEqual(csv.sellers[0].totalViews, 25136);
   assert.strictEqual(csv.sellers[1].reviewCount, 0, 'CSV zero must stay a numeric zero');
   assert.strictEqual(csv.sellers[1].totalViews, 0, 'CSV zero must not become UNKNOWN');
+  assert.deepStrictEqual(csv.sellers[0].badges.isAd.value, false, 'String/number zero is an observed false badge, not UNKNOWN or true');
+  assert.strictEqual(csv.sellers[0].badges.isBestseller.value, true);
+  assert.strictEqual(csv.sellers[0].badges.isStarSeller.value, false);
+  assert.strictEqual(csv.sellers[0].badges.hasFreeShipping.value, false);
+  assert.strictEqual(csv.sellers[1].badges.isAd.value, true);
+  assert.strictEqual(csv.sellers[1].badges.isBestseller.value, false);
+  assert.strictEqual(csv.sellers[0].sold24h, 0, 'Observed numeric zero must remain known');
+  assert.strictEqual(csv.sellers[0].sourceHints.keywordContext.state, 'SOURCE_HINT');
+  assert.strictEqual(csv.sellers[0].sourceHints.keywordContext.authority, 'NONE');
+  assert.strictEqual(csv.sellers[0].listingCreatedAt, null, 'Non-ISO source date remains UNKNOWN rather than being guessed');
+  assert.strictEqual(csv.sellers[0].evidenceSource, 'STAFF_MANUAL_ASSERTION');
   assert.strictEqual(csv.sellers[0].evidenceState, 'UNVERIFIED_INPUT');
 
   const html = parseEtsySearchHtml(HTML_SAMPLE);
@@ -392,6 +406,12 @@ async function waitForEtsyOwner() {
     const fileMetadata = JSON.parse(fileRows[0].metadata);
     assert.strictEqual(fileMetadata.inputFormat, 'CSV');
     assert.strictEqual(fileMetadata.sourceFileName, 'para-mi-hija.csv');
+    assert.strictEqual(fileMetadata.sellers[0].listingId, '1001', 'External listing id must persist inside the project-bound audit artifact');
+    assert.strictEqual(fileMetadata.sellers[0].sourceRowId, 'csv-row-1');
+    assert.strictEqual(fileMetadata.sellers[0].evidenceState, 'UNVERIFIED_INPUT');
+    assert.strictEqual(fileMetadata.sellers[0].evidenceSource, 'STAFF_MANUAL_ASSERTION');
+    assert.strictEqual(fileMetadata.sellers[0].badges.isAd.value, false);
+    assert.strictEqual(fileMetadata.sellers[0].sourceHints.keywordContext.authority, 'NONE');
     assert.strictEqual(Object.prototype.hasOwnProperty.call(fileMetadata, 'rawText'), false, 'Large file payload must not be duplicated into SQLite metadata');
 
     const duplicate = await post('/api/etsy/feed-search-results', { rawText: SAMPLE, seed: 'para mi hija', projectId, confirm: true });

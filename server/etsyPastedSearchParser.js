@@ -282,8 +282,13 @@ function dedupeAndRank(sellers) {
   const seen = new Set();
   let duplicatesRemoved = 0;
   for (const seller of sellers) {
-    const identity = [seller.url, seller.title, seller.shopName, seller.priceAmount, seller.priceCurrency]
-      .map(value => String(value ?? '').trim().toLowerCase()).join('|');
+    // An external Etsy listing id is the strongest identity when the source
+    // supplies one. Do not derive it from a URL; missing ids use the existing
+    // conservative composite fallback instead.
+    const identity = seller.listingId
+      ? `listing:${String(seller.listingId).trim().toLowerCase()}`
+      : [seller.url, seller.title, seller.shopName, seller.priceAmount, seller.priceCurrency]
+        .map(value => String(value ?? '').trim().toLowerCase()).join('|');
     if (seen.has(identity)) {
       duplicatesRemoved += 1;
       continue;
@@ -352,6 +357,49 @@ function splitSuggestions(value) {
   return String(value).split(/[,;|]/).map(normalizeLine).filter(Boolean);
 }
 
+// CSV exports use several conventions for a negative badge. Keep the parsed
+// value distinct from missing data: `0` is an observation, an empty cell is
+// not. These values remain research-only staff input throughout the pipeline.
+function parseBooleanEvidence(rawValue) {
+  const raw = normalizeLine(rawValue);
+  if (isUnknown(raw) || /^n\/?a$/i.test(raw)) return { value: null, state: 'UNKNOWN', raw: raw || null };
+  if (/^(?:1|true|yes)$/i.test(raw)) return { value: true, state: 'OBSERVED', raw };
+  if (/^(?:0|false|no)$/i.test(raw)) return { value: false, state: 'OBSERVED', raw };
+  return { value: null, state: 'UNKNOWN', raw };
+}
+
+function observedCsvField(value, raw) {
+  return {
+    value,
+    state: value === null || value === undefined ? 'UNKNOWN' : 'OBSERVED',
+    source: 'ETSY_SEARCH_CSV',
+    authority: 'RESEARCH_ONLY',
+    raw: raw ?? null
+  };
+}
+
+function sourceHint(value) {
+  const normalized = isUnknown(value) ? null : normalizeLine(value);
+  return {
+    value: normalized,
+    state: normalized ? 'SOURCE_HINT' : 'UNKNOWN',
+    source: 'ETSY_SEARCH_CSV',
+    authority: 'NONE'
+  };
+}
+
+function normalizeIsoTimestamp(rawValue) {
+  const raw = normalizeLine(rawValue);
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,3})?(Z|[+-]\d{2}:\d{2})$/.exec(raw);
+  if (isUnknown(raw) || !match) return null;
+  const [, year, month, day, hour, minute, second, zone] = match;
+  const [y, m, d, h, min, sec] = [year, month, day, hour, minute, second].map(Number);
+  const zoneValid = zone === 'Z' || (Number(zone.slice(1, 3)) <= 23 && Number(zone.slice(4, 6)) <= 59);
+  if (m < 1 || m > 12 || d < 1 || d > new Date(Date.UTC(y, m, 0)).getUTCDate() || h > 23 || min > 59 || sec > 59 || !zoneValid) return null;
+  const timestamp = new Date(raw);
+  return Number.isNaN(timestamp.getTime()) ? null : timestamp.toISOString();
+}
+
 function parseCsvListing(row, index) {
   const title = csvValue(row, 'title', 'Title', 'listing_title');
   if (!title) return null;
@@ -363,8 +411,23 @@ function parseCsvListing(row, index) {
   const reviews = parseNumberEvidence(csvValue(row, 'reviews', 'review_count', 'Review Count'));
   const sourceRank = parseNumberEvidence(csvValue(row, 'rank_position', 'rank', 'position')).value || index + 1;
   const currency = csvValue(row, 'currency', 'price_currency') || null;
+  const listingId = csvValue(row, 'listing_id', 'listingId', 'Listing ID');
+  const isAd = parseBooleanEvidence(csvValue(row, 'ad', 'is_ad'));
+  const isBestseller = parseBooleanEvidence(csvValue(row, 'bestseller', 'is_bestseller'));
+  const isStarSeller = parseBooleanEvidence(csvValue(row, 'star_seller', 'is_star_seller'));
+  const hasFreeShipping = parseBooleanEvidence(csvValue(row, 'free_shipping', 'has_free_shipping'));
+  const keywordContext = sourceHint(csvValue(row, 'keyword_context'));
+  const keywordMatchType = sourceHint(csvValue(row, 'keyword_match_type'));
+  const keywordMatchConfidence = sourceHint(csvValue(row, 'keyword_match_confidence'));
+  const proofScopeHint = sourceHint(csvValue(row, 'proof_scope_hint'));
+  const dataUseHint = sourceHint(csvValue(row, 'data_use_hint'));
+  const shopDailySold = parseNumberEvidence(csvValue(row, 'shop_daily_sold'));
+  const createdRaw = csvValue(row, 'he_created', 'created');
+  const updatedRaw = csvValue(row, 'he_updated', 'updated');
   const seller = {
     id: `csv-${sourceRank}`,
+    sourceRowId: `csv-row-${index + 1}`,
+    listingId,
     sourceRank,
     title,
     shopName: csvValue(row, 'shop', 'shop_name', 'Shop'),
@@ -393,14 +456,37 @@ function parseCsvListing(row, index) {
     conversionRate: parseNumberEvidence(csvValue(row, 'conversion_pct', 'conversion_rate')).value,
     conversionRateApproximate: false,
     createdDate: null,
-    createdRaw: csvValue(row, 'he_created', 'created'),
-    updatedRaw: csvValue(row, 'he_updated', 'updated'),
+    createdRaw,
+    updatedRaw,
+    listingCreatedAt: normalizeIsoTimestamp(createdRaw),
+    listingUpdatedAt: normalizeIsoTimestamp(updatedRaw),
     tags: splitSuggestions(csvValue(row, 'he_tags', 'tags')),
     tagSource: csvValue(row, 'he_tags', 'tags') ? 'STAFF_FILE_CSV_SUGGESTION' : 'NO_TAGS_REPORTED',
     categories: splitSuggestions(csvValue(row, 'he_categories', 'categories')),
     country: csvValue(row, 'country'),
     shopCountry: csvValue(row, 'country'),
     url: csvValue(row, 'url', 'listing_url'),
+    badges: { isAd, isBestseller, isStarSeller, hasFreeShipping },
+    shopDailySold: shopDailySold.value,
+    sourceHints: { keywordContext, keywordMatchType, keywordMatchConfidence, proofScopeHint, dataUseHint },
+    fieldProvenance: {
+      listingId: observedCsvField(listingId, listingId),
+      priceAmount: observedCsvField(numericPrice.value, priceRaw),
+      country: observedCsvField(csvValue(row, 'country'), csvValue(row, 'country')),
+      views24h: observedCsvField(parseNumberEvidence(csvValue(row, 'views_24h', 'he_views_24h')).value, csvValue(row, 'views_24h', 'he_views_24h')),
+      sold24h: observedCsvField(parseNumberEvidence(csvValue(row, 'sold_24h', 'he_sold_24h')).value, csvValue(row, 'sold_24h', 'he_sold_24h')),
+      totalViews: observedCsvField(parseNumberEvidence(csvValue(row, 'he_views', 'total_views')).value, csvValue(row, 'he_views', 'total_views')),
+      totalSold: observedCsvField(parseNumberEvidence(csvValue(row, 'he_sold', 'total_sold')).value, csvValue(row, 'he_sold', 'total_sold')),
+      conversionRate: observedCsvField(parseNumberEvidence(csvValue(row, 'conversion_pct', 'conversion_rate')).value, csvValue(row, 'conversion_pct', 'conversion_rate')),
+      revenue: observedCsvField(parseNumberEvidence(csvValue(row, 'he_revenue_usd', 'revenue_usd')).value, csvValue(row, 'he_revenue_usd', 'revenue_usd')),
+      reviewCount: observedCsvField(reviews.value, csvValue(row, 'reviews', 'review_count', 'Review Count')),
+      rating: observedCsvField(rating.value, csvValue(row, 'rating', 'Rating')),
+      shopDailySold: observedCsvField(shopDailySold.value, csvValue(row, 'shop_daily_sold')),
+      isAd: observedCsvField(isAd.value, isAd.raw),
+      isBestseller: observedCsvField(isBestseller.value, isBestseller.raw),
+      isStarSeller: observedCsvField(isStarSeller.value, isStarSeller.raw),
+      hasFreeShipping: observedCsvField(hasFreeShipping.value, hasFreeShipping.raw)
+    },
     evidenceSource: 'STAFF_MANUAL_ASSERTION',
     evidenceState: 'UNVERIFIED_INPUT',
     evidenceProvider: 'ETSY_SEARCH_CSV',
@@ -494,6 +580,8 @@ module.exports = {
   decodeEntities,
   isUnknown,
   parseNumberEvidence,
+  parseBooleanEvidence,
+  normalizeIsoTimestamp,
   parseMoney,
   parseHeyEtsyPastedText,
   parseEtsySearchCsv,

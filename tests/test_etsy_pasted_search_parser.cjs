@@ -204,7 +204,7 @@ HeyEtsy.com`;
 
 const CSV_SAMPLE = `listing_id,title,shop,price,price_num,reviews,he_views,he_sold,he_tags,he_categories,url,rank_position,ad,bestseller,star_seller,free_shipping,sold_24h,views_24h,shop_daily_sold,keyword_context,proof_scope_hint,data_use_hint,he_created
 1001,"Para Mi Hija Necklace",Fantasticgiftsltd,"1,145,896",1145896,119,25136,1610,"para mi hija|hija necklace","Jewelry, Necklaces",https://www.etsy.com/listing/1001,3,0,1,false,no,0,0,0,"para mi hija",source-hint,pattern-only,not-a-date
-1002,"Daughter Gift",SecondShop,"815,152",815152,0,0,0,,,https://www.etsy.com/listing/1002,4,1,0,true,yes,,,,,,`;
+1002,"Daughter Gift",SecondShop,"815,152",815152,0,0,0,,,https://www.etsy.com/listing/1002,4,1,0,true,yes,,,,,,,`;
 
 const HTML_SAMPLE = `<!doctype html><html><head><script type="application/ld+json">{"@context":"https://schema.org","@type":"ItemList","itemListElement":[{"@type":"ListItem","position":2,"item":{"@type":"Product","name":"Para Mi Hija Necklace","url":"https://www.etsy.com/listing/1001","brand":{"@type":"Brand","name":"Fantasticgiftsltd"},"offers":{"@type":"Offer","price":"1145896","priceCurrency":"VND"}}}]}</script></head></html>`;
 

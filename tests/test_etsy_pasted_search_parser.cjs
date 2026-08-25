@@ -404,9 +404,13 @@ async function waitForEtsyOwner() {
     const health = await healthResponse.json();
     assert.strictEqual(healthResponse.status, 200);
     assert.strictEqual(health.health.contractVersion, 'EVIDENCE_HEALTH_V1');
-    assert.strictEqual(health.health.authority, 'RESEARCH_STATUS_ONLY');
-    assert.strictEqual(health.health.layers.find(layer => layer.key === 'search_capture').state, 'CAPTURED');
-    assert.strictEqual(health.health.summary.states.UNVERIFIED_INPUT, 2, 'Health must report semantic input state, not promote staff data.');
+    assert.strictEqual(health.health.scope, 'READ_ONLY_RESEARCH_STATUS');
+    const searchHealth = health.health.layers.find(layer => layer.key === 'search_capture');
+    assert.strictEqual(searchHealth.state, 'MAPPED');
+    assert.deepStrictEqual(searchHealth.dbStates, ['OBSERVED']);
+    assert.deepStrictEqual(searchHealth.semanticStates, ['UNVERIFIED_INPUT'], 'Health must report semantic input state without promoting staff data.');
+    assert.strictEqual(health.health.fieldCoverage.title.total, 6);
+    assert.strictEqual(health.health.fieldCoverage.title.status, 'KNOWN');
     assert.strictEqual((await dbAll('SELECT id FROM research_evidence')).length, healthBefore, 'Evidence health must be read-only.');
 
     const ledgerResponse = await fetch(`${base}/api/evidence?projectId=${projectId}`, { headers: { Origin: base, Cookie: `omni_session=${session.rawToken}` } });

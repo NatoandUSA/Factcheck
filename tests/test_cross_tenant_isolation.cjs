@@ -126,6 +126,18 @@ async function runCrossTenantIsolationSuite() {
     assert.strictEqual(betaMutateRes.status, 404, 'Cross-tenant project mutation must return non-enumerating 404');
     console.log('  🟢 Cross-tenant project mutation blocked with non-enumerating HTTP 404.');
 
+    // 3b. The read-only Evidence Health projection must not disclose a project
+    // across tenant/workspace boundaries, nor write a ledger row while denied.
+    console.log('\nTest 3b: Tenant Beta attempting Evidence Health IDOR...');
+    const evidenceBefore = await dbAll('SELECT id FROM research_evidence');
+    const betaHealthRes = await fetch(`http://127.0.0.1:${port}/api/projects/${alphaProjectId}/evidence-health`, {
+      headers: { Cookie: betaCookie }
+    });
+    assert.strictEqual(betaHealthRes.status, 404, 'Cross-tenant Evidence Health must return non-enumerating 404');
+    const evidenceAfter = await dbAll('SELECT id FROM research_evidence');
+    assert.strictEqual(evidenceAfter.length, evidenceBefore.length, 'Denied Evidence Health request must write zero rows');
+    console.log('  🟢 Cross-tenant Evidence Health blocked with zero DB writes.');
+
     // 4. Create Listing under Tenant Alpha
     console.log('\nTest 4: Tenant Alpha creates Listing...');
     const createListingRes = await fetch(`http://127.0.0.1:${port}/api/listings`, {

@@ -405,7 +405,7 @@ async function waitForEtsyOwner() {
     assert.strictEqual(filePreview.provider, 'ETSY_SEARCH_CSV');
     assert.strictEqual(filePreview.sourceFileName, 'para-mi-hija.csv');
     assert.strictEqual(filePreview.count, 2);
-    assert.deepStrictEqual(filePreview.rowAccounting, { inputRows: 2, validRows: 2, uniqueRows: 2, duplicateRowsRemoved: 0 });
+    assert.deepStrictEqual(filePreview.rowAccounting, { inputRows: 2, validRows: 2, uniqueRows: 2, duplicateRowsRemoved: 0, returnedRows: 2, truncatedRows: 0 });
     assert.strictEqual((await dbAll('SELECT id FROM research_evidence')).length, countBefore, 'File preview must make zero DB writes');
 
     const htmlPreviewForm = new FormData();
@@ -450,8 +450,8 @@ async function waitForEtsyOwner() {
     const fileMetadata = JSON.parse(fileRows[0].metadata);
     assert.strictEqual(fileMetadata.inputFormat, 'CSV');
     assert.strictEqual(fileMetadata.sourceFileName, 'para-mi-hija.csv');
-    assert.deepStrictEqual(fileCommitted.rowAccounting, { inputRows: 2, validRows: 2, uniqueRows: 2, duplicateRowsRemoved: 0 });
-    assert.deepStrictEqual(fileMetadata.rowAccounting, { inputRows: 2, validRows: 2, uniqueRows: 2, duplicateRowsRemoved: 0 });
+    assert.deepStrictEqual(fileCommitted.rowAccounting, { inputRows: 2, validRows: 2, uniqueRows: 2, duplicateRowsRemoved: 0, returnedRows: 2, truncatedRows: 0 });
+    assert.deepStrictEqual(fileMetadata.rowAccounting, { inputRows: 2, validRows: 2, uniqueRows: 2, duplicateRowsRemoved: 0, returnedRows: 2, truncatedRows: 0 });
     assert.strictEqual(fileMetadata.sellers[0].listingId, '1001', 'External listing id must persist inside the project-bound audit artifact');
     assert.strictEqual(fileMetadata.sellers[0].sourceRowId, 'csv-row-1');
     assert.strictEqual(fileMetadata.sellers[0].evidenceState, 'UNVERIFIED_INPUT');
@@ -477,7 +477,7 @@ async function waitForEtsyOwner() {
     assert.deepStrictEqual(searchHealth.semanticStates, ['UNVERIFIED_INPUT'], 'Health must report semantic input state without promoting staff data.');
     assert.strictEqual(health.health.fieldCoverage.title.total, 6);
     assert.strictEqual(health.health.fieldCoverage.title.status, 'KNOWN');
-    assert(health.health.summary.rowAccounting.some(item => item.evidenceId === fileCommitted.evidenceId && item.inputRows === 2 && item.validRows === 2 && item.uniqueRows === 2 && item.duplicateRowsRemoved === 0), 'Evidence Health must retain the persisted CSV row-accounting receipt.');
+    assert(health.health.summary.rowAccounting.some(item => item.evidenceId === fileCommitted.evidenceId && item.status === 'VALID' && item.inputRows === 2 && item.validRows === 2 && item.uniqueRows === 2 && item.duplicateRowsRemoved === 0 && item.returnedRows === 2 && item.truncatedRows === 0), 'Evidence Health must retain the persisted CSV row-accounting receipt.');
     assert.strictEqual((await dbAll('SELECT id FROM research_evidence')).length, healthBefore, 'Evidence health must be read-only.');
 
     const ledgerResponse = await fetch(`${base}/api/evidence?projectId=${projectId}`, { headers: { Origin: base, Cookie: `omni_session=${session.rawToken}` } });

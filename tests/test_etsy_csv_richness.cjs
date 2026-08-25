@@ -12,7 +12,7 @@ const CSV = `listing_id,title,shop,price_num,ad,bestseller,star_seller,free_ship
 const parsed = parseEtsySearchCsv(CSV);
 assert.strictEqual(parsed.sellers.length, 2, 'Duplicate external listing_id must be represented once');
 assert.strictEqual(parsed.duplicatesRemoved, 1);
-assert.deepStrictEqual(parsed.rowAccounting, { inputRows: 3, validRows: 3, uniqueRows: 2, duplicateRowsRemoved: 1 });
+assert.deepStrictEqual(parsed.rowAccounting, { inputRows: 3, validRows: 3, uniqueRows: 2, duplicateRowsRemoved: 1, returnedRows: 2, truncatedRows: 0 });
 
 const first = parsed.sellers[0];
 assert.strictEqual(first.listingId, '1001');
@@ -223,5 +223,11 @@ assert.throws(() => parseEtsySearchCsv('listing_id,title,shop\n123,,A\n124,Good,
   assert.deepStrictEqual(error.invalidRows, [{ sourceRow: 2, requiredField: 'title' }]);
   return true;
 }, 'Rows missing a required title must not be silently filtered out');
+
+const overLimitCsv = ['listing_id,title,shop', ...Array.from({ length: 501 }, (_, index) => `${index + 1},Item ${index + 1},Shop`)].join('\n');
+const overLimit = parseEtsySearchCsv(overLimitCsv);
+assert.deepStrictEqual(overLimit.rowAccounting, { inputRows: 501, validRows: 501, uniqueRows: 501, duplicateRowsRemoved: 0, returnedRows: 500, truncatedRows: 1 });
+assert.strictEqual(overLimit.truncated, true);
+assert.strictEqual(overLimit.sellers.length, 500);
 
 console.log('Etsy CSV Richness parser contract passed.');

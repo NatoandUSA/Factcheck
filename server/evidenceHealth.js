@@ -61,6 +61,25 @@ function dateBounds(values) {
   return { oldest: valid[0] || 'UNKNOWN', newest: valid[valid.length - 1] || 'UNKNOWN' };
 }
 
+function normalizedRowAccounting(receipt, evidenceId) {
+  const empty = {
+    evidenceId: evidenceId ?? null,
+    status: 'INVALID',
+    inputRows: null,
+    validRows: null,
+    uniqueRows: null,
+    duplicateRowsRemoved: null,
+    returnedRows: null,
+    truncatedRows: null
+  };
+  if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) return empty;
+  const keys = ['inputRows', 'validRows', 'uniqueRows', 'duplicateRowsRemoved', 'returnedRows', 'truncatedRows'];
+  if (!keys.every(key => Number.isSafeInteger(receipt[key]) && receipt[key] >= 0)) return empty;
+  const { inputRows, validRows, uniqueRows, duplicateRowsRemoved, returnedRows, truncatedRows } = receipt;
+  if (inputRows !== validRows || validRows !== uniqueRows + duplicateRowsRemoved || returnedRows > uniqueRows || truncatedRows !== uniqueRows - returnedRows) return empty;
+  return { evidenceId: evidenceId ?? null, status: 'VALID', inputRows, validRows, uniqueRows, duplicateRowsRemoved, returnedRows, truncatedRows };
+}
+
 function matchesLayer(artifact, config) {
   if (config.kinds.has(artifact.metadata.kind)) return true;
   // STAFF_MANUAL_ASSERTION is intentionally too broad to classify an artifact.
@@ -108,13 +127,7 @@ function buildEvidenceHealth(rows) {
   const rowAccounting = searchArtifacts.flatMap(({ row, metadata }) => {
     const receipt = metadata.rowAccounting;
     if (!receipt || typeof receipt !== 'object') return [];
-    return [{
-      evidenceId: row.id ?? null,
-      inputRows: receipt.inputRows ?? null,
-      validRows: receipt.validRows ?? null,
-      uniqueRows: receipt.uniqueRows ?? null,
-      duplicateRowsRemoved: receipt.duplicateRowsRemoved ?? null
-    }];
+    return [normalizedRowAccounting(receipt, row.id)];
   });
   const fieldCoverage = {
     listingId: coverage(searchListings, row => isKnown(row.listingId)), reportedRank: coverage(searchListings, row => isKnown(row.reportedRank?.value)), title: coverage(searchListings, row => isKnown(row.title)), shop: coverage(searchListings, row => isKnown(row.shopName)), price: coverage(searchListings, row => isKnown(row.priceAmount)),
@@ -148,4 +161,4 @@ function buildEvidenceHealth(rows) {
   return { contractVersion: 'EVIDENCE_HEALTH_V1', scope: 'READ_ONLY_RESEARCH_STATUS', summary: { evidenceRecords: safeRows.length, searchArtifacts: searchArtifacts.length, searchListings: searchListings.length, malformedMetadata: artifacts.filter(item => item.malformed).length, unmappedSourceColumns: unmappedColumns, rowAccounting }, freshness: { observedAt: observed.newest, importedAt: imported.newest, oldestCaptureAt: capture.oldest, newestCaptureAt: capture.newest }, layers, fieldCoverage, fieldGroups, actions };
 }
 
-module.exports = { buildEvidenceHealth, isKnown, matchesLayer, normalizeTimestamp };
+module.exports = { buildEvidenceHealth, isKnown, matchesLayer, normalizeTimestamp, normalizedRowAccounting };

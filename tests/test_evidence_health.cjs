@@ -10,7 +10,7 @@ const row = {
     evidenceState: 'UNVERIFIED_INPUT',
     provider: 'ETSY_SEARCH_CSV',
     inputFormat: 'CSV',
-    rowAccounting: { inputRows: 2, validRows: 2, uniqueRows: 2, duplicateRowsRemoved: 0 },
+    rowAccounting: { inputRows: 2, validRows: 2, uniqueRows: 2, duplicateRowsRemoved: 0, returnedRows: 2, truncatedRows: 0 },
     observedAt: null,
     importedAt: '2026-08-25T01:00:00.000Z',
     sellers: [
@@ -24,7 +24,13 @@ const health = buildEvidenceHealth([row]);
 assert.strictEqual(health.contractVersion, 'EVIDENCE_HEALTH_V1');
 assert.strictEqual(health.scope, 'READ_ONLY_RESEARCH_STATUS');
 assert.strictEqual(health.summary.searchListings, 2);
-assert.deepStrictEqual(health.summary.rowAccounting, [{ evidenceId: 7, inputRows: 2, validRows: 2, uniqueRows: 2, duplicateRowsRemoved: 0 }]);
+assert.deepStrictEqual(health.summary.rowAccounting, [{ evidenceId: 7, status: 'VALID', inputRows: 2, validRows: 2, uniqueRows: 2, duplicateRowsRemoved: 0, returnedRows: 2, truncatedRows: 0 }]);
+
+const invalidReceipt = buildEvidenceHealth([{ id: 8, source: 'STAFF_MANUAL_ASSERTION', evidence_state: 'OBSERVED', metadata: JSON.stringify({
+  kind: 'ETSY_SEARCH_PASTE_V1', evidenceState: 'UNVERIFIED_INPUT', provider: 'ETSY_SEARCH_CSV',
+  rowAccounting: { inputRows: '999', validRows: -1, uniqueRows: {}, duplicateRowsRemoved: 'oops' }
+}) }]);
+assert.deepStrictEqual(invalidReceipt.summary.rowAccounting, [{ evidenceId: 8, status: 'INVALID', inputRows: null, validRows: null, uniqueRows: null, duplicateRowsRemoved: null, returnedRows: null, truncatedRows: null }]);
 const searchLayer = health.layers.find(layer => layer.key === 'search_capture');
 assert.strictEqual(searchLayer.state, 'MAPPED');
 assert.deepStrictEqual(searchLayer.dbStates, ['OBSERVED']);

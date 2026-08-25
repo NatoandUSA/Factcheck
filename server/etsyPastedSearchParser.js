@@ -385,8 +385,10 @@ function finalizeParsedInput({ normalizedRaw, parserVersion, searchContext, sell
     duplicatesRemoved: deduped.duplicatesRemoved,
     rowAccounting: rowAccounting && {
       ...rowAccounting,
-      uniqueRows: deduped.sellers.length,
-      duplicateRowsRemoved: deduped.duplicatesRemoved
+      uniqueRows: deduped.parsedCount,
+      duplicateRowsRemoved: deduped.duplicatesRemoved,
+      returnedRows: deduped.sellers.length,
+      truncatedRows: deduped.parsedCount - deduped.sellers.length
     },
     truncated: deduped.parsedCount > MAX_IMPORTED_LISTINGS,
     tagSuggestions: aggregateTagSuggestions(deduped.sellers)

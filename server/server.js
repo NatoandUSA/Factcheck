@@ -2662,7 +2662,20 @@ async function handleEtsySearchResultFeed(req, res, supplied = {}) {
   try {
     parsed = parseEtsySearchInput(rawText, inputFormat);
   } catch (error) {
-    return res.status(422).json({ success: false, error: error.message || 'SEARCH_INPUT_PARSE_FAILED', message: 'Không thể đọc định dạng file. Hãy dùng CSV, HTML Etsy đã lưu, hoặc toàn bộ text HeyEtsy.' });
+    const firstCollision = error?.canonicalCollisions?.[0];
+    return res.status(422).json({
+      success: false,
+      error: error.message || 'SEARCH_INPUT_PARSE_FAILED',
+      canonicalField: firstCollision?.canonicalField,
+      sourceColumns: firstCollision?.sourceColumns,
+      canonicalCollisions: error?.canonicalCollisions,
+      duplicateHeaders: error?.duplicateHeaders === true,
+      invalidHeaders: error?.invalidHeaders,
+      fieldMismatches: error?.fieldMismatches,
+      invalidRows: error?.invalidRows,
+      listingIdConflicts: error?.listingIdConflicts,
+      message: 'Không thể đọc định dạng file. Hãy dùng CSV, HTML Etsy đã lưu, hoặc toàn bộ text HeyEtsy.'
+    });
   }
   if (!parsed.sellers.length) {
     return res.status(422).json({
@@ -2702,6 +2715,8 @@ async function handleEtsySearchResultFeed(req, res, supplied = {}) {
     sourceFileName: sourceFileName ? path.basename(String(sourceFileName)) : null,
     contentHash: parsed.contentHash,
     searchContext: parsed.searchContext,
+    headerDiagnostics: parsed.headerDiagnostics,
+    rowAccounting: parsed.rowAccounting,
     sellers: parsed.sellers,
     batches,
     keywords,
@@ -2722,6 +2737,8 @@ async function handleEtsySearchResultFeed(req, res, supplied = {}) {
     provider: responsePayload.provider,
     inputFormat: parsed.inputFormat,
     sourceFileName: responsePayload.sourceFileName,
+    headerDiagnostics: parsed.headerDiagnostics,
+    rowAccounting: parsed.rowAccounting,
     observedAt: null,
     importedAt,
     searchContext: parsed.searchContext,

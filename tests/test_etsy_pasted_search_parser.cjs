@@ -202,9 +202,9 @@ Categories Copy
 Jewelry, Necklaces, Pendant Necklaces
 HeyEtsy.com`;
 
-const CSV_SAMPLE = `listing_id,title,shop,price,price_num,reviews,he_views,he_sold,he_tags,he_categories,url,rank_position
-1001,"Para Mi Hija Necklace",Fantasticgiftsltd,"1,145,896",1145896,119,25136,1610,"para mi hija|hija necklace","Jewelry, Necklaces",https://www.etsy.com/listing/1001,3
-1002,"Daughter Gift",SecondShop,"815,152",815152,0,0,0,,,https://www.etsy.com/listing/1002,4`;
+const CSV_SAMPLE = `listing_id,title,shop,price,price_num,reviews,he_views,he_sold,he_tags,he_categories,url,rank_position,ad,bestseller,star_seller,free_shipping,sold_24h,views_24h,shop_daily_sold,keyword_context,proof_scope_hint,data_use_hint,he_created
+1001,"Para Mi Hija Necklace",Fantasticgiftsltd,"1,145,896",1145896,119,25136,1610,"para mi hija|hija necklace","Jewelry, Necklaces",https://www.etsy.com/listing/1001,3,0,1,false,no,0,0,0,"para mi hija",source-hint,pattern-only,not-a-date
+1002,"Daughter Gift",SecondShop,"815,152",815152,0,0,0,,,https://www.etsy.com/listing/1002,4,1,0,true,yes,,,,,,,`;
 
 const HTML_SAMPLE = `<!doctype html><html><head><script type="application/ld+json">{"@context":"https://schema.org","@type":"ItemList","itemListElement":[{"@type":"ListItem","position":2,"item":{"@type":"Product","name":"Para Mi Hija Necklace","url":"https://www.etsy.com/listing/1001","brand":{"@type":"Brand","name":"Fantasticgiftsltd"},"offers":{"@type":"Offer","price":"1145896","priceCurrency":"VND"}}}]}</script></head></html>`;
 
@@ -279,9 +279,23 @@ async function waitForEtsyOwner() {
   assert.strictEqual(csv.sellers.length, 2);
   assert.strictEqual(csv.sellers[0].sourceRank, 1, 'Source order must not be replaced by a claimed performance rank');
   assert.strictEqual(csv.sellers[0].priceAmount, 1145896);
+  assert.strictEqual(csv.sellers[0].listingId, '1001', 'External Etsy listing_id must survive separately from internal row identity');
+  assert.strictEqual(csv.sellers[0].sourceRowId, 'csv-row-1');
+  assert.notStrictEqual(csv.sellers[0].listingId, csv.sellers[0].id, 'External listing_id must never become the internal row id');
   assert.strictEqual(csv.sellers[0].totalViews, 25136);
   assert.strictEqual(csv.sellers[1].reviewCount, 0, 'CSV zero must stay a numeric zero');
   assert.strictEqual(csv.sellers[1].totalViews, 0, 'CSV zero must not become UNKNOWN');
+  assert.deepStrictEqual(csv.sellers[0].badges.isAd.value, false, 'String/number zero is an observed false badge, not UNKNOWN or true');
+  assert.strictEqual(csv.sellers[0].badges.isBestseller.value, true);
+  assert.strictEqual(csv.sellers[0].badges.isStarSeller.value, false);
+  assert.strictEqual(csv.sellers[0].badges.hasFreeShipping.value, false);
+  assert.strictEqual(csv.sellers[1].badges.isAd.value, true);
+  assert.strictEqual(csv.sellers[1].badges.isBestseller.value, false);
+  assert.strictEqual(csv.sellers[0].sold24h, 0, 'Observed numeric zero must remain known');
+  assert.strictEqual(csv.sellers[0].sourceHints.keywordContext.state, 'SOURCE_HINT');
+  assert.strictEqual(csv.sellers[0].sourceHints.keywordContext.authority, 'NONE');
+  assert.strictEqual(csv.sellers[0].listingCreatedAt, null, 'Non-ISO source date remains UNKNOWN rather than being guessed');
+  assert.strictEqual(csv.sellers[0].evidenceSource, 'STAFF_MANUAL_ASSERTION');
   assert.strictEqual(csv.sellers[0].evidenceState, 'UNVERIFIED_INPUT');
 
   const html = parseEtsySearchHtml(HTML_SAMPLE);
@@ -319,6 +333,49 @@ async function waitForEtsyOwner() {
     assert.strictEqual(missingProject.body.error, 'MISSING_PROJECT_ID');
     assert.strictEqual((await dbAll('SELECT id FROM research_evidence')).length, countBefore, 'Missing project must make zero DB writes');
 
+    const ambiguousCsv = 'listing_id,LISTING_ID,title,shop\n111,222,Item,Shop';
+    for (const confirm of [false, true]) {
+      const ambiguous = await post('/api/etsy/feed-search-results', { rawText: ambiguousCsv, seed: 'para mi hija', projectId, confirm });
+      assert.strictEqual(ambiguous.status, 422);
+      assert.strictEqual(ambiguous.body.error, 'AMBIGUOUS_CSV_HEADERS');
+      assert.strictEqual(ambiguous.body.canonicalField, 'listingId');
+      assert.deepStrictEqual(ambiguous.body.sourceColumns, ['listing_id', 'LISTING_ID']);
+      assert.strictEqual((await dbAll('SELECT id FROM research_evidence')).length, countBefore, 'Ambiguous CSV headers must make zero DB writes for preview and confirm');
+    }
+    const duplicateHeaderCsv = 'listing_id,listing_id,title,shop\n111,222,Item,Shop';
+    for (const confirm of [false, true]) {
+      const duplicateHeader = await post('/api/etsy/feed-search-results', { rawText: duplicateHeaderCsv, seed: 'para mi hija', projectId, confirm });
+      assert.strictEqual(duplicateHeader.status, 422);
+      assert.strictEqual(duplicateHeader.body.error, 'AMBIGUOUS_CSV_HEADERS');
+      assert.strictEqual(duplicateHeader.body.duplicateHeaders, true);
+      assert.strictEqual(duplicateHeader.body.canonicalField, 'listingId');
+      assert.deepStrictEqual(duplicateHeader.body.sourceColumns, ['listing_id', 'listing_id']);
+      assert.strictEqual((await dbAll('SELECT id FROM research_evidence')).length, countBefore, 'Exact duplicate CSV headers must make zero DB writes for preview and confirm');
+    }
+    for (const [rawText, expectedError] of [
+      ['listing_id,title,shop\n123,Item,Shop,EXTRA', 'CSV_FIELD_COUNT_MISMATCH'],
+      ['listing_id,title,shop,views_24h\n123,Item', 'CSV_FIELD_COUNT_MISMATCH'],
+      ['listing_id,,title,shop\n123,HIDDEN,Item,Shop', 'INVALID_CSV_HEADER']
+    ]) {
+      for (const confirm of [false, true]) {
+        const malformed = await post('/api/etsy/feed-search-results', { rawText, seed: 'para mi hija', projectId, confirm });
+        assert.strictEqual(malformed.status, 422);
+        assert.strictEqual(malformed.body.error, expectedError);
+        assert.strictEqual((await dbAll('SELECT id FROM research_evidence')).length, countBefore, 'Malformed CSV must make zero DB writes for preview and confirm');
+      }
+    }
+    for (const [rawText, expectedError] of [
+      ['listing_id,title,shop\n123,One,A\n123,Two,B', 'DUPLICATE_LISTING_ID_CONFLICT'],
+      ['listing_id,title,shop\n123,,A\n124,Good,B', 'CSV_REQUIRED_FIELD_MISSING']
+    ]) {
+      for (const confirm of [false, true]) {
+        const rowIntegrityFailure = await post('/api/etsy/feed-search-results', { rawText, seed: 'para mi hija', projectId, confirm });
+        assert.strictEqual(rowIntegrityFailure.status, 422);
+        assert.strictEqual(rowIntegrityFailure.body.error, expectedError);
+        assert.strictEqual((await dbAll('SELECT id FROM research_evidence')).length, countBefore, 'Row-integrity failures must make zero DB writes for preview and confirm');
+      }
+    }
+
     const urlOnly = await post('/api/etsy/feed-search-results', { rawText: 'https://www.etsy.com/search?q=para+mi+hija', seed: 'para mi hija', projectId });
     assert.strictEqual(urlOnly.status, 422);
     assert.strictEqual(urlOnly.body.error, 'PASTED_RESULT_TEXT_REQUIRED');
@@ -348,6 +405,7 @@ async function waitForEtsyOwner() {
     assert.strictEqual(filePreview.provider, 'ETSY_SEARCH_CSV');
     assert.strictEqual(filePreview.sourceFileName, 'para-mi-hija.csv');
     assert.strictEqual(filePreview.count, 2);
+    assert.deepStrictEqual(filePreview.rowAccounting, { inputRows: 2, validRows: 2, uniqueRows: 2, duplicateRowsRemoved: 0, returnedRows: 2, truncatedRows: 0 });
     assert.strictEqual((await dbAll('SELECT id FROM research_evidence')).length, countBefore, 'File preview must make zero DB writes');
 
     const htmlPreviewForm = new FormData();
@@ -392,6 +450,14 @@ async function waitForEtsyOwner() {
     const fileMetadata = JSON.parse(fileRows[0].metadata);
     assert.strictEqual(fileMetadata.inputFormat, 'CSV');
     assert.strictEqual(fileMetadata.sourceFileName, 'para-mi-hija.csv');
+    assert.deepStrictEqual(fileCommitted.rowAccounting, { inputRows: 2, validRows: 2, uniqueRows: 2, duplicateRowsRemoved: 0, returnedRows: 2, truncatedRows: 0 });
+    assert.deepStrictEqual(fileMetadata.rowAccounting, { inputRows: 2, validRows: 2, uniqueRows: 2, duplicateRowsRemoved: 0, returnedRows: 2, truncatedRows: 0 });
+    assert.strictEqual(fileMetadata.sellers[0].listingId, '1001', 'External listing id must persist inside the project-bound audit artifact');
+    assert.strictEqual(fileMetadata.sellers[0].sourceRowId, 'csv-row-1');
+    assert.strictEqual(fileMetadata.sellers[0].evidenceState, 'UNVERIFIED_INPUT');
+    assert.strictEqual(fileMetadata.sellers[0].evidenceSource, 'STAFF_MANUAL_ASSERTION');
+    assert.strictEqual(fileMetadata.sellers[0].badges.isAd.value, false);
+    assert.strictEqual(fileMetadata.sellers[0].sourceHints.keywordContext.authority, 'NONE');
     assert.strictEqual(Object.prototype.hasOwnProperty.call(fileMetadata, 'rawText'), false, 'Large file payload must not be duplicated into SQLite metadata');
 
     const duplicate = await post('/api/etsy/feed-search-results', { rawText: SAMPLE, seed: 'para mi hija', projectId, confirm: true });
@@ -411,6 +477,7 @@ async function waitForEtsyOwner() {
     assert.deepStrictEqual(searchHealth.semanticStates, ['UNVERIFIED_INPUT'], 'Health must report semantic input state without promoting staff data.');
     assert.strictEqual(health.health.fieldCoverage.title.total, 6);
     assert.strictEqual(health.health.fieldCoverage.title.status, 'KNOWN');
+    assert(health.health.summary.rowAccounting.some(item => item.evidenceId === fileCommitted.evidenceId && item.status === 'VALID' && item.inputRows === 2 && item.validRows === 2 && item.uniqueRows === 2 && item.duplicateRowsRemoved === 0 && item.returnedRows === 2 && item.truncatedRows === 0), 'Evidence Health must retain the persisted CSV row-accounting receipt.');
     assert.strictEqual((await dbAll('SELECT id FROM research_evidence')).length, healthBefore, 'Evidence health must be read-only.');
 
     const ledgerResponse = await fetch(`${base}/api/evidence?projectId=${projectId}`, { headers: { Origin: base, Cookie: `omni_session=${session.rawToken}` } });

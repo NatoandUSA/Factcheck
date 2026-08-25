@@ -71,4 +71,17 @@ assert.strictEqual(richHealth.fieldCoverage.views24h.known, 67);
 assert.strictEqual(richHealth.fieldCoverage.conversion.known, 45);
 assert.deepStrictEqual(richHealth.summary.unmappedSourceColumns, []);
 
+for (const alias of ['listing_id', 'listingId', 'listingid', 'Listing ID', 'LISTING_ID']) {
+  const aliasParsed = parseEtsySearchCsv(`${alias},title,shop\n123,Item,Shop`);
+  assert.strictEqual(aliasParsed.sellers[0].listingId, '123', `${alias} must populate the canonical listingId`);
+  assert.deepStrictEqual(aliasParsed.headerDiagnostics.unmappedColumns, []);
+  assert.strictEqual(aliasParsed.headerDiagnostics.recognizedColumns.find(item => item.sourceColumn === alias).canonicalField, 'listingId');
+}
+
+const parserAliasMatrix = parseEtsySearchCsv('listing_id,title,shop_name,avg_view,discount_pct\n123,Item,Shop,0,0');
+assert.strictEqual(parserAliasMatrix.sellers[0].shopName, 'Shop');
+assert.strictEqual(parserAliasMatrix.sellers[0].avgViews, 0);
+assert.strictEqual(parserAliasMatrix.sellers[0].discountPercent, 0);
+assert.deepStrictEqual(parserAliasMatrix.headerDiagnostics.unmappedColumns, []);
+
 console.log('Etsy CSV Richness parser contract passed.');

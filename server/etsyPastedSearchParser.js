@@ -16,19 +16,31 @@ const CSV_HEADER_REGISTRY = Object.freeze({
   keyword_context: 'sourceHints.keywordContext', proof_scope_hint: 'sourceHints.proofScopeHint', evidence_route_hint: 'sourceHints.evidenceRouteHint', data_use_hint: 'sourceHints.dataUseHint',
   rank_position: 'sourceRank',
   listingid: 'listingId', 'listing id': 'listingId', listing_title: 'title', price_display: 'price', price_amount: 'priceAmount', 'price $': 'priceAmount',
-  original_price: 'originalPrice', price_was_display: 'originalPrice', review_count: 'reviewCount', 'review count': 'reviewCount', rating: 'rating',
+  original_price: 'originalPrice', price_was_display: 'originalPrice', review_count: 'reviewCount', 'review count': 'reviewCount', rating: 'rating', shop_name: 'shopName', avg_view: 'avgViews', discount_pct: 'discountPercent',
   currency: 'priceCurrency', price_currency: 'priceCurrency', is_ad: 'badges.isAd', is_bestseller: 'badges.isBestseller', is_star_seller: 'badges.isStarSeller', has_free_shipping: 'badges.hasFreeShipping',
   he_views_24h: 'views24h', total_views: 'totalViews', he_sold_24h: 'sold24h', total_sold: 'totalSold', revenue_usd: 'revenue', favorites: 'favorites', favorite_rate: 'favoriteRate',
   conversion_rate: 'conversionRate', created: 'createdRaw/listingCreatedAt', updated: 'updatedRaw/listingUpdatedAt', tags: 'tags', categories: 'categories', listing_url: 'url', rank: 'sourceRank', position: 'sourceRank'
 });
+
+function normalizeCsvHeader(value) {
+  return String(value ?? '').trim().toLowerCase();
+}
+
+function normalizeCsvRow(row) {
+  return Object.fromEntries(Object.entries(row || {}).map(([key, value]) => [normalizeCsvHeader(key), value]));
+}
+
+function canonicalCsvField(header) {
+  const normalized = normalizeCsvHeader(header);
+  return CSV_HEADER_REGISTRY[normalized] || (/^keyword_match_[a-z0-9_]+$/.test(normalized) ? `sourceHints.keywordMatches.${normalized.slice('keyword_match_'.length)}` : null);
+}
 
 function csvHeaderDiagnostics(headers) {
   const normalizedHeaders = (headers || []).map(header => String(header || '').trim()).filter(Boolean);
   const recognizedColumns = [];
   const unmappedColumns = [];
   for (const header of normalizedHeaders) {
-    const normalized = header.toLowerCase();
-    const canonicalField = CSV_HEADER_REGISTRY[normalized] || (/^keyword_match_[a-z0-9_]+$/i.test(normalized) ? `sourceHints.keywordMatches.${normalized.slice('keyword_match_'.length)}` : null);
+    const canonicalField = canonicalCsvField(header);
     if (canonicalField) recognizedColumns.push({ sourceColumn: header, canonicalField });
     else unmappedColumns.push(header);
   }
@@ -378,7 +390,7 @@ function parseHeyEtsyPastedText(rawText) {
 
 function csvValue(row, ...names) {
   for (const name of names) {
-    const value = row?.[name];
+    const value = row?.[normalizeCsvHeader(name)];
     if (value !== undefined && value !== null && String(value).trim() !== '') return String(value).trim();
   }
   return null;
@@ -434,6 +446,7 @@ function normalizeIsoTimestamp(rawValue) {
 }
 
 function parseCsvListing(row, index) {
+  row = normalizeCsvRow(row);
   const title = csvValue(row, 'title', 'Title', 'listing_title');
   if (!title) return null;
   const priceRaw = csvValue(row, 'price', 'Price', 'price_display');

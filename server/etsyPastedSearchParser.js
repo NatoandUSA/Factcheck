@@ -14,12 +14,12 @@ const CSV_HEADER_REGISTRY = Object.freeze({
   he_created: 'createdRaw/listingCreatedAt', age_days: 'ageDays', he_updated: 'updatedRaw/listingUpdatedAt', he_revenue_usd: 'revenue', conversion_pct: 'conversionRate',
   country: 'country', shop_daily_sold: 'shopDailySold', he_discount_pct: 'discountPercent', he_tags: 'tags', he_categories: 'categories', url: 'url',
   keyword_context: 'sourceHints.keywordContext', proof_scope_hint: 'sourceHints.proofScopeHint', evidence_route_hint: 'sourceHints.evidenceRouteHint', data_use_hint: 'sourceHints.dataUseHint',
-  rank_position: 'sourceRank',
+  rank_position: 'reportedRank',
   listingid: 'listingId', 'listing id': 'listingId', listing_title: 'title', price_display: 'price', price_amount: 'priceAmount', 'price $': 'priceAmount',
   original_price: 'originalPrice', price_was_display: 'originalPrice', review_count: 'reviewCount', 'review count': 'reviewCount', rating: 'rating', shop_name: 'shopName', avg_view: 'avgViews', discount_pct: 'discountPercent',
   currency: 'priceCurrency', price_currency: 'priceCurrency', is_ad: 'badges.isAd', is_bestseller: 'badges.isBestseller', is_star_seller: 'badges.isStarSeller', has_free_shipping: 'badges.hasFreeShipping',
   he_views_24h: 'views24h', total_views: 'totalViews', he_sold_24h: 'sold24h', total_sold: 'totalSold', revenue_usd: 'revenue', favorites: 'favorites', favorite_rate: 'favoriteRate',
-  conversion_rate: 'conversionRate', created: 'createdRaw/listingCreatedAt', updated: 'updatedRaw/listingUpdatedAt', tags: 'tags', categories: 'categories', listing_url: 'url', rank: 'sourceRank', position: 'sourceRank'
+  conversion_rate: 'conversionRate', created: 'createdRaw/listingCreatedAt', updated: 'updatedRaw/listingUpdatedAt', tags: 'tags', categories: 'categories', listing_url: 'url', rank: 'reportedRank', position: 'reportedRank'
 });
 
 function normalizeCsvHeader(value) {
@@ -497,12 +497,15 @@ function parseCsvListing(row, index) {
   const title = csvValue(row, 'title', 'Title', 'listing_title');
   if (!title) return null;
   const priceRaw = csvValue(row, 'price', 'Price', 'price_display');
-  const numericPrice = parseCsvNumberEvidence(csvValue(row, 'price_num', 'price_amount', 'Price $') || priceRaw);
+  const priceAmountRaw = csvValue(row, 'price_num', 'price_amount', 'Price $') || priceRaw;
+  const numericPrice = parseCsvNumberEvidence(priceAmountRaw);
   const originalRaw = csvValue(row, 'price_was', 'original_price', 'price_was_display');
   const originalNumeric = parseCsvNumberEvidence(originalRaw);
   const rating = parseCsvNumberEvidence(csvValue(row, 'rating', 'Rating'));
   const reviews = parseCsvNumberEvidence(csvValue(row, 'reviews', 'review_count', 'Review Count'));
-  const sourceRank = parseCsvNumberEvidence(csvValue(row, 'rank_position', 'rank', 'position')).value || index + 1;
+  const reportedRankRaw = csvValue(row, 'rank_position', 'rank', 'position');
+  const reportedRank = parseCsvNumberEvidence(reportedRankRaw);
+  const sourceRank = index + 1;
   const currency = csvValue(row, 'currency', 'price_currency') || null;
   const listingId = csvValue(row, 'listing_id', 'listingId', 'Listing ID');
   const isAd = parseBooleanEvidence(csvValue(row, 'ad', 'is_ad'));
@@ -533,7 +536,9 @@ function parseCsvListing(row, index) {
     rating: rating.value,
     reviewCount: reviews.value,
     price: priceRaw,
+    priceDisplayRaw: priceRaw,
     priceAmount: numericPrice.value,
+    priceAmountRaw: numericPrice.raw,
     priceCurrency: currency,
     originalPrice: originalRaw,
     originalPriceAmount: originalNumeric.value,
@@ -567,9 +572,10 @@ function parseCsvListing(row, index) {
     badges: { isAd, isBestseller, isStarSeller, hasFreeShipping },
     shopDailySold: shopDailySold.value,
     sourceHints: { keywordContext, keywordMatchType, keywordMatchConfidence, keywordMatches, proofScopeHint, evidenceRouteHint, dataUseHint },
+    reportedRank: observedCsvField(reportedRank.value, reportedRank.raw),
     fieldProvenance: {
       listingId: observedCsvField(listingId, listingId),
-      priceAmount: observedCsvField(numericPrice.value, priceRaw),
+      priceAmount: observedCsvField(numericPrice.value, numericPrice.raw),
       country: observedCsvField(csvValue(row, 'country'), csvValue(row, 'country')),
       views24h: observedCsvField(parseCsvNumberEvidence(csvValue(row, 'views_24h', 'he_views_24h')).value, csvValue(row, 'views_24h', 'he_views_24h')),
       sold24h: observedCsvField(parseCsvNumberEvidence(csvValue(row, 'sold_24h', 'he_sold_24h')).value, csvValue(row, 'sold_24h', 'he_sold_24h')),

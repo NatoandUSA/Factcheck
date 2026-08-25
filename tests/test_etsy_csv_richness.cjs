@@ -18,6 +18,8 @@ assert.strictEqual(first.listingId, '1001');
 assert.strictEqual(first.sourceRowId, 'csv-row-1');
 assert.notStrictEqual(first.listingId, first.id);
 assert.strictEqual(first.priceAmount, 0, 'Numeric zero is a known supplied value');
+assert.strictEqual(first.priceAmountRaw, '0');
+assert.strictEqual(first.fieldProvenance.priceAmount.raw, '0', 'Price provenance must bind the parsed numeric cell, not a display-price sibling');
 assert.strictEqual(first.badges.isAd.value, false);
 assert.strictEqual(first.badges.isBestseller.value, true);
 assert.strictEqual(first.badges.isStarSeller.value, false);
@@ -32,6 +34,16 @@ assert.strictEqual(first.fieldProvenance.totalSold.state, 'OBSERVED');
 assert.strictEqual(first.fieldProvenance.totalSold.authority, 'NONE');
 assert.strictEqual(first.fieldProvenance.totalSold.allowedUse, 'RESEARCH_ONLY');
 assert.deepStrictEqual(parsed.headerDiagnostics.unmappedColumns, ['mystery_metric']);
+
+const reportedRank = parseEtsySearchCsv('rank_position,listing_id,title,shop\n7,123,Item,Shop').sellers[0];
+assert.strictEqual(reportedRank.sourceRank, 1, 'sourceRank is the internal source-order position');
+assert.strictEqual(reportedRank.reportedRank.value, 7, 'Reported rank must remain a separate research-only source field');
+assert.strictEqual(reportedRank.reportedRank.authority, 'NONE');
+const numericPriceProvenance = parseEtsySearchCsv('price,price_num,listing_id,title,shop\nUS$12,12,123,Item,Shop').sellers[0];
+assert.strictEqual(numericPriceProvenance.priceAmount, 12);
+assert.strictEqual(numericPriceProvenance.priceDisplayRaw, 'US$12');
+assert.strictEqual(numericPriceProvenance.priceAmountRaw, '12');
+assert.strictEqual(numericPriceProvenance.fieldProvenance.priceAmount.raw, '12');
 
 const second = parsed.sellers[1];
 assert.strictEqual(second.listingId, '1002');
@@ -66,6 +78,7 @@ const richHealth = buildEvidenceHealth([{ source: 'STAFF_MANUAL_ASSERTION', evid
   kind: 'ETSY_SEARCH_PASTE_V1', provider: 'ETSY_SEARCH_CSV', evidenceState: 'UNVERIFIED_INPUT', headerDiagnostics: rich67.headerDiagnostics, sellers: rich67.sellers
 }) }]);
 assert.strictEqual(richHealth.fieldCoverage.listingId.known, 67);
+assert.strictEqual(richHealth.fieldCoverage.reportedRank.known, 67);
 assert.strictEqual(richHealth.fieldCoverage.tags.known, 67);
 assert.strictEqual(richHealth.fieldCoverage.views24h.known, 67);
 assert.strictEqual(richHealth.fieldCoverage.conversion.known, 45);
@@ -146,7 +159,7 @@ const canonicalValue = canonicalField => {
   if (canonicalField.includes('keywordMatches')) return '1';
   if (canonicalField.includes('badges.')) return '1';
   if (canonicalField.includes('listingCreatedAt')) return '2026-08-25T01:30:00Z';
-  if (/price|revenue|review|rating|views|sold|favorite|conversion|discount|age|sourceRank/i.test(canonicalField)) return '7';
+  if (/price|revenue|review|rating|views|sold|favorite|conversion|discount|age|reportedRank/i.test(canonicalField)) return '7';
   if (canonicalField.includes('tags') || canonicalField.includes('categories')) return 'tag';
   if (canonicalField.includes('url')) return 'https://example.test/listing/123';
   return 'value';
@@ -154,6 +167,23 @@ const canonicalValue = canonicalField => {
 const readCanonical = (seller, canonicalField) => {
   const path = canonicalField.split('/')[0].split('.');
   return path.reduce((value, key) => value?.[key], seller);
+};
+const expectedCanonicalValue = (canonicalField, raw) => {
+  if (canonicalField.includes('badges.')) return true;
+  if (canonicalField === 'reportedRank') return 7;
+  if (canonicalField === 'price' || canonicalField === 'originalPrice' || canonicalField === 'priceCurrency') return raw;
+  if (/price|revenue|review|rating|views|sold|favorite|conversion|discount|age/i.test(canonicalField)) return 7;
+  if (canonicalField.includes('tags') || canonicalField.includes('categories')) return 'tag';
+  return raw;
+};
+const assertCanonicalProjection = (seller, canonicalField, raw, alias) => {
+  let actual = readCanonical(seller, canonicalField);
+  if (canonicalField.includes('badges.') || canonicalField === 'reportedRank' || canonicalField.startsWith('sourceHints.')) actual = actual?.value;
+  if (canonicalField.includes('tags') || canonicalField.includes('categories')) {
+    assert(actual.includes('tag'), `${alias} must preserve a tag/category value`);
+    return;
+  }
+  assert.strictEqual(actual, expectedCanonicalValue(canonicalField, raw), `${alias} must preserve the exact canonical value`);
 };
 // Meta-test the contract, not an implementation-shaped fixture: every
 // registered alias must be both diagnosed and actually projected by the same
@@ -174,7 +204,7 @@ for (const [alias, canonicalField] of Object.entries(CSV_HEADER_REGISTRY)) {
   assert(recognized, `${alias} must be recognized`);
   assert.strictEqual(recognized.canonicalField, canonicalField, `${alias} canonical mapping`);
   assert.deepStrictEqual(aliasResult.headerDiagnostics.unmappedColumns, [], `${alias} must not be unmapped`);
-  assert.notStrictEqual(readCanonical(aliasResult.sellers[0], canonicalField), null, `${alias} must populate ${canonicalField}`);
+  assertCanonicalProjection(aliasResult.sellers[0], canonicalField, values[0], alias);
 }
 
 const wildcardResult = parseEtsySearchCsv('listing_id,title,shop,keyword_match_exact\n123,Item,Shop,1');

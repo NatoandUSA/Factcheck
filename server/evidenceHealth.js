@@ -125,9 +125,10 @@ function buildEvidenceHealth(rows) {
   // authority signal. Keep it visible after reload so row-level completeness
   // can be audited from the persisted artifact.
   const rowAccounting = searchArtifacts.flatMap(({ row, metadata }) => {
-    const receipt = metadata.rowAccounting;
-    if (!receipt || typeof receipt !== 'object') return [];
-    return [normalizedRowAccounting(receipt, row.id)];
+    // Absence is a legacy artifact; presence with any invalid shape is an
+    // explicit corrupted receipt and must remain visible as INVALID.
+    if (!Object.prototype.hasOwnProperty.call(metadata, 'rowAccounting')) return [];
+    return [normalizedRowAccounting(metadata.rowAccounting, row.id)];
   });
   const fieldCoverage = {
     listingId: coverage(searchListings, row => isKnown(row.listingId)), reportedRank: coverage(searchListings, row => isKnown(row.reportedRank?.value)), title: coverage(searchListings, row => isKnown(row.title)), shop: coverage(searchListings, row => isKnown(row.shopName)), price: coverage(searchListings, row => isKnown(row.priceAmount)),

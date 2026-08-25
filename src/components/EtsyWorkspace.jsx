@@ -706,6 +706,24 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
             <div style={{ marginTop: '12px', padding: '10px', borderRadius: '8px', background: '#f0fdf4', fontSize: '0.78rem' }}>
               <b>Ưu tiên nghiên cứu</b> — điểm minh bạch từ velocity (sold/views 24h), traction lịch sử, tuổi listing, badge nguồn và ưu tiên vận hành theo country. Đây <b>không</b> phải xếp hạng Etsy hay cam kết bán được hàng.
             </div>
+            {importedResearch.analysis?.niche && <div style={{ marginTop: '12px', border: '1px solid #93c5fd', borderRadius: '10px', padding: '12px', background: '#eff6ff' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px', alignItems: 'baseline' }}>
+                <div><b>Quyết định niche — “{importedResearch.analysis.niche.seedPhrase}”</b><div style={{ fontSize: '0.75rem', color: '#475569', marginTop: '3px' }}>Đọc toàn bộ file đã nạp trước khi chọn mẫu để học; không phải Etsy algorithm hay dự báo doanh số.</div></div>
+                <span style={{ fontWeight: 800, color: '#1d4ed8' }}>{importedResearch.analysis.niche.decision} · Confidence {importedResearch.analysis.niche.confidence}/100</span>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: '8px', marginTop: '10px' }}>
+                {(importedResearch.analysis.niche.scorecard || []).map(item => <div key={item.key} style={{ border: '1px solid #bfdbfe', borderRadius: '7px', background: '#fff', padding: '9px' }}>
+                  <div style={{ fontWeight: 800, fontSize: '0.78rem' }}>{item.label}</div>
+                  <div style={{ color: '#1d4ed8', fontWeight: 700, fontSize: '0.78rem', marginTop: '3px' }}>{item.value}</div>
+                  <div style={{ color: '#475569', fontSize: '0.71rem', marginTop: '4px' }}>{item.detail}</div>
+                </div>)}
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginTop: '10px', fontSize: '0.74rem' }}>
+                <div><b>Title patterns từ file:</b> {(importedResearch.analysis.niche.patterns?.titleTerms || []).map(item => `${item.term} ×${item.count}`).join(' · ') || 'UNKNOWN'}</div>
+                <div><b>Tag suggestions từ file:</b> {(importedResearch.analysis.niche.patterns?.tags || []).map(item => `${item.tag} ×${item.count}`).join(' · ') || 'UNKNOWN'}</div>
+              </div>
+              {(importedResearch.analysis.niche.nextDataRequest || []).length > 0 && <div style={{ marginTop: '9px', fontSize: '0.74rem', color: '#92400e' }}><b>Để tăng confidence:</b> {importedResearch.analysis.niche.nextDataRequest.join(' ')}</div>}
+            </div>}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '10px', marginTop: '10px' }}>
               {(importedResearch.rankedListings || []).slice(0, 6).map((seller) => <div key={`priority-${seller.id}-${seller.researchPriority?.rank}`} style={{ border: '1px solid #bbf7d0', borderRadius: '8px', padding: '10px', background: '#fff' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px' }}><b>#{seller.researchPriority?.rank} · {seller.researchPriority?.score}/100</b><span>Confidence {seller.researchPriority?.confidence}%</span></div>

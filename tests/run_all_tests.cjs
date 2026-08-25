@@ -57,6 +57,7 @@ const testFiles = [
     'tests/test_smart_pull_hardening.cjs',
     'tests/test_etsy_pasted_search_parser.cjs',
     'tests/test_etsy_research_ranker.cjs',
+    'tests/test_etsy_niche_evaluator.cjs',
     'tests/test_zero_fabrication_boundary.cjs'
   ];
 

@@ -44,7 +44,16 @@ function csvHeaderDiagnostics(headers) {
     if (canonicalField) recognizedColumns.push({ sourceColumn: header, canonicalField });
     else unmappedColumns.push(header);
   }
-  return { recognizedColumns, unmappedColumns, recognizedColumnCount: recognizedColumns.length, unmappedColumnCount: unmappedColumns.length };
+  const grouped = new Map();
+  for (const item of recognizedColumns) {
+    const existing = grouped.get(item.canonicalField) || [];
+    existing.push(item.sourceColumn);
+    grouped.set(item.canonicalField, existing);
+  }
+  const canonicalCollisions = [...grouped.entries()]
+    .filter(([, sourceColumns]) => sourceColumns.length > 1)
+    .map(([canonicalField, sourceColumns]) => ({ canonicalField, sourceColumns }));
+  return { recognizedColumns, unmappedColumns, canonicalCollisions, recognizedColumnCount: recognizedColumns.length, unmappedColumnCount: unmappedColumns.length };
 }
 
 const METRIC_LABELS = new Set([
@@ -555,13 +564,19 @@ function parseEtsySearchCsv(rawText) {
   if (result.errors.some(error => error.code === 'MissingQuotes' || error.code === 'UndetectableDelimiter')) {
     throw new Error('CSV_PARSE_FAILED');
   }
+  const headerDiagnostics = csvHeaderDiagnostics(result.meta?.fields);
+  if (headerDiagnostics.canonicalCollisions.length) {
+    const error = new Error('AMBIGUOUS_CSV_HEADERS');
+    error.canonicalCollisions = headerDiagnostics.canonicalCollisions;
+    throw error;
+  }
   return finalizeParsedInput({
     normalizedRaw,
     parserVersion: 'ETSY_SEARCH_CSV_V1',
     inputFormat: 'CSV',
     searchContext: { appliedFilters: [], unappliedFilters: [], resultCount: result.data.length, pageContainsAds: false, sortMode: null },
     sellers: result.data.map(parseCsvListing).filter(Boolean),
-    headerDiagnostics: csvHeaderDiagnostics(result.meta?.fields)
+    headerDiagnostics
   });
 }
 

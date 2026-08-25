@@ -84,4 +84,18 @@ assert.strictEqual(parserAliasMatrix.sellers[0].avgViews, 0);
 assert.strictEqual(parserAliasMatrix.sellers[0].discountPercent, 0);
 assert.deepStrictEqual(parserAliasMatrix.headerDiagnostics.unmappedColumns, []);
 
+for (const csv of [
+  'listing_id,LISTING_ID,title,shop\n111,222,Item,Shop',
+  'listing_id,listingId,title,shop\n111,222,Item,Shop',
+  'title,TITLE,listing_id,shop\nFirst,Second,123,Shop',
+  'keyword_match_exact,KEYWORD_MATCH_EXACT,listing_id,title,shop\n1,0,123,Item,Shop'
+]) {
+  assert.throws(() => parseEtsySearchCsv(csv), error => {
+    assert.strictEqual(error.message, 'AMBIGUOUS_CSV_HEADERS');
+    assert.strictEqual(error.canonicalCollisions.length, 1);
+    assert.strictEqual(error.canonicalCollisions[0].sourceColumns.length, 2);
+    return true;
+  }, 'Any duplicate canonical CSV header must fail before projection');
+}
+
 console.log('Etsy CSV Richness parser contract passed.');

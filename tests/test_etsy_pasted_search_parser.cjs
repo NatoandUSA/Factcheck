@@ -333,6 +333,16 @@ async function waitForEtsyOwner() {
     assert.strictEqual(missingProject.body.error, 'MISSING_PROJECT_ID');
     assert.strictEqual((await dbAll('SELECT id FROM research_evidence')).length, countBefore, 'Missing project must make zero DB writes');
 
+    const ambiguousCsv = 'listing_id,LISTING_ID,title,shop\n111,222,Item,Shop';
+    for (const confirm of [false, true]) {
+      const ambiguous = await post('/api/etsy/feed-search-results', { rawText: ambiguousCsv, seed: 'para mi hija', projectId, confirm });
+      assert.strictEqual(ambiguous.status, 422);
+      assert.strictEqual(ambiguous.body.error, 'AMBIGUOUS_CSV_HEADERS');
+      assert.strictEqual(ambiguous.body.canonicalField, 'listingId');
+      assert.deepStrictEqual(ambiguous.body.sourceColumns, ['listing_id', 'LISTING_ID']);
+      assert.strictEqual((await dbAll('SELECT id FROM research_evidence')).length, countBefore, 'Ambiguous CSV headers must make zero DB writes for preview and confirm');
+    }
+
     const urlOnly = await post('/api/etsy/feed-search-results', { rawText: 'https://www.etsy.com/search?q=para+mi+hija', seed: 'para mi hija', projectId });
     assert.strictEqual(urlOnly.status, 422);
     assert.strictEqual(urlOnly.body.error, 'PASTED_RESULT_TEXT_REQUIRED');

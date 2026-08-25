@@ -4,11 +4,38 @@
 const assert = require("assert");
 process.env.NODE_ENV = "test";
 
-const { app, db, databaseReady } = require("../server/server");
+const { app, db, databaseReady, ytrendsMcp } = require("../server/server");
 const { createSessionRecord } = require("../server/security/session");
 
+// Reachability must not depend on the availability of a third-party test
+// service. Provider-failure behavior is covered by its own fail-closed tests.
+ytrendsMcp.exploreNiche = async seed => ({
+  data: {
+    overview: { seed },
+    adjacent_tags: ["gift idea"],
+    related_keywords: ["custom gift"],
+    top_listings: [{
+      title: `${seed} observed listing`,
+      shop_name: "FixtureShop",
+      url: "https://www.etsy.com/listing/1234567890/fixture",
+      price: 19.99,
+      tags: ["gift idea"],
+      country: "US"
+    }]
+  }
+});
+
 const dbAll = (s, p = []) => new Promise((r, j) => db.all(s, p, (e, x) => e ? j(e) : r(x)));
+const dbRun = (s, p = []) => new Promise((r, j) => db.run(s, p, function onRun(e) { if (e) j(e); else r({ lastID: this.lastID, changes: this.changes }); }));
 const mkSess = (u, w, t) => new Promise((r, j) => createSessionRecord(db, u, w, t, (e, s) => e ? j(e) : r(s)));
+
+const insertVerifiedProviderEvidence = (fixture, projectId, seedPhrase) => dbRun(
+  `INSERT INTO research_evidence
+   (tenant_id, workspace_id, marketplace, project_id, seed_phrase, source, actor_id, evidence_state, metadata)
+   VALUES (?, ?, ?, ?, ?, 'MCP_RETRIEVAL', ?, 'OBSERVED', ?)`,
+  [fixture.tenant_id, fixture.workspace_id, fixture.marketplace, projectId, seedPhrase, fixture.user_id,
+    JSON.stringify({ kind: 'SMART_PULL_ARTIFACT_V1', evidenceState: 'VERIFIED_RETRIEVED', contentHash: 'a'.repeat(64) })]
+);
 
 async function waitForFixtures(timeoutMs = 15000) {
   const deadline = Date.now() + timeoutMs;
@@ -73,10 +100,11 @@ async function waitForFixtures(timeoutMs = 15000) {
   assert.strictEqual(evNull.status, 400, "Unscoped evidence must return 400 MISSING_FIELDS");
   console.log("  🟢 Unscoped evidence creation correctly rejected (400 MISSING_FIELDS).");
 
-  // Control 2: Valid scoped evidence accepted and transitioned to RESEARCH_ACCEPTED
-  const evEtsy = await callEtsy("POST", "/api/evidence", { projectId: etsyPid, seedPhrase: "personalized necklace", source: "MANUAL" });
-  assert.strictEqual(evEtsy.status, 200);
-  await callEtsy("POST", `/api/evidence/${evEtsy.j.evidenceId}/accept`);
+  // Control 2: A provider-controlled fixture (not generic MANUAL input) may
+  // be accepted and transition the scoped project to RESEARCH_ACCEPTED.
+  const evEtsy = await insertVerifiedProviderEvidence(ownerEtsy, etsyPid, 'personalized necklace');
+  const acceptEtsy = await callEtsy("POST", `/api/evidence/${evEtsy.lastID}/accept`);
+  assert.strictEqual(acceptEtsy.status, 200);
   const tEtsy1 = await callEtsy("PATCH", `/api/projects/${etsyPid}/transition`, { targetState: "RESEARCH_ACCEPTED" });
   assert.strictEqual(tEtsy1.status, 200);
   console.log("  🟢 Etsy Project transitioned to RESEARCH_ACCEPTED.");
@@ -104,10 +132,11 @@ async function waitForFixtures(timeoutMs = 15000) {
   assert(amzPid, "Amazon project creation failed: " + JSON.stringify(pAmz.j));
   console.log(`  Amazon project #${amzPid} created in state ${pAmz.j.state}`);
 
-  // Ingest & accept scoped evidence for Amazon
-  const evAmz = await callAmz("POST", "/api/evidence", { projectId: amzPid, seedPhrase: "mama sweatshirt", source: "H10_XRAY_OBSERVED" });
-  assert.strictEqual(evAmz.status, 200);
-  await callAmz("POST", `/api/evidence/${evAmz.j.evidenceId}/accept`);
+  // Reachability uses an explicitly provider-controlled qualifying fixture;
+  // staff-uploaded Xray remains research-only and cannot open the gate.
+  const evAmz = await insertVerifiedProviderEvidence(ownerAmz, amzPid, 'mama sweatshirt');
+  const acceptAmz = await callAmz("POST", `/api/evidence/${evAmz.lastID}/accept`);
+  assert.strictEqual(acceptAmz.status, 200);
   const tAmz1 = await callAmz("PATCH", `/api/projects/${amzPid}/transition`, { targetState: "RESEARCH_ACCEPTED" });
   assert.strictEqual(tAmz1.status, 200);
   await callAmz("PATCH", `/api/projects/${amzPid}/transition`, { targetState: "DNA_ACCEPTED" });

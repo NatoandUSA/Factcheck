@@ -43,6 +43,8 @@ export default function ProjectEvidenceGate({ activeProject, onTransition, onSho
   const accepted = evidence.filter(row => row.evidence_state === 'ACCEPTED');
   const acceptedQualified = accepted.filter(row => row.acceptanceEligibility?.eligible === true);
   const pending = evidence.filter(row => row.evidence_state !== 'ACCEPTED');
+  const blockedAccepted = accepted.filter(row => row.acceptanceEligibility?.eligible !== true);
+  const reviewRows = evidence.filter(row => row.evidence_state !== 'ACCEPTED' || row.acceptanceEligibility?.eligible !== true);
   const canAdvance = activeProject.state === 'EVIDENCE_INTAKE' && acceptedQualified.length > 0;
 
   return (
@@ -60,12 +62,15 @@ export default function ProjectEvidenceGate({ activeProject, onTransition, onSho
       {activeProject.state === 'EVIDENCE_INTAKE' && <div style={{ marginTop: '10px', padding: '10px', borderRadius: '8px', background: '#fff7ed', color: '#7c2d12', fontSize: '0.78rem', lineHeight: 1.45 }}>
         <b>Gate này không đánh giá “dữ liệu có nhiều hay ít”.</b> Xray/Cerebro, CSV/HTML Etsy và paste HeyEtsy vẫn dùng được cho phân tích pattern, keyword và draft có kiểm soát. Để chuyển sang Research Accepted, cần ít nhất một record mà <b>server</b> xác nhận đủ điều kiện; UI không thể tự nâng trạng thái.
       </div>}
-      {pending.length > 0 && <div style={{ marginTop: '10px', display: 'grid', gap: '8px' }}>{pending.slice(0, 10).map(row => {
+      {activeProject.state === 'RESEARCH_ACCEPTED' && acceptedQualified.length === 0 && <div style={{ marginTop: '10px', padding: '10px', borderRadius: '8px', background: '#fef2f2', color: '#991b1b', fontSize: '0.78rem', lineHeight: 1.45 }}>
+        <b>Project đang bị chặn bởi policy evidence fail-closed.</b> {blockedAccepted.length > 0 ? `Các evidence đã accept nhưng không còn đủ điều kiện: ${blockedAccepted.map(row => `#${row.id}`).join(', ')}.` : 'Project chưa có qualifying evidence.'} Hãy đọc lý do từng record và thu thập lại bằng provider retrieval hoàn chỉnh; không nới Gate hoặc dùng Xray/Cerebro/file staff để thay thế.
+      </div>}
+      {reviewRows.length > 0 && <div style={{ marginTop: '10px', display: 'grid', gap: '8px' }}>{reviewRows.slice(0, 10).map(row => {
         const eligible = row.acceptanceEligibility?.eligible === true;
         const reason = row.acceptanceEligibility?.message || 'Đang tải điều kiện accept từ server.';
         return <div key={row.id} style={{ padding: '10px', borderRadius: '8px', border: `1px solid ${eligible ? '#bbf7d0' : '#fed7aa'}`, background: eligible ? '#f0fdf4' : '#fffaf0', display: 'flex', justifyContent: 'space-between', gap: '12px', alignItems: 'center', fontSize: '0.78rem' }}>
           <div><b>#{row.id} · {row.source} · {row.evidence_state}</b><div style={{ marginTop: '3px', color: eligible ? '#166534' : '#9a3412' }}>{eligible ? 'Có thể được OWNER/MANAGER accept.' : reason}</div></div>
-          <button className="btn btn-secondary btn-sm" onClick={() => accept(row.id)} disabled={!eligible || actingId === row.id} title={eligible ? 'Yêu cầu server accept record này.' : reason}>{actingId === row.id ? 'Đang accept…' : eligible ? 'Accept evidence' : 'Không đủ điều kiện'}</button>
+          <button className="btn btn-secondary btn-sm" onClick={() => accept(row.id)} disabled={!eligible || row.evidence_state === 'ACCEPTED' || actingId === row.id} title={eligible ? 'Yêu cầu server accept record này.' : reason}>{actingId === row.id ? 'Đang accept…' : eligible ? 'Accept evidence' : 'Không đủ điều kiện'}</button>
         </div>;
       })}</div>}
       {activeProject.state === 'EVIDENCE_INTAKE' && !canAdvance && <div style={{ marginTop: '10px', color: '#92400e', fontSize: '0.78rem' }}><CircleAlert size={14} style={{ verticalAlign: 'middle', marginRight: '5px' }} />Bước kế tiếp: đọc lý do cạnh từng record. Nếu là MCP `PARTIAL_EVIDENCE`, retry khi provider trả retrieval hoàn chỉnh; nếu là staff file/paste, dùng nó cho analysis chứ không cố accept.</div>}

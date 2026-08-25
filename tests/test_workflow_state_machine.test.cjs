@@ -12,6 +12,13 @@ function dbAll(sql, params = []) {
   return new Promise((resolve, reject) => db.all(sql, params, (err, rows) => err ? reject(err) : resolve(rows)));
 }
 
+function dbRun(sql, params = []) {
+  return new Promise((resolve, reject) => db.run(sql, params, function onRun(err) {
+    if (err) reject(err);
+    else resolve({ lastID: this.lastID, changes: this.changes });
+  }));
+}
+
 function createSession(userId, workspaceId, tenantId) {
   return new Promise((resolve, reject) => {
     createSessionRecord(db, userId, workspaceId, tenantId, (err, session) => {
@@ -108,17 +115,18 @@ async function runTests() {
     assert.strictEqual(noEvData.error, 'MISSING_QUALIFYING_EVIDENCE_PRECONDITION');
     console.log('  🟢 Transition to RESEARCH_ACCEPTED rejected due to missing evidence precondition.');
 
-    // 4. Ingest Evidence Record, Accept Evidence, and Transition to RESEARCH_ACCEPTED
-    console.log('\nTest 4: Ingesting Evidence Record and Transitioning to RESEARCH_ACCEPTED...');
-    const evAddRes = await fetch(`${baseUrl}/api/evidence`, {
-      method: 'POST',
-      headers: { ...origin, 'Content-Type': 'application/json', Cookie: ownerAmzCookie },
-      body: JSON.stringify({ projectId, seedPhrase: 'mom sweatshirt', source: 'HELIUM10_XRAY_OBSERVED', fileName: 'xray_report.csv' })
-    });
-    assert.strictEqual(evAddRes.status, 200);
-    const evAddData = await evAddRes.json();
+    // 4. Accept a provider-controlled qualifying record and transition. A
+    // generic Xray upload is intentionally not used as authority here.
+    console.log('\nTest 4: Accepting provider-controlled evidence and transitioning to RESEARCH_ACCEPTED...');
+    const evAddData = await dbRun(
+      `INSERT INTO research_evidence
+       (tenant_id, workspace_id, marketplace, project_id, seed_phrase, source, actor_id, evidence_state, metadata)
+       VALUES (?, ?, 'AMAZON', ?, 'mom sweatshirt', 'MCP_RETRIEVAL', ?, 'OBSERVED', ?)`,
+      [ownerAmzFixture.tenant_id, ownerAmzFixture.workspace_id, projectId, ownerAmzFixture.user_id,
+        JSON.stringify({ kind: 'SMART_PULL_ARTIFACT_V1', evidenceState: 'VERIFIED_RETRIEVED', contentHash: 'b'.repeat(64) })]
+    );
 
-    const acceptRes = await fetch(`${baseUrl}/api/evidence/${evAddData.evidenceId}/accept`, {
+    const acceptRes = await fetch(`${baseUrl}/api/evidence/${evAddData.lastID}/accept`, {
       method: 'POST',
       headers: { ...origin, Cookie: ownerAmzCookie }
     });

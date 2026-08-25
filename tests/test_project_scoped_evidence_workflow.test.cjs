@@ -14,6 +14,13 @@ function dbAll(sql, params = []) {
   return new Promise((resolve, reject) => db.all(sql, params, (err, rows) => err ? reject(err) : resolve(rows)));
 }
 
+function dbRun(sql, params = []) {
+  return new Promise((resolve, reject) => db.run(sql, params, function onRun(err) {
+    if (err) reject(err);
+    else resolve({ lastID: this.lastID, changes: this.changes });
+  }));
+}
+
 function createSession(userId, workspaceId, tenantId) {
   return new Promise((resolve, reject) => {
     createSessionRecord(db, userId, workspaceId, tenantId, (err, session) => {
@@ -128,14 +135,31 @@ async function runTests() {
     assert.strictEqual(sellerAcceptRes.status, 403, `SELLER role evidence accept should be 403, got ${sellerAcceptRes.status}`);
     console.log('  🟢 SELLER role correctly denied 403 when attempting to accept evidence.');
 
-    // Test 6: OWNER role accepts evidence for Project A
-    console.log('\nTest 6: OWNER role accepting evidence for Project A...');
+    // Test 6: OWNER still cannot promote staff-uploaded Xray into authority.
+    console.log('\nTest 6: OWNER attempts to accept research-only Xray evidence...');
     const ownerAcceptRes = await fetch(`${baseUrl}/api/evidence/${evAId}/accept`, {
       method: 'POST',
       headers: { ...origin, Cookie: ownerCookie }
     });
-    assert.strictEqual(ownerAcceptRes.status, 200);
-    console.log('  🟢 OWNER role successfully accepted evidence for Project A.');
+    assert.strictEqual(ownerAcceptRes.status, 409);
+    const ownerAcceptData = await ownerAcceptRes.json();
+    assert.strictEqual(ownerAcceptData.error, 'UNQUALIFIED_RESEARCH_ARTIFACT');
+    console.log('  🟢 OWNER cannot promote staff Xray research into qualifying evidence.');
+
+    // Controlled provider fixture supplies the qualifying evidence needed for
+    // the positive project transition path.
+    const providerEvidence = await dbRun(
+      `INSERT INTO research_evidence
+       (tenant_id, workspace_id, marketplace, project_id, seed_phrase, source, actor_id, evidence_state, metadata)
+       VALUES (?, ?, 'AMAZON', ?, 'mom sweatshirt', 'MCP_RETRIEVAL', ?, 'OBSERVED', ?)`,
+      [ownerAmzFixture.tenant_id, ownerAmzFixture.workspace_id, projAId, ownerAmzFixture.user_id,
+        JSON.stringify({ kind: 'SMART_PULL_ARTIFACT_V1', evidenceState: 'VERIFIED_RETRIEVED', contentHash: 'c'.repeat(64) })]
+    );
+    const providerAcceptRes = await fetch(`${baseUrl}/api/evidence/${providerEvidence.lastID}/accept`, {
+      method: 'POST',
+      headers: { ...origin, Cookie: ownerCookie }
+    });
+    assert.strictEqual(providerAcceptRes.status, 200);
 
     // Test 7: Project B transition attempt to RESEARCH_ACCEPTED -> Must fail because Project B has zero evidence!
     console.log('\nTest 7: Attempting Project B transition using Project A evidence (Isolation Check)...');

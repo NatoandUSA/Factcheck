@@ -12,11 +12,30 @@ const assert = require("assert");
 const path = require("path");
 process.env.NODE_ENV = "test";
 
-const { app, db, databaseReady } = require("../server/server");
+const { app, db, databaseReady, ytrendsMcp } = require("../server/server");
 const { createSessionRecord } = require("../server/security/session");
+
+// This suite verifies project attribution, not provider availability. Keep the
+// external MCP deterministic so a network outage cannot mask routing defects.
+ytrendsMcp.exploreNiche = async seed => ({
+  data: {
+    overview: { seed },
+    adjacent_tags: ["gift idea"],
+    related_keywords: ["custom gift"],
+    top_listings: [{
+      title: `${seed} observed listing`,
+      shop_name: "FixtureShop",
+      url: "https://www.etsy.com/listing/1234567890/fixture",
+      price: 19.99,
+      tags: ["gift idea"],
+      country: "US"
+    }]
+  }
+});
 
 const dbAll = (s, p = []) => new Promise((r, j) => db.all(s, p, (e, x) => e ? j(e) : r(x)));
 const dbGet = (s, p = []) => new Promise((r, j) => db.get(s, p, (e, x) => e ? j(e) : r(x)));
+const dbRun = (s, p = []) => new Promise((r, j) => db.run(s, p, function onRun(e) { if (e) j(e); else r({ lastID: this.lastID, changes: this.changes }); }));
 const mkSess = (u, w, t) => new Promise((r, j) => createSessionRecord(db, u, w, t, (e, s) => e ? j(e) : r(s)));
 
 async function waitForFixtures(timeoutMs = 15000) {
@@ -136,7 +155,18 @@ async function waitForFixtures(timeoutMs = 15000) {
   const evP2 = await callEtsy("POST", "/api/evidence", { projectId: pid2, seedPhrase: "silver bracelet", source: "MANUAL" });
   assert.strictEqual(evP2.status, 200);
   assert.strictEqual(evP2.j.projectId, pid2);
-  await callEtsy("POST", `/api/evidence/${evP2.j.evidenceId}/accept`);
+  const manualAccept = await callEtsy("POST", `/api/evidence/${evP2.j.evidenceId}/accept`);
+  assert.strictEqual(manualAccept.status, 409, 'Generic manual research must remain ineligible');
+
+  const providerEvidence = await dbRun(
+    `INSERT INTO research_evidence
+     (tenant_id, workspace_id, marketplace, project_id, seed_phrase, source, actor_id, evidence_state, metadata)
+     VALUES (?, ?, 'ETSY', ?, 'silver bracelet', 'MCP_RETRIEVAL', ?, 'OBSERVED', ?)`,
+    [ownerEtsy.tenant_id, ownerEtsy.workspace_id, pid2, ownerEtsy.user_id,
+      JSON.stringify({ kind: 'SMART_PULL_ARTIFACT_V1', evidenceState: 'VERIFIED_RETRIEVED', contentHash: 'd'.repeat(64) })]
+  );
+  const providerAccept = await callEtsy("POST", `/api/evidence/${providerEvidence.lastID}/accept`);
+  assert.strictEqual(providerAccept.status, 200);
 
   const pullP2 = await callEtsy("POST", "/api/mcp/pull-etsy", { projectId: pid2, seed: "silver bracelet", category: "Jewelry" });
   assert.strictEqual(pullP2.status, 200);

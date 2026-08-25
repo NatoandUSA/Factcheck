@@ -41,6 +41,13 @@ const { UrlGuardError } = require('./security/urlGuard');
 const { resolveRuntimePaths } = require('./config/paths');
 const { parseEtsySearchInput } = require('./etsyPastedSearchParser');
 const { buildEvidenceHealth } = require('./evidenceHealth');
+const {
+  SMART_PULL_ARTIFACT_KIND,
+  ETSY_SEARCH_PASTE_ARTIFACT_KIND,
+  GENERIC_STAFF_EVIDENCE_KIND,
+  parseEvidenceMetadata,
+  getEvidenceAcceptanceEligibility
+} = require('./evidenceEligibility');
 
 // Make crashes visible instead of dying silently with no trace (systemd will
 // still restart the process via Restart=always; this just ensures the cause
@@ -913,7 +920,6 @@ app.get('/api/projects/:projectId/evidence-health', requireAuth(db), requireRole
 });
 
 const ALLOWED_EVIDENCE_SOURCES = [
-  'MCP_RETRIEVAL',
   'FILE_UPLOAD',
   'STAFF_MANUAL_ASSERTION',
   'VERIFIED_EXTERNAL_URL',
@@ -993,58 +999,44 @@ function requireProjectContext(req, rawProjectId) {
 // provider retrieval may be accepted into the project workflow. In particular,
 // staff-entered ASINs and partial provider responses stay observable but can
 // never be promoted to ACCEPTED merely by a ledger action.
-const SMART_PULL_ARTIFACT_KIND = 'SMART_PULL_ARTIFACT_V1';
-const ETSY_SEARCH_PASTE_ARTIFACT_KIND = 'ETSY_SEARCH_PASTE_V1';
-const ACCEPTABLE_SMART_PULL_STATES = new Set([
-  'RETRIEVED_NO_OBSERVED_AT',
-  'VERIFIED_RETRIEVED'
-]);
-
-function parseEvidenceMetadata(evidence) {
-  if (!evidence || !evidence.metadata) return {};
-  try {
-    const metadata = typeof evidence.metadata === 'string' ? JSON.parse(evidence.metadata) : evidence.metadata;
-    return metadata && typeof metadata === 'object' ? metadata : {};
-  } catch (_) {
-    return {};
-  }
-}
-
-function getEvidenceAcceptanceEligibility(evidence) {
-  const metadata = parseEvidenceMetadata(evidence);
-  if (metadata.kind === ETSY_SEARCH_PASTE_ARTIFACT_KIND) {
-    return {
-      eligible: false,
-      error: 'UNQUALIFIED_STAFF_PASTED_EVIDENCE',
-      message: 'Staff-pasted HeyEtsy/search text is retained for analysis and audit, but it is not independently verified evidence and cannot satisfy Research Accepted.'
-    };
-  }
-  if (metadata.kind !== SMART_PULL_ARTIFACT_KIND) return { eligible: true };
-
-  const state = metadata.evidenceState;
-  const hasContentHash = typeof metadata.contentHash === 'string' && /^[a-f0-9]{64}$/i.test(metadata.contentHash);
-  const completeRetrieval = evidence.source === 'MCP_RETRIEVAL'
-    && ACCEPTABLE_SMART_PULL_STATES.has(state)
-    && hasContentHash;
-
-  if (completeRetrieval) return { eligible: true };
-  return {
-    eligible: false,
-    error: 'UNQUALIFIED_SMART_PULL_ARTIFACT',
-    message: `Smart Pull artifact state ${state || 'UNKNOWN'} is not eligible for acceptance. Only complete, hashed MCP retrievals may satisfy research acceptance.`
-  };
-}
-
 function persistSmartPullArtifact(req, project, source, seedPhrase, artifact) {
   return new Promise((resolve, reject) => {
     db.run(
       `INSERT INTO research_evidence (tenant_id, workspace_id, marketplace, project_id, seed_phrase, source, actor_id, evidence_state, metadata)
        VALUES (?, ?, ?, ?, ?, ?, ?, 'OBSERVED', ?)`,
       [req.user.tenantId, req.user.workspaceId, req.user.marketplace, project.id, seedPhrase, source, req.user.userId,
-        JSON.stringify({ kind: 'SMART_PULL_ARTIFACT_V1', ...artifact })],
+        JSON.stringify({ ...artifact, kind: SMART_PULL_ARTIFACT_KIND })],
       function(err) { if (err) reject(err); else resolve(this.lastID); }
     );
   });
+}
+
+function loadQualifyingAcceptedEvidence(req, projectId, callback) {
+  db.all(
+    `SELECT * FROM research_evidence
+     WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ?
+       AND project_id = ? AND evidence_state = 'ACCEPTED'`,
+    [req.user.tenantId, req.user.workspaceId, req.user.marketplace, projectId],
+    (err, rows) => {
+      if (err) return callback(err);
+      const evaluated = (rows || []).map(row => ({
+        row,
+        eligibility: getEvidenceAcceptanceEligibility(row)
+      }));
+      callback(null, {
+        qualifying: evaluated.filter(item => item.eligibility.eligible),
+        blocked: evaluated
+          .filter(item => !item.eligibility.eligible)
+          .map(({ row, eligibility }) => ({
+            evidenceId: row.id,
+            source: row.source,
+            kind: parseEvidenceMetadata(row).kind || 'UNKNOWN',
+            error: eligibility.error,
+            message: eligibility.message
+          }))
+      });
+    }
+  );
 }
 
 // POST /api/evidence - Ingest new evidence record (Strictly Project-Bound & Source-Contracted)
@@ -1067,8 +1059,23 @@ app.post('/api/evidence', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SEL
       });
     }
 
+    if (metadata !== undefined && (!metadata || typeof metadata !== 'object' || Array.isArray(metadata))) {
+      return res.status(400).json({
+        success: false,
+        error: 'INVALID_CLIENT_ANNOTATIONS',
+        message: 'metadata must be a JSON object. Client annotations never define evidence authority.'
+      });
+    }
+
     const isManual = cleanSource === 'STAFF_MANUAL_ASSERTION';
-    const finalMetadata = { ...(metadata || {}), isManualAssertion: isManual };
+    const finalMetadata = {
+      kind: GENERIC_STAFF_EVIDENCE_KIND,
+      evidenceState: 'UNVERIFIED_INPUT',
+      authority: 'NONE',
+      allowedUse: 'RESEARCH_ONLY',
+      isManualAssertion: isManual,
+      clientAnnotations: metadata || {}
+    };
 
     db.run(
       `INSERT INTO research_evidence (tenant_id, workspace_id, marketplace, project_id, seed_phrase, source, source_url, file_name, actor_id, evidence_state, metadata)
@@ -1242,40 +1249,29 @@ app.patch('/api/projects/:id/transition', requireAuth(db), requireRole(['OWNER',
       // Evidence & Artifact Precondition Validation (Strict Project-Scoped - NO legacy fallbacks)
       const checkPreconditions = (next) => {
         if (targetState === 'RESEARCH_ACCEPTED') {
-          db.all(
-            `SELECT * FROM research_evidence
-             WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ? 
-               AND project_id = ? AND evidence_state = 'ACCEPTED'`,
-            [req.user.tenantId, req.user.workspaceId, req.user.marketplace, projectId],
-            (eErr, evidenceRows) => {
-              const hasQualifyingEvidence = !eErr && (evidenceRows || []).some(row => getEvidenceAcceptanceEligibility(row).eligible);
-              if (!hasQualifyingEvidence) {
+          loadQualifyingAcceptedEvidence(req, projectId, (eErr, result) => {
+              if (eErr || !result || result.qualifying.length === 0) {
                 return res.status(400).json({
                   success: false,
                   error: 'MISSING_QUALIFYING_EVIDENCE_PRECONDITION',
-                  message: 'Cannot accept research without at least 1 qualifying ACCEPTED evidence record bound specifically to this project.'
+                  message: 'Cannot accept research without at least 1 qualifying ACCEPTED evidence record bound specifically to this project.',
+                  blockingEvidence: result?.blocked || []
                 });
               }
               next();
-            }
-          );
+          });
         } else if (targetState === 'DNA_ACCEPTED') {
-          db.get(
-            `SELECT COUNT(*) as cnt FROM research_evidence
-             WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ?
-               AND project_id = ? AND evidence_state = 'ACCEPTED'`,
-            [req.user.tenantId, req.user.workspaceId, req.user.marketplace, projectId],
-            (dErr, dRow) => {
-              if (dErr || !dRow || dRow.cnt === 0) {
+          loadQualifyingAcceptedEvidence(req, projectId, (dErr, result) => {
+              if (dErr || !result || result.qualifying.length === 0) {
                 return res.status(400).json({
                   success: false,
                   error: 'MISSING_DNA_PRECONDITION',
-                  message: 'Cannot accept DNA without at least 1 ACCEPTED evidence/learning artifact bound specifically to this project.'
+                  message: 'Cannot accept DNA without at least 1 qualifying ACCEPTED evidence record bound specifically to this project.',
+                  blockingEvidence: result?.blocked || []
                 });
               }
               next();
-            }
-          );
+          });
         } else if (targetState === 'MKL_FROZEN') {
           db.get(
             `SELECT COUNT(*) as cnt FROM market_trends

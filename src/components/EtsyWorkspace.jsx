@@ -33,6 +33,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
   const [feedPreview, setFeedPreview] = useState(null);
   const [feedSubmitting, setFeedSubmitting] = useState(false);
   const [scannedSellers, setScannedSellers] = useState([]);
+  const [evidenceHealth, setEvidenceHealth] = useState(null);
   const fileInputRef = useRef(null);
   const feedFileInputRef = useRef(null);
   const activeProjectIdRef = useRef(null);
@@ -46,6 +47,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
     setFeedRawText('');
     setFeedFile(null);
     setFeedPreview(null);
+    setEvidenceHealth(null);
     setSeedPhrase(activeProject?.seed_phrase || '');
   }, [activeProject?.id]);
 
@@ -145,6 +147,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
   const fetchData = async () => {
     if (!activeProject?.id) {
       setTrends([]);
+      setEvidenceHealth(null);
       return;
     }
     const requestedProjectId = activeProject.id;
@@ -159,6 +162,11 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
           && t.keywords_detailed
         ));
         setTrends(etsyTrends);
+      }
+      const healthRes = await fetch(`/api/projects/${encodeURIComponent(requestedProjectId)}/evidence-health`, { credentials: 'include' });
+      const healthData = await parseJsonResponse(healthRes);
+      if (healthRes.ok && healthData.success && activeProjectIdRef.current === requestedProjectId) {
+        setEvidenceHealth(healthData.health || null);
       }
     } catch (e) {
       console.warn('Failed to fetch Etsy workspace data', e);
@@ -679,6 +687,22 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
             
             {/* Etsy Learning Box */}
             <LearningBoxWidget platform="ETSY" onShowToast={onShowToast} scannedSellers={scannedSellers} />
+          </div>
+
+          <div className="studio-panel" style={{ padding: '18px', borderLeft: '4px solid #2563eb' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
+              <div><h4 style={{ margin: 0 }}>Evidence Health — Project research</h4><p style={{ margin: '5px 0 0', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Bạn đang có dữ liệu gì, thiếu gì và cần làm gì tiếp. Không chấm điểm, không chuyển state và không mở publish.</p></div>
+              <span style={{ fontSize: '0.76rem', fontWeight: 800, color: '#1d4ed8' }}>{evidenceHealth?.authority || 'RESEARCH_STATUS_ONLY'}</span>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(205px, 1fr))', gap: '9px', marginTop: '12px' }}>
+              {(evidenceHealth?.layers || []).map(layer => <div key={layer.key} style={{ border: '1px solid #bfdbfe', borderRadius: '8px', padding: '10px', background: '#f8fbff' }}>
+                <div style={{ fontWeight: 800, fontSize: '0.8rem' }}>{layer.label}</div>
+                <div style={{ marginTop: '3px', color: layer.state === 'CAPTURED' || layer.state === 'PRESENT' ? '#047857' : '#64748b', fontWeight: 700, fontSize: '0.75rem' }}>{layer.state} · {layer.count}</div>
+                <div style={{ marginTop: '5px', fontSize: '0.7rem', color: '#475569' }}>{layer.allowedUse}</div>
+              </div>)}
+            </div>
+            {evidenceHealth && <div style={{ marginTop: '10px', fontSize: '0.75rem' }}><b>Field coverage:</b> {Object.entries(evidenceHealth.fieldCoverage || {}).map(([field, count]) => `${field}: ${count}`).join(' · ') || 'UNKNOWN'}</div>}
+            {(evidenceHealth?.actions || []).length > 0 && <div style={{ marginTop: '9px', padding: '9px', borderRadius: '7px', background: '#fff7ed', fontSize: '0.75rem' }}><b>Next action:</b> {evidenceHealth.actions[0]}</div>}
           </div>
 
           {/* Stage 2 Acceptance Gate */}

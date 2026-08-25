@@ -40,6 +40,7 @@ const { readFirstWorksheet } = require('./services/spreadsheetReader');
 const { UrlGuardError } = require('./security/urlGuard');
 const { resolveRuntimePaths } = require('./config/paths');
 const { parseEtsySearchInput, parseEtsySearchInputs } = require('./etsyPastedSearchParser');
+const { rankEtsyResearchListings } = require('./etsyResearchRanker');
 
 // Make crashes visible instead of dying silently with no trace (systemd will
 // still restart the process via Restart=always; this just ensures the cause
@@ -2777,12 +2778,14 @@ app.get('/api/projects/:projectId/etsy-search-imports', requireAuth(db), require
           };
         });
         const sellers = imports.flatMap(item => item.sellers);
+        const rankedListings = rankEtsyResearchListings(sellers);
         const countKnown = key => sellers.filter(seller => seller[key] !== null && seller[key] !== undefined && seller[key] !== '').length;
         res.json({
           success: true,
           projectId: project.id,
           imports,
           sellers,
+          rankedListings,
           analysis: {
             listingCount: sellers.length,
             importCount: imports.length,
@@ -2793,7 +2796,8 @@ app.get('/api/projects/:projectId/etsy-search-imports', requireAuth(db), require
               categories: sellers.filter(seller => Array.isArray(seller.categories) && seller.categories.length).length,
               views: countKnown('totalViews'), sold: countKnown('totalSold'), revenue: countKnown('revenue'),
               favorites: countKnown('favorites'), conversion: countKnown('conversionRate')
-            }
+            },
+            rankingMethod: 'Research-priority score uses only source-reported demand/velocity, age, badges and optional operational country preference. It is not Etsy ranking or a sales guarantee.'
           },
           authority: 'STAFF_MANUAL_ASSERTION / UNVERIFIED_INPUT — available for research analysis only; never an acceptance or publish authority.'
         });

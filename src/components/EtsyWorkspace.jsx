@@ -703,6 +703,17 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
               <span>Tags <b>{importedResearch.analysis?.coverage?.tags || 0}</b></span>
               <span>Views/Sold <b>{importedResearch.analysis?.coverage?.views || 0}/{importedResearch.analysis?.coverage?.sold || 0}</b></span>
             </div>
+            <div style={{ marginTop: '12px', padding: '10px', borderRadius: '8px', background: '#f0fdf4', fontSize: '0.78rem' }}>
+              <b>Ưu tiên nghiên cứu</b> — điểm minh bạch từ velocity (sold/views 24h), traction lịch sử, tuổi listing, badge nguồn và ưu tiên vận hành theo country. Đây <b>không</b> phải xếp hạng Etsy hay cam kết bán được hàng.
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '10px', marginTop: '10px' }}>
+              {(importedResearch.rankedListings || []).slice(0, 6).map((seller) => <div key={`priority-${seller.id}-${seller.researchPriority?.rank}`} style={{ border: '1px solid #bbf7d0', borderRadius: '8px', padding: '10px', background: '#fff' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px' }}><b>#{seller.researchPriority?.rank} · {seller.researchPriority?.score}/100</b><span>Confidence {seller.researchPriority?.confidence}%</span></div>
+                <div style={{ fontSize: '0.8rem', fontWeight: 700, marginTop: '5px' }}>{seller.title}</div>
+                <div style={{ fontSize: '0.74rem', color: '#475569', marginTop: '4px' }}>{seller.shopName || 'Shop UNKNOWN'} · {seller.country || 'Country UNKNOWN'} · age {seller.ageDays ?? 'UNKNOWN'} days</div>
+                <div style={{ fontSize: '0.72rem', marginTop: '5px' }}>{(seller.researchPriority?.reasons || []).join(' · ') || 'No ranking signal was supplied.'}</div>
+              </div>)}
+            </div>
             {(importedResearch.sellers || []).slice(0, 8).map((seller, index) => <details key={`${seller.id}-${index}`} style={{ marginTop: '8px', borderTop: '1px solid var(--border-subtle)', paddingTop: '8px' }}>
               <summary><b>#{seller.sourceRank || index + 1} {seller.title}</b> — {seller.shopName || 'Shop UNKNOWN'} · {seller.price || 'Price UNKNOWN'} · {seller.reviewCount ?? 'Reviews UNKNOWN'}</summary>
               <div style={{ marginTop: '6px', fontSize: '0.78rem' }}>Listing ID: {seller.listingId || 'UNKNOWN'} · Views: {seller.totalViews ?? 'UNKNOWN'} · Sold: {seller.totalSold ?? 'UNKNOWN'} · Revenue: {seller.revenue ?? 'UNKNOWN'} · Tags: {(seller.tags || []).join(', ') || 'UNKNOWN'}</div>

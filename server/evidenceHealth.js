@@ -102,6 +102,20 @@ function buildEvidenceHealth(rows) {
   }
   const searchArtifacts = artifacts.filter(({ metadata }) => metadata.kind === 'ETSY_SEARCH_PASTE_V1');
   const searchListings = searchArtifacts.flatMap(({ metadata }) => Array.isArray(metadata.sellers) ? metadata.sellers : []);
+  // Accounting is a read-only ingestion receipt, not an evidence-quality or
+  // authority signal. Keep it visible after reload so row-level completeness
+  // can be audited from the persisted artifact.
+  const rowAccounting = searchArtifacts.flatMap(({ row, metadata }) => {
+    const receipt = metadata.rowAccounting;
+    if (!receipt || typeof receipt !== 'object') return [];
+    return [{
+      evidenceId: row.id ?? null,
+      inputRows: receipt.inputRows ?? null,
+      validRows: receipt.validRows ?? null,
+      uniqueRows: receipt.uniqueRows ?? null,
+      duplicateRowsRemoved: receipt.duplicateRowsRemoved ?? null
+    }];
+  });
   const fieldCoverage = {
     listingId: coverage(searchListings, row => isKnown(row.listingId)), reportedRank: coverage(searchListings, row => isKnown(row.reportedRank?.value)), title: coverage(searchListings, row => isKnown(row.title)), shop: coverage(searchListings, row => isKnown(row.shopName)), price: coverage(searchListings, row => isKnown(row.priceAmount)),
     tags: coverage(searchListings, row => Array.isArray(row.tags) && row.tags.length > 0), categories: coverage(searchListings, row => Array.isArray(row.categories) && row.categories.length > 0), country: coverage(searchListings, row => isKnown(row.country)), ageDays: coverage(searchListings, row => isKnown(row.ageDays)),
@@ -131,7 +145,7 @@ function buildEvidenceHealth(rows) {
   if (searchListings.length && (fieldCoverage.views24h.status === 'UNKNOWN' || fieldCoverage.sold24h.status === 'UNKNOWN')) actions.push('Bổ sung views_24h/sold_24h hoặc snapshot lần hai để đánh giá traction theo thời gian.');
   if (unmapped.length) actions.push('Map artifact kind/source to an Evidence Health adapter before relying on its fields.');
   if (unmappedColumns.length) actions.push('Map or explicitly document source columns reported as UNMAPPED before relying on a complete projection.');
-  return { contractVersion: 'EVIDENCE_HEALTH_V1', scope: 'READ_ONLY_RESEARCH_STATUS', summary: { evidenceRecords: safeRows.length, searchArtifacts: searchArtifacts.length, searchListings: searchListings.length, malformedMetadata: artifacts.filter(item => item.malformed).length, unmappedSourceColumns: unmappedColumns }, freshness: { observedAt: observed.newest, importedAt: imported.newest, oldestCaptureAt: capture.oldest, newestCaptureAt: capture.newest }, layers, fieldCoverage, fieldGroups, actions };
+  return { contractVersion: 'EVIDENCE_HEALTH_V1', scope: 'READ_ONLY_RESEARCH_STATUS', summary: { evidenceRecords: safeRows.length, searchArtifacts: searchArtifacts.length, searchListings: searchListings.length, malformedMetadata: artifacts.filter(item => item.malformed).length, unmappedSourceColumns: unmappedColumns, rowAccounting }, freshness: { observedAt: observed.newest, importedAt: imported.newest, oldestCaptureAt: capture.oldest, newestCaptureAt: capture.newest }, layers, fieldCoverage, fieldGroups, actions };
 }
 
 module.exports = { buildEvidenceHealth, isKnown, matchesLayer, normalizeTimestamp };

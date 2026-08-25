@@ -10,6 +10,7 @@ const row = {
     evidenceState: 'UNVERIFIED_INPUT',
     provider: 'ETSY_SEARCH_CSV',
     inputFormat: 'CSV',
+    rowAccounting: { inputRows: 2, validRows: 2, uniqueRows: 2, duplicateRowsRemoved: 0 },
     observedAt: null,
     importedAt: '2026-08-25T01:00:00.000Z',
     sellers: [
@@ -23,6 +24,7 @@ const health = buildEvidenceHealth([row]);
 assert.strictEqual(health.contractVersion, 'EVIDENCE_HEALTH_V1');
 assert.strictEqual(health.scope, 'READ_ONLY_RESEARCH_STATUS');
 assert.strictEqual(health.summary.searchListings, 2);
+assert.deepStrictEqual(health.summary.rowAccounting, [{ evidenceId: 7, inputRows: 2, validRows: 2, uniqueRows: 2, duplicateRowsRemoved: 0 }]);
 const searchLayer = health.layers.find(layer => layer.key === 'search_capture');
 assert.strictEqual(searchLayer.state, 'MAPPED');
 assert.deepStrictEqual(searchLayer.dbStates, ['OBSERVED']);

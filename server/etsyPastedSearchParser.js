@@ -4,6 +4,37 @@ const cheerio = require('cheerio');
 
 const MAX_IMPORTED_LISTINGS = 500;
 
+// Explicitly document every source column that this parser understands. New
+// columns never become silent data loss: parseEtsySearchCsv returns them in
+// `unmappedColumns` until a canonical, research-only projection is added.
+const CSV_HEADER_REGISTRY = Object.freeze({
+  listing_id: 'listingId', title: 'title', shop: 'shopName', price: 'price', price_num: 'priceAmount', price_was: 'originalPrice', reviews: 'reviewCount',
+  star_seller: 'badges.isStarSeller', ad: 'badges.isAd', bestseller: 'badges.isBestseller', free_shipping: 'badges.hasFreeShipping',
+  sold_24h: 'sold24h', views_24h: 'views24h', he_sold: 'totalSold', he_views_avg: 'avgViews', he_views: 'totalViews', he_fav_pct: 'favoriteRate', he_favorites: 'favorites',
+  he_created: 'createdRaw/listingCreatedAt', age_days: 'ageDays', he_updated: 'updatedRaw/listingUpdatedAt', he_revenue_usd: 'revenue', conversion_pct: 'conversionRate',
+  country: 'country', shop_daily_sold: 'shopDailySold', he_discount_pct: 'discountPercent', he_tags: 'tags', he_categories: 'categories', url: 'url',
+  keyword_context: 'sourceHints.keywordContext', proof_scope_hint: 'sourceHints.proofScopeHint', evidence_route_hint: 'sourceHints.evidenceRouteHint', data_use_hint: 'sourceHints.dataUseHint',
+  rank_position: 'sourceRank',
+  listingid: 'listingId', 'listing id': 'listingId', listing_title: 'title', price_display: 'price', price_amount: 'priceAmount', 'price $': 'priceAmount',
+  original_price: 'originalPrice', price_was_display: 'originalPrice', review_count: 'reviewCount', 'review count': 'reviewCount', rating: 'rating',
+  currency: 'priceCurrency', price_currency: 'priceCurrency', is_ad: 'badges.isAd', is_bestseller: 'badges.isBestseller', is_star_seller: 'badges.isStarSeller', has_free_shipping: 'badges.hasFreeShipping',
+  he_views_24h: 'views24h', total_views: 'totalViews', he_sold_24h: 'sold24h', total_sold: 'totalSold', revenue_usd: 'revenue', favorites: 'favorites', favorite_rate: 'favoriteRate',
+  conversion_rate: 'conversionRate', created: 'createdRaw/listingCreatedAt', updated: 'updatedRaw/listingUpdatedAt', tags: 'tags', categories: 'categories', listing_url: 'url', rank: 'sourceRank', position: 'sourceRank'
+});
+
+function csvHeaderDiagnostics(headers) {
+  const normalizedHeaders = (headers || []).map(header => String(header || '').trim()).filter(Boolean);
+  const recognizedColumns = [];
+  const unmappedColumns = [];
+  for (const header of normalizedHeaders) {
+    const normalized = header.toLowerCase();
+    const canonicalField = CSV_HEADER_REGISTRY[normalized] || (/^keyword_match_[a-z0-9_]+$/i.test(normalized) ? `sourceHints.keywordMatches.${normalized.slice('keyword_match_'.length)}` : null);
+    if (canonicalField) recognizedColumns.push({ sourceColumn: header, canonicalField });
+    else unmappedColumns.push(header);
+  }
+  return { recognizedColumns, unmappedColumns, recognizedColumnCount: recognizedColumns.length, unmappedColumnCount: unmappedColumns.length };
+}
+
 const METRIC_LABELS = new Set([
   'total views',
   'avg view',
@@ -299,11 +330,12 @@ function dedupeAndRank(sellers) {
   return { sellers: unique.slice(0, MAX_IMPORTED_LISTINGS), parsedCount: unique.length, duplicatesRemoved };
 }
 
-function finalizeParsedInput({ normalizedRaw, parserVersion, searchContext, sellers, inputFormat }) {
+function finalizeParsedInput({ normalizedRaw, parserVersion, searchContext, sellers, inputFormat, headerDiagnostics = null }) {
   const deduped = dedupeAndRank(sellers);
   return {
     parserVersion,
     inputFormat,
+    headerDiagnostics,
     contentHash: crypto.createHash('sha256').update(normalizedRaw.trim()).digest('hex'),
     searchContext,
     sellers: deduped.sellers,
@@ -373,7 +405,8 @@ function observedCsvField(value, raw) {
     value,
     state: value === null || value === undefined ? 'UNKNOWN' : 'OBSERVED',
     source: 'ETSY_SEARCH_CSV',
-    authority: 'RESEARCH_ONLY',
+    authority: 'NONE',
+    allowedUse: 'RESEARCH_ONLY',
     raw: raw ?? null
   };
 }
@@ -419,7 +452,11 @@ function parseCsvListing(row, index) {
   const keywordContext = sourceHint(csvValue(row, 'keyword_context'));
   const keywordMatchType = sourceHint(csvValue(row, 'keyword_match_type'));
   const keywordMatchConfidence = sourceHint(csvValue(row, 'keyword_match_confidence'));
+  const keywordMatches = Object.fromEntries(Object.entries(row || {})
+    .filter(([key]) => /^keyword_match_[a-z0-9_]+$/i.test(key))
+    .map(([key, value]) => [key.slice('keyword_match_'.length), sourceHint(value)]));
   const proofScopeHint = sourceHint(csvValue(row, 'proof_scope_hint'));
+  const evidenceRouteHint = sourceHint(csvValue(row, 'evidence_route_hint'));
   const dataUseHint = sourceHint(csvValue(row, 'data_use_hint'));
   const shopDailySold = parseNumberEvidence(csvValue(row, 'shop_daily_sold'));
   const createdRaw = csvValue(row, 'he_created', 'created');
@@ -460,6 +497,7 @@ function parseCsvListing(row, index) {
     updatedRaw,
     listingCreatedAt: normalizeIsoTimestamp(createdRaw),
     listingUpdatedAt: normalizeIsoTimestamp(updatedRaw),
+    ageDays: parseNumberEvidence(csvValue(row, 'age_days')).value,
     tags: splitSuggestions(csvValue(row, 'he_tags', 'tags')),
     tagSource: csvValue(row, 'he_tags', 'tags') ? 'STAFF_FILE_CSV_SUGGESTION' : 'NO_TAGS_REPORTED',
     categories: splitSuggestions(csvValue(row, 'he_categories', 'categories')),
@@ -468,7 +506,7 @@ function parseCsvListing(row, index) {
     url: csvValue(row, 'url', 'listing_url'),
     badges: { isAd, isBestseller, isStarSeller, hasFreeShipping },
     shopDailySold: shopDailySold.value,
-    sourceHints: { keywordContext, keywordMatchType, keywordMatchConfidence, proofScopeHint, dataUseHint },
+    sourceHints: { keywordContext, keywordMatchType, keywordMatchConfidence, keywordMatches, proofScopeHint, evidenceRouteHint, dataUseHint },
     fieldProvenance: {
       listingId: observedCsvField(listingId, listingId),
       priceAmount: observedCsvField(numericPrice.value, priceRaw),
@@ -481,6 +519,7 @@ function parseCsvListing(row, index) {
       revenue: observedCsvField(parseNumberEvidence(csvValue(row, 'he_revenue_usd', 'revenue_usd')).value, csvValue(row, 'he_revenue_usd', 'revenue_usd')),
       reviewCount: observedCsvField(reviews.value, csvValue(row, 'reviews', 'review_count', 'Review Count')),
       rating: observedCsvField(rating.value, csvValue(row, 'rating', 'Rating')),
+      ageDays: observedCsvField(parseNumberEvidence(csvValue(row, 'age_days')).value, csvValue(row, 'age_days')),
       shopDailySold: observedCsvField(shopDailySold.value, csvValue(row, 'shop_daily_sold')),
       isAd: observedCsvField(isAd.value, isAd.raw),
       isBestseller: observedCsvField(isBestseller.value, isBestseller.raw),
@@ -508,7 +547,8 @@ function parseEtsySearchCsv(rawText) {
     parserVersion: 'ETSY_SEARCH_CSV_V1',
     inputFormat: 'CSV',
     searchContext: { appliedFilters: [], unappliedFilters: [], resultCount: result.data.length, pageContainsAds: false, sortMode: null },
-    sellers: result.data.map(parseCsvListing).filter(Boolean)
+    sellers: result.data.map(parseCsvListing).filter(Boolean),
+    headerDiagnostics: csvHeaderDiagnostics(result.meta?.fields)
   });
 }
 

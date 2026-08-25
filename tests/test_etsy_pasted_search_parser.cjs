@@ -342,6 +342,16 @@ async function waitForEtsyOwner() {
       assert.deepStrictEqual(ambiguous.body.sourceColumns, ['listing_id', 'LISTING_ID']);
       assert.strictEqual((await dbAll('SELECT id FROM research_evidence')).length, countBefore, 'Ambiguous CSV headers must make zero DB writes for preview and confirm');
     }
+    const duplicateHeaderCsv = 'listing_id,listing_id,title,shop\n111,222,Item,Shop';
+    for (const confirm of [false, true]) {
+      const duplicateHeader = await post('/api/etsy/feed-search-results', { rawText: duplicateHeaderCsv, seed: 'para mi hija', projectId, confirm });
+      assert.strictEqual(duplicateHeader.status, 422);
+      assert.strictEqual(duplicateHeader.body.error, 'AMBIGUOUS_CSV_HEADERS');
+      assert.strictEqual(duplicateHeader.body.duplicateHeaders, true);
+      assert.strictEqual(duplicateHeader.body.canonicalField, 'listingId');
+      assert.deepStrictEqual(duplicateHeader.body.sourceColumns, ['listing_id', 'listing_id']);
+      assert.strictEqual((await dbAll('SELECT id FROM research_evidence')).length, countBefore, 'Exact duplicate CSV headers must make zero DB writes for preview and confirm');
+    }
 
     const urlOnly = await post('/api/etsy/feed-search-results', { rawText: 'https://www.etsy.com/search?q=para+mi+hija', seed: 'para mi hija', projectId });
     assert.strictEqual(urlOnly.status, 422);

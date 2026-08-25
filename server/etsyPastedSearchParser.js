@@ -35,7 +35,7 @@ function canonicalCsvField(header) {
   return CSV_HEADER_REGISTRY[normalized] || (/^keyword_match_[a-z0-9_]+$/.test(normalized) ? `sourceHints.keywordMatches.${normalized.slice('keyword_match_'.length)}` : null);
 }
 
-function csvHeaderDiagnostics(headers) {
+function csvHeaderDiagnostics(headers, renamedHeaders = {}) {
   const normalizedHeaders = (headers || []).map(header => String(header || '').trim()).filter(Boolean);
   const recognizedColumns = [];
   const unmappedColumns = [];
@@ -53,7 +53,15 @@ function csvHeaderDiagnostics(headers) {
   const canonicalCollisions = [...grouped.entries()]
     .filter(([, sourceColumns]) => sourceColumns.length > 1)
     .map(([canonicalField, sourceColumns]) => ({ canonicalField, sourceColumns }));
-  return { recognizedColumns, unmappedColumns, canonicalCollisions, recognizedColumnCount: recognizedColumns.length, unmappedColumnCount: unmappedColumns.length };
+  // PapaParse renames exact duplicate headers (`listing_id` becomes
+  // `listing_id_1`) before exposing meta.fields. Preserve its original-header
+  // metadata so that duplicate source columns cannot masquerade as separate
+  // fields or as an unmapped suffix.
+  const duplicateHeaderCollisions = Object.values(renamedHeaders || {}).map(sourceColumn => ({
+    canonicalField: canonicalCsvField(sourceColumn) || 'UNMAPPED',
+    sourceColumns: [sourceColumn, sourceColumn]
+  }));
+  return { recognizedColumns, unmappedColumns, canonicalCollisions, duplicateHeaderCollisions, recognizedColumnCount: recognizedColumns.length, unmappedColumnCount: unmappedColumns.length };
 }
 
 const METRIC_LABELS = new Set([
@@ -564,10 +572,12 @@ function parseEtsySearchCsv(rawText) {
   if (result.errors.some(error => error.code === 'MissingQuotes' || error.code === 'UndetectableDelimiter')) {
     throw new Error('CSV_PARSE_FAILED');
   }
-  const headerDiagnostics = csvHeaderDiagnostics(result.meta?.fields);
-  if (headerDiagnostics.canonicalCollisions.length) {
+  const headerDiagnostics = csvHeaderDiagnostics(result.meta?.fields, result.meta?.renamedHeaders);
+  const allCollisions = [...headerDiagnostics.canonicalCollisions, ...headerDiagnostics.duplicateHeaderCollisions];
+  if (allCollisions.length) {
     const error = new Error('AMBIGUOUS_CSV_HEADERS');
-    error.canonicalCollisions = headerDiagnostics.canonicalCollisions;
+    error.canonicalCollisions = allCollisions;
+    error.duplicateHeaders = headerDiagnostics.duplicateHeaderCollisions.length > 0;
     throw error;
   }
   return finalizeParsedInput({

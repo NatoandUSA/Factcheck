@@ -98,4 +98,19 @@ for (const csv of [
   }, 'Any duplicate canonical CSV header must fail before projection');
 }
 
+for (const csv of [
+  'listing_id,listing_id,title,shop\n111,222,Item,Shop',
+  'title,title,listing_id,shop\nFirst,Second,123,Shop',
+  'keyword_match_exact,keyword_match_exact,listing_id,title,shop\n1,0,123,Item,Shop',
+  'mystery_metric,mystery_metric,listing_id,title,shop\na,b,123,Item,Shop'
+]) {
+  assert.throws(() => parseEtsySearchCsv(csv), error => {
+    assert.strictEqual(error.message, 'AMBIGUOUS_CSV_HEADERS');
+    assert.strictEqual(error.duplicateHeaders, true);
+    assert.strictEqual(error.canonicalCollisions.length, 1);
+    assert.deepStrictEqual(error.canonicalCollisions[0].sourceColumns[0], error.canonicalCollisions[0].sourceColumns[1]);
+    return true;
+  }, 'Exact duplicate source headers must fail before projection');
+}
+
 console.log('Etsy CSV Richness parser contract passed.');

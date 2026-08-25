@@ -371,7 +371,7 @@ function dedupeAndRank(sellers) {
   return { sellers: unique.slice(0, MAX_IMPORTED_LISTINGS), parsedCount: unique.length, duplicatesRemoved };
 }
 
-function finalizeParsedInput({ normalizedRaw, parserVersion, searchContext, sellers, inputFormat, headerDiagnostics = null }) {
+function finalizeParsedInput({ normalizedRaw, parserVersion, searchContext, sellers, inputFormat, headerDiagnostics = null, rowAccounting = null }) {
   const deduped = dedupeAndRank(sellers);
   return {
     parserVersion,
@@ -383,6 +383,11 @@ function finalizeParsedInput({ normalizedRaw, parserVersion, searchContext, sell
     parsedCount: deduped.parsedCount,
     returnedCount: deduped.sellers.length,
     duplicatesRemoved: deduped.duplicatesRemoved,
+    rowAccounting: rowAccounting && {
+      ...rowAccounting,
+      uniqueRows: deduped.sellers.length,
+      duplicateRowsRemoved: deduped.duplicatesRemoved
+    },
     truncated: deduped.parsedCount > MAX_IMPORTED_LISTINGS,
     tagSuggestions: aggregateTagSuggestions(deduped.sellers)
   };
@@ -428,6 +433,30 @@ function csvValue(row, ...names) {
 function splitSuggestions(value) {
   if (isUnknown(value)) return [];
   return String(value).split(/[,;|]/).map(normalizeLine).filter(Boolean);
+}
+
+function findCsvListingIdConflicts(sellers) {
+  const byListingId = new Map();
+  const conflicts = [];
+  for (const seller of sellers) {
+    if (!seller.listingId) continue;
+    const identity = String(seller.listingId).trim().toLowerCase();
+    const previous = byListingId.get(identity);
+    if (!previous) {
+      byListingId.set(identity, seller);
+      continue;
+    }
+    // Exact repeated exports are safe to de-duplicate. Differing records for
+    // one external identity are an ambiguous source conflict, not a reason to
+    // silently choose whichever row appeared first.
+    if (previous.rawBlock !== seller.rawBlock) {
+      conflicts.push({
+        listingId: seller.listingId,
+        sourceRows: [previous.sourceRowId, seller.sourceRowId]
+      });
+    }
+  }
+  return conflicts;
 }
 
 // The pasted-text parser intentionally remains permissive because it has to
@@ -643,13 +672,30 @@ function parseEtsySearchCsv(rawText) {
     throw error;
   }
   headerDiagnostics.fieldCountValidated = true;
+  const parsedRows = result.data.map((row, index) => ({ index, seller: parseCsvListing(row, index) }));
+  const invalidRows = parsedRows
+    .filter(item => !item.seller)
+    .map(item => ({ sourceRow: item.index + 2, requiredField: 'title' }));
+  if (invalidRows.length) {
+    const error = new Error('CSV_REQUIRED_FIELD_MISSING');
+    error.invalidRows = invalidRows;
+    throw error;
+  }
+  const sellers = parsedRows.map(item => item.seller);
+  const listingIdConflicts = findCsvListingIdConflicts(sellers);
+  if (listingIdConflicts.length) {
+    const error = new Error('DUPLICATE_LISTING_ID_CONFLICT');
+    error.listingIdConflicts = listingIdConflicts;
+    throw error;
+  }
   return finalizeParsedInput({
     normalizedRaw,
     parserVersion: 'ETSY_SEARCH_CSV_V1',
     inputFormat: 'CSV',
     searchContext: { appliedFilters: [], unappliedFilters: [], resultCount: result.data.length, pageContainsAds: false, sortMode: null },
-    sellers: result.data.map(parseCsvListing).filter(Boolean),
-    headerDiagnostics
+    sellers,
+    headerDiagnostics,
+    rowAccounting: { inputRows: result.data.length, validRows: sellers.length }
   });
 }
 

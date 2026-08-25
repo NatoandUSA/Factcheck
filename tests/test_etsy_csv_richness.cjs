@@ -5,13 +5,14 @@ const { headers: richHeaders, csv: rich67Csv } = require('./fixtures/etsy_search
 
 const CSV = `listing_id,title,shop,price_num,ad,bestseller,star_seller,free_shipping,sold_24h,views_24h,he_sold,he_views,conversion_pct,he_revenue_usd,reviews,rating,shop_daily_sold,keyword_context,keyword_match_exact,keyword_match_title,proof_scope_hint,evidence_route_hint,data_use_hint,he_created,mystery_metric
 1001,First listing,Shop A,0,0,1,false,no,0,0,0,0,0,0,0,0,0,para mi hija,1,0,staff hint,etsy_search_results,pattern-only,2026-08-25T01:30:00+07:00,unmapped
-1001,Duplicate title must not become another listing,Shop B,10,yes,no,true,yes,2,3,4,5,6,7,8,4.5,9,ignored,0,1,ignored,ignored,ignored,2026-02-30T10:00:00Z,unmapped
+1001,First listing,Shop A,0,0,1,false,no,0,0,0,0,0,0,0,0,0,para mi hija,1,0,staff hint,etsy_search_results,pattern-only,2026-08-25T01:30:00+07:00,unmapped
 1002,=NOT_A_FORMULA(),Shop C,12,N/A,—,UNKNOWN,, , , , , , , , , ,@formula-hint,,, ,,,,
 `;
 
 const parsed = parseEtsySearchCsv(CSV);
 assert.strictEqual(parsed.sellers.length, 2, 'Duplicate external listing_id must be represented once');
 assert.strictEqual(parsed.duplicatesRemoved, 1);
+assert.deepStrictEqual(parsed.rowAccounting, { inputRows: 3, validRows: 3, uniqueRows: 2, duplicateRowsRemoved: 1 });
 
 const first = parsed.sellers[0];
 assert.strictEqual(first.listingId, '1001');
@@ -210,5 +211,17 @@ for (const [alias, canonicalField] of Object.entries(CSV_HEADER_REGISTRY)) {
 const wildcardResult = parseEtsySearchCsv('listing_id,title,shop,keyword_match_exact\n123,Item,Shop,1');
 assert.strictEqual(wildcardResult.sellers[0].sourceHints.keywordMatches.exact.value, '1');
 assert.deepStrictEqual(wildcardResult.headerDiagnostics.unmappedColumns, []);
+
+assert.throws(() => parseEtsySearchCsv('listing_id,title,shop\n123,One,A\n123,Two,B'), error => {
+  assert.strictEqual(error.message, 'DUPLICATE_LISTING_ID_CONFLICT');
+  assert.deepStrictEqual(error.listingIdConflicts, [{ listingId: '123', sourceRows: ['csv-row-1', 'csv-row-2'] }]);
+  return true;
+}, 'Conflicting rows for one external listing ID must not be silently de-duplicated');
+
+assert.throws(() => parseEtsySearchCsv('listing_id,title,shop\n123,,A\n124,Good,B'), error => {
+  assert.strictEqual(error.message, 'CSV_REQUIRED_FIELD_MISSING');
+  assert.deepStrictEqual(error.invalidRows, [{ sourceRow: 2, requiredField: 'title' }]);
+  return true;
+}, 'Rows missing a required title must not be silently filtered out');
 
 console.log('Etsy CSV Richness parser contract passed.');

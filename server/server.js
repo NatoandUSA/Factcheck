@@ -2672,6 +2672,8 @@ async function handleEtsySearchResultFeed(req, res, supplied = {}) {
       duplicateHeaders: error?.duplicateHeaders === true,
       invalidHeaders: error?.invalidHeaders,
       fieldMismatches: error?.fieldMismatches,
+      invalidRows: error?.invalidRows,
+      listingIdConflicts: error?.listingIdConflicts,
       message: 'Không thể đọc định dạng file. Hãy dùng CSV, HTML Etsy đã lưu, hoặc toàn bộ text HeyEtsy.'
     });
   }

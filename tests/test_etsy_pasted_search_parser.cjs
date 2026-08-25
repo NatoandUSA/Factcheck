@@ -364,6 +364,17 @@ async function waitForEtsyOwner() {
         assert.strictEqual((await dbAll('SELECT id FROM research_evidence')).length, countBefore, 'Malformed CSV must make zero DB writes for preview and confirm');
       }
     }
+    for (const [rawText, expectedError] of [
+      ['listing_id,title,shop\n123,One,A\n123,Two,B', 'DUPLICATE_LISTING_ID_CONFLICT'],
+      ['listing_id,title,shop\n123,,A\n124,Good,B', 'CSV_REQUIRED_FIELD_MISSING']
+    ]) {
+      for (const confirm of [false, true]) {
+        const rowIntegrityFailure = await post('/api/etsy/feed-search-results', { rawText, seed: 'para mi hija', projectId, confirm });
+        assert.strictEqual(rowIntegrityFailure.status, 422);
+        assert.strictEqual(rowIntegrityFailure.body.error, expectedError);
+        assert.strictEqual((await dbAll('SELECT id FROM research_evidence')).length, countBefore, 'Row-integrity failures must make zero DB writes for preview and confirm');
+      }
+    }
 
     const urlOnly = await post('/api/etsy/feed-search-results', { rawText: 'https://www.etsy.com/search?q=para+mi+hija', seed: 'para mi hija', projectId });
     assert.strictEqual(urlOnly.status, 422);

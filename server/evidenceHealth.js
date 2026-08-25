@@ -20,8 +20,10 @@ function isKnown(value) {
   return Boolean(normalized) && !/^(unknown|n\/a|[-–—]+)$/i.test(normalized);
 }
 
-function semanticState(row, metadata) {
-  return metadata.evidenceState || row.evidence_state || 'UNKNOWN';
+function semanticState(metadata) {
+  return typeof metadata.evidenceState === 'string' && metadata.evidenceState.trim()
+    ? metadata.evidenceState.trim()
+    : 'UNKNOWN';
 }
 
 function coverage(rows, selector) {
@@ -30,8 +32,21 @@ function coverage(rows, selector) {
   return { known, total, coveragePercent: total ? Number(((known / total) * 100).toFixed(2)) : 0, status: known === 0 ? 'UNKNOWN' : known === total ? 'KNOWN' : 'PARTIAL' };
 }
 
+function normalizeTimestamp(value) {
+  if (typeof value !== 'string') return null;
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?(Z|[+-]\d{2}:\d{2})$/.exec(value.trim());
+  if (!match) return null;
+  const [, year, month, day, hour, minute, second, , zone] = match;
+  const numeric = [year, month, day, hour, minute, second].map(Number);
+  const [y, m, d, h, min, sec] = numeric;
+  const zoneValid = zone === 'Z' || (Number(zone.slice(1, 3)) <= 23 && Number(zone.slice(4, 6)) <= 59);
+  if (m < 1 || m > 12 || d < 1 || d > new Date(Date.UTC(y, m, 0)).getUTCDate() || h > 23 || min > 59 || sec > 59 || !zoneValid) return null;
+  const timestamp = new Date(value.trim());
+  return Number.isNaN(timestamp.getTime()) ? null : timestamp.toISOString();
+}
+
 function dateBounds(values) {
-  const valid = values.filter(value => typeof value === 'string' && value.trim()).sort();
+  const valid = values.map(normalizeTimestamp).filter(Boolean).sort();
   return { oldest: valid[0] || 'UNKNOWN', newest: valid[valid.length - 1] || 'UNKNOWN' };
 }
 
@@ -53,7 +68,7 @@ function mapLayer(artifacts, config) {
     state: matched.length ? 'MAPPED' : artifacts.length ? 'NOT_CAPTURED' : 'MISSING',
     provenance: matched.length ? [...new Set(matched.map(({ row, metadata }) => metadata.provider || row.source || 'UNKNOWN'))].sort() : 'UNKNOWN',
     dbStates: matched.length ? [...new Set(matched.map(({ row }) => row.evidence_state || 'UNKNOWN'))].sort() : ['UNKNOWN'],
-    semanticStates: matched.length ? [...new Set(matched.map(({ row, metadata }) => semanticState(row, metadata)))].sort() : ['UNKNOWN'],
+    semanticStates: matched.length ? [...new Set(matched.map(({ metadata }) => semanticState(metadata)))].sort() : ['UNKNOWN'],
     observedAt: observed.newest, importedAt: imported.newest, oldestCaptureAt: capture.oldest, newestCaptureAt: capture.newest,
     allowedUse: config.allowedUse
   };
@@ -72,7 +87,7 @@ function buildEvidenceHealth(rows) {
     const observed = dateBounds(unmapped.map(({ metadata }) => metadata.observedAt));
     const imported = dateBounds(unmapped.map(({ metadata }) => metadata.importedAt));
     const capture = dateBounds(unmapped.map(({ metadata }) => metadata.observedAt || metadata.importedAt));
-    layers.push({ key: 'unmapped', label: 'Unmapped artifact', count: unmapped.length, state: 'UNMAPPED', provenance: [...new Set(unmapped.map(({ row, metadata }) => metadata.kind || metadata.provider || row.source || 'UNKNOWN'))].sort(), dbStates: [...new Set(unmapped.map(({ row }) => row.evidence_state || 'UNKNOWN'))].sort(), semanticStates: [...new Set(unmapped.map(({ row, metadata }) => semanticState(row, metadata)))].sort(), observedAt: observed.newest, importedAt: imported.newest, oldestCaptureAt: capture.oldest, newestCaptureAt: capture.newest, allowedUse: 'Artifact exists but has no Evidence Health adapter; no capability is inferred.' });
+    layers.push({ key: 'unmapped', label: 'Unmapped artifact', count: unmapped.length, state: 'UNMAPPED', provenance: [...new Set(unmapped.map(({ row, metadata }) => metadata.kind || metadata.provider || row.source || 'UNKNOWN'))].sort(), dbStates: [...new Set(unmapped.map(({ row }) => row.evidence_state || 'UNKNOWN'))].sort(), semanticStates: [...new Set(unmapped.map(({ metadata }) => semanticState(metadata)))].sort(), observedAt: observed.newest, importedAt: imported.newest, oldestCaptureAt: capture.oldest, newestCaptureAt: capture.newest, allowedUse: 'Artifact exists but has no Evidence Health adapter; no capability is inferred.' });
   }
   const searchArtifacts = artifacts.filter(({ metadata }) => metadata.kind === 'ETSY_SEARCH_PASTE_V1');
   const searchListings = searchArtifacts.flatMap(({ metadata }) => Array.isArray(metadata.sellers) ? metadata.sellers : []);
@@ -93,4 +108,4 @@ function buildEvidenceHealth(rows) {
   return { contractVersion: 'EVIDENCE_HEALTH_V1', scope: 'READ_ONLY_RESEARCH_STATUS', summary: { evidenceRecords: safeRows.length, searchArtifacts: searchArtifacts.length, searchListings: searchListings.length, malformedMetadata: artifacts.filter(item => item.malformed).length }, freshness: { observedAt: observed.newest, importedAt: imported.newest, oldestCaptureAt: capture.oldest, newestCaptureAt: capture.newest }, layers, fieldCoverage, actions };
 }
 
-module.exports = { buildEvidenceHealth, isKnown, matchesLayer };
+module.exports = { buildEvidenceHealth, isKnown, matchesLayer, normalizeTimestamp };

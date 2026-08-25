@@ -709,6 +709,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
                 <div style={{ marginTop: '3px', color: layer.state === 'MAPPED' ? '#047857' : '#64748b', fontWeight: 700, fontSize: '0.75rem' }}>{layer.state} · {layer.count}</div>
                 <div style={{ marginTop: '5px', fontSize: '0.7rem', color: '#475569' }}><b>Source:</b> {Array.isArray(layer.provenance) ? layer.provenance.join(', ') : layer.provenance}</div>
                 <div style={{ marginTop: '3px', fontSize: '0.7rem', color: '#475569' }}><b>DB:</b> {(layer.dbStates || []).join(', ')} · <b>Semantic:</b> {(layer.semanticStates || []).join(', ')}</div>
+                {(layer.dbStates || []).includes('OBSERVED') && <div style={{ marginTop: '3px', fontSize: '0.7rem', color: '#9a3412' }}><b>OBSERVED</b> = đã ghi nhận trong evidence ledger, không đồng nghĩa dữ liệu đã được xác minh độc lập.</div>}
                 <div style={{ marginTop: '3px', fontSize: '0.7rem', color: '#475569' }}><b>Observed:</b> {layer.observedAt} · <b>Imported:</b> {layer.importedAt}</div>
                 <div style={{ marginTop: '5px', fontSize: '0.7rem', color: '#475569' }}>{layer.allowedUse}</div>
               </div>)}

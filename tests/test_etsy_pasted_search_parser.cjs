@@ -430,6 +430,7 @@ async function waitForEtsyOwner() {
     assert(ui.includes('feed-search-results-file'));
     assert(ui.includes('CSV / HTML / TXT'));
     assert(ui.includes('Evidence Health — Project research'));
+    assert(ui.includes('OBSERVED</b> = đã ghi nhận trong evidence ledger'));
     assert(ui.includes('Smart Pull dùng URL/seed để hỏi MCP'));
     assert(!ui.includes('30 Sellers thực tế'));
     assert(!ui.includes('13 Tags chuẩn 100%'));

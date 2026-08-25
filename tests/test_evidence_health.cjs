@@ -1,5 +1,5 @@
 const assert = require('assert');
-const { buildEvidenceHealth, isKnown } = require('../server/evidenceHealth');
+const { buildEvidenceHealth, isKnown, normalizeTimestamp } = require('../server/evidenceHealth');
 
 const row = {
   id: 7,
@@ -39,6 +39,13 @@ assert.strictEqual(isKnown('—'), false);
 const unmapped = buildEvidenceHealth([{ source: 'STAFF_MANUAL_ASSERTION', evidence_state: 'OBSERVED', metadata: '{not json' }]);
 assert.strictEqual(unmapped.summary.malformedMetadata, 1);
 assert.strictEqual(unmapped.layers.find(layer => layer.key === 'unmapped').state, 'UNMAPPED');
+assert.deepStrictEqual(unmapped.layers.find(layer => layer.key === 'unmapped').semanticStates, ['UNKNOWN'], 'DB state must never become semantic provenance when metadata is malformed');
+
+const timestamps = buildEvidenceHealth([{ source: 'STAFF_MANUAL_ASSERTION', evidence_state: 'OBSERVED', metadata: JSON.stringify({ kind: 'ETSY_SEARCH_PASTE_V1', evidenceState: 'UNVERIFIED_INPUT', observedAt: 'not-a-date', importedAt: 'tomorrow' }) }, { source: 'STAFF_MANUAL_ASSERTION', evidence_state: 'OBSERVED', metadata: JSON.stringify({ kind: 'ETSY_SEARCH_PASTE_V1', evidenceState: 'UNVERIFIED_INPUT', observedAt: '2026-08-25T01:30:00+07:00', importedAt: '2026-08-25T02:00:00.000Z' }) }]);
+assert.strictEqual(timestamps.freshness.observedAt, '2026-08-24T18:30:00.000Z', 'valid timestamps normalize before ordering');
+assert.strictEqual(timestamps.freshness.importedAt, '2026-08-25T02:00:00.000Z');
+assert.strictEqual(normalizeTimestamp('2026-02-30T10:00:00Z'), null, 'impossible ISO dates are unknown');
+assert.strictEqual(normalizeTimestamp('2026-08-25T01:30:00Z'), '2026-08-25T01:30:00.000Z');
 
 const empty = buildEvidenceHealth([]);
 assert.strictEqual(empty.layers.find(layer => layer.key === 'search_capture').state, 'MISSING');

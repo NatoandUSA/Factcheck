@@ -1,5 +1,5 @@
 const assert = require('assert');
-const { parseEtsySearchCsv } = require('../server/etsyPastedSearchParser');
+const { parseEtsySearchCsv, parseCsvNumberEvidence, CSV_HEADER_REGISTRY } = require('../server/etsyPastedSearchParser');
 const { buildEvidenceHealth } = require('../server/evidenceHealth');
 const { headers: richHeaders, csv: rich67Csv } = require('./fixtures/etsy_search_rich_67_sanitized.cjs');
 
@@ -112,5 +112,73 @@ for (const csv of [
     return true;
   }, 'Exact duplicate source headers must fail before projection');
 }
+
+for (const csv of [
+  'listing_id,title,shop\n123,Item,Shop,EXTRA',
+  'listing_id,title,shop,views_24h\n123,Item'
+]) {
+  assert.throws(() => parseEtsySearchCsv(csv), error => {
+    assert.strictEqual(error.message, 'CSV_FIELD_COUNT_MISMATCH');
+    assert(error.fieldMismatches.length > 0);
+    return true;
+  }, 'Rows with too many or too few cells must fail before projection');
+}
+
+for (const csv of [
+  'listing_id,,title,shop\n123,HIDDEN,Item,Shop',
+  'listing_id,   ,title,shop\n123,HIDDEN,Item,Shop'
+]) {
+  assert.throws(() => parseEtsySearchCsv(csv), error => {
+    assert.strictEqual(error.message, 'INVALID_CSV_HEADER');
+    assert(error.invalidHeaders.length > 0);
+    return true;
+  }, 'Blank or whitespace CSV headers must never hide a value');
+}
+
+for (const [raw, expected] of [
+  ['0', 0], ['-12', -12], ['12.5', 12.5], ['1,234', 1234], ['~12', 12], ['12k', 12000], ['12.5%', 12.5],
+  ['12garbage', null], ['1e3', null], ['Infinity', null], ['NaN', null], ['1,23', null], ['12k%', null]
+]) {
+  assert.strictEqual(parseCsvNumberEvidence(raw).value, expected, `Strict CSV numeric grammar: ${raw}`);
+}
+
+const canonicalValue = canonicalField => {
+  if (canonicalField.includes('keywordMatches')) return '1';
+  if (canonicalField.includes('badges.')) return '1';
+  if (canonicalField.includes('listingCreatedAt')) return '2026-08-25T01:30:00Z';
+  if (/price|revenue|review|rating|views|sold|favorite|conversion|discount|age|sourceRank/i.test(canonicalField)) return '7';
+  if (canonicalField.includes('tags') || canonicalField.includes('categories')) return 'tag';
+  if (canonicalField.includes('url')) return 'https://example.test/listing/123';
+  return 'value';
+};
+const readCanonical = (seller, canonicalField) => {
+  const path = canonicalField.split('/')[0].split('.');
+  return path.reduce((value, key) => value?.[key], seller);
+};
+// Meta-test the contract, not an implementation-shaped fixture: every
+// registered alias must be both diagnosed and actually projected by the same
+// parser. This prevents the registry and reader from drifting apart.
+for (const [alias, canonicalField] of Object.entries(CSV_HEADER_REGISTRY)) {
+  const headers = [alias];
+  const values = [canonicalValue(canonicalField)];
+  for (const [requiredHeader, requiredCanonical, requiredValue] of [
+    ['listing_id', 'listingId', '123'], ['title', 'title', 'Item'], ['shop', 'shopName', 'Shop']
+  ]) {
+    if (requiredCanonical !== canonicalField) {
+      headers.push(requiredHeader);
+      values.push(requiredValue);
+    }
+  }
+  const aliasResult = parseEtsySearchCsv(`${headers.join(',')}\n${values.join(',')}`);
+  const recognized = aliasResult.headerDiagnostics.recognizedColumns.find(item => item.sourceColumn === alias);
+  assert(recognized, `${alias} must be recognized`);
+  assert.strictEqual(recognized.canonicalField, canonicalField, `${alias} canonical mapping`);
+  assert.deepStrictEqual(aliasResult.headerDiagnostics.unmappedColumns, [], `${alias} must not be unmapped`);
+  assert.notStrictEqual(readCanonical(aliasResult.sellers[0], canonicalField), null, `${alias} must populate ${canonicalField}`);
+}
+
+const wildcardResult = parseEtsySearchCsv('listing_id,title,shop,keyword_match_exact\n123,Item,Shop,1');
+assert.strictEqual(wildcardResult.sellers[0].sourceHints.keywordMatches.exact.value, '1');
+assert.deepStrictEqual(wildcardResult.headerDiagnostics.unmappedColumns, []);
 
 console.log('Etsy CSV Richness parser contract passed.');

@@ -36,7 +36,11 @@ function canonicalCsvField(header) {
 }
 
 function csvHeaderDiagnostics(headers, renamedHeaders = {}) {
-  const normalizedHeaders = (headers || []).map(header => String(header || '').trim()).filter(Boolean);
+  // Keep blank headers in the diagnostic rather than filtering them out. A
+  // blank name still owns a cell and therefore must not be allowed to hide
+  // input from the canonical projection.
+  const normalizedHeaders = (headers || []).map(header => String(header ?? '').trim());
+  const invalidHeaders = normalizedHeaders.filter(header => !header);
   const recognizedColumns = [];
   const unmappedColumns = [];
   for (const header of normalizedHeaders) {
@@ -61,7 +65,15 @@ function csvHeaderDiagnostics(headers, renamedHeaders = {}) {
     canonicalField: canonicalCsvField(sourceColumn) || 'UNMAPPED',
     sourceColumns: [sourceColumn, sourceColumn]
   }));
-  return { recognizedColumns, unmappedColumns, canonicalCollisions, duplicateHeaderCollisions, recognizedColumnCount: recognizedColumns.length, unmappedColumnCount: unmappedColumns.length };
+  return {
+    recognizedColumns,
+    unmappedColumns,
+    canonicalCollisions,
+    duplicateHeaderCollisions,
+    invalidHeaders,
+    recognizedColumnCount: recognizedColumns.length,
+    unmappedColumnCount: unmappedColumns.length
+  };
 }
 
 const METRIC_LABELS = new Set([
@@ -418,6 +430,24 @@ function splitSuggestions(value) {
   return String(value).split(/[,;|]/).map(normalizeLine).filter(Boolean);
 }
 
+// The pasted-text parser intentionally remains permissive because it has to
+// recover values from human-formatted prose. CSV cells are a structured input
+// contract, so accepting a numeric prefix (for example "12garbage") would
+// silently manufacture a metric. This parser therefore consumes the entire
+// cell or returns UNKNOWN.
+function parseCsvNumberEvidence(rawValue) {
+  const raw = normalizeLine(rawValue);
+  if (isUnknown(raw) || /^n\/?a$/i.test(raw)) return { value: null, approximate: false, raw: raw || null };
+
+  const match = /^(~)?(-?(?:(?:\d{1,3}(?:,\d{3})+)|\d+)(?:\.\d+)?)([kKmM]|%)?$/.exec(raw);
+  if (!match) return { value: null, approximate: false, raw };
+
+  const [, approxMarker, numberPart, suffix] = match;
+  const multiplier = suffix?.toLowerCase() === 'k' ? 1000 : suffix?.toLowerCase() === 'm' ? 1000000 : 1;
+  const value = Number(numberPart.replace(/,/g, '')) * multiplier;
+  return { value: Number.isFinite(value) ? value : null, approximate: Boolean(approxMarker) || multiplier > 1, raw };
+}
+
 // CSV exports use several conventions for a negative badge. Keep the parsed
 // value distinct from missing data: `0` is an observation, an empty cell is
 // not. These values remain research-only staff input throughout the pipeline.
@@ -467,12 +497,12 @@ function parseCsvListing(row, index) {
   const title = csvValue(row, 'title', 'Title', 'listing_title');
   if (!title) return null;
   const priceRaw = csvValue(row, 'price', 'Price', 'price_display');
-  const numericPrice = parseNumberEvidence(csvValue(row, 'price_num', 'price_amount', 'Price $') || priceRaw);
+  const numericPrice = parseCsvNumberEvidence(csvValue(row, 'price_num', 'price_amount', 'Price $') || priceRaw);
   const originalRaw = csvValue(row, 'price_was', 'original_price', 'price_was_display');
-  const originalNumeric = parseNumberEvidence(originalRaw);
-  const rating = parseNumberEvidence(csvValue(row, 'rating', 'Rating'));
-  const reviews = parseNumberEvidence(csvValue(row, 'reviews', 'review_count', 'Review Count'));
-  const sourceRank = parseNumberEvidence(csvValue(row, 'rank_position', 'rank', 'position')).value || index + 1;
+  const originalNumeric = parseCsvNumberEvidence(originalRaw);
+  const rating = parseCsvNumberEvidence(csvValue(row, 'rating', 'Rating'));
+  const reviews = parseCsvNumberEvidence(csvValue(row, 'reviews', 'review_count', 'Review Count'));
+  const sourceRank = parseCsvNumberEvidence(csvValue(row, 'rank_position', 'rank', 'position')).value || index + 1;
   const currency = csvValue(row, 'currency', 'price_currency') || null;
   const listingId = csvValue(row, 'listing_id', 'listingId', 'Listing ID');
   const isAd = parseBooleanEvidence(csvValue(row, 'ad', 'is_ad'));
@@ -488,7 +518,7 @@ function parseCsvListing(row, index) {
   const proofScopeHint = sourceHint(csvValue(row, 'proof_scope_hint'));
   const evidenceRouteHint = sourceHint(csvValue(row, 'evidence_route_hint'));
   const dataUseHint = sourceHint(csvValue(row, 'data_use_hint'));
-  const shopDailySold = parseNumberEvidence(csvValue(row, 'shop_daily_sold'));
+  const shopDailySold = parseCsvNumberEvidence(csvValue(row, 'shop_daily_sold'));
   const createdRaw = csvValue(row, 'he_created', 'created');
   const updatedRaw = csvValue(row, 'he_updated', 'updated');
   const seller = {
@@ -507,27 +537,27 @@ function parseCsvListing(row, index) {
     priceCurrency: currency,
     originalPrice: originalRaw,
     originalPriceAmount: originalNumeric.value,
-    discountPercent: parseNumberEvidence(csvValue(row, 'he_discount_pct', 'discount_pct')).value,
-    totalViews: parseNumberEvidence(csvValue(row, 'he_views', 'total_views')).value,
-    avgViews: parseNumberEvidence(csvValue(row, 'he_views_avg', 'avg_view')).value,
-    views24h: parseNumberEvidence(csvValue(row, 'views_24h', 'he_views_24h')).value,
-    totalSold: parseNumberEvidence(csvValue(row, 'he_sold', 'total_sold')).value,
-    sold24h: parseNumberEvidence(csvValue(row, 'sold_24h', 'he_sold_24h')).value,
-    revenue: parseNumberEvidence(csvValue(row, 'he_revenue_usd', 'revenue_usd')).value,
+    discountPercent: parseCsvNumberEvidence(csvValue(row, 'he_discount_pct', 'discount_pct')).value,
+    totalViews: parseCsvNumberEvidence(csvValue(row, 'he_views', 'total_views')).value,
+    avgViews: parseCsvNumberEvidence(csvValue(row, 'he_views_avg', 'avg_view')).value,
+    views24h: parseCsvNumberEvidence(csvValue(row, 'views_24h', 'he_views_24h')).value,
+    totalSold: parseCsvNumberEvidence(csvValue(row, 'he_sold', 'total_sold')).value,
+    sold24h: parseCsvNumberEvidence(csvValue(row, 'sold_24h', 'he_sold_24h')).value,
+    revenue: parseCsvNumberEvidence(csvValue(row, 'he_revenue_usd', 'revenue_usd')).value,
     revenueCurrency: csvValue(row, 'he_revenue_usd', 'revenue_usd') ? 'USD' : null,
     revenueApproximate: false,
     revenueRaw: csvValue(row, 'he_revenue_usd', 'revenue_usd'),
-    favorites: parseNumberEvidence(csvValue(row, 'he_favorites', 'favorites')).value,
-    favoriteRate: parseNumberEvidence(csvValue(row, 'he_fav_pct', 'favorite_rate')).value,
+    favorites: parseCsvNumberEvidence(csvValue(row, 'he_favorites', 'favorites')).value,
+    favoriteRate: parseCsvNumberEvidence(csvValue(row, 'he_fav_pct', 'favorite_rate')).value,
     favoriteRateApproximate: false,
-    conversionRate: parseNumberEvidence(csvValue(row, 'conversion_pct', 'conversion_rate')).value,
+    conversionRate: parseCsvNumberEvidence(csvValue(row, 'conversion_pct', 'conversion_rate')).value,
     conversionRateApproximate: false,
     createdDate: null,
     createdRaw,
     updatedRaw,
     listingCreatedAt: normalizeIsoTimestamp(createdRaw),
     listingUpdatedAt: normalizeIsoTimestamp(updatedRaw),
-    ageDays: parseNumberEvidence(csvValue(row, 'age_days')).value,
+    ageDays: parseCsvNumberEvidence(csvValue(row, 'age_days')).value,
     tags: splitSuggestions(csvValue(row, 'he_tags', 'tags')),
     tagSource: csvValue(row, 'he_tags', 'tags') ? 'STAFF_FILE_CSV_SUGGESTION' : 'NO_TAGS_REPORTED',
     categories: splitSuggestions(csvValue(row, 'he_categories', 'categories')),
@@ -541,15 +571,15 @@ function parseCsvListing(row, index) {
       listingId: observedCsvField(listingId, listingId),
       priceAmount: observedCsvField(numericPrice.value, priceRaw),
       country: observedCsvField(csvValue(row, 'country'), csvValue(row, 'country')),
-      views24h: observedCsvField(parseNumberEvidence(csvValue(row, 'views_24h', 'he_views_24h')).value, csvValue(row, 'views_24h', 'he_views_24h')),
-      sold24h: observedCsvField(parseNumberEvidence(csvValue(row, 'sold_24h', 'he_sold_24h')).value, csvValue(row, 'sold_24h', 'he_sold_24h')),
-      totalViews: observedCsvField(parseNumberEvidence(csvValue(row, 'he_views', 'total_views')).value, csvValue(row, 'he_views', 'total_views')),
-      totalSold: observedCsvField(parseNumberEvidence(csvValue(row, 'he_sold', 'total_sold')).value, csvValue(row, 'he_sold', 'total_sold')),
-      conversionRate: observedCsvField(parseNumberEvidence(csvValue(row, 'conversion_pct', 'conversion_rate')).value, csvValue(row, 'conversion_pct', 'conversion_rate')),
-      revenue: observedCsvField(parseNumberEvidence(csvValue(row, 'he_revenue_usd', 'revenue_usd')).value, csvValue(row, 'he_revenue_usd', 'revenue_usd')),
+      views24h: observedCsvField(parseCsvNumberEvidence(csvValue(row, 'views_24h', 'he_views_24h')).value, csvValue(row, 'views_24h', 'he_views_24h')),
+      sold24h: observedCsvField(parseCsvNumberEvidence(csvValue(row, 'sold_24h', 'he_sold_24h')).value, csvValue(row, 'sold_24h', 'he_sold_24h')),
+      totalViews: observedCsvField(parseCsvNumberEvidence(csvValue(row, 'he_views', 'total_views')).value, csvValue(row, 'he_views', 'total_views')),
+      totalSold: observedCsvField(parseCsvNumberEvidence(csvValue(row, 'he_sold', 'total_sold')).value, csvValue(row, 'he_sold', 'total_sold')),
+      conversionRate: observedCsvField(parseCsvNumberEvidence(csvValue(row, 'conversion_pct', 'conversion_rate')).value, csvValue(row, 'conversion_pct', 'conversion_rate')),
+      revenue: observedCsvField(parseCsvNumberEvidence(csvValue(row, 'he_revenue_usd', 'revenue_usd')).value, csvValue(row, 'he_revenue_usd', 'revenue_usd')),
       reviewCount: observedCsvField(reviews.value, csvValue(row, 'reviews', 'review_count', 'Review Count')),
       rating: observedCsvField(rating.value, csvValue(row, 'rating', 'Rating')),
-      ageDays: observedCsvField(parseNumberEvidence(csvValue(row, 'age_days')).value, csvValue(row, 'age_days')),
+      ageDays: observedCsvField(parseCsvNumberEvidence(csvValue(row, 'age_days')).value, csvValue(row, 'age_days')),
       shopDailySold: observedCsvField(shopDailySold.value, csvValue(row, 'shop_daily_sold')),
       isAd: observedCsvField(isAd.value, isAd.raw),
       isBestseller: observedCsvField(isBestseller.value, isBestseller.raw),
@@ -573,6 +603,11 @@ function parseEtsySearchCsv(rawText) {
     throw new Error('CSV_PARSE_FAILED');
   }
   const headerDiagnostics = csvHeaderDiagnostics(result.meta?.fields, result.meta?.renamedHeaders);
+  if (headerDiagnostics.invalidHeaders.length) {
+    const error = new Error('INVALID_CSV_HEADER');
+    error.invalidHeaders = headerDiagnostics.invalidHeaders;
+    throw error;
+  }
   const allCollisions = [...headerDiagnostics.canonicalCollisions, ...headerDiagnostics.duplicateHeaderCollisions];
   if (allCollisions.length) {
     const error = new Error('AMBIGUOUS_CSV_HEADERS');
@@ -580,6 +615,28 @@ function parseEtsySearchCsv(rawText) {
     error.duplicateHeaders = headerDiagnostics.duplicateHeaderCollisions.length > 0;
     throw error;
   }
+  const fieldMismatches = result.errors
+    .filter(error => error.code === 'TooManyFields' || error.code === 'TooFewFields')
+    .map(error => ({ code: error.code, row: error.row }));
+  const rowsWithExtraCells = result.data
+    .map((row, index) => ({ row: index, extra: row?.__parsed_extra }))
+    .filter(item => Array.isArray(item.extra) && item.extra.length > 0)
+    .map(item => ({ code: 'TooManyFields', row: item.row }));
+  if (fieldMismatches.length || rowsWithExtraCells.length) {
+    const error = new Error('CSV_FIELD_COUNT_MISMATCH');
+    error.fieldMismatches = [...fieldMismatches, ...rowsWithExtraCells];
+    throw error;
+  }
+  // Accepted CSV rows may never carry PapaParse's side-channel for cells that
+  // do not match the header shape. This is deliberately redundant with the
+  // error-code check above so a future parser upgrade cannot silently retain
+  // an extra cell in rawBlock.
+  if (result.data.some(row => Object.prototype.hasOwnProperty.call(row || {}, '__parsed_extra'))) {
+    const error = new Error('CSV_FIELD_COUNT_MISMATCH');
+    error.fieldMismatches = [{ code: 'TooManyFields', row: null }];
+    throw error;
+  }
+  headerDiagnostics.fieldCountValidated = true;
   return finalizeParsedInput({
     normalizedRaw,
     parserVersion: 'ETSY_SEARCH_CSV_V1',
@@ -658,8 +715,11 @@ module.exports = {
   decodeEntities,
   isUnknown,
   parseNumberEvidence,
+  parseCsvNumberEvidence,
   parseBooleanEvidence,
   normalizeIsoTimestamp,
+  CSV_HEADER_REGISTRY,
+  csvHeaderDiagnostics,
   parseMoney,
   parseHeyEtsyPastedText,
   parseEtsySearchCsv,

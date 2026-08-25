@@ -2663,7 +2663,17 @@ async function handleEtsySearchResultFeed(req, res, supplied = {}) {
     parsed = parseEtsySearchInput(rawText, inputFormat);
   } catch (error) {
     const firstCollision = error?.canonicalCollisions?.[0];
-    return res.status(422).json({ success: false, error: error.message || 'SEARCH_INPUT_PARSE_FAILED', canonicalField: firstCollision?.canonicalField, sourceColumns: firstCollision?.sourceColumns, canonicalCollisions: error?.canonicalCollisions, duplicateHeaders: error?.duplicateHeaders === true, message: 'Không thể đọc định dạng file. Hãy dùng CSV, HTML Etsy đã lưu, hoặc toàn bộ text HeyEtsy.' });
+    return res.status(422).json({
+      success: false,
+      error: error.message || 'SEARCH_INPUT_PARSE_FAILED',
+      canonicalField: firstCollision?.canonicalField,
+      sourceColumns: firstCollision?.sourceColumns,
+      canonicalCollisions: error?.canonicalCollisions,
+      duplicateHeaders: error?.duplicateHeaders === true,
+      invalidHeaders: error?.invalidHeaders,
+      fieldMismatches: error?.fieldMismatches,
+      message: 'Không thể đọc định dạng file. Hãy dùng CSV, HTML Etsy đã lưu, hoặc toàn bộ text HeyEtsy.'
+    });
   }
   if (!parsed.sellers.length) {
     return res.status(422).json({

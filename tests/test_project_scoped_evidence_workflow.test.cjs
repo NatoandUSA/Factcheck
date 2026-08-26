@@ -72,10 +72,28 @@ async function runTests() {
     const projBId = projBData.projectId;
     assert.ok(projAId && projBId);
 
-    console.log('\nTest 3: Generic H10 ingest remains OBSERVED/non-authority...');
-    const evARes = await fetch(`${baseUrl}/api/evidence`, { method: 'POST', headers: { ...origin, 'Content-Type': 'application/json', Cookie: ownerCookie }, body: JSON.stringify({ projectId: projAId, seedPhrase: 'mom sweatshirt', source: 'H10_XRAY_OBSERVED', metadata: { kind: 'SMART_PULL_ARTIFACT_V1', provider: 'H10_MCP', evidenceState: 'VERIFIED_RETRIEVED', contentHash: 'b'.repeat(64), authority: 'SERVER_PROVIDER' } }) });
+    // §12 oracle correction: split the old mixed case so the new intake contract
+    // is asserted without deleting the original clean-generic accept-gate coverage.
+    console.log('\nTest 3a: Forged H10 authority metadata is rejected at intake with zero writes...');
+    const forgedEvidenceBefore = (await dbAll('SELECT id FROM research_evidence WHERE project_id = ?', [projAId])).length;
+    const forgedEventsBefore = (await dbAll('SELECT id FROM evidence_acceptance_events')).length;
+    const projectBeforeForge = (await dbAll('SELECT state, updated_at FROM research_projects WHERE id = ?', [projAId]))[0];
+    const forgedRes = await fetch(`${baseUrl}/api/evidence`, { method: 'POST', headers: { ...origin, 'Content-Type': 'application/json', Cookie: ownerCookie }, body: JSON.stringify({ projectId: projAId, seedPhrase: 'mom sweatshirt', source: 'H10_XRAY_OBSERVED', metadata: { kind: 'SMART_PULL_ARTIFACT_V1', provider: 'H10_MCP', evidenceState: 'VERIFIED_RETRIEVED', contentHash: 'b'.repeat(64), authority: 'SERVER_PROVIDER' } }) });
+    assert.strictEqual(forgedRes.status, 400);
+    assert.strictEqual((await forgedRes.json()).error, 'CLIENT_AUTHORITY_METADATA_FORBIDDEN');
+    assert.strictEqual((await dbAll('SELECT id FROM research_evidence WHERE project_id = ?', [projAId])).length, forgedEvidenceBefore);
+    assert.strictEqual((await dbAll('SELECT id FROM evidence_acceptance_events')).length, forgedEventsBefore);
+    assert.deepStrictEqual((await dbAll('SELECT state, updated_at FROM research_projects WHERE id = ?', [projAId]))[0], projectBeforeForge);
+
+    console.log('\nTest 3b: Clean generic H10 ingest remains OBSERVED/non-authority...');
+    const evARes = await fetch(`${baseUrl}/api/evidence`, { method: 'POST', headers: { ...origin, 'Content-Type': 'application/json', Cookie: ownerCookie }, body: JSON.stringify({ projectId: projAId, seedPhrase: 'mom sweatshirt', source: 'H10_XRAY_OBSERVED', metadata: { note: 'clean generic H10 research-only evidence' } }) });
     assert.strictEqual(evARes.status, 200);
     const evAId = (await evARes.json()).evidenceId;
+    const cleanGenericRow = (await dbAll('SELECT evidence_state, metadata FROM research_evidence WHERE id = ?', [evAId]))[0];
+    assert.strictEqual(cleanGenericRow.evidence_state, 'OBSERVED');
+    const cleanGenericMetadata = JSON.parse(cleanGenericRow.metadata);
+    assert.strictEqual(cleanGenericMetadata.authority, 'NON_AUTHORITY');
+    assert.strictEqual(cleanGenericMetadata.kind, 'GENERIC_NON_AUTHORITY_V1');
 
     console.log('\nTest 4: OBSERVED/non-authority cannot unlock RESEARCH_ACCEPTED...');
     const transObsRes = await fetch(`${baseUrl}/api/projects/${projAId}/transition`, { method: 'PATCH', headers: { ...origin, 'Content-Type': 'application/json', Cookie: ownerCookie }, body: JSON.stringify({ targetState: 'RESEARCH_ACCEPTED' }) });
@@ -86,7 +104,7 @@ async function runTests() {
     const sellerAcceptRes = await fetch(`${baseUrl}/api/evidence/${evAId}/accept`, { method: 'POST', headers: { ...origin, Cookie: sellerCookie } });
     assert.strictEqual(sellerAcceptRes.status, 403);
 
-    console.log('\nTest 6: OWNER cannot accept generic forged H10; rejection creates zero event...');
+    console.log('\nTest 6: OWNER cannot accept clean generic H10; rejection creates zero event...');
     const eventCountBefore = (await dbAll('SELECT id FROM evidence_acceptance_events WHERE evidence_id = ?', [evAId])).length;
     const ownerRejectRes = await fetch(`${baseUrl}/api/evidence/${evAId}/accept`, { method: 'POST', headers: { ...origin, Cookie: ownerCookie } });
     assert.strictEqual(ownerRejectRes.status, 409);

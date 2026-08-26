@@ -54,7 +54,7 @@ async function learnFromListing({ url = '', rawText = '', category = 'Custom Gif
       // A blocked URL must be a real, visible failure — not silently
       // papered over with fallback placeholder text pretending to be
       // learned data (that's exactly the fabricated-signal pattern
-      // PROJECT_GUIDE forbids).
+      // GOLDEN_RULES.md §7 forbids).
       if (fetchErr instanceof UrlGuardError) throw fetchErr;
       console.warn('URL Fetch warning:', fetchErr.message);
     }

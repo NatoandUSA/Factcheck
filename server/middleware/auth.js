@@ -10,6 +10,7 @@
  */
 
 const { COOKIE_NAME, verifySessionRecord } = require('../security/session');
+const { inspectClientAuthorityMetadata } = require('../evidenceAuthority');
 
 const DEFAULT_ALLOWED_ORIGINS = [
   'http://localhost:5173',
@@ -79,6 +80,19 @@ function requireAuth(db) {
   };
 }
 
+function rejectForgedGenericEvidenceAuthority(req, res) {
+  if (req.method !== 'POST' || req.path !== '/api/evidence') return false;
+  const inspection = inspectClientAuthorityMetadata(req.body || {});
+  if (!inspection.forbidden) return false;
+  res.status(400).json({
+    success: false,
+    error: 'CLIENT_AUTHORITY_METADATA_FORBIDDEN',
+    message: 'Reserved authority metadata is server-controlled and forbidden on generic evidence intake.',
+    fields: inspection.fields
+  });
+  return true;
+}
+
 function requireRole(allowedRoles) {
   const rolesSet = new Set(Array.isArray(allowedRoles) ? allowedRoles : [allowedRoles]);
   return function requireRoleMiddleware(req, res, next) {
@@ -97,6 +111,11 @@ function requireRole(allowedRoles) {
         message: `Role ${req.user.role} does not have required permission`
       });
     }
+
+    // H0-AUTH-01 / C-01: generic evidence clients may choose an operational
+    // source, but may not submit authority metadata. This executes before the
+    // route handler, so forged requests cannot reach any business persistence.
+    if (rejectForgedGenericEvidenceAuthority(req, res)) return;
 
     next();
   };

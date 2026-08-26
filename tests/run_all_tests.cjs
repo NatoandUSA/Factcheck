@@ -9,6 +9,7 @@ function runAllTests() {
 
 const testFiles = [
     'tests/test_h0_evidence_authority_red.cjs',
+    'tests/test_h0_auth01_checkpoint1.cjs',
     'tests/test_product_truth_core.cjs',
     'tests/test_ai_boundary_and_batch.cjs',
     'tests/test_server_ai_truth_boundary.cjs',
@@ -52,7 +53,7 @@ const testFiles = [
     'tests/test_cross_tenant_isolation.cjs',
     'tests/test_vite_dev_runtime_smoke.test.cjs',
     'tests/test_login_rate_limiter_http.test.cjs',
-    'tests/test_legacy_migration_integrity.test.cjs',
+    'tests/test_legacy_migration_integrity.cjs',
     'tests/test_workflow_truth_ui_contract.cjs',
     'tests/test_audit_fixes_014a1f4.cjs',
     'tests/test_smart_pull_hardening.cjs',

@@ -1,7 +1,7 @@
 # OMNISELLER — GOLDEN RULES
 
-**Version:** 1.1 — RATIFIED (H0 execution order added)
-**Ratified by:** Owner (Alex), 2026-08-25
+**Version:** 1.4 — RATIFIED
+**Ratified by:** Owner (Alex), 2026-08-25; GPT1 authority contract ratified 2026-08-26
 **Base SHA đối chiếu:** `5c4153bbb03ccf9e0f02b4b90781f64819b70848`
 **Áp dụng cho:** GPT1, GPT2, GPT3, GPT4, Claude và mọi reviewer/implementer sau này.
 
@@ -145,6 +145,8 @@ Preview **zero-write**. Confirm mới persist. Search chạy trên **full corpus
 
 ## 6. PROVENANCE VÀ AUTHORITY SEPARATION
 
+> **Provenance — `GPT1-RATIFIED`, 2026-08-26:** reserved authority metadata, EA-A/EA-B/EA-C boundaries, explicit eligibility allowlist, server-derived hash/provider/scope, H0 error/zero-write contract và promotion rules trong Phần 6 là authority ruling của GPT1. Không gán các chi tiết này thành `OWNER-RATIFIED` nếu Owner chưa ratify riêng từng nội dung.
+
 ```
 Xray / Cerebro / Etsy CSV / HTML / paste / staff input
 → research input → UNVERIFIED_INPUT → authority NONE
@@ -159,7 +161,60 @@ RESEARCH_ACCEPTED ≠ PUBLISH_READY
 
 Client **không được** gửi hoặc forge authority metadata. Authority phải server-derive từ: controlled route · provider identity · validated source · **server-computed hash** · version binding · explicit policy.
 
+**Reserved authority metadata — reject-first.** Generic/client-controlled routes phải trả `400 CLIENT_AUTHORITY_METADATA_FORBIDDEN` và zero business/authority DB writes nếu client gửi tối thiểu các key sau ở bất kỳ authority-bearing vị trí nào:
+
+```
+kind · source · evidenceState · contentHash · authority · eligible · verified
+provider · acceptanceEligibility · accepted_at · accepted_by · tier
+```
+
+Không silently strip, không spread metadata client vào top-level. Metadata non-authoritative chỉ được lưu trong `clientAnnotations` sau schema/type/size/depth validation và chặn prototype-pollution keys.
+
+Generic `/api/evidence` không được tạo MCP evidence, kể cả khi client gửi `source=MCP_RETRIEVAL`. Chỉ provider-controlled ingestion path mới được tạo qualifying retrieval artifact. `contentHash` phải do server tính trên canonical provider response; không nhận hash hoặc canonical representation từ client.
+
 **Eligibility là allowlist tường minh.** Unknown kind/provider/state → fail-closed.
+
+### Authority classes — phân lớp dữ liệu, KHÔNG phải review tier
+
+| Class | Contract | Quyền hạn |
+|---|---|---|
+| **EA-A — Verified authority** | Server-controlled verification + canonical evidence + exact tenant/workspace/project/product/listingVersion binding + server-computed hash + `VERIFIED` + provenance đầy đủ | Có thể tham gia Product Truth/publish decision; không tự động tạo `PUBLISH_READY` |
+| **EA-B — Qualified research** | `SMART_PULL_ARTIFACT_V1` + server-established `MCP_RETRIEVAL` + allowlisted provider/state + server-computed hash + exact scope binding + current/untampered | Có thể thỏa qualifying-research precondition; Product Truth authority vẫn `NONE` |
+| **EA-C — Unverified research** | Staff/manual, Xray/Cerebro/Etsy CSV/HTML/paste, generic evidence, client annotations, unknown/mismatched artifact | `UNVERIFIED_INPUT`, authority `NONE`, `RESEARCH_ONLY`, non-qualifying |
+
+**Promotion rules:**
+
+```
+EA-C --client metadata/staff accept--> EA-B/EA-A      FORBIDDEN
+EA-B --workflow transition--> EA-A                   FORBIDDEN
+provider-controlled validated ingestion --> EA-B    ALLOWED
+specialized verified Product Truth process --> EA-A ALLOWED
+unknown/mismatch/tamper --> non-qualifying           FAIL-CLOSED
+```
+
+`ACCEPTED` không tự nâng authority class. Server phải derive class và recompute eligibility theo current policy; không tin `eligible=true` hoặc classification đã persist từ policy cũ.
+
+**H0 error/zero-write contract:**
+
+| Failure class | Required result |
+|---|---|
+| Forged/reserved authority metadata | `400 CLIENT_AUTHORITY_METADATA_FORBIDDEN` |
+| Accept EA-C hoặc artifact không còn qualifying | `409 UNQUALIFIED_RESEARCH_ARTIFACT` |
+| Forward transition thiếu current EA-B | `400 MISSING_QUALIFYING_EVIDENCE_PRECONDITION` |
+| Hash/provider/scope/tamper mismatch | Fail-closed bằng code cụ thể của lớp lỗi; không generic success/fallback |
+
+Mọi rejected request phải zero-write đối với evidence row/status, acceptance fields, project state, listing/version, `market_trends`, Product Truth và workflow/remediation business events. Nếu security audit log là bắt buộc, nó phải append-only và nằm ngoài authority transaction; không được biến rejection thành business-state mutation.
+
+### Authority hierarchy — cao xuống thấp
+
+```
+1. Server-enforced Product Truth/publish policy
+2. Exact verified Product Truth + evidence/version/hash binding (EA-A)
+3. Independent IP, approval, economics và scope gates
+4. Provider-controlled qualifying research artifact (EA-B)
+5. Persisted unverified research input (EA-C)
+6. UI/client state, labels, scores và metadata — zero authority
+```
 
 **AI/model output không bao giờ thoả mãn hard gate:** exact SKU · supplier confirmation · material · dimensions · personalization limits · IP QA · owner-set price · publish approval.
 
@@ -167,7 +222,7 @@ Client **không được** gửi hoặc forge authority metadata. Authority ph�
 
 ---
 
-## 7. REVIEW LAYERS VÀ TIERING
+## 7. REVIEW LAYERS VÀ RISK TIERING
 
 **Full layer stack:**
 ```
@@ -178,9 +233,9 @@ Architecture review → implementation self-check → independent data/adversari
 Không reviewer nào được thay PASS của reviewer khác.
 `GPT1 PASS authority ≠ GPT2 PASS runtime ≠ GPT4 PASS data fidelity ≠ GPT3 PASS integration`
 
-### Tiering — ÁP DỤNG NGAY (GPT1 có thể tinh chỉnh ranh giới)
+### Review Risk Tiering — ĐÃ ĐƯỢC GPT1 RATIFY
 
-| Tier | Phạm vi | Lớp review |
+| Review tier | Phạm vi | Lớp review |
 |---|---|---|
 | **A** | Authority · Product Truth · publish gate · eligibility · IP · economics · state machine · migration | Đủ 8 lớp |
 | **B** | Parser · persistence · provenance · API contract · isolation | Architecture + implementation + adversarial + authority + CI |
@@ -188,76 +243,9 @@ Không reviewer nào được thay PASS của reviewer khác.
 
 > Governance này quản trị **công cụ**. Nó không được trở thành lý do không có listing nào được bán.
 
+**Không nhầm lẫn:** Review Tier A/B/C trong Phần 7 phân loại mức rủi ro của thay đổi. EA-A/EA-B/EA-C trong Phần 6 phân loại authority của dữ liệu. Hai hệ độc lập và không được dùng thay nhau.
+
 ---
-
-## 7A. H0 EXECUTION ORDER — BẮT BUỘC
-
-> H0 là authority hotfix ưu tiên số 0. R1–R4 functional expansion tạm dừng cho tới khi H0 qua exact-SHA certification và controlled cutover.
-
-**Một implementation owner duy nhất:** GPT2. Các AI còn lại review/test/certify theo role, không cùng sửa production source trong cùng vòng.
-
-Trình tự chuẩn:
-
-```text
-1. GPT1 ratify Tier A/B/C + authority hierarchy
-2. Claude hợp nhất governance/spec; KHÔNG sửa production source
-3. GPT2 viết H0 failing tests chứng minh unsafe contract hiện tại
-4. GPT2 implement H0
-5. GPT4 adversarial forge/tamper/state-machine review
-6. Claude independent exact-diff + test-oracle review
-7. GPT1 final authority review
-8. GPT3 Node22/runtime/full-suite/exact-SHA CI/backup–restore/audit/cutover
-9. Sau H0: machine controls được mở rộng/hoàn thiện trong R1–R4
-```
-
-### Quy tắc không chờ vô ích
-
-Mỗi AI **phải tiếp tục mọi phần việc độc lập có thể hoàn thành an toàn** thay vì chờ AI khác, miễn là:
-
-- không cần authority ruling chưa có;
-- không làm thay implementation owner;
-- không thay đổi production source ngoài quyền sở hữu role;
-- base/SHA/branch/worktree đã rõ;
-- công việc không phụ thuộc artifact chưa tồn tại.
-
-Ví dụ được phép làm song song:
-
-- Claude: audit competing paths, governance conflicts, test oracle, downstream consumers, historical-risk model.
-- GPT4: chuẩn bị adversarial matrix/fixtures/harness không phụ thuộc implementation candidate.
-- GPT3: chuẩn bị Node22 certification checklist, backup–restore rehearsal plan, cutover/rollback packet.
-- GPT1: hoàn thiện authority matrix/Tier definitions và review contract.
-
-**Không được tự biến việc song song thành PASS.** Verdict chỉ được cấp khi exact candidate artifact tương ứng đã tồn tại và được review theo Phần 3/7.
-
-### H0 test-first requirement
-
-Trước implementation, GPT2 phải tạo/điều chỉnh tests để chứng minh contract cũ sai và contract mới mong đợi. Ít nhất phải bao phủ:
-
-- `MANUAL`, H10/Xray/Cerebro/Etsy import/paste → không qualifying;
-- unknown/missing/malformed kind → fail-closed;
-- forged authority metadata qua generic `/api/evidence` → reject;
-- direct/legacy `ACCEPTED` row không bypass downstream shared guard;
-- wrong tenant/workspace/marketplace/project → fail-closed + zero-write;
-- rejected acceptance → không tạo acceptance event;
-- provider-controlled, server-derived qualifying artifact → positive control PASS.
-
-Test cũ đang chứng nhận unsafe contract phải được sửa **có chủ đích**, ghi rõ trong PR theo Phần 8.
-
-### H0 authority-metadata rule
-
-Generic/manual route không được mint qualifying provider artifact. Nếu client gửi reserved authority keys (`kind`, `evidenceState`, `contentHash`, `authority`, `eligible`, `verified`, `provider`, `acceptanceEligibility` hoặc field authority-equivalent mới), server phải **reject tường minh** hoặc cô lập dưới namespace annotation không có authority; không silently strip và không spread vào top-level authority metadata.
-
-Qualifying authority chỉ có thể đến từ controlled server-owned creation path với provider identity, validated source, server-computed hash, version/scope binding và explicit allowlist policy.
-
-### H0 production-data handling
-
-Sau khi candidate H0 được certified nhưng trước cutover:
-
-1. chạy read-only audit bằng **chính policy evaluator đã certified**;
-2. liệt kê invalid `ACCEPTED` evidence và project downstream bị ảnh hưởng;
-3. không tự động sửa/rollback DB;
-4. remediation state/data cần authority ruling riêng + append-only audit event;
-5. backup–restore rehearsal phải là restore thật vào instance sạch rồi smoke test, không chỉ test API copy/VACUUM.
 
 ## 8. TEST ORACLE RULE
 
@@ -301,13 +289,26 @@ Amazon project không được render Etsy state và ngược lại. Cross-scope
 
 ## 10. STATE-MACHINE INTEGRITY
 
+> **Provenance — `GPT1-RATIFIED`, 2026-08-26:** shared qualifying-evidence guard áp dụng tại cả 7 forward transition. Guard chỉ chứng minh research foundation; không thay Product Truth, IP, economics, approval/version/hash, scope hoặc final `publishGate`.
+
 Mỗi transition **recompute preconditions server-side**. Không dựa vào: UI state · số lượng row đơn thuần · project đã từng vượt gate · client metadata · legacy accepted state.
 
 Chỉ có **một** authority server-side cho workflow readiness. Output: `PASS` / `WARN` / `BLOCK` + lý do + **một** next action. UI được hiển thị; UI **không** được tự tính lại rule.
 
 **Cấm:** React component quyết định publish readiness · duplicate `if` chain ở nhiều view · UI-only hard gate · hidden fallback ID · default fake data để màn hình có dữ liệu.
 
-> **Ranh giới evidence guard — CHỜ GPT1 RULING (ảnh hưởng H0):** evidence chain là authority tại `RESEARCH_ACCEPTED` và `DNA_ACCEPTED`. Từ `MKL_FROZEN` trở đi precondition thực tế đọc `market_trends` → `listings` → Product Truth Card → publishGate. Gắn thêm evidence guard ở `MANAGER_APPROVED` sẽ tạo authority thứ hai chồng lên publishGate (vi phạm Phần 6). Claude đề xuất giới hạn ở 2 transition; project đã trót vượt gate xử bằng audit + quarantine, không phải guard runtime vĩnh viễn.
+**Ranh giới evidence guard — GPT1 ĐÃ QUYẾT:** mọi forward transition phụ thuộc research foundation phải gọi cùng shared qualifying-evidence guard và recompute từ DB theo current policy:
+
+```
+RESEARCH_ACCEPTED → DNA_ACCEPTED → MKL_FROZEN → DRAFT_GENERATED
+→ VALIDATED → MANAGER_APPROVED → PUBLISH_READY
+```
+
+Guard phải query đúng tenant/workspace/marketplace/project, yêu cầu ít nhất một row `ACCEPTED` hiện vẫn đạt EA-B, tái xác minh hash/tamper/revocation/supersession và reject **trước mọi mutation** nếu không đạt.
+
+Đây là research-foundation precondition, **không phải authority thứ hai thay publishGate**. Tại `MANAGER_APPROVED`/`PUBLISH_READY`, hệ thống vẫn phải kiểm riêng EA-A Product Truth, IP `CLEARED`, approval/version/hash, economics và scope. `publishGate` tiếp tục là authority tổng hợp cuối cùng.
+
+Project lịch sử đã vượt gate bằng evidence không hợp lệ: audit read-only + quarantine report trước; không tự sửa DB. Mọi remediation production cần quyền riêng, append-only event và authority ruling của GPT1.
 
 ---
 
@@ -325,15 +326,13 @@ Chỉ có **một** authority server-side cho workflow readiness. Output: `PASS`
 | §5 projection | `MACHINE` | assert `unmappedColumns` được trả về ở mọi rich-source parser |
 | §6 authority | `MACHINE` | assert client metadata không lên top-level; assert default `eligible:false` |
 | §9 isolation | `MACHINE` | mở rộng route registry test sang tenant/workspace/marketplace/project |
-| §10 state machine | `MACHINE` | assert mọi transition gọi shared guard |
+| §10 state machine | `MACHINE` | assert cả 7 forward transition gọi shared qualifying-evidence guard; publish transitions vẫn gọi `publishGate` |
 | §3 exact-artifact | `HUMAN` | — |
 | §4 class remediation | `HUMAN` | — |
 | §7 tiering | `HUMAN` | — |
 | §8 test oracle | `HUMAN` (GPT1 review bắt buộc) | — |
 
 **Năm test `MACHINE` bảo vệ nhiều hơn toàn bộ văn bản này.** Phải viết trong H0, trước R1–R4.
-
-**Triển khai theo hai lớp:** H0 phải dựng controls tối thiểu đủ chặn authority regression ngay; sau H0, R1–R4 phải mở rộng controls này thành coverage class-level cho persistence/reload, full-corpus search, provenance registry, route/source registration, shared authority evaluator và lifecycle UAT. Không trì hoãn H0 chỉ để hoàn thiện toàn bộ machine-control framework.
 
 ---
 
@@ -349,6 +348,20 @@ Cutover cần: exact source + runbook SHA · fresh migration evidence · **backu
 > ⚠️ **`tests/test_backup_restore_and_migrations.cjs` KHÔNG phải rehearsal.** Nó chỉ test `VACUUM INTO` của SQLite và `fs.copyFileSync`, **không import một dòng backup code nào của ứng dụng**. Rehearsal phải là restore thật vào instance sạch rồi chạy smoke.
 
 Marketplace publish luôn là gate riêng theo từng listing/version.
+
+### H0 production audit và remediation boundary
+
+Trước cutover H0:
+
+```
+canonical backup–restore rehearsal
+→ read-only audit toàn bộ ACCEPTED evidence
+→ recompute từng row theo current EA-B policy
+→ liệt kê project đã đi tới state cao hơn dựa trên row không hợp lệ
+→ zero production DB remediation trong audit
+```
+
+Sau H0, hạ evidence state, xoá acceptance attribution, đổi project state hoặc ghi remediation event đều cần authorization riêng. Audit PASS không tự cấp quyền sửa DB/cutover/publish.
 
 ---
 
@@ -390,51 +403,6 @@ Push/Merge/Deploy/Publish authorization status:
 
 **Không bao giờ chuyển báo cáo của agent khác thành xác minh của mình.** Test không chạy phải ghi lý do — không được trình bày như PASS.
 
-### 14A. SESSION-CLOSE CHECKPOINT — BẮT BUỘC
-
-> **Owner directive — 2026-08-26.** Sau **mỗi phiên làm việc** của bất kỳ AI/reviewer/implementer nào, trước khi kết thúc phiên phải ghi lại trạng thái đủ để AI khác có thể tiếp tục từ đúng artifact mà không suy đoán.
-
-Session-close report tối thiểu phải trả lời rõ:
-
-1. **Đang ở đâu?** — workstream/cluster hiện tại, gate đang đứng ở bước nào, blocker nào còn mở.
-2. **Exact artifact nào?** — `Candidate SHA`, `Parent SHA`, `Base/production SHA`, `Branch`; nếu có bundle thì thêm `Bundle SHA-256`; ghi rõ worktree clean/dirty/unknown.
-3. **Đã làm được gì?** — thay đổi đã thực hiện, files/paths đã chạm, findings đã mở/đóng, test/CI/UAT nào đã **thực sự** chạy và kết quả của chúng.
-4. **Chưa làm gì / còn thiếu gì?** — tests chưa chạy, verification chưa có, unresolved findings, authority ruling/dependency còn thiếu; không được biến `PENDING` thành `PASS`.
-5. **Mục tiêu hiện tại là gì?** — objective của cluster/workstream và điều kiện cụ thể để coi bước kế tiếp là hoàn thành.
-6. **AI nào cần làm gì tiếp theo?** — nêu đúng `next owner` theo role, action cụ thể, artifact/SHA mà AI đó phải bắt đầu từ; nếu nhiều việc có thể chạy song song thì tách rõ từng owner/action.
-7. **Quyền release hiện ở đâu?** — `Push / Merge / Migration / Cutover / Publish` cái nào `OPEN`, `BLOCKED`, `NOT GRANTED` hoặc `NOT APPLICABLE`.
-
-Định dạng chuẩn:
-
-```text
-SESSION CLOSE
-Role:
-Workstream / current gate:
-Objective:
-Candidate SHA:
-Parent SHA:
-Base/production SHA:
-Branch:
-Bundle SHA-256 (nếu có):
-Worktree status:
-Completed this session:
-Evidence actually verified:
-Open findings / blockers:
-Not yet verified / not executed:
-Next owner(s):
-Next action(s):
-Start-from artifact/SHA for each next owner:
-Push status:
-Merge status:
-Migration status:
-Cutover status:
-Publish status:
-```
-
-**Cấm kết thúc phiên bằng các trạng thái mơ hồ** như `đã xong`, `tiếp tục sau`, `chờ review`, `gần xong` mà không có exact SHA + next owner/action + blocker/gate cụ thể.
-
-Nếu phiên chỉ làm analysis/review và **không tạo SHA mới**, phải ghi rõ `No new artifact created` và giữ nguyên exact artifact cuối cùng đã verify. Nếu SHA thay đổi sau report, session-close report cũ lập tức trở thành historical record, không còn là current release state.
-
 ### Defect closure contract
 `Finding ID` · `Severity P0-P3` · `Before` · `Root cause (tầng hệ thống)` · `Affected paths` · `Remediation (tổng thể)` · `Regression tests (targeted + adversarial)` · `Real-data result (expected/actual)` · `Residual risk` · `Verdict`
 
@@ -475,6 +443,183 @@ server/publishGate.js:268  "Ported from 22etsy-agent Truth Discipline"
 
 ---
 
+## 16. END-OF-SESSION CHECKPOINT — BẮT BUỘC
+
+Sau **mỗi phiên làm việc**, AI đang giữ phiên phải kết thúc bằng một checkpoint đủ để Owner và phiên kế tiếp trả lời ngay được:
+
+```text
+Đang ở đâu?
+Đang làm trên exact artifact/SHA nào?
+Đã làm và đã thực sự verify được gì?
+Còn blocker/finding nào?
+Mục tiêu hiện tại là gì?
+AI nào phải làm việc gì tiếp theo?
+Việc nào có thể chạy song song mà không cần chờ?
+Quyền push/merge/deploy/publish hiện tại là gì?
+```
+
+Checkpoint không được chỉ ghi “DONE”, “PASS” hoặc kể lại kế hoạch. Nó phải phân biệt rõ **thực tế đã tự xác minh**, **báo cáo nhận từ agent khác**, **việc chưa chạy** và **suy luận**.
+
+### 16.1. Exact identity bắt buộc
+
+> **Fresh-verification rule:** mọi SHA và trạng thái được trình bày trong checkpoint như **trạng thái hiện tại** phải được chính AI viết checkpoint kiểm tra lại tại thời điểm viết checkpoint. Không được copy từ checkpoint trước, chat, memory hoặc báo cáo của agent khác rồi gắn nhãn current.
+
+Áp dụng tối thiểu cho:
+
+```text
+main/production revision
+base/parent/candidate HEAD
+branch/PR state và base branch
+ahead/behind và ancestry
+changed-files scope
+CI/check status trên exact SHA
+worktree clean/dirty
+bundle/patch hash và verify status
+deployment/service/health/runtime state
+authorization state nếu có thể đã thay đổi
+```
+
+Verification phải diễn ra ngay trước khi gửi checkpoint và ghi:
+
+```text
+Verified at: ISO-8601 timestamp + timezone
+Verification source: local Git / GitHub exact-head API or UI / VPS command / artifact checksum
+```
+
+Nếu checkpoint được soạn đủ lâu để state có thể thay đổi, AI phải recheck các state mutable ngay trước khi gửi. CI của ancestor, branch name, checkpoint cũ hoặc status được kể trong chat không chứng minh trạng thái hiện tại.
+
+Nếu không có quyền/công cụ để verify, không được đưa giá trị đó vào phần canonical current state. Chỉ được ghi riêng:
+
+```text
+UNVERIFIED REPORTS
+- Reported value:
+- Reporter/source:
+- Reported at:
+- Verification blocker:
+- Required next check/owner:
+```
+
+Trong trường hợp không verify được state trọng yếu, checkpoint phải ghi `CURRENT STATE NOT VERIFIED`; không được dùng reported value để mở gate, chuyển owner, tuyên bố PASS hoặc cấp quyền.
+
+Ghi đầy đủ khi có liên quan:
+
+```text
+Current phase/cluster
+Production/main SHA
+Working base SHA
+Candidate HEAD SHA
+Parent SHA
+Branch/PR
+Bundle/patch SHA-256
+Changed files
+Worktree status
+```
+
+Mỗi giá trị canonical phải có provenance label theo Phần 14 và fresh verification như trên. Các nhãn `OWNER-REPORTED`, `REPO-HANDOFF-REPORTED`, `NOT VERIFIED` hoặc `UNKNOWN` chỉ được đặt trong `UNVERIFIED REPORTS`, không được trộn vào canonical current state; **không được biến SHA được kể trong chat thành SHA đã verify**.
+
+Nếu artifact hiện có trong Library/chat nhưng chưa commit vào repo, phải ghi riêng:
+
+```text
+POLICY/CONTENT RULING: trạng thái nội dung
+LOCAL/LIBRARY ARTIFACT: filename + SHA-256 + provenance
+REPOSITORY ARTIFACT: exact commit hoặc NOT YET CREATED
+PRODUCTION ARTIFACT: exact active SHA hoặc NOT VERIFIED
+```
+
+### 16.2. Thành quả và evidence
+
+Checkpoint phải tách:
+
+```text
+Completed: thay đổi hoặc review đã hoàn tất
+Verified evidence: command/test/artifact mà chính AI đã kiểm
+Not verified: báo cáo hoặc artifact chưa thể kiểm
+Tests actually run: tên test/command + kết quả
+Tests not run: tên + lý do
+Findings opened/closed: ID + severity + trạng thái
+Residual risk: điều chưa được chứng minh
+```
+
+Không được dùng CI xanh ở ancestor, test của agent khác hoặc documentation làm bằng chứng cho exact candidate/runtime hiện tại.
+
+### 16.3. Mục tiêu và critical path
+
+Luôn ghi một mục tiêu ngắn gọn, đo được cho cluster hiện tại và điều kiện hoàn thành:
+
+```text
+Current objective:
+Exit criteria:
+Current blocker:
+Critical-path owner:
+```
+
+Nếu không có blocker, ghi `NONE` và giao ngay hành động tiếp theo. Nếu có blocker, vẫn phải xác định các việc an toàn có thể chạy song song để AI khác không chờ vô ích.
+
+### 16.4. Phân công GPT1/GPT2/GPT3/GPT4/Claude
+
+Checkpoint bắt buộc có bảng:
+
+| AI | Trạng thái | Việc đã hoàn thành | Việc tiếp theo | Có bị chặn không? | Cần artifact/quyền gì? |
+|---|---|---|---|---|---|
+| GPT1 |  |  |  |  |  |
+| GPT2 |  |  |  |  |  |
+| GPT3 |  |  |  |  |  |
+| GPT4 |  |  |  |  |  |
+| Claude |  |  |  |  |  |
+
+Không giao cùng một implementation task cho nhiều AI. Review, adversarial preparation, fixture audit và release preparation có thể chạy song song khi không sửa cùng source/contract.
+
+### 16.5. Authorization boundary
+
+Kết thúc checkpoint bằng trạng thái riêng của từng quyền:
+
+```text
+Push: AUTHORIZED / NOT AUTHORIZED
+Merge: AUTHORIZED / NOT AUTHORIZED
+Migration evidence: AUTHORIZED / NOT AUTHORIZED
+Cutover/deploy: AUTHORIZED / NOT AUTHORIZED
+Marketplace publish: AUTHORIZED / NOT AUTHORIZED
+```
+
+Không suy ra quyền sau từ quyền trước. `READY`, `PASS`, CI xanh hoặc Owner đồng ý review không tự cấp quyền push/merge/deploy/publish.
+
+### 16.6. Mẫu checkpoint tối thiểu
+
+```text
+[END-OF-SESSION CHECKPOINT]
+Role:
+Verified at:
+Verification sources/commands:
+Current phase/cluster:
+Current objective:
+Exit criteria:
+Production/main SHA + provenance:
+Base/parent/candidate SHA + provenance:
+Branch/PR/bundle/patch:
+Changed files:
+Completed:
+Verified evidence:
+Tests actually run:
+Tests not run + reason:
+Findings opened/closed:
+Current blocker:
+Critical-path owner:
+Parallel work available:
+GPT1 next:
+GPT2 next:
+GPT3 next:
+GPT4 next:
+Claude next:
+Residual risk:
+Worktree status:
+Unverified reports + required verifier:
+Push/Merge/Migration/Cutover/Publish authorization:
+```
+
+Checkpoint là trạng thái bàn giao của **phiên**, không thay thế exact-SHA handoff, defect register, test evidence hoặc release approval.
+
+---
+
 ## PHỤ LỤC A — SỔ XUNG ĐỘT ĐÃ GIẢI
 
 | # | Xung đột | Nguồn | Giải quyết |
@@ -484,22 +629,21 @@ server/publishGate.js:268  "Ported from 22etsy-agent Truth Discipline"
 | 3 | Fixture count-based vs accounting | Multi-AI §13 vs §8 | Accounting-based (bằng chứng 19→16+3) |
 | 4 | Stop-doing vs stop-condition | `PROJECT_GUIDE §17` vs Multi-AI §21 | Hai thứ khác nhau → tách §13a/§13b |
 | 5 | Bốn văn bản governance | toàn bộ | Hợp nhất; ba văn bản kia bãi bỏ/hạ cấp |
-| 6 | Phạm vi downstream guard | Multi-AI §11 vs `PROJECT_GUIDE §10` | **Chờ GPT1** — xem Phần 10 |
+| 6 | Phạm vi downstream guard | Multi-AI §11 vs `PROJECT_GUIDE §10` | ✅ **GPT1 quyết:** shared qualifying-evidence guard tại cả 7 forward transition; `publishGate` vẫn là authority tổng hợp cuối |
 | 7 | Rule ngôn ngữ | `PROJECT_RULES` GR1 vs preference owner | ✅ **Owner quyết:** bỏ GR1. Hỏi tiếng nào trả lời tiếng đó |
 | 8 | Kế thừa 2 toolkit | `PROJECT_RULES` GR4 | ✅ **Owner quyết:** reference ưu tiên, không phải authority → Phần 15 |
 
 ---
 
-## PHỤ LỤC B — CÒN CHỜ QUYẾT
+## PHỤ LỤC B — AUTHORITY RULINGS ĐÃ ĐÓNG
 
-| Mục | Người quyết | Nội dung | Trạng thái thực thi |
-|---|---|---|---|
-| Phần 10 — ranh giới evidence guard | **GPT1** | Giới hạn guard tại `RESEARCH_ACCEPTED` + `DNA_ACCEPTED`, hay yêu cầu shared research-foundation check ở các forward transition phụ thuộc research | **BLOCK H0 final authority PASS**; không block audit/test preparation độc lập |
-| Phần 7 — ranh giới Tier A/B/C + authority hierarchy | **GPT1** | Ratify Tier definitions, nguồn nào có qualifying authority, hierarchy giữa research readiness / Product Truth / approval / publish | **BLOCK H0 implementation contract freeze**; không block governance/test-harness preparation |
+| Mục | Người quyết | Ruling |
+|---|---|---|
+| Phần 10 — ranh giới evidence guard | **GPT1** | Cả 7 forward transition; research guard không thay `publishGate` |
+| Phần 7 — Review Risk Tier A/B/C | **GPT1** | Ratified theo bảng hiện tại |
+| Phần 6 — Evidence Authority EA-A/B/C | **GPT1** | Ratified; client cannot promote; server recomputes current eligibility |
 
-**Không AI nào được tự điền hai ruling này thay GPT1.** Trong thời gian chờ, mọi AI khác phải tiếp tục các phần việc độc lập theo Phần 7A.
-
-*Tất cả mục khác đã được Owner ratify ngày 2026-08-25; Phần 7A được Owner bổ sung/ratify trong vòng H0 hiện tại.*
+*Tất cả mục khác đã được Owner ratify ngày 2026-08-25.*
 
 ---
 
@@ -511,13 +655,10 @@ server/publishGate.js:268  "Ported from 22etsy-agent Truth Discipline"
 | 2 | `PROJECT_RULES.md` → stub trỏ về đây | GPT3 | ⬜ |
 | 3 | `PROJECT_GUIDE_*.md` → xoá §13, §21; thêm header trỏ về đây | GPT3 | ⬜ |
 | 4 | `GPT1_GPT2_INTEGRATION_CHECKLIST.md` → `docs/operational/` | GPT3 | ⬜ |
-| 5 | Viết 5 test `MACHINE` tối thiểu + H0 failing authority matrix | GPT2 | ⬜ |
-| 6 | GPT1 ratify Tier A/B/C + authority hierarchy + evidence-guard ruling | GPT1 | ⬜ |
-| 7 | Claude hợp nhất governance/spec + independent diff/test-oracle reviews | Claude | ⬜ |
-| 8 | GPT4 adversarial forge/tamper/state-machine review | GPT4 | ⬜ |
-| 9 | GPT3 Node22/runtime/full-suite/exact-SHA CI/backup–restore/audit/cutover packet | GPT3 | ⬜ |
-| 10 | Parity review Etsy (Phần 15) | GPT1 | ⬜ |
-| 11 | Parity review Amazon (Phần 15) | GPT3 | ⬜ |
+| 5 | Viết 5 test `MACHINE` (Phần 11) trong H0 | GPT2 | ⬜ |
+| 6 | GPT1 ruling ranh giới evidence guard (Phần 10) | GPT1 | ✅ |
+| 7 | Parity review Etsy (Phần 15) | GPT1 | ⬜ |
+| 8 | Parity review Amazon (Phần 15) | GPT3 | ⬜ |
 
 **Chừng nào việc 1–4 chưa xong, bốn văn bản cũ vẫn còn hiệu lực song song — và đây chỉ là văn bản thứ năm.**
 
@@ -526,3 +667,23 @@ server/publishGate.js:268  "Ported from 22etsy-agent Truth Discipline"
 ## CÂU KHOÁ
 
 > Review theo exact artifact, sửa root cause thay vì vá PoC, bảo toàn mọi dữ liệu có ý nghĩa, fail-closed mọi authority, kiểm tra xuyên source→DB→reload→UI, và luôn quay lại mục tiêu tạo listing có khả năng bán hàng.
+
+---
+
+## PHỤ LỤC D — THỨ TỰ H0 ĐÃ RATIFY
+
+**Provenance split:** trình tự 9 bước bên dưới là `OWNER-RATIFIED`. Các authority rules được trình tự này tham chiếu là `GPT1-RATIFIED` theo Phần 6 và Phần 10; Owner ratify trình tự không tự động đồng nghĩa Owner ratify từng authority detail.
+
+```text
+1. GPT1 ratify Review Tier + Evidence Authority hierarchy        DONE
+2. Claude hợp nhất governance; không sửa production source
+3. GPT2 viết H0 tests chứng minh failure
+4. GPT2 implement H0 — implementation owner duy nhất
+5. GPT4 adversarial review; không code vòng đầu
+6. Claude independent exact-diff/test-oracle review
+7. GPT1 final authority review trên exact artifact
+8. GPT3 Node22/native SQLite/runtime/backup–restore/cutover gates
+9. Sau H0: bổ sung machine controls trong R1–R4
+```
+
+Không bước review nào thay PASS của bước khác. Không push/merge/deploy/publish nếu chưa có quyền tương ứng.

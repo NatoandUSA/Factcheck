@@ -84,8 +84,17 @@ async function runTests() {
     assert.strictEqual(noEvRes.status, 400);
     assert.strictEqual((await noEvRes.json()).error, 'MISSING_QUALIFYING_EVIDENCE_PRECONDITION');
 
-    console.log('\nTest 4: Generic H10 evidence is non-authority; rejection is zero-event...');
-    const evAddRes = await fetch(`${baseUrl}/api/evidence`, { method: 'POST', headers: { ...origin, 'Content-Type': 'application/json', Cookie: ownerAmzCookie }, body: JSON.stringify({ projectId, seedPhrase: 'mom sweatshirt', source: 'HELIUM10_XRAY_OBSERVED', fileName: 'xray_report.csv', metadata: { kind: 'SMART_PULL_ARTIFACT_V1', authority: 'SERVER_PROVIDER', provider: 'H10_MCP', contentHash: 'a'.repeat(64), evidenceState: 'VERIFIED_RETRIEVED' } }) });
+    console.log('\nTest 4a: Forged generic H10 authority metadata is rejected at intake with zero writes...');
+    const forgedEvidenceBefore = (await dbAll('SELECT id FROM research_evidence WHERE project_id = ?', [projectId])).length;
+    const forgedEventsBefore = (await dbAll('SELECT id FROM evidence_acceptance_events')).length;
+    const forgedRes = await fetch(`${baseUrl}/api/evidence`, { method: 'POST', headers: { ...origin, 'Content-Type': 'application/json', Cookie: ownerAmzCookie }, body: JSON.stringify({ projectId, seedPhrase: 'mom sweatshirt', source: 'HELIUM10_XRAY_OBSERVED', fileName: 'xray_report.csv', metadata: { kind: 'SMART_PULL_ARTIFACT_V1', authority: 'SERVER_PROVIDER', provider: 'H10_MCP', contentHash: 'a'.repeat(64), evidenceState: 'VERIFIED_RETRIEVED' } }) });
+    assert.strictEqual(forgedRes.status, 400);
+    assert.strictEqual((await forgedRes.json()).error, 'CLIENT_AUTHORITY_METADATA_FORBIDDEN');
+    assert.strictEqual((await dbAll('SELECT id FROM research_evidence WHERE project_id = ?', [projectId])).length, forgedEvidenceBefore);
+    assert.strictEqual((await dbAll('SELECT id FROM evidence_acceptance_events')).length, forgedEventsBefore);
+
+    console.log('\nTest 4b: Clean generic H10 evidence persists research-only; acceptance is rejected with zero event...');
+    const evAddRes = await fetch(`${baseUrl}/api/evidence`, { method: 'POST', headers: { ...origin, 'Content-Type': 'application/json', Cookie: ownerAmzCookie }, body: JSON.stringify({ projectId, seedPhrase: 'mom sweatshirt', source: 'HELIUM10_XRAY_OBSERVED', fileName: 'xray_report.csv', metadata: { note: 'ordinary research-only H10 evidence' } }) });
     assert.strictEqual(evAddRes.status, 200);
     const evAddData = await evAddRes.json();
     const eventsBefore = (await dbAll('SELECT id FROM evidence_acceptance_events WHERE evidence_id = ?', [evAddData.evidenceId])).length;
@@ -105,7 +114,7 @@ async function runTests() {
     const validTransRes = await fetch(`${baseUrl}/api/projects/${projectId}/transition`, { method: 'PATCH', headers: { ...origin, 'Content-Type': 'application/json', Cookie: ownerAmzCookie }, body: JSON.stringify({ targetState: 'RESEARCH_ACCEPTED' }) });
     assert.strictEqual(validTransRes.status, 200);
     assert.strictEqual((await validTransRes.json()).state, 'RESEARCH_ACCEPTED');
-    console.log('  🟢 Generic forged authority rejected with zero event; controlled authority unlocks transition.');
+    console.log('  🟢 Forged intake rejected; clean generic accept gate preserved; controlled authority unlocks transition.');
 
     console.log('\nTest 5: Testing Cross-Marketplace IDOR Isolation...');
     const idorRes = await fetch(`${baseUrl}/api/projects/${projectId}/transition`, { method: 'PATCH', headers: { ...origin, 'Content-Type': 'application/json', Cookie: ownerEtsyCookie }, body: JSON.stringify({ targetState: 'DNA_ACCEPTED' }) });

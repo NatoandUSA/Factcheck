@@ -25,6 +25,9 @@ const RESERVED_AUTHORITY_FIELDS = Object.freeze([
   'projectId',
   'evidenceVersion'
 ]);
+const CLIENT_EVIDENCE_OPERATIONAL_FIELDS = new Set([
+  'projectId', 'seedPhrase', 'source', 'sourceUrl', 'fileName', 'metadata'
+]);
 
 function canonicalize(value) {
   if (Array.isArray(value)) return value.map(canonicalize);
@@ -84,11 +87,10 @@ function inspectClientAuthorityMetadata(body) {
       collectReservedKeys(value, 'metadata', findings);
       continue;
     }
-    // `source` is the required operational routing field for /api/evidence.
-    // Case/confusable variants are not operational fields and remain forbidden.
-    if (key !== 'source' && RESERVED_AUTHORITY_KEY_TOKENS.has(normalizeAuthorityKey(key))) {
-      findings.push(`body.${key}`);
-    }
+    // Exact operational request fields are allowed at the HTTP envelope.
+    // Authority-shaped variants (e.g. Provider, Project_Id, SOURCE) are not.
+    if (CLIENT_EVIDENCE_OPERATIONAL_FIELDS.has(key)) continue;
+    if (RESERVED_AUTHORITY_KEY_TOKENS.has(normalizeAuthorityKey(key))) findings.push(`body.${key}`);
   }
   return { forbidden: findings.length > 0, fields: [...new Set(findings)] };
 }

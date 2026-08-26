@@ -2,7 +2,7 @@
 
 > Văn bản này đã bị bãi bỏ ngày 2026-08-25 theo quyết định của Owner.
 >
-> **Golden rule duy nhất của OmniSeller: [`GOLDEN_RULES.md`](./GOLDEN_RULES.md)**
+> **Golden rule duy nhất của OmniSeller: [`GOLDEN_RULES.md`](./GOLDEN_RULES.md), Version 1.4 — RATIFIED**
 
 Không dùng file này. Không thêm rule vào file này.
 

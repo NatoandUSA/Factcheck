@@ -1,35 +1,6 @@
 {
-  "project": "OmniSeller / 22Etsy Agent / AMZ-FBM Toolkit",
-  "artifact": "PROJECT_GUIDE_CLAUDE_GPT_OMNI_AMZ_ETSY.md",
-  "status": "CREATED",
-  "objective": "Create one shared Project Operating Guide for Claude and GPT so future agents use the same business priorities, architecture boundaries, provenance rules, testing standards, multi-agent workflow, handoff format and consolidation gates.",
-  "what_changed": [
-    "Converted the multi-model Master Plan into one operational manual.",
-    "Separated Revenue, Safety/Trust and Consolidation tracks.",
-    "Defined single-organization multi-workspace security scope.",
-    "Defined shared-vs-domain architecture boundaries.",
-    "Added Claude implementation prompt and GPT review prompt.",
-    "Added required handoff schema, testing standard, staff UX standard and stop-doing list."
-  ],
-  "files_changed": [
-    "/mnt/data/PROJECT_GUIDE_CLAUDE_GPT_OMNI_AMZ_ETSY.md"
-  ],
-  "tests_executed": [],
-  "tests_not_executed": [
-    "No code implementation changed; no runtime or CI tests required for this documentation artifact."
-  ],
-  "known_risks": [
-    "Repository state will evolve; exact SHA/status sections must be refreshed when used as a live checkpoint.",
-    "The guide should be treated as policy/operating guidance, not a substitute for reading current code and latest repo handoffs."
-  ],
-  "recommended_next_step": "Place/adapt this guide as AGENTS.md or PROJECT_GUIDE_CLAUDE_GPT.md in the relevant repos, with thin CLAUDE.md/GEMINI.md pointers if desired.",
-  "requested_gpt_review": [
-    "Keep the guide synchronized with the latest canonical Master Plan.",
-    "Challenge any future work that violates Revenue → Safety → Truth → Real Usage → Consolidation."
-  ],
-  "provenance": {
-    "basis": "Current conversation, latest multi-model Master Plan, reviewed project handoffs and current repo direction.",
-    "status": "GPT-AUTHORED OPERATING GUIDE"
-  },
-  "generated_at": "2026-08-17T23:16:47+07:00"
+  "artifact": "PROJECT_GUIDE_CLAUDE_GPT_OMNI_AMZ_ETSY_HANDOFF.json",
+  "status": "RETIRED",
+  "superseded_by": "GOLDEN_RULES.md",
+  "note": "Historical/traceability pointer only. Do not use as current governance, handoff contract, review gate, or authority source."
 }

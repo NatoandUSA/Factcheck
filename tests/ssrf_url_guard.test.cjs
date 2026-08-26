@@ -1,7 +1,7 @@
 /**
  * Negative + boundary tests for server/security/urlGuard.js — the SSRF
- * control gating server/learningService.js's URL fetch. Covers PROJECT_GUIDE
- * §7's 11-point SSRF policy and Issue #3 finding #1's regression requirement.
+ * control gating server/learningService.js's URL fetch. The closed SSRF
+ * regression is recorded in GOLDEN_RULES.md; this remains executable coverage.
  */
 const assert = require('assert');
 const { assertSafeUrl, safeFetch, isDisallowedIp, isAllowedHost, UrlGuardError } = require('../server/security/urlGuard');
@@ -86,8 +86,8 @@ async function main() {
   console.log('🟢 assertSafeUrl: cross-marketplace host rejected when expectedMarketplace is pinned.');
 
   // --- Positive path: real allowlisted host resolves and passes (network
-  // required — matches PROJECT_GUIDE §15's requirement to prove the
-  // allowlist doesn't just block everything) ---
+  // required — preserves the positive-path proof for the closed SSRF
+  // regression recorded in GOLDEN_RULES.md; allowlist must not block everything) ---
   try {
     await assertSafeUrl('https://www.amazon.com/');
     await assertSafeUrl('https://www.amazon.com/', 'AMAZON');

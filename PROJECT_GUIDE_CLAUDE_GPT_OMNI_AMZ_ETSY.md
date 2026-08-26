@@ -610,52 +610,11 @@ Do not delay Amazon launch work for Omni.
 
 ---
 
-# 13. MULTI-AGENT WORKING MODEL
+# 13. MULTI-AGENT WORKING MODEL — BÃI BỎ
 
-The shared environment is:
-
-> **Git repository + branches/worktrees + Pull Requests + CI**
-
-Not one chat.
-
-## Recommended roles
-
-### Claude / Claude Code
-Primary implementation owner for a scoped task.
-
-Responsibilities:
-- inspect the system,
-- implement,
-- run targeted tests,
-- run regression tests,
-- self-review,
-- produce exact-SHA handoff.
-
-### GPT
-Independent reviewer / architect / Best Next Move authority.
-
-Responsibilities:
-- challenge claims,
-- verify exact state,
-- review full stack,
-- inspect architecture,
-- inspect regression risk,
-- inspect Staff impact,
-- check source-of-truth duplication,
-- choose next P0/P1/P2 action.
-
-### Antigravity / second reviewer
-Independent review, same-bug-class search, edge-case review.
-
-## Rule
-One implementation owner per task.
-
-Do not let multiple agents independently modify the same feature at the same time.
-
-Parallel work must be isolated by:
-- branch,
-- worktree,
-- clearly separate scope.
+> Thay bằng [`GOLDEN_RULES.md`](./GOLDEN_RULES.md) §3. Nội dung cũ ghi Claude là "Primary implementation owner", trái §3 hiện hành.
+>
+> Stub này được giữ tại chỗ để bảo toàn traceability. Nó không phải contract độc lập.
 
 ---
 
@@ -866,41 +825,11 @@ If:
 
 ---
 
-# 21. REQUIRED HANDOFF FORMAT
+# 21. REQUIRED HANDOFF FORMAT — BÃI BỎ
 
-Every substantial task ends with:
-
-```json
-{
-  "project": "",
-  "repository": "",
-  "branch": "",
-  "base_sha": "",
-  "current_sha": "",
-  "current_state": "",
-  "objective": "",
-  "what_changed": [],
-  "files_changed": [],
-  "gpt_suggestion_coverage": [],
-  "root_cause": "",
-  "impact_surface": [],
-  "source_of_truth_review": "",
-  "tests_executed": [],
-  "tests_not_executed": [],
-  "ci_evidence": {},
-  "runtime_evidence": [],
-  "known_risks": [],
-  "not_verified": [],
-  "open_questions": [],
-  "recommended_next_step": "",
-  "requested_gpt_review": [],
-  "provenance": {}
-}
-```
-
-Do not omit uncomfortable facts.
-
-A good handoff makes the next reviewer faster and more skeptical.
+> Thay bằng [`GOLDEN_RULES.md`](./GOLDEN_RULES.md) §17. JSON handoff schema cũ không còn là handoff contract hiện hành.
+>
+> Stub này được giữ tại chỗ để bảo toàn traceability. Nó không phải contract độc lập.
 
 ---
 

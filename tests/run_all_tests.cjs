@@ -10,6 +10,7 @@ function runAllTests() {
 const testFiles = [
     'tests/test_h0_evidence_authority_red.cjs',
     'tests/test_h0_auth01_checkpoint1.cjs',
+    'tests/test_h0_c03_transition_authority.cjs',
     'tests/test_product_truth_core.cjs',
     'tests/test_ai_boundary_and_batch.cjs',
     'tests/test_server_ai_truth_boundary.cjs',

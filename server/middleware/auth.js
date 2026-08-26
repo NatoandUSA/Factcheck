@@ -10,7 +10,7 @@
  */
 
 const { COOKIE_NAME, verifySessionRecord } = require('../security/session');
-const { inspectClientAuthorityMetadata } = require('../evidenceAuthority');
+const { inspectClientAuthorityMetadata, evaluateEvidenceAuthority } = require('../evidenceAuthority');
 
 const DEFAULT_ALLOWED_ORIGINS = [
   'http://localhost:5173',
@@ -18,6 +18,24 @@ const DEFAULT_ALLOWED_ORIGINS = [
   'http://localhost:3001',
   'http://127.0.0.1:3001'
 ];
+
+// C-03: every declared workflow edge must re-evaluate persisted evidence
+// authority before the transition route can execute any stage-specific
+// precondition or mutation. Keep this map aligned with the canonical server
+// transition DAG; illegal edges are deliberately passed through so the route
+// preserves its INVALID_STATE_TRANSITION error contract.
+const PROJECT_TRANSITION_EDGES = Object.freeze({
+  EVIDENCE_INTAKE: Object.freeze(['RESEARCH_ACCEPTED']),
+  RESEARCH_ACCEPTED: Object.freeze(['DNA_ACCEPTED']),
+  DNA_ACCEPTED: Object.freeze(['MKL_FROZEN']),
+  MKL_FROZEN: Object.freeze(['DRAFT_GENERATED', 'PRODUCT_TRUTH_VERIFIED', 'PRODUCT_TRUTH_CONFIRMED']),
+  DRAFT_GENERATED: Object.freeze(['PRODUCT_TRUTH_VERIFIED', 'VALIDATED']),
+  PRODUCT_TRUTH_VERIFIED: Object.freeze(['MANAGER_APPROVED']),
+  PRODUCT_TRUTH_CONFIRMED: Object.freeze(['DRAFT_GENERATED']),
+  VALIDATED: Object.freeze(['MANAGER_APPROVED']),
+  MANAGER_APPROVED: Object.freeze(['PUBLISH_READY']),
+  PUBLISH_READY: Object.freeze([])
+});
 
 function getNormalizedAllowedOrigins() {
   if (process.env.ALLOWED_ORIGINS) {
@@ -53,6 +71,71 @@ function extractRawToken(req) {
   return null;
 }
 
+function isDeclaredProjectTransition(currentState, targetState) {
+  const allowed = PROJECT_TRANSITION_EDGES[currentState] || [];
+  return typeof targetState === 'string' && allowed.includes(targetState);
+}
+
+function hasQualifyingAcceptedAuthority(row) {
+  try {
+    return evaluateEvidenceAuthority(row, {
+      tenantId: row?.tenant_id,
+      workspaceId: Number(row?.workspace_id),
+      marketplace: row?.marketplace,
+      projectId: Number(row?.project_id),
+      evidenceVersion: 1
+    }).qualifying === true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function enforceProjectTransitionAuthority(db, req, res, next) {
+  if (req.method !== 'PATCH') return next();
+  const match = /^\/api\/projects\/(\d+)\/transition$/.exec(req.path || '');
+  if (!match) return next();
+
+  const projectId = Number(match[1]);
+  const targetState = req.body?.targetState;
+  if (!Number.isInteger(projectId) || projectId < 1 || typeof targetState !== 'string') return next();
+
+  // Preserve the route's stronger role-specific error contract for approval
+  // stages. C-03 is an authority gate, not a replacement authorization gate.
+  if ((targetState === 'MANAGER_APPROVED' || targetState === 'PUBLISH_READY') &&
+      !['OWNER', 'MANAGER', 'ADMIN'].includes(req.user?.role)) {
+    return next();
+  }
+
+  db.get(
+    `SELECT state FROM research_projects
+     WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
+    [projectId, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+    (projectErr, project) => {
+      if (projectErr) return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
+      if (!project || !isDeclaredProjectTransition(project.state, targetState)) return next();
+
+      db.all(
+        `SELECT * FROM research_evidence
+         WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ?
+           AND project_id = ? AND evidence_state = 'ACCEPTED'`,
+        [req.user.tenantId, req.user.workspaceId, req.user.marketplace, projectId],
+        (evidenceErr, rows) => {
+          if (evidenceErr) return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
+          const qualifying = (rows || []).some(hasQualifyingAcceptedAuthority);
+          if (!qualifying) {
+            return res.status(400).json({
+              success: false,
+              error: 'MISSING_QUALIFYING_EVIDENCE_PRECONDITION',
+              message: 'Cannot advance project workflow without at least 1 qualifying ACCEPTED evidence record bound specifically to this project.'
+            });
+          }
+          next();
+        }
+      );
+    }
+  );
+}
+
 function requireAuth(db) {
   return function requireAuthMiddleware(req, res, next) {
     const rawToken = extractRawToken(req);
@@ -75,7 +158,7 @@ function requireAuth(db) {
       }
 
       req.user = principal;
-      next();
+      enforceProjectTransitionAuthority(db, req, res, next);
     });
   };
 }

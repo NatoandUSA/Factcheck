@@ -1,5 +1,7 @@
 # GPT1/GPT2 Integration Checklist
 
+> **Operational reference only.** This checklist is not governance and cannot override [`GOLDEN_RULES.md`](../../GOLDEN_RULES.md).
+
 ## Before integration
 
 - [ ] GPT2 ancestry includes GPT1 commit `bdd44d27d05bd5611d434b24f8978b6c80844c45`.

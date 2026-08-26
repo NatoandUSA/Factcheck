@@ -1,3 +1,18 @@
+> ## ⚠️ TRẠNG THÁI VĂN BẢN
+>
+> **Đây KHÔNG phải golden rule.** Golden rule duy nhất: [`GOLDEN_RULES.md`](./GOLDEN_RULES.md), hiện tại **Version 1.1 — RATIFIED**.
+>
+> Văn bản này giữ lại làm **tài liệu tham khảo business / architecture**. Khi mâu thuẫn với `GOLDEN_RULES.md`, `GOLDEN_RULES.md` thắng.
+>
+> **Hai mục sau đã BỊ BÃI BỎ — không áp dụng:**
+> - **§13 MULTI-AGENT WORKING MODEL** — vai trò đã đổi. Xem `GOLDEN_RULES.md` Phần 2.
+>   *(§13 ghi Claude là implementation owner; thực tế hiện tại GPT2 implement, Claude audit.)*
+> - **§21 REQUIRED HANDOFF FORMAT** — định dạng JSON đã bỏ. Xem `GOLDEN_RULES.md` Phần 14.
+>
+> Bãi bỏ ngày 2026-08-25 theo quyết định của Owner.
+
+---
+
 # PROJECT OPERATING GUIDE — Claude + GPT
 ## OmniSeller / 22Etsy Agent / AMZ-FBM Toolkit
 
@@ -610,55 +625,6 @@ Do not delay Amazon launch work for Omni.
 
 ---
 
-# 13. MULTI-AGENT WORKING MODEL
-
-The shared environment is:
-
-> **Git repository + branches/worktrees + Pull Requests + CI**
-
-Not one chat.
-
-## Recommended roles
-
-### Claude / Claude Code
-Primary implementation owner for a scoped task.
-
-Responsibilities:
-- inspect the system,
-- implement,
-- run targeted tests,
-- run regression tests,
-- self-review,
-- produce exact-SHA handoff.
-
-### GPT
-Independent reviewer / architect / Best Next Move authority.
-
-Responsibilities:
-- challenge claims,
-- verify exact state,
-- review full stack,
-- inspect architecture,
-- inspect regression risk,
-- inspect Staff impact,
-- check source-of-truth duplication,
-- choose next P0/P1/P2 action.
-
-### Antigravity / second reviewer
-Independent review, same-bug-class search, edge-case review.
-
-## Rule
-One implementation owner per task.
-
-Do not let multiple agents independently modify the same feature at the same time.
-
-Parallel work must be isolated by:
-- branch,
-- worktree,
-- clearly separate scope.
-
----
-
 # 14. PR DESIGN RULE
 
 Each PR should have one main purpose.
@@ -863,44 +829,6 @@ If:
 - real parity cases collected.
 - duplicated workflow steps identified.
 - duplicated business rules across repos.
-
----
-
-# 21. REQUIRED HANDOFF FORMAT
-
-Every substantial task ends with:
-
-```json
-{
-  "project": "",
-  "repository": "",
-  "branch": "",
-  "base_sha": "",
-  "current_sha": "",
-  "current_state": "",
-  "objective": "",
-  "what_changed": [],
-  "files_changed": [],
-  "gpt_suggestion_coverage": [],
-  "root_cause": "",
-  "impact_surface": [],
-  "source_of_truth_review": "",
-  "tests_executed": [],
-  "tests_not_executed": [],
-  "ci_evidence": {},
-  "runtime_evidence": [],
-  "known_risks": [],
-  "not_verified": [],
-  "open_questions": [],
-  "recommended_next_step": "",
-  "requested_gpt_review": [],
-  "provenance": {}
-}
-```
-
-Do not omit uncomfortable facts.
-
-A good handoff makes the next reviewer faster and more skeptical.
 
 ---
 

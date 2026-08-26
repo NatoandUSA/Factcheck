@@ -8,6 +8,7 @@ function runAllTests() {
   console.log('================================================================\n');
 
 const testFiles = [
+    'tests/test_governance_single_source.cjs',
     'tests/test_product_truth_core.cjs',
     'tests/test_ai_boundary_and_batch.cjs',
     'tests/test_server_ai_truth_boundary.cjs',

@@ -390,6 +390,51 @@ Push/Merge/Deploy/Publish authorization status:
 
 **Không bao giờ chuyển báo cáo của agent khác thành xác minh của mình.** Test không chạy phải ghi lý do — không được trình bày như PASS.
 
+### 14A. SESSION-CLOSE CHECKPOINT — BẮT BUỘC
+
+> **Owner directive — 2026-08-26.** Sau **mỗi phiên làm việc** của bất kỳ AI/reviewer/implementer nào, trước khi kết thúc phiên phải ghi lại trạng thái đủ để AI khác có thể tiếp tục từ đúng artifact mà không suy đoán.
+
+Session-close report tối thiểu phải trả lời rõ:
+
+1. **Đang ở đâu?** — workstream/cluster hiện tại, gate đang đứng ở bước nào, blocker nào còn mở.
+2. **Exact artifact nào?** — `Candidate SHA`, `Parent SHA`, `Base/production SHA`, `Branch`; nếu có bundle thì thêm `Bundle SHA-256`; ghi rõ worktree clean/dirty/unknown.
+3. **Đã làm được gì?** — thay đổi đã thực hiện, files/paths đã chạm, findings đã mở/đóng, test/CI/UAT nào đã **thực sự** chạy và kết quả của chúng.
+4. **Chưa làm gì / còn thiếu gì?** — tests chưa chạy, verification chưa có, unresolved findings, authority ruling/dependency còn thiếu; không được biến `PENDING` thành `PASS`.
+5. **Mục tiêu hiện tại là gì?** — objective của cluster/workstream và điều kiện cụ thể để coi bước kế tiếp là hoàn thành.
+6. **AI nào cần làm gì tiếp theo?** — nêu đúng `next owner` theo role, action cụ thể, artifact/SHA mà AI đó phải bắt đầu từ; nếu nhiều việc có thể chạy song song thì tách rõ từng owner/action.
+7. **Quyền release hiện ở đâu?** — `Push / Merge / Migration / Cutover / Publish` cái nào `OPEN`, `BLOCKED`, `NOT GRANTED` hoặc `NOT APPLICABLE`.
+
+Định dạng chuẩn:
+
+```text
+SESSION CLOSE
+Role:
+Workstream / current gate:
+Objective:
+Candidate SHA:
+Parent SHA:
+Base/production SHA:
+Branch:
+Bundle SHA-256 (nếu có):
+Worktree status:
+Completed this session:
+Evidence actually verified:
+Open findings / blockers:
+Not yet verified / not executed:
+Next owner(s):
+Next action(s):
+Start-from artifact/SHA for each next owner:
+Push status:
+Merge status:
+Migration status:
+Cutover status:
+Publish status:
+```
+
+**Cấm kết thúc phiên bằng các trạng thái mơ hồ** như `đã xong`, `tiếp tục sau`, `chờ review`, `gần xong` mà không có exact SHA + next owner/action + blocker/gate cụ thể.
+
+Nếu phiên chỉ làm analysis/review và **không tạo SHA mới**, phải ghi rõ `No new artifact created` và giữ nguyên exact artifact cuối cùng đã verify. Nếu SHA thay đổi sau report, session-close report cũ lập tức trở thành historical record, không còn là current release state.
+
 ### Defect closure contract
 `Finding ID` · `Severity P0-P3` · `Before` · `Root cause (tầng hệ thống)` · `Affected paths` · `Remediation (tổng thể)` · `Regression tests (targeted + adversarial)` · `Real-data result (expected/actual)` · `Residual risk` · `Verdict`
 

@@ -49,9 +49,7 @@ async function digest(projectId) {
     'sales_feedback'
   ];
   const counts = {};
-  for (const table of tables) {
-    counts[table] = Number((await dbGet(`SELECT COUNT(*) AS c FROM ${table}`)).c);
-  }
+  for (const table of tables) counts[table] = Number((await dbGet(`SELECT COUNT(*) AS c FROM ${table}`)).c);
   const project = await dbGet('SELECT state, updated_at, validated_at, validated_by FROM research_projects WHERE id = ?', [projectId]);
   return { counts, project };
 }
@@ -91,8 +89,16 @@ async function digest(projectId) {
     { name: 'top-level case variant', topLevel: { Provider: 'H10_MCP' }, metadata: { note: 'ordinary' } }
   );
 
-  const before = await digest(projectId);
   try {
+    const cleanResponse = await fetch(endpoint, {
+      method: 'POST', headers,
+      body: JSON.stringify({ ...baseBody, metadata: { note: 'ordinary research-only metadata' } })
+    });
+    assert.strictEqual(cleanResponse.status, 200, 'exact operational envelope with clean metadata must remain accepted');
+    const cleanJson = await cleanResponse.json();
+    assert.strictEqual(cleanJson?.success, true);
+
+    const before = await digest(projectId);
     for (const testCase of cases) {
       const response = await fetch(endpoint, {
         method: 'POST',
@@ -107,6 +113,7 @@ async function digest(projectId) {
       assert.deepStrictEqual(afterCase, before, `${testCase.name} must be zero-write across authority/business state`);
     }
 
+    console.log('PASS clean-control: exact /api/evidence operational envelope persists research-only evidence.');
     console.log(`PASS H0-AUTH-01/C-01: ${cases.length} forged variants rejected with HTTP 400 before persistence.`);
     console.log('PASS zero-write digest: research_evidence / acceptance / project / trend / listing / workflow-business state unchanged.');
   } finally {

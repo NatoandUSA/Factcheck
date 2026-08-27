@@ -1,8 +1,9 @@
 # OMNISELLER — GOLDEN RULES
 
-**Version:** 2.0
+**Version:** 2.1
 **Thay thế:** v1.4 và **toàn bộ** rule/agreement trước đó, không có ngoại lệ.
 **Soạn bởi:** Claude (architecture controller) theo yêu cầu Owner, 2026-08-26
+**v2.1, 2026-08-27:** docs-only — GPT1 ruling F-06/F-09 repo-bound; register bổ sung F-08/F-09, đóng F-03; §2.2 exit criteria; DOC-01/DOC-02 ratified. Không đổi rule nào của v2.0.
 **Base SHA đối chiếu:** `5c4153bbb03ccf9e0f02b4b90781f64819b70848`
 **Áp dụng cho:** GPT1, GPT2, GPT3, GPT4, Claude, Antigravity và mọi reviewer/implementer sau này.
 
@@ -114,13 +115,60 @@ Mỗi cluster phải kết thúc bằng **một gate được thực thi bằng 
 
 Mỗi mục phải có **exit criteria nhân viên tự kiểm được**. Mục nào chưa có exit criteria đo được thì **chưa được tính là đang làm**.
 
-| # | Kết quả | Exit criteria mẫu | Trạng thái |
-|---|---|---|---|
-| 1 | Nhân viên tạo/chọn project | Tạo project mới, chọn lại sau reload, không mất | ⬜ chưa có evidence |
-| 2 | Nạp research data thật, reload không mất | Nạp CSV `para mi hija` → F5 hai lần → đủ row + đủ column | ⬜ chưa có evidence |
-| 3 | Evidence không thể tự phong authority | 12/12 transition edge reject non-authority, zero-write | ✅ **PASS** — `test_h0_c03_transition_authority.cjs`, exit 0 |
-| 4 | Tạo draft từ dữ liệu thật | Draft sinh ra từ evidence đã persist, không fallback | ⬜ chưa có evidence |
-| 5 | Không publish claim chưa verified | `publishGate` fail-closed trên listing thiếu Product Truth/IP | ⬜ chưa có evidence |
+| # | Kết quả | Trạng thái |
+|---|---|---|
+| 1 | Nhân viên tạo/chọn project | ⬜ OPEN |
+| 2 | Nạp research data thật, reload không mất | ⬜ OPEN |
+| 3 | Evidence không thể tự phong authority | ✅ **PASS** — `test_h0_c03_transition_authority.cjs`, exit 0 |
+| 4 | Tạo draft từ dữ liệu thật | ⬜ **BLOCKED BY F-09** |
+| 5 | Không publish claim chưa verified | ⬜ OPEN |
+
+#### Exit criteria — `GPT1-RATIFIED`, 2026-08-27
+
+> **Đây là acceptance wording, KHÔNG phải bằng chứng PASS.** Thêm các câu dưới đây vào tài liệu
+> không làm mục nào chuyển sang PASS. Evidence thực thi phải xuất hiện ở candidate SHA tương ứng.
+
+```text
+1. Nhân viên tạo/chọn project
+PASS khi:
+- nhân viên tạo một project mới;
+- project đó xuất hiện trong project selector;
+- chuyển sang project khác rồi quay lại vẫn chọn được project vừa tạo;
+- reload trang vẫn giữ đúng project và không phát sinh project ngầm/default ngoài ý muốn.
+
+2. Nạp research data thật, reload không mất
+PASS khi:
+- trong một project xác định, nạp fixture/research file đã được chỉ định;
+- UI hiển thị đúng số row và các field/column bắt buộc;
+- F5 hai lần;
+- dữ liệu vẫn thuộc đúng project, đủ row và đủ field bắt buộc;
+- không phải upload lại chỉ vì reload hoặc chuyển Stage.
+
+3. Evidence không thể tự phong authority
+PASS khi:
+- evidence mới chỉ ở trạng thái research/evidence;
+- không path nào tự biến evidence thành Product Truth;
+- transition authority suite canonical PASS toàn bộ.
+STATUS hiện tại: PASS theo C-03.
+
+4. Tạo draft từ dữ liệu thật
+PASS khi:
+- từ project có research data persisted/reloaded, nhân viên tạo draft qua luồng staff-facing bình thường;
+- draft được tạo thành công mà không DATABASE_ERROR;
+- dữ liệu factual trong draft chỉ lấy từ authority/evidence được phép theo Product Truth contract;
+- không cần constraint bypass hoặc sửa DB thủ công.
+F-09 hiện đang chặn outcome này.
+
+5. Không publish claim chưa verified
+PASS khi:
+- inject ít nhất một factual claim chưa verified vào candidate draft;
+- staff-facing publish/approve path từ chối claim đó trước khi side effect publish xảy ra;
+- sau lần từ chối: published state/artifact/event count không tăng;
+- claim chỉ có thể đi tiếp sau đúng authority/verification transition được quy định.
+```
+
+> **F-06/F-09 closure KHÔNG đồng nghĩa Product Ready.** Đóng xong chỉ gỡ blocker trực tiếp cho
+> outcome #4. Release-readiness staff-facing vẫn yêu cầu evidence thực tế cho #1, #2 và #5.
 
 Việc nào không nằm trong 5 mục này **không được chiếm critical path**, trừ khi nó là điều kiện an toàn bắt buộc.
 
@@ -757,8 +805,14 @@ Push/Merge/Migration/Cutover/Publish authorization:
 | §3.1 Tách hai chữ "certify" | **GPT1** | GPT3 không tạo authority contract |
 | §3.3 Antigravity | **GPT1** | Không audit/certify |
 
+| §2.2 exit criteria | **GPT1** | Ratified 2026-08-27 — acceptance wording, không phải evidence |
+| DOC-01 §0.1 vs §1-L3 | **GPT1** | Ratified: **§0.1** quản hiệu lực của governance record, defect classification, assignment và procedural ruling (qua ancestry của `main`); **§1-L3** quản định nghĩa literal authority/contract mà implementation phải khớp chính xác |
+| DOC-02 | **GPT1** | Đóng: F-06 basis chuyển sang §8/§12, §9 supporting. §9.1 vẫn PENDING nhưng không còn là căn cứ duy nhất của F-06 |
+| F-06 severity | **GPT1** | **P1.** Mọi ruling chat hạ xuống P2 đã bị thu hồi |
+| F-09 | **GPT1** | **CONFIRMED, P1 functional/release blocker.** Closure contract 8 điều kiện: `GPT1_RULING_F06_F09.md` |
+
 **Mục sau là ĐỀ XUẤT MỚI của Claude trong v2.0, `PENDING` GPT1/Owner ratify:**
-§0.1 governance-in-force · §1.1 kỷ luật quy kết · §2.1 governance ≠ sản phẩm · §2.2 năm kết quả staff-facing · §3.5 năng lực thực thi · §5.1 head di chuyển · §6.1 scope theo class · §9.1 cấm fail-open-by-drift · §10.1 location map · §10.2 hermeticity · §10.3 accumulate · §10.4 runner completeness · §17.2 tự đính chính
+§1.1 kỷ luật quy kết · §2.1 governance ≠ sản phẩm · §2.2 năm kết quả staff-facing · §3.5 năng lực thực thi · §5.1 head di chuyển · §6.1 scope theo class · §9.1 cấm fail-open-by-drift · §10.1 location map · §10.2 hermeticity · §10.3 accumulate · §10.4 runner completeness · §17.2 tự đính chính
 
 ---
 
@@ -787,16 +841,21 @@ Push/Merge/Migration/Cutover/Publish authorization:
 | ID | Sev | Mô tả | Owner | Trạng thái |
 |---|---|---|---|---|
 | F-02 | P1 | 3 literal authority nằm ở `server/`, không chỉ ở tests | GPT1 ratify trước | **PAUSED** (§1) |
-| F-03 | P1 | `GOLDEN_RULES.md` không nằm trong ancestry của `main` | GPT2 + Owner | ⬜ → §0.1 |
 | F-04 | P2 | `test_adversarial_staff_ui_flow.cjs` phụ thuộc MCP sống + secret; che 12 file | GPT2 | ⬜ → §10.2 |
 | F-05 | P3 | Runner hardcoded; 2 file test không được enumerate | GPT2 | ⬜ → §10.4 |
-| F-06 | P1 | `PROJECT_TRANSITION_EDGES` nhân bản `ALLOWED_PROJECT_TRANSITIONS`, fail-open by drift | GPT2 | ⬜ → §9.1 |
+| F-06 | P1 | `PROJECT_TRANSITION_EDGES` nhân bản `ALLOWED_PROJECT_TRANSITIONS`, fail-open by drift | GPT2 | ⬜ → §9.1 + [`GPT1_RULING_F06_F09.md`](./GPT1_RULING_F06_F09.md) |
 | F-07 | P3 | Role `ADMIN` không tồn tại trong schema nhưng có trong 2 role check | GPT2 | ⬜ |
+| F-08 | P3 | TOCTOU seed race: `await hashPassword` nằm giữa CHECK và ACT, `server/server.js:361`; không `INSERT OR IGNORE`, không transaction. Chỉ ảnh hưởng `NODE_ENV=test` | GPT2 | ⬜ |
+| F-09 | **P1** | DAG khai `PRODUCT_TRUTH_VERIFIED` nhưng `CHECK(state IN …)` không có → `500 DATABASE_ERROR`, chặn nhánh Product Truth. **Closure contract: [`GPT1_RULING_F06_F09.md`](./GPT1_RULING_F06_F09.md)** | GPT2 | ⬜ |
 | E-02, E-06, E-07 | P1 | Etsy defect register | GPT1 (Etsy) | ⬜ |
 | E-01 | P2 | Etsy defect register | GPT1 (Etsy) | ⬜ |
 | E-04, E-05 | P3 | Etsy defect register | GPT1 (Etsy) | ⬜ |
 
-**Đã đóng:** C-01 (stale oracle, 2 file) · C-03 (1/8 → 12/12 transition edges) · H0-AUTH-01 (zero-write) · SSRF · 24 unauthenticated routes · 4 fabrication sites · publishGate financial floors · cross-tenant isolation · project-scoped evidence · eligibility default-allow
+> **Register duy nhất.** Bảng này là defect register canonical. `GPT1_RULING_F06_F09.md` là
+> **closure contract chi tiết** cho F-06/F-09, không phải register thứ hai. Severity và trạng
+> thái lấy từ bảng này; điều kiện đóng lấy từ ruling. Không tạo bảng defect ở nơi khác (§9).
+
+**Đã đóng:** F-03 (`GOLDEN_RULES.md` đã vào ancestry của `main` tại PR#26 `4cba3cb`) · C-01 (stale oracle, 2 file) · C-03 (1/8 → 12/12 transition edges) · H0-AUTH-01 (zero-write) · SSRF · 24 unauthenticated routes · 4 fabrication sites · publishGate financial floors · cross-tenant isolation · project-scoped evidence · eligibility default-allow
 
 ---
 

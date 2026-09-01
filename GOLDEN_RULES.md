@@ -1,9 +1,10 @@
 # OMNISELLER — GOLDEN RULES
 
-**Version:** 2.1
+**Version:** 2.2
 **Thay thế:** v1.4 và **toàn bộ** rule/agreement trước đó, không có ngoại lệ.
 **Soạn bởi:** Claude (architecture controller) theo yêu cầu Owner, 2026-08-26
-**v2.1, 2026-08-27:** docs-only — GPT1 ruling F-06/F-09 repo-bound; register bổ sung F-08/F-09, đóng F-03; §2.2 exit criteria; DOC-01/DOC-02 ratified. Không đổi rule nào của v2.0.
+**v2.1, 2026-08-27:** docs-only candidate — GPT1 ruling F-06/F-09, register bổ sung F-08/F-09, đóng F-03; §2.2 exit criteria; DOC-01/DOC-02 ratified. Chỉ có hiệu lực sau khi commit chứa thay đổi này vào ancestry của `main`.
+**v2.2, 2026-09-01:** docs-only candidate — retire governance artifact trùng `GOLDEN_RULES_V2.json`; bind mọi implementation/test evidence vào exact SHA; đăng ký F-10/F-11. Không tuyên bố runtime PASS cho candidate tài liệu.
 **Base SHA đối chiếu:** `5c4153bbb03ccf9e0f02b4b90781f64819b70848`
 **Áp dụng cho:** GPT1, GPT2, GPT3, GPT4, Claude, Antigravity và mọi reviewer/implementer sau này.
 
@@ -21,6 +22,7 @@
 | `PROJECT_GUIDE_*.md` phần còn lại | ⚠️ Tài liệu tham khảo business/architecture. Mâu thuẫn → văn bản này thắng |
 | Multi-AI Golden Rules (21 mục) | ✅ Đã hợp nhất |
 | `OMNISELLER_GOVERNANCE_V1.md`, các stub, checklist rời | ❌ **BÃI BỎ** hoặc hạ xuống `docs/operational/` |
+| `GOLDEN_RULES_V2.json` | ❌ **RETIRED** — historical AMZ Launch OS artifact; không phải governance của Factcheck/OmniSeller; stub trỏ về văn bản này |
 | Mọi ruling chỉ tồn tại trong chat | ⚠️ Xem §1 — không phải contract cho tới khi vào repo |
 
 ### 0.1. RULE CAO NHẤT — GOVERNANCE CHỈ CÓ HIỆU LỰC KHI NẰM TRONG ANCESTRY CỦA `main`
@@ -48,9 +50,9 @@ git merge-base --is-ancestor <governance-sha> origin/main && echo IN-FORCE || ec
 
 Nếu `NOT-IN-FORCE`: được phép **đề xuất**, không được phép **cưỡng chế**.
 
-### 0.2. Cảnh báo tự áp cho chính văn bản này
+### 0.2. Cảnh báo tự áp cho mọi revision tương lai
 
-Chừng nào v2.0 chưa được commit và merge vào `main`, **nó cũng chỉ là đề xuất**. Xem PHỤ LỤC C.
+v2.0 đã nằm trong `main`. Mọi revision mới hơn chỉ là proposal cho tới khi exact commit chứa revision đó được review, Owner cho phép merge, và commit đi vào ancestry của `main`. Xem PHỤ LỤC C.
 
 ---
 
@@ -119,7 +121,7 @@ Mỗi mục phải có **exit criteria nhân viên tự kiểm được**. Mục
 |---|---|---|
 | 1 | Nhân viên tạo/chọn project | ⬜ OPEN |
 | 2 | Nạp research data thật, reload không mất | ⬜ OPEN |
-| 3 | Evidence không thể tự phong authority | ✅ **PASS** — `test_h0_c03_transition_authority.cjs`, exit 0 |
+| 3 | Evidence không thể tự phong authority | ⚠️ **OPEN — HISTORICAL EXTERNAL-BRANCH EVIDENCE ONLY**; chưa chạy trên candidate tài liệu này |
 | 4 | Tạo draft từ dữ liệu thật | ⬜ **BLOCKED BY F-09** |
 | 5 | Không publish claim chưa verified | ⬜ OPEN |
 
@@ -149,7 +151,11 @@ PASS khi:
 - evidence mới chỉ ở trạng thái research/evidence;
 - không path nào tự biến evidence thành Product Truth;
 - transition authority suite canonical PASS toàn bộ.
-STATUS hiện tại: PASS theo C-03.
+EVIDENCE SCOPE: `tests/test_h0_c03_transition_authority.cjs` không tồn tại trên
+`main@0f6a941793c19c2e92c6755627328a8a443fed32` hoặc parent docs
+`e9b9153b716ab4ba9351cb1dd7857462386f2411`. File tồn tại trên PR #25 exact head
+`078533d075559e7a2f4d71885bfb89d4ebaf0a87`; mọi kết quả C-03 trước đây là historical
+implementation evidence của lineage đó, không phải test execution của candidate docs này.
 
 4. Tạo draft từ dữ liệu thật
 PASS khi:
@@ -451,7 +457,7 @@ Trước khi thêm status/score/mapping/config/readiness flag/schema field/deriv
 
 ### 9.1. Cấm nhân bản classification map — **rule mới, P1**
 
-> **Bằng chứng (`936be83`):** `PROJECT_TRANSITION_EDGES` trong `server/middleware/auth.js:27` là bản sao **byte-identical** của `ALLOWED_PROJECT_TRANSITIONS` trong `server/server.js:1233` — 10 state, trùng khít 100%. Nhưng middleware xử lý edge không nhận ra bằng `return next()` — **đi qua không guard**. Thêm một edge vào map ở `server.js` mà quên bản copy → authority gate im lặng không chạy. Không test nào đỏ.
+> **Historical implementation evidence, không phải candidate-docs evidence (`936be8329ab226d94a6ba79e2213a66be9c1996a`, ancestor của PR #25 head `078533d075559e7a2f4d71885bfb89d4ebaf0a87`):** `PROJECT_TRANSITION_EDGES` trong `server/middleware/auth.js` là bản sao của `ALLOWED_PROJECT_TRANSITIONS` trong `server/server.js`. Map middleware không tồn tại trên `main@0f6a941793c19c2e92c6755627328a8a443fed32` hoặc docs parent `e9b9153b716ab4ba9351cb1dd7857462386f2411`. Finding F-06 áp dụng cho implementation lineage PR #25; không được trình bày như diff của PR governance.
 
 ```
 Nhân bản một classification map (DAG, route registry, allowlist, role map)
@@ -561,7 +567,7 @@ EVIDENCE_INTAKE → RESEARCH_ACCEPTED → DNA_ACCEPTED → MKL_FROZEN
 
 Guard phải query đúng tenant/workspace/marketplace/project, yêu cầu ít nhất một row `ACCEPTED` **hiện vẫn đạt EA-B**, tái xác minh hash/tamper/revocation/supersession và reject **trước mọi mutation**.
 
-> **`COUNT(*) WHERE evidence_state='ACCEPTED'` KHÔNG phải guard.** Row-state không phải authority. Đó là `PERSISTED ≠ ELIGIBLE` viết thành code. Bằng chứng: `DNA_ACCEPTED` tại `server.js:1300` từng trông như được guard nhưng chỉ đếm row — đã đóng tại `936be83`.
+> **`COUNT(*) WHERE evidence_state='ACCEPTED'` KHÔNG phải guard.** Row-state không phải authority. Đó là `PERSISTED ≠ ELIGIBLE` viết thành code. Historical remediation evidence cho `DNA_ACCEPTED` thuộc exact implementation SHA `936be8329ab226d94a6ba79e2213a66be9c1996a` trong lineage PR #25; không phải execution evidence của candidate docs này.
 
 Đây là research-foundation precondition, **không phải authority thứ hai thay `publishGate`**. Tại `MANAGER_APPROVED`/`PUBLISH_READY` vẫn phải kiểm riêng EA-A Product Truth, IP `CLEARED`, approval/version/hash, economics và scope.
 
@@ -804,33 +810,32 @@ Push/Merge/Migration/Cutover/Publish authorization:
 | §4 Luật bằng chứng PASS/GREEN/DONE | **GPT1** | Có hiệu lực ngay |
 | §3.1 Tách hai chữ "certify" | **GPT1** | GPT3 không tạo authority contract |
 | §3.3 Antigravity | **GPT1** | Không audit/certify |
-
 | §2.2 exit criteria | **GPT1** | Ratified 2026-08-27 — acceptance wording, không phải evidence |
 | DOC-01 §0.1 vs §1-L3 | **GPT1** | Ratified: **§0.1** quản hiệu lực của governance record, defect classification, assignment và procedural ruling (qua ancestry của `main`); **§1-L3** quản định nghĩa literal authority/contract mà implementation phải khớp chính xác |
-| DOC-02 | **GPT1** | Đóng: F-06 basis chuyển sang §8/§12, §9 supporting. §9.1 vẫn PENDING nhưng không còn là căn cứ duy nhất của F-06 |
+| DOC-02 | **GPT1** | Đóng: F-06 basis là §8/§12; §9.1 chỉ supporting và vẫn PENDING. Defect register dùng đúng basis này |
 | F-06 severity | **GPT1** | **P1.** Mọi ruling chat hạ xuống P2 đã bị thu hồi |
 | F-09 | **GPT1** | **CONFIRMED, P1 functional/release blocker.** Closure contract 8 điều kiện: `GPT1_RULING_F06_F09.md` |
 
 **Mục sau là ĐỀ XUẤT MỚI của Claude trong v2.0, `PENDING` GPT1/Owner ratify:**
-§1.1 kỷ luật quy kết · §2.1 governance ≠ sản phẩm · §2.2 năm kết quả staff-facing · §3.5 năng lực thực thi · §5.1 head di chuyển · §6.1 scope theo class · §9.1 cấm fail-open-by-drift · §10.1 location map · §10.2 hermeticity · §10.3 accumulate · §10.4 runner completeness · §17.2 tự đính chính
+§1.1 kỷ luật quy kết · §2.1 governance ≠ sản phẩm · §3.5 năng lực thực thi · §5.1 head di chuyển · §6.1 scope theo class · §9.1 cấm fail-open-by-drift · §10.1 location map · §10.2 hermeticity · §10.3 accumulate · §10.4 runner completeness · §17.2 tự đính chính
 
 ---
 
 ## PHỤ LỤC C — VIỆC ĐỂ VĂN BẢN NÀY CÓ HIỆU LỰC
 
-> **Chừng nào việc 1–2 chưa xong, v2.0 KHÔNG CÓ HIỆU LỰC (§0.1) — nó chỉ là artifact lớp L2.**
+> **v2.0 đã có hiệu lực trên `main` qua PR #26 (`4cba3cb`).** Các thay đổi v2.1/v2.2 trong candidate này chỉ có hiệu lực sau khi exact child commit được review, Owner cho phép merge, và commit đó vào ancestry của `main`.
 
 | # | Việc | Owner | Trạng thái |
 |---|---|---|---|
-| 1 | Commit `GOLDEN_RULES.md` v2.0 ở gốc repo | GPT2 | ⬜ |
-| 2 | **Merge vào `origin/main`** — điều kiện tiên quyết | Owner authorize | ⬜ |
-| 3 | Xoá/stub toàn bộ governance cũ; `PROJECT_GUIDE_*` xoá §13, §21 | GPT2 | ⬜ |
+| 1 | Commit `GOLDEN_RULES.md` v2.0 ở gốc repo | GPT2 | ✅ `4cba3cb` |
+| 2 | **Merge vào `origin/main`** — điều kiện tiên quyết | Owner authorize | ✅ PR #26; nằm trong `main@0f6a941793c19c2e92c6755627328a8a443fed32` |
+| 3 | Xoá/stub toàn bộ governance cũ; `PROJECT_GUIDE_*` xoá §13, §21 | GPT2 | ⚠️ CANDIDATE FIX — `GOLDEN_RULES_V2.json` và `PROJECT_GUIDE_CLAUDE_GPT_OMNI_AMZ_ETSY.md` retired as governance trong v2.2; có hiệu lực sau review/merge |
 | 4 | Viết 8 test `MACHINE` (§14) | GPT2 | ⬜ |
 | 5 | CI check: `GOLDEN_RULES.md` tồn tại ở `main` (§0.1) | GPT2 | ⬜ |
 | 6 | GPT1 ratify các mục `PENDING` ở Phụ lục B | GPT1 | ⬜ |
 | 7 | GPT1 ratify hoặc bỏ literal C-02 (§1, §8.2) | GPT1 | ⬜ |
-| 8 | Gán exit criteria đo được cho 4/5 mục còn lại (§2.2) | GPT1 | ⬜ |
-| 9 | Môi trường Linux/Node22 cho GPT2 (§3.5) | Owner | ⬜ |
+| 8 | Gán exit criteria đo được cho 4/5 mục còn lại (§2.2) | GPT1 | ⚠️ candidate v2.1/v2.2; có hiệu lực sau merge |
+| 9 | Môi trường Linux/Node22 cho GPT2 (§3.5) | Owner | ✅ `/home/longca/projects/Factcheck`, Node `22.23.2`, GPT-LIVE-VERIFIED 2026-09-01 |
 | 10 | GPT4 giao adversarial artifact hoặc rời critical path (§3.4) | GPT4 | ⬜ |
 | 11 | Parity review Etsy / Amazon (§18) | GPT1 / GPT3 | ⬜ |
 
@@ -840,13 +845,16 @@ Push/Merge/Migration/Cutover/Publish authorization:
 
 | ID | Sev | Mô tả | Owner | Trạng thái |
 |---|---|---|---|---|
+| G-03 | P1 | Nhiều file cùng tự nhận là ACTIVE/shared governance contract | GPT2 + Owner | ⚠️ CANDIDATE FIX — legacy JSON/Guide retired; chỉ `GOLDEN_RULES.md` còn authority sau merge |
 | F-02 | P1 | 3 literal authority nằm ở `server/`, không chỉ ở tests | GPT1 ratify trước | **PAUSED** (§1) |
 | F-04 | P2 | `test_adversarial_staff_ui_flow.cjs` phụ thuộc MCP sống + secret; che 12 file | GPT2 | ⬜ → §10.2 |
 | F-05 | P3 | Runner hardcoded; 2 file test không được enumerate | GPT2 | ⬜ → §10.4 |
-| F-06 | P1 | `PROJECT_TRANSITION_EDGES` nhân bản `ALLOWED_PROJECT_TRANSITIONS`, fail-open by drift | GPT2 | ⬜ → §9.1 + [`GPT1_RULING_F06_F09.md`](./GPT1_RULING_F06_F09.md) |
+| F-06 | P1 | PR #25 implementation lineage nhân bản `PROJECT_TRANSITION_EDGES` và `ALLOWED_PROJECT_TRANSITIONS`, tạo fail-open-by-drift | GPT2 | ⬜ → basis §8/§12; §9.1 supporting; historical evidence `936be8329ab226d94a6ba79e2213a66be9c1996a`, present at PR #25 `078533d075559e7a2f4d71885bfb89d4ebaf0a87`; absent from docs candidate |
 | F-07 | P3 | Role `ADMIN` không tồn tại trong schema nhưng có trong 2 role check | GPT2 | ⬜ |
 | F-08 | P3 | TOCTOU seed race: `await hashPassword` nằm giữa CHECK và ACT, `server/server.js:361`; không `INSERT OR IGNORE`, không transaction. Chỉ ảnh hưởng `NODE_ENV=test` | GPT2 | ⬜ |
-| F-09 | **P1** | DAG khai `PRODUCT_TRUTH_VERIFIED` nhưng `CHECK(state IN …)` không có → `500 DATABASE_ERROR`, chặn nhánh Product Truth. **Closure contract: [`GPT1_RULING_F06_F09.md`](./GPT1_RULING_F06_F09.md)** | GPT2 | ⬜ |
+| F-09 | **P1** | Static mismatch trên `main@0f6a941793c19c2e92c6755627328a8a443fed32`: DAG khai `PRODUCT_TRUTH_VERIFIED` nhưng persisted `CHECK(state IN …)` không có state đó. HTTP/runtime result **NOT EXECUTED** cho docs candidate. **Closure contract: [`GPT1_RULING_F06_F09.md`](./GPT1_RULING_F06_F09.md)** | GPT2 | ⬜ |
+| F-10 | **P1** | Generic client-controlled `POST /api/evidence` allowlist nhận `source=MCP_RETRIEVAL`; client không được tạo provider-controlled provenance | GPT2 | ⬜ **STATIC CONFIRMED** trên `main@0f6a941793c19c2e92c6755627328a8a443fed32` và PR #25 `078533d075559e7a2f4d71885bfb89d4ebaf0a87`; closure cần route/provider class remediation + adversarial zero-write tests |
+| F-11 | **P1** | Project transition `PUBLISH_READY` chỉ đếm listing có persisted status, không recompute current `publishGate` trên exact listing/version/payload | GPT2 | ⬜ **STATIC CONFIRMED** trên `main@0f6a941793c19c2e92c6755627328a8a443fed32` và PR #25 `078533d075559e7a2f4d71885bfb89d4ebaf0a87`; closure cần current gate recomputation + stale/tamper/zero-write tests |
 | E-02, E-06, E-07 | P1 | Etsy defect register | GPT1 (Etsy) | ⬜ |
 | E-01 | P2 | Etsy defect register | GPT1 (Etsy) | ⬜ |
 | E-04, E-05 | P3 | Etsy defect register | GPT1 (Etsy) | ⬜ |
@@ -855,7 +863,9 @@ Push/Merge/Migration/Cutover/Publish authorization:
 > **closure contract chi tiết** cho F-06/F-09, không phải register thứ hai. Severity và trạng
 > thái lấy từ bảng này; điều kiện đóng lấy từ ruling. Không tạo bảng defect ở nơi khác (§9).
 
-**Đã đóng:** F-03 (`GOLDEN_RULES.md` đã vào ancestry của `main` tại PR#26 `4cba3cb`) · C-01 (stale oracle, 2 file) · C-03 (1/8 → 12/12 transition edges) · H0-AUTH-01 (zero-write) · SSRF · 24 unauthenticated routes · 4 fabrication sites · publishGate financial floors · cross-tenant isolation · project-scoped evidence · eligibility default-allow
+**Đã đóng trên current `main`:** F-03 (`GOLDEN_RULES.md` đã vào ancestry của `main` tại PR#26 `4cba3cb`) · C-01 (stale oracle, 2 file) · SSRF · 24 unauthenticated routes · 4 fabrication sites · publishGate financial floors · project-scoped evidence.
+
+**Historical implementation evidence, không phải candidate-docs execution:** C-03 12/12 transition edges, H0-AUTH-01 zero-write, cross-tenant isolation và eligibility-default-allow remediation từng được báo trên implementation lineage PR #25. Riêng C-03 test file hiện tồn tại tại exact PR #25 head `078533d075559e7a2f4d71885bfb89d4ebaf0a87` nhưng không tồn tại trên `main@0f6a941…` hoặc docs parent `e9b9153…`. Các kết quả này phải rerun trên exact implementation candidate trước khi dùng làm current PASS.
 
 ---
 

@@ -855,6 +855,7 @@ Push/Merge/Migration/Cutover/Publish authorization:
 | F-09 | **P1** | Static mismatch trên `main@0f6a941793c19c2e92c6755627328a8a443fed32`: DAG khai `PRODUCT_TRUTH_VERIFIED` nhưng persisted `CHECK(state IN …)` không có state đó. HTTP/runtime result **NOT EXECUTED** cho docs candidate. **Closure contract: [`GPT1_RULING_F06_F09.md`](./GPT1_RULING_F06_F09.md)** | GPT2 | ⬜ |
 | F-10 | **P1** | Generic client-controlled `POST /api/evidence` allowlist nhận `source=MCP_RETRIEVAL`; client không được tạo provider-controlled provenance | GPT2 | ⬜ **STATIC CONFIRMED** trên `main@0f6a941793c19c2e92c6755627328a8a443fed32` và PR #25 `078533d075559e7a2f4d71885bfb89d4ebaf0a87`; closure cần route/provider class remediation + adversarial zero-write tests |
 | F-11 | **P1** | Project transition `PUBLISH_READY` chỉ đếm listing có persisted status, không recompute current `publishGate` trên exact listing/version/payload | GPT2 | ⬜ **STATIC CONFIRMED** trên `main@0f6a941793c19c2e92c6755627328a8a443fed32` và PR #25 `078533d075559e7a2f4d71885bfb89d4ebaf0a87`; closure cần current gate recomputation + stale/tamper/zero-write tests |
+| F-12 | **P1** | Evidence kind không phải Etsy paste/Smart Pull mặc định nhận `eligible:true`; unknown/missing/malformed kind không được tự đủ điều kiện acceptance | GPT2 | ⬜ **STATIC CONFIRMED** trên `main@0f6a941793c19c2e92c6755627328a8a443fed32`, `server/server.js:1013-1035`; PR #25 `078533d075559e7a2f4d71885bfb89d4ebaf0a87` có pending remediation nhưng chưa merge/current PASS. Closure: explicit allowlist; unknown/missing/malformed → `eligible:false`; accept/transition reject; zero business/authority writes; cross-scope adversarial matrix; rerun trên exact implementation candidate |
 | E-02, E-06, E-07 | P1 | Etsy defect register | GPT1 (Etsy) | ⬜ |
 | E-01 | P2 | Etsy defect register | GPT1 (Etsy) | ⬜ |
 | E-04, E-05 | P3 | Etsy defect register | GPT1 (Etsy) | ⬜ |
@@ -872,7 +873,7 @@ publishGate financial floors · project-scoped evidence. Candidate tài liệu n
 các closure suites và không bind command/exit/environment riêng cho từng record; reviewer phải
 đối chiếu exact implementation artifact trước khi dựa vào chúng.
 
-**Historical implementation evidence, không phải candidate-docs execution:** C-03 12/12 transition edges, H0-AUTH-01 zero-write, cross-tenant isolation và eligibility-default-allow remediation từng được báo trên implementation lineage PR #25. Riêng C-03 test file hiện tồn tại tại exact PR #25 head `078533d075559e7a2f4d71885bfb89d4ebaf0a87` nhưng không tồn tại trên `main@0f6a941…` hoặc docs parent `e9b9153…`. Các kết quả này phải rerun trên exact implementation candidate trước khi dùng làm current PASS.
+**Historical implementation evidence, không phải candidate-docs execution:** C-03 12/12 transition edges, H0-AUTH-01 zero-write, cross-tenant isolation và pending F-12 default-allow remediation từng được báo trên implementation lineage PR #25. Riêng C-03 test file hiện tồn tại tại exact PR #25 head `078533d075559e7a2f4d71885bfb89d4ebaf0a87` nhưng không tồn tại trên `main@0f6a941…` hoặc docs parent `e9b9153…`. Các kết quả này phải rerun trên exact implementation candidate trước khi dùng làm current PASS.
 
 ---
 

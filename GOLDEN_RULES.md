@@ -835,7 +835,7 @@ Push/Merge/Migration/Cutover/Publish authorization:
 | 6 | GPT1 ratify các mục `PENDING` ở Phụ lục B | GPT1 | ⬜ |
 | 7 | GPT1 ratify hoặc bỏ literal C-02 (§1, §8.2) | GPT1 | ⬜ |
 | 8 | Gán exit criteria đo được cho 4/5 mục còn lại (§2.2) | GPT1 | ⚠️ candidate v2.1/v2.2; có hiệu lực sau merge |
-| 9 | Môi trường Linux/Node22 cho GPT2 (§3.5) | Owner | ✅ `/home/longca/projects/Factcheck`, Node `22.23.2`, GPT-LIVE-VERIFIED 2026-09-01 |
+| 9 | Môi trường Linux/Node22 cho GPT2 (§3.5) | Owner | ⚠️ SESSION-REPORTED: `/home/longca/projects/Factcheck`, Node `22.23.2`; mỗi implementation/certification run phải tự ghi command, timestamp và exit code |
 | 10 | GPT4 giao adversarial artifact hoặc rời critical path (§3.4) | GPT4 | ⬜ |
 | 11 | Parity review Etsy / Amazon (§18) | GPT1 / GPT3 | ⬜ |
 
@@ -863,7 +863,14 @@ Push/Merge/Migration/Cutover/Publish authorization:
 > **closure contract chi tiết** cho F-06/F-09, không phải register thứ hai. Severity và trạng
 > thái lấy từ bảng này; điều kiện đóng lấy từ ruling. Không tạo bảng defect ở nơi khác (§9).
 
-**Đã đóng trên current `main`:** F-03 (`GOLDEN_RULES.md` đã vào ancestry của `main` tại PR#26 `4cba3cb`) · C-01 (stale oracle, 2 file) · SSRF · 24 unauthenticated routes · 4 fabrication sites · publishGate financial floors · project-scoped evidence.
+**Đã đóng và bind được vào current `main`:** F-03 — `GOLDEN_RULES.md` đã vào ancestry của
+`main` tại PR #26 merge commit `4cba3cb`; ancestry được kiểm lại trên docs candidate này.
+
+**Historical closure records — không được dùng làm current PASS nếu thiếu exact execution
+receipt:** C-01 (stale oracle, 2 file) · SSRF · 24 unauthenticated routes · 4 fabrication sites ·
+publishGate financial floors · project-scoped evidence. Candidate tài liệu này không chạy lại
+các closure suites và không bind command/exit/environment riêng cho từng record; reviewer phải
+đối chiếu exact implementation artifact trước khi dựa vào chúng.
 
 **Historical implementation evidence, không phải candidate-docs execution:** C-03 12/12 transition edges, H0-AUTH-01 zero-write, cross-tenant isolation và eligibility-default-allow remediation từng được báo trên implementation lineage PR #25. Riêng C-03 test file hiện tồn tại tại exact PR #25 head `078533d075559e7a2f4d71885bfb89d4ebaf0a87` nhưng không tồn tại trên `main@0f6a941…` hoặc docs parent `e9b9153…`. Các kết quả này phải rerun trên exact implementation candidate trước khi dùng làm current PASS.
 

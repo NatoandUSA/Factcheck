@@ -25,6 +25,7 @@
   "tests/test_etsy_scanner_evidence_ui.cjs",
   "tests/test_etsy_truth_semantics.cjs",
   "tests/test_evidence_health.cjs",
+  "tests/test_h0_evidence_integrity.cjs",
   "tests/test_full_cerebro_mkl_flow.cjs",
   "tests/test_legacy_migration_integrity.test.cjs",
   "tests/test_listing_ip_rescreen.cjs",

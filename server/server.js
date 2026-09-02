@@ -43,6 +43,7 @@ const { UrlGuardError } = require('./security/urlGuard');
 const { resolveRuntimePaths } = require('./config/paths');
 const { parseEtsySearchInput } = require('./etsyPastedSearchParser');
 const { buildEvidenceHealth } = require('./evidenceHealth');
+const evidenceAuthority = require('./evidenceAuthority');
 
 // Make crashes visible instead of dying silently with no trace (systemd will
 // still restart the process via Restart=always; this just ensures the cause
@@ -963,29 +964,33 @@ function getEvidenceAcceptanceEligibility(evidence) {
       message: 'Staff-pasted HeyEtsy/search text is retained for analysis and audit, but it is not independently verified evidence and cannot satisfy Research Accepted.'
     };
   }
-  if (metadata.kind !== SMART_PULL_ARTIFACT_KIND) return { eligible: true };
-
-  const state = metadata.evidenceState;
-  const hasContentHash = typeof metadata.contentHash === 'string' && /^[a-f0-9]{64}$/i.test(metadata.contentHash);
-  const completeRetrieval = evidence.source === 'MCP_RETRIEVAL'
-    && ACCEPTABLE_SMART_PULL_STATES.has(state)
-    && hasContentHash;
-
-  if (completeRetrieval) return { eligible: true };
+  const result = evidenceAuthority.evaluateEvidenceAuthority(evidence, {
+    tenantId: evidence.tenant_id, workspaceId: evidence.workspace_id,
+    marketplace: evidence.marketplace, projectId: evidence.project_id, evidenceVersion: 1
+  });
+  if (result.qualifying) return { eligible: true };
   return {
     eligible: false,
-    error: 'UNQUALIFIED_SMART_PULL_ARTIFACT',
-    message: `Smart Pull artifact state ${state || 'UNKNOWN'} is not eligible for acceptance. Only complete, hashed MCP retrievals may satisfy research acceptance.`
+    error: metadata.kind === SMART_PULL_ARTIFACT_KIND ? 'UNQUALIFIED_SMART_PULL_ARTIFACT' : 'UNQUALIFIED_EVIDENCE_AUTHORITY',
+    message: result.message
   };
 }
 
 function persistSmartPullArtifact(req, project, source, seedPhrase, artifact) {
+  const metadata = source === 'MCP_RETRIEVAL'
+    ? evidenceAuthority.deriveControlledEvidenceEnvelope({
+      provider: artifact.provider, payload: artifact.canonicalPayload,
+      scope: { tenantId: req.user.tenantId, workspaceId: req.user.workspaceId,
+        marketplace: req.user.marketplace, projectId: project.id, evidenceVersion: 1 },
+      evidenceState: artifact.evidenceState, extraMetadata: artifact
+    }).metadata
+    : { ...artifact, kind: SMART_PULL_ARTIFACT_KIND, authority: 'NONE' };
   return new Promise((resolve, reject) => {
     db.run(
       `INSERT INTO research_evidence (tenant_id, workspace_id, marketplace, project_id, seed_phrase, source, actor_id, evidence_state, metadata)
        VALUES (?, ?, ?, ?, ?, ?, ?, 'OBSERVED', ?)`,
       [req.user.tenantId, req.user.workspaceId, req.user.marketplace, project.id, seedPhrase, source, req.user.userId,
-        JSON.stringify({ kind: 'SMART_PULL_ARTIFACT_V1', ...artifact })],
+        JSON.stringify(metadata)],
       function(err) { if (err) reject(err); else resolve(this.lastID); }
     );
   });
@@ -993,6 +998,9 @@ function persistSmartPullArtifact(req, project, source, seedPhrase, artifact) {
 
 // POST /api/evidence - Ingest new evidence record (Strictly Project-Bound & Source-Contracted)
 app.post('/api/evidence', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
+  const inspection = evidenceAuthority.inspectClientAuthorityMetadata(req.body);
+  if (inspection.forbidden) return res.status(400).json({ success: false, error: 'CLIENT_AUTHORITY_METADATA_FORBIDDEN', fields: inspection.fields });
+  if (inspection.invalid) return res.status(400).json({ success: false, error: 'INVALID_EVIDENCE_METADATA' });
   const { projectId, seedPhrase, source, sourceUrl, fileName, metadata } = req.body || {};
 
   parseAndValidateProject(db, req, projectId, (pErr, project) => {
@@ -1012,7 +1020,7 @@ app.post('/api/evidence', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SEL
     }
 
     const isManual = cleanSource === 'STAFF_MANUAL_ASSERTION';
-    const finalMetadata = { ...(metadata || {}), isManualAssertion: isManual };
+    const finalMetadata = { ...evidenceAuthority.sanitizeGenericEvidenceMetadata(metadata), isManualAssertion: isManual };
 
     db.run(
       `INSERT INTO research_evidence (tenant_id, workspace_id, marketplace, project_id, seed_phrase, source, source_url, file_name, actor_id, evidence_state, metadata)
@@ -1064,13 +1072,23 @@ app.post('/api/evidence/:id/accept', requireAuth(db), requireRole(['OWNER', 'MAN
         });
       }
 
+      // The project must still belong to this exact scope. A matching evidence
+      // row alone is not sufficient (legacy/orphaned bindings fail closed).
+      db.get(`SELECT id FROM research_projects WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
+        [evidence.project_id, req.user.tenantId, req.user.workspaceId, req.user.marketplace], (projectError, project) => {
+      if (projectError) return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
+      if (!project) return res.status(404).json({ success: false, error: 'PROJECT_NOT_FOUND' });
+
       db.run(
         `UPDATE research_evidence
          SET evidence_state = 'ACCEPTED', accepted_at = ?, accepted_by = ?
-         WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
-        [now, req.user.userId, id, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+         WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?
+           AND metadata = ? AND source = ? AND project_id = ? AND evidence_state = ?`,
+        [now, req.user.userId, id, req.user.tenantId, req.user.workspaceId, req.user.marketplace,
+          evidence.metadata, evidence.source, evidence.project_id, evidence.evidence_state],
         function(err) {
           if (err) return res.status(500).json({ success: false, error: err.message });
+          if (this.changes !== 1) return res.status(409).json({ success: false, error: 'UNQUALIFIED_EVIDENCE_AUTHORITY' });
 
           // Log append-only evidence acceptance event
           if (evidence.project_id) {
@@ -1084,6 +1102,7 @@ app.post('/api/evidence/:id/accept', requireAuth(db), requireRole(['OWNER', 'MAN
           res.json({ success: true, evidenceId: id, evidenceState: 'ACCEPTED', acceptedBy: req.user.userId, acceptedAt: now });
         }
       );
+      });
     }
   );
 });
@@ -1322,6 +1341,13 @@ app.patch('/api/projects/:id/transition', requireAuth(db), requireRole(['OWNER',
         }
       };
 
+      // Every legal forward edge uses current authority, never just row state.
+      db.all(`SELECT * FROM research_evidence WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ?
+        AND project_id = ? AND evidence_state = 'ACCEPTED'`,
+        [req.user.tenantId, req.user.workspaceId, req.user.marketplace, projectId], (authorityError, rows) => {
+      if (authorityError) return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
+      const qualifying = (rows || []).find(row => getEvidenceAcceptanceEligibility(row).eligible);
+      if (!qualifying) return res.status(400).json({ success: false, error: 'MISSING_QUALIFYING_EVIDENCE_PRECONDITION' });
       checkPreconditions((resolvedNotes) => {
         const now = new Date().toISOString();
         const updatedNotes = resolvedNotes || project.product_truth_notes || null;
@@ -1332,10 +1358,16 @@ app.patch('/api/projects/:id/transition', requireAuth(db), requireRole(['OWNER',
         db.run(
           `UPDATE research_projects
            SET state = ?, product_truth_notes = ?, validated_at = ?, validated_by = ?, updated_at = ?
-           WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
-          [targetState, updatedNotes, validatedAt, validatedBy, now, projectId, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+           WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ? AND state = ?
+             AND EXISTS (SELECT 1 FROM research_evidence e WHERE e.id = ? AND e.metadata = ? AND e.source = ?
+               AND e.evidence_state = 'ACCEPTED' AND e.project_id = research_projects.id
+               AND e.tenant_id = research_projects.tenant_id AND e.workspace_id = research_projects.workspace_id
+               AND e.marketplace = research_projects.marketplace)`,
+          [targetState, updatedNotes, validatedAt, validatedBy, now, projectId, req.user.tenantId, req.user.workspaceId, req.user.marketplace,
+            currentState, qualifying.id, qualifying.metadata, qualifying.source],
           function(uErr) {
             if (uErr) return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
+            if (this.changes !== 1) return res.status(409).json({ success: false, error: 'UNQUALIFIED_EVIDENCE_AUTHORITY' });
 
             // Append-Only Transition Event Audit Record
             db.run(
@@ -1350,6 +1382,7 @@ app.patch('/api/projects/:id/transition', requireAuth(db), requireRole(['OWNER',
             res.json({ success: true, projectId, previousState: currentState, state: targetState, productTruthNotes: updatedNotes, updatedAt: now });
           }
         );
+      });
       });
     }
   );
@@ -1370,11 +1403,21 @@ app.post('/api/projects/:id/adopt-evidence', requireAuth(db), requireRole(['OWNE
     (pErr, project) => {
       if (pErr || !project) return res.status(404).json({ success: false, error: 'PROJECT_NOT_FOUND' });
 
+      db.get(`SELECT * FROM research_evidence WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
+        [evidenceId, req.user.tenantId, req.user.workspaceId, req.user.marketplace], (eErr, evidence) => {
+      if (eErr) return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
+      if (!evidence || evidence.project_id !== null) return res.status(404).json({ success: false, error: 'UNSCOPED_EVIDENCE_NOT_FOUND' });
+      // Adoption may attach an unscoped row only to its ORIGINAL server-bound
+      // project. It cannot mint a new scope/hash or promote legacy research.
+      const eligibility = getEvidenceAcceptanceEligibility({ ...evidence, project_id: project.id });
+      if (!eligibility.eligible) return res.status(409).json({ success: false, error: eligibility.error });
       db.run(
         `UPDATE research_evidence
          SET project_id = ?
-         WHERE id = ? AND project_id IS NULL AND tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
-        [projectId, evidenceId, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+         WHERE id = ? AND project_id IS NULL AND tenant_id = ? AND workspace_id = ? AND marketplace = ?
+           AND metadata = ? AND source = ? AND evidence_state = ?`,
+        [projectId, evidenceId, req.user.tenantId, req.user.workspaceId, req.user.marketplace,
+          evidence.metadata, evidence.source, evidence.evidence_state],
         function(uErr) {
           if (uErr) return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
           if (this.changes === 0) return res.status(404).json({ success: false, error: 'UNSCOPED_EVIDENCE_NOT_FOUND' });
@@ -1392,6 +1435,7 @@ app.post('/api/projects/:id/adopt-evidence', requireAuth(db), requireRole(['OWNE
           res.json({ success: true, projectId, evidenceId, adoptedBy: req.user.userId });
         }
       );
+      });
     }
   );
 });
@@ -2883,6 +2927,7 @@ app.post('/api/research/smart-pull', requireAuth(db), requireRole(['OWNER', 'MAN
   };
   try {
     responsePayload.evidenceId = await persistSmartPullArtifact(req, project, 'MCP_RETRIEVAL', searchSeed, {
+      canonicalPayload: { searchRows, hotRows },
       contentHash: responsePayload.contentHash, provider: responsePayload.provider, providerResults,
       evidenceState: responsePayload.evidenceState, observedAt: null, importedAt, response: responsePayload
     });

@@ -1,4 +1,6 @@
 const path = require('path');
+const os = require('os');
+const crypto = require('crypto');
 
 // Single source of truth for mutable runtime-state paths. Dev/test keep their
 // existing local defaults, but production must explicitly place state outside
@@ -6,6 +8,7 @@ const path = require('path');
 // data as collateral damage.
 const SERVER_DIR = path.resolve(__dirname, '..'); // server/
 const REPO_ROOT = path.resolve(SERVER_DIR, '..');
+const DEFAULT_TEST_RUN_ID = String(process.pid) + '-' + crypto.randomUUID();
 
 function isPathInsideRepo(candidate) {
   const resolved = path.resolve(candidate);
@@ -34,7 +37,7 @@ function resolveRuntimePaths(env = process.env) {
   if (isTest) {
     return {
       dbPath: ':memory:',
-      importsDir: env.TEST_IMPORTS_DIR || path.resolve(SERVER_DIR, '../data/test_imports')
+      importsDir: env.TEST_IMPORTS_DIR || path.resolve(os.tmpdir(), 'omniseller-test-imports', crypto.createHash('sha256').update(String(env.OMNI_TEST_RUN_ID || DEFAULT_TEST_RUN_ID)).digest('hex').slice(0, 16))
     };
   }
 

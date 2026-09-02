@@ -32,6 +32,8 @@ const { createRateLimiter } = require('./security/rateLimiter');
 const { COOKIE_NAME, SESSION_TTL_MS, createSessionRecord, verifySessionRecord, revokeSessionRecord } = require('./security/session');
 const { parseCookies, extractRawToken, requireAuth, requireRole, requireCsrfOrigin, corsOptionsDelegate } = require('./middleware/auth');
 const { runMigrations } = require('./database/migrations');
+const { ensureTestDatabaseFixtures: ensureFixturesForDb } = require('./database/testFixtures');
+const { ensureLegacyDefaultAgents } = require('./database/defaultAgents');
 const { encryptSecret, decryptSecret, maskSecret } = require('./security/secretBox');
 const { approvalHash } = require('./security/approval');
 const { validateProductTruthCard } = require('../shared/productTruth.cjs');
@@ -67,6 +69,14 @@ const { dbPath, importsDir } = resolveRuntimePaths();
 
 if (!fs.existsSync(importsDir)) {
   fs.mkdirSync(importsDir, { recursive: true });
+}
+
+// Direct/standalone tests own their generated imports directory. Canonical
+// suite runs pass TEST_IMPORTS_DIR and clean their shared run root centrally.
+if (process.env.NODE_ENV === 'test' && !process.env.TEST_IMPORTS_DIR && !process.env.OMNI_TEST_RUN_ID) {
+  process.once('exit', () => {
+    fs.rmSync(importsDir, { recursive: true, force: true });
+  });
 }
 
 
@@ -353,84 +363,9 @@ db.serialize(() => {
     )
   `);
 
-  // Seed default users & workspaces ONLY in test environment
-  if (process.env.NODE_ENV === 'test') {
-    db.get("SELECT COUNT(*) as count FROM users", async (err, row) => {
-      if (row && row.count === 0) {
-        console.log('Seeding test users and workspaces...');
-        try {
-          const defaultPasswordHash = await hashPassword('password123');
-          
-          // Step 1: Create Amazon Workspace first
-          db.run("INSERT INTO workspaces (tenant_id, marketplace, name) VALUES (?, ?, ?)",
-            ['tenant-alpha-uuid', 'AMAZON', 'Amazon Main Store'], function(err) {
-              if (err) return console.error('Error creating Amazon workspace:', err);
-              const amzWorkspaceId = this.lastID;
-
-              // Step 2: Create Etsy Workspace
-              db.run("INSERT INTO workspaces (tenant_id, marketplace, name) VALUES (?, ?, ?)",
-                ['tenant-alpha-uuid', 'ETSY', 'Etsy Craft Studio'], function(err) {
-                  if (err) return console.error('Error creating Etsy workspace:', err);
-                  const etsyWorkspaceId = this.lastID;
-
-                  // Step 3: Create Owner User and Memberships
-                  db.run("INSERT INTO users (email, password_hash, name) VALUES (?, ?, ?)", 
-                    ['owner@omniseller.local', defaultPasswordHash, 'Store Owner'], function(err) {
-                      if (err) return console.error('Error creating owner:', err);
-                      const ownerId = this.lastID;
-                      db.run("INSERT INTO workspace_memberships (user_id, workspace_id, role) VALUES (?, ?, ?)", [ownerId, amzWorkspaceId, 'OWNER']);
-                      db.run("INSERT INTO workspace_memberships (user_id, workspace_id, role) VALUES (?, ?, ?)", [ownerId, etsyWorkspaceId, 'OWNER']);
-                    });
-
-                  // Step 4: Create Manager User and Membership
-                  db.run("INSERT INTO users (email, password_hash, name) VALUES (?, ?, ?)",
-                    ['manager@omniseller.local', defaultPasswordHash, 'Ops Manager'], function(err) {
-                      if (err) return console.error('Error creating manager:', err);
-                      const managerId = this.lastID;
-                      db.run("INSERT INTO workspace_memberships (user_id, workspace_id, role) VALUES (?, ?, ?)", [managerId, amzWorkspaceId, 'MANAGER']);
-                    });
-
-                  // Step 5: Create Seller User and Membership
-                  db.run("INSERT INTO users (email, password_hash, name) VALUES (?, ?, ?)",
-                    ['seller@omniseller.local', defaultPasswordHash, 'Listing Specialist'], function(err) {
-                      if (err) return console.error('Error creating seller:', err);
-                      const sellerId = this.lastID;
-                      db.run("INSERT INTO workspace_memberships (user_id, workspace_id, role) VALUES (?, ?, ?)", [sellerId, amzWorkspaceId, 'SELLER']);
-                    });
-
-                  // Step 6: Create Tenant Beta Workspace & Owner (Cross-Tenant Isolation Fixture)
-                  db.run("INSERT INTO workspaces (tenant_id, marketplace, name) VALUES (?, ?, ?)",
-                    ['tenant-beta-uuid', 'AMAZON', 'Tenant Beta Store'], function(err) {
-                      if (err) return console.error('Error creating Beta workspace:', err);
-                      const betaWorkspaceId = this.lastID;
-                      db.run("INSERT INTO users (email, password_hash, name) VALUES (?, ?, ?)",
-                        ['owner-beta@omniseller.local', defaultPasswordHash, 'Tenant Beta Owner'], function(err) {
-                          if (err) return console.error('Error creating Beta owner:', err);
-                          const betaOwnerId = this.lastID;
-                          db.run("INSERT INTO workspace_memberships (user_id, workspace_id, role) VALUES (?, ?, ?)", [betaOwnerId, betaWorkspaceId, 'OWNER']);
-                        });
-                    });
-                });
-            });
-        } catch (e) {
-          console.error('Seeding error:', e);
-        }
-      }
-    });
-  }
 
 
 
-  // Seed default agents if empty
-  db.get("SELECT COUNT(*) as count FROM agents", (err, row) => {
-    if (row && row.count === 0) {
-      console.log('Seeding initial agents...');
-      const stmt = db.prepare("INSERT INTO agents (tenant_id, workspace_id, name, role, status) VALUES (?, ?, ?, ?, ?)");
-      stmt.run('default', 1, 'Trend Scout', 'RESEARCHER', 'OFFLINE');
-      stmt.run('default', 1, 'AI Drafter', 'DRAFTER', 'OFFLINE');
-      stmt.finalize();
-    }
-  });
 
   // Environment API keys remain process secrets and are never copied into SQLite.
 });
@@ -438,7 +373,16 @@ db.serialize(() => {
 // Migrations are queued after base schema creation. Every API request waits for
 // completion, so an existing app.db cannot be served through a partially
 // upgraded schema.
-const databaseReady = runMigrations(db);
+const ensureTestDatabaseFixtures = () => {
+  if (process.env.NODE_ENV !== 'test') {
+    return Promise.reject(new Error('TEST_FIXTURE_INITIALIZER_DISABLED'));
+  }
+  return ensureFixturesForDb(db);
+};
+const databaseReady = runMigrations(db).then(() => {
+  if (process.env.NODE_ENV === 'test') return ensureTestDatabaseFixtures();
+  return ensureLegacyDefaultAgents(db);
+});
 
 const REAUTH_TTL_MS = 5 * 60 * 1000;
 function secretContext(user, key) {
@@ -4035,4 +3979,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app, db, databaseReady, serverInstance, backgroundAgentTimer, ytrendsMcp };
+module.exports = { app, db, databaseReady, ensureTestDatabaseFixtures, serverInstance, backgroundAgentTimer, ytrendsMcp };

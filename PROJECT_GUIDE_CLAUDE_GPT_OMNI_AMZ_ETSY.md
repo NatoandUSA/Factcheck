@@ -1,10 +1,15 @@
 # PROJECT OPERATING GUIDE — Claude + GPT
 ## OmniSeller / 22Etsy Agent / AMZ-FBM Toolkit
 
-**Status:** ACTIVE  
+**Status:** RETIRED AS GOVERNANCE — BUSINESS/ARCHITECTURE REFERENCE ONLY
 **Audience:** Claude, Claude Code, GPT, Codex, Antigravity, reviewers, future engineering agents  
 **Owner context:** Internal operating system for the owner's own team and shops. This is **not** a SaaS product for outside sellers.  
 **Primary business north star:** **Generate real embroidery revenue first** while building only the minimum trustworthy tooling needed to operate better.
+
+> **Governance pointer:** The only Factcheck/OmniSeller governance source is the revision of
+> [`GOLDEN_RULES.md`](./GOLDEN_RULES.md) present in the exact `main` ancestry under review.
+> This guide must not open/block findings, define authority, certify a candidate, or override that file.
+> Historical SHA/status/examples below are reference context and are not current-state evidence.
 
 ---
 
@@ -21,7 +26,7 @@ This project has accumulated multiple tools, architecture documents, handoffs, r
 - letting multiple agents work from different assumptions,
 - and spending more time on tooling than on actual Etsy/Amazon launches.
 
-This guide is the shared operating contract for Claude and GPT.
+This guide was the historical shared operating contract for Claude and GPT. It is now reference material only.
 
 Every agent must optimize for:
 
@@ -833,36 +838,17 @@ If:
 
 ---
 
-# 22. PROMPT FOR CLAUDE IMPLEMENTATION
+# 22. PROMPT FOR CLAUDE IMPLEMENTATION — RETIRED
 
-Use this template:
-
-> Read `PROJECT_GUIDE_CLAUDE_GPT.md` first and treat it as the active operating contract.  
-> Before editing, inspect the relevant source, callers, callees, tests, schema/data contracts, and Staff workflow.  
-> Identify the root cause and search the same bug class.  
-> Do not add a new source of truth.  
-> Implement the smallest safe change that closes the root cause.  
-> Run targeted, negative, boundary and regression tests proportional to risk.  
-> Re-audit your own change.  
-> Do not claim DONE unless the exact evidence supports it.  
-> End with a structured JSON handoff using the required fields, exact branch/SHA, tests, known risks, not-verified items, and what GPT must review next.
+> Historical prompt removed from active use. Follow [`GOLDEN_RULES.md`](./GOLDEN_RULES.md),
+> including its current role boundaries and §17 handoff format.
 
 ---
 
-# 23. PROMPT FOR GPT REVIEW
+# 23. PROMPT FOR GPT REVIEW — RETIRED
 
-Use this template:
-
-> Act as independent reviewer, system architect and Best Next Move authority.  
-> Read the complete handoff and this Project Guide.  
-> Do not accept DONE/FIXED/GREEN/READY at face value.  
-> Verify the exact SHA and evidence where possible.  
-> Review UI → API → business logic → persistence → schema/contracts → tests → Staff workflow.  
-> Separate verified facts from reported claims and assumptions.  
-> Search for same bug class and duplicated sources of truth.  
-> Evaluate engineering, security, usability and business value separately.  
-> Decide whether the checkpoint is ACCEPTED, PARTIALLY ACCEPTED or REJECTED.  
-> Then choose exactly one Best Next Move ranked P0/P1/P2.
+> Historical prompt removed from active use. Follow [`GOLDEN_RULES.md`](./GOLDEN_RULES.md).
+> This guide does not grant audit, certification, implementation, merge, or release authority.
 
 ---
 

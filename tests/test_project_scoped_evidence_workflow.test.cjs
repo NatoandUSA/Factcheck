@@ -130,7 +130,12 @@ async function runTests() {
 
     // Test 6: OWNER role accepts evidence for Project A
     console.log('\nTest 6: OWNER role accepting evidence for Project A...');
-    const ownerAcceptRes = await fetch(`${baseUrl}/api/evidence/${evAId}/accept`, {
+    const genericAccept = await fetch(`${baseUrl}/api/evidence/${evAId}/accept`, {
+      method: 'POST', headers: { ...origin, Cookie: ownerCookie }
+    });
+    assert.strictEqual(genericAccept.status, 409, 'Generic evidence remains non-qualifying');
+    const controlledId = await require('./helpers/controlledEvidence.cjs')(db, projAId);
+    const ownerAcceptRes = await fetch(`${baseUrl}/api/evidence/${controlledId}/accept`, {
       method: 'POST',
       headers: { ...origin, Cookie: ownerCookie }
     });

@@ -136,7 +136,9 @@ async function waitForFixtures(timeoutMs = 15000) {
   const evP2 = await callEtsy("POST", "/api/evidence", { projectId: pid2, seedPhrase: "silver bracelet", source: "MANUAL" });
   assert.strictEqual(evP2.status, 200);
   assert.strictEqual(evP2.j.projectId, pid2);
-  await callEtsy("POST", `/api/evidence/${evP2.j.evidenceId}/accept`);
+  assert.strictEqual((await callEtsy("POST", `/api/evidence/${evP2.j.evidenceId}/accept`)).status, 409);
+  const controlledId = await require('./helpers/controlledEvidence.cjs')(db, pid2);
+  assert.strictEqual((await callEtsy("POST", `/api/evidence/${controlledId}/accept`)).status, 200);
 
   const pullP2 = await callEtsy("POST", "/api/mcp/pull-etsy", { projectId: pid2, seed: "silver bracelet", category: "Jewelry" });
   assert.strictEqual(pullP2.status, 200);

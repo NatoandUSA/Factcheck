@@ -2,6 +2,8 @@ const assert = require('assert');
 const path = require('path');
 const fs = require('fs');
 const { execFileSync } = require('child_process');
+const os = require('os');
+const { childImportsDir } = require('./helpers/suiteIsolation.cjs');
 const {
   resolveRuntimePaths,
   isPathInsideRepo,
@@ -29,9 +31,34 @@ function testRuntimePathBoundary() {
   // 2. Tests stay isolated and in-memory.
   const testDefaults = resolveRuntimePaths({ NODE_ENV: 'test' });
   assert.strictEqual(testDefaults.dbPath, ':memory:');
-  assert.strictEqual(testDefaults.importsDir, path.resolve(__dirname, '../data/test_imports'));
+  assert.ok(
+    testDefaults.importsDir.startsWith(path.resolve(require('os').tmpdir(), 'omniseller-test-imports') + path.sep),
+    `Default test imports must be outside the repo and process-scoped, got ${testDefaults.importsDir}`
+  );
+  const isolatedA = resolveRuntimePaths({ NODE_ENV: 'test', OMNI_TEST_RUN_ID: 'fixture-a' });
+  const isolatedB = resolveRuntimePaths({ NODE_ENV: 'test', OMNI_TEST_RUN_ID: 'fixture-b' });
+  assert.notStrictEqual(isolatedA.importsDir, isolatedB.importsDir);
   const testOverride = resolveRuntimePaths({ NODE_ENV: 'test', TEST_IMPORTS_DIR: '/tmp/custom-test-imports' });
   assert.strictEqual(testOverride.importsDir, '/tmp/custom-test-imports');
+
+  const suiteRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'omniseller-runtime-path-test-'));
+  try {
+    const childA = childImportsDir(suiteRoot, 0, 'tests/a.cjs');
+    const childB = childImportsDir(suiteRoot, 1, 'tests/b.cjs');
+    const probe = `const { resolveRuntimePaths } = require('./server/config/paths'); process.stdout.write(resolveRuntimePaths(process.env).importsDir);`;
+    const resolveInChild = (importsDir) => execFileSync(process.execPath, ['-e', probe], {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      env: { ...process.env, NODE_ENV: 'test', TEST_IMPORTS_DIR: importsDir }
+    });
+    const resolvedA = path.resolve(resolveInChild(childA));
+    const resolvedB = path.resolve(resolveInChild(childB));
+    assert.notStrictEqual(resolvedA, resolvedB, 'Every child test must receive a distinct imports directory');
+    assert.ok(resolvedA.startsWith(path.resolve(suiteRoot) + path.sep));
+    assert.ok(resolvedB.startsWith(path.resolve(suiteRoot) + path.sep));
+  } finally {
+    fs.rmSync(suiteRoot, { recursive: true, force: true });
+  }
   console.log('  🟢 Test defaults remain isolated; TEST_IMPORTS_DIR still works.');
 
   // 3. Production must explicitly externalize DB, imports, and dotenv path.

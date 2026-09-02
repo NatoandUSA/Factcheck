@@ -1,6 +1,8 @@
 const { execFileSync } = require('child_process');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
+const { childImportsDir } = require('./helpers/suiteIsolation.cjs');
 
 function runAllTests() {
   console.log('================================================================');
@@ -48,6 +50,7 @@ const testFiles = [
     'tests/test_multi_project_attribution.cjs',
     'tests/test_workspace_switching_and_auth_security.cjs',
     'tests/test_performance_and_latency.cjs',
+    'tests/test_database_fixture_isolation.cjs',
     'tests/test_cross_tenant_isolation.cjs',
     'tests/test_vite_dev_runtime_smoke.test.cjs',
     'tests/test_login_rate_limiter_http.test.cjs',
@@ -61,8 +64,10 @@ const testFiles = [
   ];
 
   let passedCount = 0;
+  const suiteImportsRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'omniseller-suite-imports-'));
 
-  testFiles.forEach((file, idx) => {
+  try {
+    testFiles.forEach((file, idx) => {
     console.log(`[Test ${idx + 1}/${testFiles.length}] Executing ${file}...`);
     try {
       // Some deployment suites intentionally exercise cleanup paths. Restore
@@ -79,6 +84,7 @@ const testFiles = [
       const output = execFileSync(process.execPath, [file], {
         encoding: 'utf-8',
         cwd: path.resolve(__dirname, '..'),
+        env: { ...process.env, TEST_IMPORTS_DIR: childImportsDir(suiteImportsRoot, idx, file) },
         timeout: 180000,
         killSignal: 'SIGTERM'
       });
@@ -88,13 +94,20 @@ const testFiles = [
     } catch (err) {
       const reason = err.code === 'ETIMEDOUT' ? 'TIMED OUT AFTER 180 SECONDS' : err.message;
       console.error(`🔴 ${file} FAILED:`, reason);
-      process.exit(1);
+      throw err;
     }
-  });
+    });
 
-  console.log('================================================================');
-  console.log(`  🟢 100% SUITE PASSED: ${passedCount}/${testFiles.length} TEST FILES EXECUTED!`);
-  console.log('================================================================');
+    console.log('================================================================');
+    console.log(`  🟢 100% SUITE PASSED: ${passedCount}/${testFiles.length} TEST FILES EXECUTED!`);
+    console.log('================================================================');
+  } finally {
+    fs.rmSync(suiteImportsRoot, { recursive: true, force: true });
+  }
 }
 
-runAllTests();
+try {
+  runAllTests();
+} catch (_error) {
+  process.exitCode = 1;
+}

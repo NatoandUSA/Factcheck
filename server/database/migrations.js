@@ -263,6 +263,20 @@ async function runMigrations(db) {
     }
   }
   await require('./projectStateMigration').migrateProjectStates(db);
+  const contextMigration = '2026-09-02_publish_approval_context';
+  if (!(await all(db, 'SELECT id FROM schema_migrations WHERE id=?', [contextMigration])).length) {
+    await run(db, 'BEGIN IMMEDIATE');
+    try {
+      const columns = new Set((await all(db, 'PRAGMA table_info(listings)')).map(c => c.name));
+      await addColumnIfMissing(db, columns, 'approved_context_hash', 'TEXT NULL');
+      // Legacy approvals deliberately remain unbound and require reapproval.
+      await run(db, 'INSERT INTO schema_migrations(id) VALUES (?)', [contextMigration]);
+      await run(db, 'COMMIT');
+    } catch (error) {
+      await run(db, 'ROLLBACK');
+      throw error;
+    }
+  }
 }
 
 async function migrateAgentWorkspaceScope(db) {

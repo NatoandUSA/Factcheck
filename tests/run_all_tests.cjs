@@ -10,6 +10,7 @@ function runAllTests() {
   console.log('================================================================\n');
 
 const testFiles = [
+    'tests/test_h0_publish_integrity.cjs',
     'tests/test_h0_state_authority.cjs',
     'tests/test_h0_state_migration.cjs',
     'tests/test_h0_evidence_integrity.cjs',

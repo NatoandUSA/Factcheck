@@ -262,6 +262,7 @@ async function runMigrations(db) {
       throw error;
     }
   }
+  await require('./projectStateMigration').migrateProjectStates(db);
 }
 
 async function migrateAgentWorkspaceScope(db) {

@@ -44,6 +44,7 @@ const { resolveRuntimePaths } = require('./config/paths');
 const { parseEtsySearchInput } = require('./etsyPastedSearchParser');
 const { buildEvidenceHealth } = require('./evidenceHealth');
 const evidenceAuthority = require('./evidenceAuthority');
+const projectStates = require('./projectStateRegistry');
 
 // Make crashes visible instead of dying silently with no trace (systemd will
 // still restart the process via Restart=always; this just ensures the cause
@@ -208,7 +209,7 @@ db.serialize(() => {
       marketplace TEXT NOT NULL CHECK(marketplace IN ('AMAZON', 'ETSY')),
       name TEXT NOT NULL,
       seed_phrase TEXT NOT NULL,
-      state TEXT DEFAULT 'EVIDENCE_INTAKE' CHECK(state IN ('EVIDENCE_INTAKE', 'RESEARCH_ACCEPTED', 'DNA_ACCEPTED', 'MKL_FROZEN', 'PRODUCT_TRUTH_CONFIRMED', 'DRAFT_GENERATED', 'VALIDATED', 'MANAGER_APPROVED', 'PUBLISH_READY')),
+      ${projectStates.stateColumnSql},
       reference_asin TEXT,
       batch_count INTEGER DEFAULT 0,
       product_truth_notes TEXT,
@@ -1155,18 +1156,7 @@ app.post('/api/projects', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SEL
 });
 
 // ALLOWED_PROJECT_TRANSITIONS Adjacency Map (Canonical Sequence)
-const ALLOWED_PROJECT_TRANSITIONS = {
-  'EVIDENCE_INTAKE': ['RESEARCH_ACCEPTED'],
-  'RESEARCH_ACCEPTED': ['DNA_ACCEPTED'],
-  'DNA_ACCEPTED': ['MKL_FROZEN'],
-  'MKL_FROZEN': ['DRAFT_GENERATED', 'PRODUCT_TRUTH_VERIFIED', 'PRODUCT_TRUTH_CONFIRMED'],
-  'DRAFT_GENERATED': ['PRODUCT_TRUTH_VERIFIED', 'VALIDATED'],
-  'PRODUCT_TRUTH_VERIFIED': ['MANAGER_APPROVED'],
-  'PRODUCT_TRUTH_CONFIRMED': ['DRAFT_GENERATED'],
-  'VALIDATED': ['MANAGER_APPROVED'],
-  'MANAGER_APPROVED': ['PUBLISH_READY'],
-  'PUBLISH_READY': []
-};
+const ALLOWED_PROJECT_TRANSITIONS = projectStates.transitions;
 
 // PATCH /api/projects/:id/transition - Server-authoritative state transition
 app.patch('/api/projects/:id/transition', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
@@ -1200,6 +1190,9 @@ app.patch('/api/projects/:id/transition', requireAuth(db), requireRole(['OWNER',
           error: 'INVALID_STATE_TRANSITION',
           message: `Illegal transition from ${currentState} to ${targetState}. Allowed next state: ${allowedNext.join(', ') || 'NONE'}`
         });
+      }
+      if (!projectStates.classifyTransition(currentState, targetState)) {
+        return res.status(400).json({ success: false, error: 'INVALID_STATE_TRANSITION' });
       }
 
       // Evidence & Artifact Precondition Validation (Strict Project-Scoped - NO legacy fallbacks)

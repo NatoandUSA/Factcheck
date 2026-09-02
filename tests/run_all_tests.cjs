@@ -19,6 +19,7 @@ function normalizeEntry(testsDir, filename) {
 /* Incoming H0 commits used a pre-F-05 static manifest. Reconcile its H0
  * additions with the F-05 canonical inventory without replacing the runner. */
 const LEGACY_PRE_F05_TEST_FILES = [
+    'tests/test_h0_publish_integrity.cjs',
     'tests/test_h0_state_authority.cjs',
     'tests/test_h0_state_migration.cjs',
     'tests/test_h0_evidence_integrity.cjs',

@@ -26,6 +26,7 @@
   "tests/test_etsy_truth_semantics.cjs",
   "tests/test_evidence_health.cjs",
   "tests/test_h0_evidence_integrity.cjs",
+  "tests/test_h0_publish_integrity.cjs",
   "tests/test_h0_state_authority.cjs",
   "tests/test_h0_state_migration.cjs",
   "tests/test_full_cerebro_mkl_flow.cjs",

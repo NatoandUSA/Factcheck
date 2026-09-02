@@ -99,6 +99,13 @@ async function main() {
     facts: { productType: { value: 'SWEATSHIRT', evidence }, materials: { value: ['cotton'], evidence } }
   });
   await dbRun('UPDATE listings SET product_truth_card = ?, approved_version = 1 WHERE id = ?', [JSON.stringify(card), sourceId]);
+  // Synthetic approved fixture must carry the same integrity binding as the
+  // real approval route, rather than acquiring authority from status alone.
+  const [sourceRow] = await dbAll('SELECT * FROM listings WHERE id=?', [sourceId]);
+  const { approvalContextHash } = require('../server/currentPublishDecision');
+  const { approvalHash } = require('../server/security/approval');
+  await dbRun('UPDATE listings SET approved_hash=?,approved_context_hash=?,approved_by=?,approved_at=CURRENT_TIMESTAMP WHERE id=?',
+    [approvalHash(JSON.parse(sourceRow.payload)), approvalContextHash(sourceRow, card, owner.user_id), owner.user_id, sourceId]);
   const trendInsert = await dbRun(
     `INSERT INTO market_trends (category, trending_keywords, marketplace, tenant_id, workspace_id)
      VALUES ('Apparel', 'family sweatshirt gift', 'AMAZON', ?, ?)`,

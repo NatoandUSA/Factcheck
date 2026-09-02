@@ -45,6 +45,7 @@ const { parseEtsySearchInput } = require('./etsyPastedSearchParser');
 const { buildEvidenceHealth } = require('./evidenceHealth');
 const evidenceAuthority = require('./evidenceAuthority');
 const projectStates = require('./projectStateRegistry');
+const { approvalContextHash, hasCurrentApprovalBinding, currentPublishDecision } = require('./currentPublishDecision');
 
 // Make crashes visible instead of dying silently with no trace (systemd will
 // still restart the process via Restart=always; this just ensures the cause
@@ -1195,6 +1196,7 @@ app.patch('/api/projects/:id/transition', requireAuth(db), requireRole(['OWNER',
         return res.status(400).json({ success: false, error: 'INVALID_STATE_TRANSITION' });
       }
 
+      let publishSnapshot = null;
       // Evidence & Artifact Precondition Validation (Strict Project-Scoped - NO legacy fallbacks)
       const checkPreconditions = (next) => {
         if (targetState === 'RESEARCH_ACCEPTED') {
@@ -1313,17 +1315,32 @@ app.patch('/api/projects/:id/transition', requireAuth(db), requireRole(['OWNER',
             }
           );
         } else if (targetState === 'PUBLISH_READY') {
-          db.get(
-            `SELECT COUNT(*) as cnt FROM listings
-             WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ?
-               AND project_id = ? AND status = 'PUBLISH_READY'`,
+          db.all(
+            `SELECT l.*, EXISTS(SELECT 1 FROM workspace_memberships m WHERE m.user_id=l.approved_by
+               AND m.workspace_id=l.workspace_id AND m.role IN ('OWNER','MANAGER')) AS approval_authorized
+             FROM listings l WHERE l.tenant_id = ? AND l.workspace_id = ? AND l.marketplace = ?
+               AND l.project_id = ? AND l.status = 'PUBLISH_READY'`,
             [req.user.tenantId, req.user.workspaceId, req.user.marketplace, projectId],
-            (rErr, rRow) => {
-              if (rErr || !rRow || rRow.cnt === 0) {
+            (rErr, listingRows) => {
+              if (rErr) return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
+              const requestedId = req.body.listingId;
+              const requestedVersion = req.body.expectedVersion;
+              if ((requestedId !== undefined || requestedVersion !== undefined)
+                  && (!Number.isSafeInteger(requestedId) || !Number.isSafeInteger(requestedVersion))) {
+                return res.status(400).json({ success: false, error: 'EXPECTED_VERSION_REQUIRED' });
+              }
+              const candidates = (listingRows || []).filter(row => requestedId === undefined || row.id === requestedId);
+              if (requestedId !== undefined && !candidates.length) return res.status(404).json({ success: false, error: 'LISTING_NOT_FOUND' });
+              for (const row of candidates) {
+                if (requestedVersion !== undefined && requestedVersion !== row.listing_version) return res.status(412).json({ success: false, error: 'STALE_LISTING_VERSION' });
+                const decision = currentPublishDecision(row, screenListingIpOrFail);
+                if (decision.allowed) { publishSnapshot = row; break; }
+              }
+              if (!publishSnapshot) {
                 return res.status(400).json({
                   success: false,
                   error: 'MISSING_PUBLISH_PRECONDITION',
-                  message: 'Cannot transition project to PUBLISH_READY without at least 1 primary listing marked PUBLISH_READY bound specifically to this project.'
+                  message: 'Current listing/version/Product Truth/approval must pass publishGate.'
                 });
               }
               next();
@@ -1355,9 +1372,21 @@ app.patch('/api/projects/:id/transition', requireAuth(db), requireRole(['OWNER',
              AND EXISTS (SELECT 1 FROM research_evidence e WHERE e.id = ? AND e.metadata = ? AND e.source = ?
                AND e.evidence_state = 'ACCEPTED' AND e.project_id = research_projects.id
                AND e.tenant_id = research_projects.tenant_id AND e.workspace_id = research_projects.workspace_id
-               AND e.marketplace = research_projects.marketplace)`,
+               AND e.marketplace = research_projects.marketplace)
+             AND (? IS NULL OR EXISTS (SELECT 1 FROM listings l WHERE l.id = ? AND l.project_id = research_projects.id
+               AND l.tenant_id = research_projects.tenant_id AND l.workspace_id = research_projects.workspace_id
+               AND l.marketplace = research_projects.marketplace AND l.status = 'PUBLISH_READY'
+               AND l.listing_version = ? AND l.payload = ? AND l.product_truth_card = ?
+               AND l.approved_hash = ? AND l.approved_context_hash = ? AND l.approved_version = ?
+               AND l.approved_by = ? AND l.approved_at = ?
+               AND EXISTS (SELECT 1 FROM workspace_memberships m WHERE m.user_id=l.approved_by
+                 AND m.workspace_id=l.workspace_id AND m.role IN ('OWNER','MANAGER'))))`,
           [targetState, updatedNotes, validatedAt, validatedBy, now, projectId, req.user.tenantId, req.user.workspaceId, req.user.marketplace,
-            currentState, qualifying.id, qualifying.metadata, qualifying.source],
+            currentState, qualifying.id, qualifying.metadata, qualifying.source,
+            publishSnapshot?.id ?? null, publishSnapshot?.id ?? null, publishSnapshot?.listing_version ?? null,
+            publishSnapshot?.payload ?? null, publishSnapshot?.product_truth_card ?? null, publishSnapshot?.approved_hash ?? null,
+            publishSnapshot?.approved_context_hash ?? null, publishSnapshot?.approved_version ?? null,
+            publishSnapshot?.approved_by ?? null, publishSnapshot?.approved_at ?? null],
           function(uErr) {
             if (uErr) return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
             if (this.changes !== 1) return res.status(409).json({ success: false, error: 'UNQUALIFIED_EVIDENCE_AUTHORITY' });
@@ -1625,7 +1654,7 @@ app.patch('/api/listings/:id', requireAuth(db), requireRole(['OWNER', 'MANAGER',
     `UPDATE listings
      SET amazonTitle = ?, etsyTitle = ?, categoryName = ?, payload = ?, status = ?,
          listing_version = listing_version + 1, approved_version = NULL,
-         approved_hash = NULL, approved_by = NULL, approved_at = NULL,
+         approved_hash = NULL, approved_context_hash = NULL, approved_by = NULL, approved_at = NULL,
          product_truth_notes = NULL, product_truth_card = NULL
      WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?
        AND listing_version = ?`,
@@ -1751,13 +1780,14 @@ app.patch('/api/listings/:id/approve', requireAuth(db), requireRole(['OWNER', 'M
     }
 
     const approvedHash = payloadHash;
+    const contextHash = approvalContextHash(row, canonicalTruthCard, req.user.userId);
     db.run(
       `UPDATE listings SET status = 'PUBLISH_READY', approved_version = listing_version,
-         approved_hash = ?, approved_by = ?, approved_at = CURRENT_TIMESTAMP,
+         approved_hash = ?, approved_context_hash = ?, approved_by = ?, approved_at = CURRENT_TIMESTAMP,
          product_truth_notes = ?, product_truth_card = ?
        WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?
-         AND listing_version = ?`,
-      [approvedHash, req.user.userId, truthNotes || null, JSON.stringify(canonicalTruthCard), id, req.user.tenantId, req.user.workspaceId, req.user.marketplace, expectedVersion],
+         AND listing_version = ? AND payload = ?`,
+      [approvedHash, contextHash, req.user.userId, truthNotes || null, JSON.stringify(canonicalTruthCard), id, req.user.tenantId, req.user.workspaceId, req.user.marketplace, expectedVersion, row.payload],
       function(updateErr) {
       if (updateErr) return res.status(500).json({ error: updateErr.message });
       if (this.changes !== 1) return res.status(412).json({ success: false, error: 'STALE_LISTING_VERSION' });
@@ -1774,44 +1804,20 @@ app.get('/api/listings/:id/export', requireAuth(db), requireRole(['OWNER', 'MANA
   const { id } = req.params;
 
   db.get(
-    `SELECT * FROM listings
-     WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
+    `SELECT l.*, EXISTS(SELECT 1 FROM workspace_memberships m WHERE m.user_id=l.approved_by
+       AND m.workspace_id=l.workspace_id AND m.role IN ('OWNER','MANAGER')) AS approval_authorized
+     FROM listings l WHERE l.id = ? AND l.tenant_id = ? AND l.workspace_id = ? AND l.marketplace = ?`,
     [id, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
     (err, row) => {
     if (err || !row) return res.status(404).json({ error: 'Listing not found.' });
 
-    let parsedPayload = {};
-    try { parsedPayload = JSON.parse(row.payload); } catch(e) {}
-    if (!row.approved_version || row.approved_version !== row.listing_version ||
-        !row.approved_hash || row.approved_hash !== approvalHash(parsedPayload)) {
-      return res.status(409).json({ success: false, error: 'APPROVAL_INVALIDATED' });
+    const decision = currentPublishDecision(row, screenListingIpOrFail);
+    if (!decision.allowed) {
+      if (decision.gate) return res.status(403).json({ error: `EXPORT_DENIED: Listing status "${decision.gate.final_status}" cannot be exported until PUBLISH_READY`, reasons: decision.gate.reasons });
+      return res.status(decision.status).json({ success: false, error: decision.error });
     }
-
-    // Defense-in-depth: re-screen before the gate runs. This protects a
-    // legacy row or one mutated outside the normal PATCH path whose stored
-    // ipVerdict/ipHits may not reflect its actual content (F-AL1). The hash
-    // check above already used the unscreened parsedPayload, so this
-    // reassignment cannot affect approval-hash validity.
-    try {
-      ({ listing: parsedPayload } = screenListingIpOrFail(parsedPayload));
-    } catch (error) {
-      console.error('IP Guard failed while exporting listing:', error);
-      return res.status(503).json({ success: false, error: 'IP_GUARD_UNAVAILABLE' });
-    }
-    parsedPayload.status = row.status;
-    parsedPayload.productTruthNotes = row.product_truth_notes || '';
-    try { parsedPayload.productTruthCard = JSON.parse(row.product_truth_card); } catch (_) { parsedPayload.productTruthCard = null; }
-    parsedPayload.productId = row.id;
-    parsedPayload.listingVersion = row.listing_version;
-    parsedPayload.marketplace = row.marketplace;
-
-    const gateRes = publishGate.evaluatePublishGate(parsedPayload);
-    if (!gateRes.canExport) {
-      return res.status(403).json({
-        error: `EXPORT_DENIED: Listing status "${gateRes.final_status}" cannot be exported until PUBLISH_READY`,
-        reasons: gateRes.reasons
-      });
-    }
+    const parsedPayload = decision.payload;
+    const gateRes = decision.gate;
 
     res.json({
       success: true,
@@ -2335,14 +2341,15 @@ function resolveServerAiAuthority(req, input = {}) {
   }
   return new Promise((resolve, reject) => {
     db.get(
-      `SELECT id, listing_version, approved_version, status, product_truth_card, payload
-       FROM listings WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
+      `SELECT l.*, EXISTS(SELECT 1 FROM workspace_memberships m WHERE m.user_id=l.approved_by
+         AND m.workspace_id=l.workspace_id AND m.role IN ('OWNER','MANAGER')) AS approval_authorized
+       FROM listings l WHERE l.id = ? AND l.tenant_id = ? AND l.workspace_id = ? AND l.marketplace = ?`,
       [Number(listingId), req.user.tenantId, req.user.workspaceId, req.user.marketplace],
       (err, row) => {
         if (err) return reject({ status: 500, error: 'DATABASE_ERROR' });
         if (!row) return reject({ status: 404, error: 'LISTING_NOT_FOUND' });
         if (row.listing_version !== expectedVersion) return reject({ status: 409, error: 'STALE_LISTING_VERSION' });
-        if (row.status !== 'PUBLISH_READY' || row.approved_version !== row.listing_version) {
+        if (!hasCurrentApprovalBinding(row)) {
           return reject({ status: 409, error: 'PRODUCT_TRUTH_REQUIRED' });
         }
         const productTruthCard = safeJsonParse(row.product_truth_card, null);

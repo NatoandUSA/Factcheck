@@ -3,6 +3,8 @@
 const crypto = require('crypto');
 const AUTHORITY_VERSION = 'H0_V1';
 const CONTROLLED_KIND = 'SMART_PULL_ARTIFACT_V1';
+const PROVIDER_CONTROLLED_SOURCES = Object.freeze(['MCP_RETRIEVAL', 'ETSY_MCP_LIVE']);
+const providerControlledSources = new Set(PROVIDER_CONTROLLED_SOURCES);
 const RESERVED_AUTHORITY_FIELDS = Object.freeze([
   'kind', 'source', 'evidenceState', 'contentHash', 'authority', 'eligible',
   'verified', 'provider', 'acceptanceEligibility', 'accepted_at', 'accepted_by',
@@ -54,7 +56,7 @@ function inspectClientAuthorityMetadata(body) {
         visit(value, key, 0);
       }
     }
-    if (typeof body.source === 'string' && body.source.trim().toUpperCase() === 'MCP_RETRIEVAL') fields.push('source');
+    if (typeof body.source === 'string' && providerControlledSources.has(body.source.trim().toUpperCase())) fields.push('source');
   }
   return { forbidden: fields.length > 0, invalid, fields };
 }
@@ -111,6 +113,6 @@ function evaluateEvidenceAuthority(evidence, expectedScope) {
   if (typeof bindingHash !== 'string' || hash(bound) !== bindingHash) return deny('UNQUALIFIED_EVIDENCE_HASH');
   return { qualifying: true, error: null };
 }
-module.exports = { AUTHORITY_VERSION, CONTROLLED_KIND, RESERVED_AUTHORITY_FIELDS,
+module.exports = { AUTHORITY_VERSION, CONTROLLED_KIND, PROVIDER_CONTROLLED_SOURCES, RESERVED_AUTHORITY_FIELDS,
   normalizeAuthorityKey, normalizeScope, canonicalJson, canonicalHash: hash, inspectClientAuthorityMetadata,
   sanitizeGenericEvidenceMetadata, deriveControlledEvidenceEnvelope, evaluateEvidenceAuthority };

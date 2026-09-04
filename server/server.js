@@ -859,8 +859,9 @@ app.get('/api/projects/:projectId/evidence-health', requireAuth(db), requireRole
   });
 });
 
-const ALLOWED_EVIDENCE_SOURCES = [
-  'MCP_RETRIEVAL',
+// Generic client intake is deliberately separate from provider-controlled
+// provenance. MCP_RETRIEVAL is created only by server-owned provider paths.
+const CLIENT_ALLOWED_EVIDENCE_SOURCES = [
   'FILE_UPLOAD',
   'STAFF_MANUAL_ASSERTION',
   'VERIFIED_EXTERNAL_URL',
@@ -1008,16 +1009,19 @@ app.post('/api/evidence', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SEL
   parseAndValidateProject(db, req, projectId, (pErr, project) => {
     if (pErr) return res.status(pErr.status).json({ success: false, error: pErr.error, message: pErr.message });
 
-    if (!seedPhrase || !source) {
+    if (!seedPhrase || source === undefined || source === null || source === '') {
       return res.status(400).json({ success: false, error: 'MISSING_FIELDS', message: 'seedPhrase and source are required.' });
     }
+    if (typeof source !== 'string') {
+      return res.status(400).json({ success: false, error: 'INVALID_EVIDENCE_SOURCE', message: 'source must be a string.' });
+    }
 
-    const cleanSource = String(source).trim().toUpperCase();
-    if (!ALLOWED_EVIDENCE_SOURCES.includes(cleanSource)) {
+    const cleanSource = source.trim().toUpperCase();
+    if (!CLIENT_ALLOWED_EVIDENCE_SOURCES.includes(cleanSource)) {
       return res.status(400).json({
         success: false,
         error: 'INVALID_EVIDENCE_SOURCE',
-        message: `source must be one of: ${ALLOWED_EVIDENCE_SOURCES.join(', ')}`
+        message: `source must be one of: ${CLIENT_ALLOWED_EVIDENCE_SOURCES.join(', ')}`
       });
     }
 
@@ -2842,7 +2846,7 @@ app.post('/api/research/smart-pull', requireAuth(db), requireRole(['OWNER', 'MAN
       evidenceState: 'INPUT_ONLY_UNVERIFIED',
       observedAt: null,
       importedAt,
-      contentHash: crypto.createHash('sha256').update(JSON.stringify({ projectId: project.id, asins })).digest('hex'),
+      contentHash: evidenceAuthority.canonicalHash({ projectId: project.id, asins }),
       providerResults: { amazonLiveConnector: 'NOT_INVOKED' },
       listings
     };
@@ -2921,7 +2925,7 @@ app.post('/api/research/smart-pull', requireAuth(db), requireRole(['OWNER', 'MAN
     evidenceState: partial ? 'PARTIAL_EVIDENCE' : 'RETRIEVED_NO_OBSERVED_AT',
     observedAt: null,
     importedAt,
-    contentHash: crypto.createHash('sha256').update(JSON.stringify({ searchRows, hotRows })).digest('hex'),
+    contentHash: evidenceAuthority.canonicalHash({ searchRows, hotRows }),
     providerResults,
     listings: listings.slice(0, 30)
   };

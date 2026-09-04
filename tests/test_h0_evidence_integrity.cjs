@@ -43,6 +43,13 @@ async function main() {
     }
   }
   for (const source of ['MCP_RETRIEVAL', ' mcp_retrieval ']) await reject('/api/evidence', { ...base, source }, 400, 'CLIENT_AUTHORITY_METADATA_FORBIDDEN');
+  for (const source of [
+    ['MCP_RETRIEVAL'], [['MCP_RETRIEVAL']], [' mcp_retrieval '],
+    { value: 'MCP_RETRIEVAL' }, 1, true
+  ]) await reject('/api/evidence', { ...base, source }, 400, 'INVALID_EVIDENCE_SOURCE');
+  for (const source of [null, undefined, '']) {
+    await reject('/api/evidence', { ...base, source }, 400, 'MISSING_FIELDS');
+  }
   for (const metadata of [JSON.parse('{"__proto__":{"x":1}}'), { constructor: {} }, { prototype: {} }]) await reject('/api/evidence', { ...base, metadata }, 400, 'CLIENT_AUTHORITY_METADATA_FORBIDDEN');
   for (const metadata of [[], 1, null, 'ordinary', { note: 'x'.repeat(33000) }]) await reject('/api/evidence', { ...base, metadata }, 400);
   const clean = await post('/api/evidence', { ...base, metadata: { note: 'ordinary' } });
@@ -92,6 +99,9 @@ async function main() {
     const pulled = await post('/api/research/smart-pull', { projectId, query: 'mug', unitCost: 2 });
     assert.equal(pulled.status, 200, JSON.stringify(pulled)); measured++;
     const [providerRow] = await all('SELECT * FROM research_evidence WHERE id=?', [pulled.body.evidenceId]);
+    const providerMetadata = JSON.parse(providerRow.metadata);
+    assert.equal(pulled.body.contentHash, providerMetadata.contentHash); measured++;
+    assert.equal(providerMetadata.contentHash, authority.canonicalHash(providerMetadata.canonicalPayload)); measured++;
     assert.equal(authority.evaluateEvidenceAuthority(providerRow, scope).qualifying, true); measured++;
     assert.equal((await post(`/api/evidence/${providerRow.id}/accept`, {})).status, 200); measured++;
     const tampered = JSON.parse(providerRow.metadata); tampered.canonicalPayload.searchRows[0].title = 'changed';

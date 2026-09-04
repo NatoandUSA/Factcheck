@@ -112,5 +112,5 @@ function evaluateEvidenceAuthority(evidence, expectedScope) {
   return { qualifying: true, error: null };
 }
 module.exports = { AUTHORITY_VERSION, CONTROLLED_KIND, RESERVED_AUTHORITY_FIELDS,
-  normalizeAuthorityKey, normalizeScope, canonicalJson, inspectClientAuthorityMetadata,
+  normalizeAuthorityKey, normalizeScope, canonicalJson, canonicalHash: hash, inspectClientAuthorityMetadata,
   sanitizeGenericEvidenceMetadata, deriveControlledEvidenceEnvelope, evaluateEvidenceAuthority };

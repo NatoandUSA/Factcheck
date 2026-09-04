@@ -10,6 +10,7 @@ const all = (db, sql, args = []) => new Promise((resolve, reject) => db.all(sql,
 const run = (db, sql, args = []) => new Promise((resolve, reject) => db.run(sql, args, e => e ? reject(e) : resolve()));
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'h0-migration-'));
 const handles = [];
+const PRE_REMEDIATION_BASE = 'f56702bd42c5b5361ff90d9cd40a6e92cb772ede';
 let measured = 0;
 async function snapshot(db) {
   const schema = await all(db, 'SELECT type,name,tbl_name,sql FROM sqlite_master ORDER BY type,name');
@@ -20,7 +21,12 @@ async function snapshot(db) {
 async function main() {
   assert.equal(registry.assertRegistry(), 12); measured++;
   // Use the exact pre-remediation production CREATE TABLE, not a surrogate.
-  const baseSource = cp.execFileSync('git', ['show', 'f56702bd42c5b5361ff90d9cd40a6e92cb772ede:server/server.js'], { encoding: 'utf8' });
+  try {
+    cp.execFileSync('git', ['cat-file', '-e', `${PRE_REMEDIATION_BASE}^{commit}`], { stdio: 'ignore' });
+  } catch {
+    throw new Error(`HARNESS_ERROR_MISSING_BASE_COMMIT:${PRE_REMEDIATION_BASE}`);
+  }
+  const baseSource = cp.execFileSync('git', ['show', `${PRE_REMEDIATION_BASE}:server/server.js`], { encoding: 'utf8' });
   const ddl = /CREATE TABLE IF NOT EXISTS research_projects \([\s\S]*?\n    \)/.exec(baseSource)[0];
   const filename = path.join(root, 'old.db');
   const db = new sqlite.Database(filename); handles.push(db);

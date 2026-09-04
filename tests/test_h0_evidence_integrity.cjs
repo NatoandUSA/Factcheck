@@ -42,10 +42,14 @@ async function main() {
       await reject('/api/evidence', { ...base, metadata }, 400, 'CLIENT_AUTHORITY_METADATA_FORBIDDEN');
     }
   }
-  for (const source of ['MCP_RETRIEVAL', ' mcp_retrieval ']) await reject('/api/evidence', { ...base, source }, 400, 'CLIENT_AUTHORITY_METADATA_FORBIDDEN');
+  assert.deepEqual(authority.PROVIDER_CONTROLLED_SOURCES, ['MCP_RETRIEVAL', 'ETSY_MCP_LIVE']); measured++;
+  for (const source of ['MCP_RETRIEVAL', ' mcp_retrieval ', 'ETSY_MCP_LIVE', ' etsy_mcp_live ']) {
+    await reject('/api/evidence', { ...base, source }, 400, 'CLIENT_AUTHORITY_METADATA_FORBIDDEN');
+  }
   for (const source of [
     ['MCP_RETRIEVAL'], [['MCP_RETRIEVAL']], [' mcp_retrieval '],
-    { value: 'MCP_RETRIEVAL' }, 1, true
+    ['ETSY_MCP_LIVE'], [['ETSY_MCP_LIVE']], [' etsy_mcp_live '],
+    { value: 'MCP_RETRIEVAL' }, { value: 'ETSY_MCP_LIVE' }, 1, true
   ]) await reject('/api/evidence', { ...base, source }, 400, 'INVALID_EVIDENCE_SOURCE');
   for (const source of [null, undefined, '']) {
     await reject('/api/evidence', { ...base, source }, 400, 'MISSING_FIELDS');

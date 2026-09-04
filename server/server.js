@@ -870,9 +870,11 @@ const CLIENT_ALLOWED_EVIDENCE_SOURCES = [
   'H10_XRAY_OBSERVED',
   'H10',
   'ETSY_SEARCH_OBSERVED',
-  'ETSY_MCP_LIVE',
   'MANUAL'
 ];
+if (CLIENT_ALLOWED_EVIDENCE_SOURCES.some(source => evidenceAuthority.PROVIDER_CONTROLLED_SOURCES.includes(source))) {
+  throw new Error('CLIENT_PROVIDER_SOURCE_REGISTRY_OVERLAP');
+}
 
 // Helper: resolve active project ID from explicit request or single unambiguous project in user workspace
 function resolveActiveProjectId(db, user, explicitId, callback) {

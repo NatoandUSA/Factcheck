@@ -4,110 +4,82 @@ const os = require('os');
 const path = require('path');
 const { childImportsDir } = require('./helpers/suiteIsolation.cjs');
 
-function runAllTests() {
-  console.log('================================================================');
-  console.log('  RUNNING OMNISELLER STUDIO SUITE - 100% EXECUTABLE ASSERTIONS');
-  console.log('================================================================\n');
+const REPO_ROOT = path.resolve(__dirname, '..');
 
-const testFiles = [
-    'tests/test_product_truth_core.cjs',
-    'tests/test_ai_boundary_and_batch.cjs',
-    'tests/test_server_ai_truth_boundary.cjs',
-    'tests/spec_hash_vector.test.cjs',
-    'tests/security_controls_unit.test.cjs',
-    'tests/listing_scope_migration.test.cjs',
-    'tests/sec_auth_foundation.test.cjs',
-    'tests/route_registry_coverage.test.cjs',
-    'tests/ssrf_url_guard.test.cjs',
-    'tests/p0_route_security.test.cjs',
-    'tests/test_real_child_asin_batcher.cjs',
-    'tests/test_runtime_paths.cjs',
-    'tests/test_etsy_truth_semantics.cjs',
-    'tests/test_etsy_provenance_authority.cjs',
-    'tests/test_etsy_scanner_evidence_ui.cjs',
-    'tests/test_strict_keyword_sanitizer.cjs',
-    'tests/test_full_cerebro_mkl_flow.cjs',
-    'tests/test_white_screen_failsafe.cjs',
-    'tests/test_amazon_truth_boundary_remediation.cjs',
-    'tests/test_listing_truth_boundary.cjs',
-    'tests/test_malicious_model_outputs.cjs',
-    'tests/test_adversarial_control_plane.cjs',
-    'tests/test_p0_5_c_research_truth.cjs',
-    'tests/test_ytrends_unknown_defaults.cjs',
-    'tests/test_listing_ip_rescreen.cjs',
-    'tests/spec_simulator_and_mkl_truth.test.cjs',
-    'tests/spec_publish_gate_contracts.test.cjs',
-    'tests/server_revision.test.cjs',
-    'tests/vps_platform_scripts.test.cjs',
-    'tests/test_opportunity_truth_boundary.cjs',
-    'tests/test_truth_evidence_ownership.test.cjs',
-    'tests/test_workflow_state_machine.test.cjs',
-    'tests/test_project_scoped_evidence_workflow.test.cjs',
-    'tests/spec_etsy_mcp_truth_boundary.test.cjs',
-    'tests/spec_canonical_business_workflow.test.cjs',
-    'tests/test_backup_restore_and_migrations.cjs',
-    'tests/test_adversarial_staff_ui_flow.cjs',
-    'tests/test_multi_project_attribution.cjs',
-    'tests/test_workspace_switching_and_auth_security.cjs',
-    'tests/test_performance_and_latency.cjs',
-    'tests/test_database_fixture_isolation.cjs',
-    'tests/test_cross_tenant_isolation.cjs',
-    'tests/test_vite_dev_runtime_smoke.test.cjs',
-    'tests/test_login_rate_limiter_http.test.cjs',
-    'tests/test_legacy_migration_integrity.test.cjs',
-    'tests/test_workflow_truth_ui_contract.cjs',
-    'tests/test_audit_fixes_014a1f4.cjs',
-    'tests/test_smart_pull_hardening.cjs',
-    'tests/test_etsy_pasted_search_parser.cjs',
-    'tests/test_evidence_health.cjs',
-    'tests/test_zero_fabrication_boundary.cjs'
-  ];
+function discoverTestFiles(testsDir = __dirname) {
+  return fs.readdirSync(testsDir, { withFileTypes: true })
+    .filter(entry => entry.isFile() && entry.name.endsWith('.cjs') && entry.name !== 'run_all_tests.cjs')
+    .map(entry => path.relative(REPO_ROOT, path.join(testsDir, entry.name)).split(path.sep).join('/'))
+    .sort();
+}
 
-  let passedCount = 0;
+function runAllTests(options = {}) {
+  const testFiles = options.testFiles || discoverTestFiles();
+  const timeoutMs = options.timeoutMs || 180000;
+  const prepareArtifacts = options.prepareArtifacts !== false;
   const suiteImportsRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'omniseller-suite-imports-'));
+  let invoked = 0;
+  let passed = 0;
+  let failed = 0;
+  const failures = [];
 
+  console.log('================================================================');
+  console.log('  RUNNING OMNISELLER STUDIO SUITE - EXECUTABLE ASSERTIONS');
+  console.log('================================================================\n');
   try {
-    testFiles.forEach((file, idx) => {
-    console.log(`[Test ${idx + 1}/${testFiles.length}] Executing ${file}...`);
-    try {
-      // Some deployment suites intentionally exercise cleanup paths. Restore
-      // the production artifact at the point where an HTTP test requires it,
-      // so canonical results do not depend on test order or a pre-existing
-      // dist directory.
-      if (file === 'tests/test_performance_and_latency.cjs' && !fs.existsSync(path.resolve(__dirname, '../dist/index.html'))) {
-        execFileSync(process.execPath, [path.resolve(__dirname, '../node_modules/vite/bin/vite.js'), 'build'], {
-          cwd: path.resolve(__dirname, '..'),
-          stdio: 'inherit',
-          timeout: 180000
+    for (const [idx, file] of testFiles.entries()) {
+      invoked++;
+      console.log(`[Test ${idx + 1}/${testFiles.length}] Executing ${file}...`);
+      try {
+        if (prepareArtifacts && file === 'tests/test_performance_and_latency.cjs'
+            && !fs.existsSync(path.resolve(REPO_ROOT, 'dist/index.html'))) {
+          execFileSync(process.execPath, [path.resolve(REPO_ROOT, 'node_modules/vite/bin/vite.js'), 'build'], {
+            cwd: REPO_ROOT,
+            stdio: 'inherit',
+            timeout: 180000
+          });
+        }
+        const output = execFileSync(process.execPath, [file], {
+          encoding: 'utf-8',
+          cwd: REPO_ROOT,
+          env: { ...process.env, TEST_IMPORTS_DIR: childImportsDir(suiteImportsRoot, idx, file) },
+          timeout: timeoutMs,
+          killSignal: 'SIGTERM'
         });
+        console.log(output);
+        console.log(`✅ ${file} PASSED CLEANLY!\n`);
+        passed++;
+      } catch (error) {
+        failed++;
+        const timedOut = error.code === 'ETIMEDOUT' || error.signal === 'SIGTERM';
+        const reason = timedOut ? `TIMED OUT AFTER ${timeoutMs} MS` : error.message;
+        failures.push({ file, reason });
+        if (error.stdout) console.error(String(error.stdout));
+        if (error.stderr) console.error(String(error.stderr));
+        console.error(`🔴 ${file} FAILED: ${reason}\n`);
       }
-      const output = execFileSync(process.execPath, [file], {
-        encoding: 'utf-8',
-        cwd: path.resolve(__dirname, '..'),
-        env: { ...process.env, TEST_IMPORTS_DIR: childImportsDir(suiteImportsRoot, idx, file) },
-        timeout: 180000,
-        killSignal: 'SIGTERM'
-      });
-      console.log(output);
-      console.log(`✅ ${file} PASSED CLEANLY!\n`);
-      passedCount++;
-    } catch (err) {
-      const reason = err.code === 'ETIMEDOUT' ? 'TIMED OUT AFTER 180 SECONDS' : err.message;
-      console.error(`🔴 ${file} FAILED:`, reason);
-      throw err;
     }
-    });
-
-    console.log('================================================================');
-    console.log(`  🟢 100% SUITE PASSED: ${passedCount}/${testFiles.length} TEST FILES EXECUTED!`);
-    console.log('================================================================');
   } finally {
     fs.rmSync(suiteImportsRoot, { recursive: true, force: true });
   }
+
+  const total = testFiles.length;
+  const unexecuted = total - invoked;
+  if (total === 0) {
+    failures.push({ file: null, reason: 'ZERO_TESTS_DISCOVERED' });
+    failed++;
+    console.error('🔴 ZERO_TESTS_DISCOVERED');
+  }
+  console.log('================================================================');
+  console.log(`SUITE_RESULT total=${total} passed=${passed} failed=${failed} unexecuted=${unexecuted}`);
+  console.log('================================================================');
+  return { total, invoked, passed, failed, unexecuted, failures };
 }
 
-try {
-  runAllTests();
-} catch (_error) {
-  process.exitCode = 1;
+const exitCodeForResult = result => result.failed > 0 || result.unexecuted > 0 ? 1 : 0;
+
+if (require.main === module) {
+  process.exitCode = exitCodeForResult(runAllTests());
 }
+
+module.exports = { discoverTestFiles, runAllTests, exitCodeForResult };

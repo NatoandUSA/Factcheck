@@ -76,7 +76,9 @@ async function waitForFixtures(timeoutMs = 15000) {
   // Control 2: Valid scoped evidence accepted and transitioned to RESEARCH_ACCEPTED
   const evEtsy = await callEtsy("POST", "/api/evidence", { projectId: etsyPid, seedPhrase: "personalized necklace", source: "MANUAL" });
   assert.strictEqual(evEtsy.status, 200);
-  await callEtsy("POST", `/api/evidence/${evEtsy.j.evidenceId}/accept`);
+  assert.strictEqual((await callEtsy("POST", `/api/evidence/${evEtsy.j.evidenceId}/accept`)).status, 409);
+  const controlledEtsyId = await require('./helpers/controlledEvidence.cjs')(db, etsyPid);
+  assert.strictEqual((await callEtsy("POST", `/api/evidence/${controlledEtsyId}/accept`)).status, 200);
   const tEtsy1 = await callEtsy("PATCH", `/api/projects/${etsyPid}/transition`, { targetState: "RESEARCH_ACCEPTED" });
   assert.strictEqual(tEtsy1.status, 200);
   console.log("  🟢 Etsy Project transitioned to RESEARCH_ACCEPTED.");
@@ -107,7 +109,9 @@ async function waitForFixtures(timeoutMs = 15000) {
   // Ingest & accept scoped evidence for Amazon
   const evAmz = await callAmz("POST", "/api/evidence", { projectId: amzPid, seedPhrase: "mama sweatshirt", source: "H10_XRAY_OBSERVED" });
   assert.strictEqual(evAmz.status, 200);
-  await callAmz("POST", `/api/evidence/${evAmz.j.evidenceId}/accept`);
+  assert.strictEqual((await callAmz("POST", `/api/evidence/${evAmz.j.evidenceId}/accept`)).status, 409);
+  const controlledAmzId = await require('./helpers/controlledEvidence.cjs')(db, amzPid);
+  assert.strictEqual((await callAmz("POST", `/api/evidence/${controlledAmzId}/accept`)).status, 200);
   const tAmz1 = await callAmz("PATCH", `/api/projects/${amzPid}/transition`, { targetState: "RESEARCH_ACCEPTED" });
   assert.strictEqual(tAmz1.status, 200);
   await callAmz("PATCH", `/api/projects/${amzPid}/transition`, { targetState: "DNA_ACCEPTED" });

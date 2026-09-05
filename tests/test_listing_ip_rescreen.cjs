@@ -200,6 +200,14 @@ async function main() {
        WHERE id = ?`,
       [approvalHash(forgedLegacyPayload), 'I personally verified the product truth details.', amazonListingId]
     );
+    // Bind all current approval fields so IP-5 still reaches IP re-screening,
+    // rather than being rejected earlier as an unbound legacy approval.
+    const fixtureRow = await dbGet('SELECT * FROM listings WHERE id=?', [amazonListingId]);
+    const fixtureOwner = await dbGet("SELECT id FROM users WHERE email='owner@omniseller.local'");
+    const fixtureCard = makeProductTruthCard(amazonListingId, fixtureRow.listing_version);
+    const contextHash = require('../server/currentPublishDecision').approvalContextHash(fixtureRow, fixtureCard, fixtureOwner.id);
+    await dbRun('UPDATE listings SET approved_by=?,approved_at=CURRENT_TIMESTAMP,product_truth_card=?,approved_context_hash=? WHERE id=?',
+      [fixtureOwner.id, JSON.stringify(fixtureCard), contextHash, amazonListingId]);
     const exportAttempt = await request(port, `/api/listings/${amazonListingId}/export`, amazonCookie);
     assert.strictEqual(exportAttempt.status, 403, 'IP-5 protected legacy content must be denied at export');
     assert.match(String(exportAttempt.body.error || ''), /EXPORT_DENIED/, 'IP-5 export denial must be explicit');

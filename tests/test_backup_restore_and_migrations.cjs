@@ -54,6 +54,7 @@ async function testMigrationsAndBackup() {
           marketplace TEXT NOT NULL,
           name TEXT NOT NULL,
           seed_phrase TEXT NOT NULL,
+          ${require('../server/projectStateRegistry').stateColumnSql},
           actor_id INTEGER NOT NULL
         )
       `, (err) => err ? reject(err) : resolve());

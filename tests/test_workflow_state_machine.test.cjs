@@ -118,7 +118,12 @@ async function runTests() {
     assert.strictEqual(evAddRes.status, 200);
     const evAddData = await evAddRes.json();
 
-    const acceptRes = await fetch(`${baseUrl}/api/evidence/${evAddData.evidenceId}/accept`, {
+    const genericAccept = await fetch(`${baseUrl}/api/evidence/${evAddData.evidenceId}/accept`, {
+      method: 'POST', headers: { ...origin, Cookie: ownerAmzCookie }
+    });
+    assert.strictEqual(genericAccept.status, 409, 'Persisted generic input has no authority');
+    const controlledId = await require('./helpers/controlledEvidence.cjs')(db, projectId);
+    const acceptRes = await fetch(`${baseUrl}/api/evidence/${controlledId}/accept`, {
       method: 'POST',
       headers: { ...origin, Cookie: ownerAmzCookie }
     });

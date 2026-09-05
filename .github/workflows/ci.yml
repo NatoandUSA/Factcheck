@@ -18,6 +18,9 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          # Migration closure tests inspect the exact pre-remediation schema commit.
+          fetch-depth: 0
 
       - name: Setup Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v4
@@ -37,5 +40,5 @@ jobs:
       # The performance contract serves the production SPA from dist/.
       # Build it before the suite so CI tests the same artifact boundary as
       # the production runtime rather than a missing static directory.
-      - name: Run Canonical Test Suite (45/45 Test Files)
+      - name: Run Canonical Test Suite (55/55 Test Files)
         run: npm test

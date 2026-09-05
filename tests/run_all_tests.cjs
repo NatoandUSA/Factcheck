@@ -16,6 +16,15 @@ function normalizeEntry(testsDir, filename) {
   return path.relative(REPO_ROOT, path.resolve(testsDir, filename)).split(path.sep).join('/');
 }
 
+/* Incoming H0 commits used a pre-F-05 static manifest. Reconcile its H0
+ * additions with the F-05 canonical inventory without replacing the runner. */
+const H0_REQUIRED_TEST_FILES = new Set([
+  'tests/test_h0_evidence_integrity.cjs',
+  'tests/test_h0_publish_integrity.cjs',
+  'tests/test_h0_state_authority.cjs',
+  'tests/test_h0_state_migration.cjs'
+]);
+
 function scanEntrypoints(testsDir) {
   const found = [];
   const visit = (directory, relative = '') => {
@@ -36,6 +45,13 @@ function discoverTestFiles(testsDir = __dirname, inventoryPath = INVENTORY_PATH)
   if (!Array.isArray(inventory) || inventory.length === 0) throw new Error('INVALID_TEST_INVENTORY');
   if (new Set(inventory).size !== inventory.length) throw new Error('DUPLICATE_TEST_INVENTORY_ENTRY');
   const expected = inventory.map(file => file.split(path.sep).join('/')).sort();
+  const isCanonicalInventory = path.resolve(inventoryPath) === path.resolve(INVENTORY_PATH);
+  const missingH0 = isCanonicalInventory
+    ? [...H0_REQUIRED_TEST_FILES].filter(file => !expected.includes(file))
+    : [];
+  if (missingH0.length) {
+    throw new Error(`H0_TEST_INVENTORY_MISMATCH missing=[${missingH0.join(',')}]`);
+  }
   const actual = scanEntrypoints(testsDir);
   const missing = expected.filter(file => !actual.includes(file));
   const unexpected = actual.filter(file => !expected.includes(file));

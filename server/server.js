@@ -43,6 +43,9 @@ const { UrlGuardError } = require('./security/urlGuard');
 const { resolveRuntimePaths } = require('./config/paths');
 const { parseEtsySearchInput } = require('./etsyPastedSearchParser');
 const { buildEvidenceHealth } = require('./evidenceHealth');
+const evidenceAuthority = require('./evidenceAuthority');
+const projectStates = require('./projectStateRegistry');
+const { approvalContextHash, hasCurrentApprovalBinding, currentPublishDecision } = require('./currentPublishDecision');
 
 // Make crashes visible instead of dying silently with no trace (systemd will
 // still restart the process via Restart=always; this just ensures the cause
@@ -207,7 +210,7 @@ db.serialize(() => {
       marketplace TEXT NOT NULL CHECK(marketplace IN ('AMAZON', 'ETSY')),
       name TEXT NOT NULL,
       seed_phrase TEXT NOT NULL,
-      state TEXT DEFAULT 'EVIDENCE_INTAKE' CHECK(state IN ('EVIDENCE_INTAKE', 'RESEARCH_ACCEPTED', 'DNA_ACCEPTED', 'MKL_FROZEN', 'PRODUCT_TRUTH_CONFIRMED', 'DRAFT_GENERATED', 'VALIDATED', 'MANAGER_APPROVED', 'PUBLISH_READY')),
+      ${projectStates.stateColumnSql},
       reference_asin TEXT,
       batch_count INTEGER DEFAULT 0,
       product_truth_notes TEXT,
@@ -856,8 +859,9 @@ app.get('/api/projects/:projectId/evidence-health', requireAuth(db), requireRole
   });
 });
 
-const ALLOWED_EVIDENCE_SOURCES = [
-  'MCP_RETRIEVAL',
+// Generic client intake is deliberately separate from provider-controlled
+// provenance. MCP_RETRIEVAL is created only by server-owned provider paths.
+const CLIENT_ALLOWED_EVIDENCE_SOURCES = [
   'FILE_UPLOAD',
   'STAFF_MANUAL_ASSERTION',
   'VERIFIED_EXTERNAL_URL',
@@ -866,9 +870,11 @@ const ALLOWED_EVIDENCE_SOURCES = [
   'H10_XRAY_OBSERVED',
   'H10',
   'ETSY_SEARCH_OBSERVED',
-  'ETSY_MCP_LIVE',
   'MANUAL'
 ];
+if (CLIENT_ALLOWED_EVIDENCE_SOURCES.some(source => evidenceAuthority.PROVIDER_CONTROLLED_SOURCES.includes(source))) {
+  throw new Error('CLIENT_PROVIDER_SOURCE_REGISTRY_OVERLAP');
+}
 
 // Helper: resolve active project ID from explicit request or single unambiguous project in user workspace
 function resolveActiveProjectId(db, user, explicitId, callback) {
@@ -963,29 +969,33 @@ function getEvidenceAcceptanceEligibility(evidence) {
       message: 'Staff-pasted HeyEtsy/search text is retained for analysis and audit, but it is not independently verified evidence and cannot satisfy Research Accepted.'
     };
   }
-  if (metadata.kind !== SMART_PULL_ARTIFACT_KIND) return { eligible: true };
-
-  const state = metadata.evidenceState;
-  const hasContentHash = typeof metadata.contentHash === 'string' && /^[a-f0-9]{64}$/i.test(metadata.contentHash);
-  const completeRetrieval = evidence.source === 'MCP_RETRIEVAL'
-    && ACCEPTABLE_SMART_PULL_STATES.has(state)
-    && hasContentHash;
-
-  if (completeRetrieval) return { eligible: true };
+  const result = evidenceAuthority.evaluateEvidenceAuthority(evidence, {
+    tenantId: evidence.tenant_id, workspaceId: evidence.workspace_id,
+    marketplace: evidence.marketplace, projectId: evidence.project_id, evidenceVersion: 1
+  });
+  if (result.qualifying) return { eligible: true };
   return {
     eligible: false,
-    error: 'UNQUALIFIED_SMART_PULL_ARTIFACT',
-    message: `Smart Pull artifact state ${state || 'UNKNOWN'} is not eligible for acceptance. Only complete, hashed MCP retrievals may satisfy research acceptance.`
+    error: metadata.kind === SMART_PULL_ARTIFACT_KIND ? 'UNQUALIFIED_SMART_PULL_ARTIFACT' : 'UNQUALIFIED_EVIDENCE_AUTHORITY',
+    message: result.message
   };
 }
 
 function persistSmartPullArtifact(req, project, source, seedPhrase, artifact) {
+  const metadata = source === 'MCP_RETRIEVAL'
+    ? evidenceAuthority.deriveControlledEvidenceEnvelope({
+      provider: artifact.provider, payload: artifact.canonicalPayload,
+      scope: { tenantId: req.user.tenantId, workspaceId: req.user.workspaceId,
+        marketplace: req.user.marketplace, projectId: project.id, evidenceVersion: 1 },
+      evidenceState: artifact.evidenceState, extraMetadata: artifact
+    }).metadata
+    : { ...artifact, kind: SMART_PULL_ARTIFACT_KIND, authority: 'NONE' };
   return new Promise((resolve, reject) => {
     db.run(
       `INSERT INTO research_evidence (tenant_id, workspace_id, marketplace, project_id, seed_phrase, source, actor_id, evidence_state, metadata)
        VALUES (?, ?, ?, ?, ?, ?, ?, 'OBSERVED', ?)`,
       [req.user.tenantId, req.user.workspaceId, req.user.marketplace, project.id, seedPhrase, source, req.user.userId,
-        JSON.stringify({ kind: 'SMART_PULL_ARTIFACT_V1', ...artifact })],
+        JSON.stringify(metadata)],
       function(err) { if (err) reject(err); else resolve(this.lastID); }
     );
   });
@@ -993,26 +1003,32 @@ function persistSmartPullArtifact(req, project, source, seedPhrase, artifact) {
 
 // POST /api/evidence - Ingest new evidence record (Strictly Project-Bound & Source-Contracted)
 app.post('/api/evidence', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
+  const inspection = evidenceAuthority.inspectClientAuthorityMetadata(req.body);
+  if (inspection.forbidden) return res.status(400).json({ success: false, error: 'CLIENT_AUTHORITY_METADATA_FORBIDDEN', fields: inspection.fields });
+  if (inspection.invalid) return res.status(400).json({ success: false, error: 'INVALID_EVIDENCE_METADATA' });
   const { projectId, seedPhrase, source, sourceUrl, fileName, metadata } = req.body || {};
 
   parseAndValidateProject(db, req, projectId, (pErr, project) => {
     if (pErr) return res.status(pErr.status).json({ success: false, error: pErr.error, message: pErr.message });
 
-    if (!seedPhrase || !source) {
+    if (!seedPhrase || source === undefined || source === null || source === '') {
       return res.status(400).json({ success: false, error: 'MISSING_FIELDS', message: 'seedPhrase and source are required.' });
     }
+    if (typeof source !== 'string') {
+      return res.status(400).json({ success: false, error: 'INVALID_EVIDENCE_SOURCE', message: 'source must be a string.' });
+    }
 
-    const cleanSource = String(source).trim().toUpperCase();
-    if (!ALLOWED_EVIDENCE_SOURCES.includes(cleanSource)) {
+    const cleanSource = source.trim().toUpperCase();
+    if (!CLIENT_ALLOWED_EVIDENCE_SOURCES.includes(cleanSource)) {
       return res.status(400).json({
         success: false,
         error: 'INVALID_EVIDENCE_SOURCE',
-        message: `source must be one of: ${ALLOWED_EVIDENCE_SOURCES.join(', ')}`
+        message: `source must be one of: ${CLIENT_ALLOWED_EVIDENCE_SOURCES.join(', ')}`
       });
     }
 
     const isManual = cleanSource === 'STAFF_MANUAL_ASSERTION';
-    const finalMetadata = { ...(metadata || {}), isManualAssertion: isManual };
+    const finalMetadata = { ...evidenceAuthority.sanitizeGenericEvidenceMetadata(metadata), isManualAssertion: isManual };
 
     db.run(
       `INSERT INTO research_evidence (tenant_id, workspace_id, marketplace, project_id, seed_phrase, source, source_url, file_name, actor_id, evidence_state, metadata)
@@ -1064,13 +1080,23 @@ app.post('/api/evidence/:id/accept', requireAuth(db), requireRole(['OWNER', 'MAN
         });
       }
 
+      // The project must still belong to this exact scope. A matching evidence
+      // row alone is not sufficient (legacy/orphaned bindings fail closed).
+      db.get(`SELECT id FROM research_projects WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
+        [evidence.project_id, req.user.tenantId, req.user.workspaceId, req.user.marketplace], (projectError, project) => {
+      if (projectError) return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
+      if (!project) return res.status(404).json({ success: false, error: 'PROJECT_NOT_FOUND' });
+
       db.run(
         `UPDATE research_evidence
          SET evidence_state = 'ACCEPTED', accepted_at = ?, accepted_by = ?
-         WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
-        [now, req.user.userId, id, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+         WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?
+           AND metadata = ? AND source = ? AND project_id = ? AND evidence_state = ?`,
+        [now, req.user.userId, id, req.user.tenantId, req.user.workspaceId, req.user.marketplace,
+          evidence.metadata, evidence.source, evidence.project_id, evidence.evidence_state],
         function(err) {
           if (err) return res.status(500).json({ success: false, error: err.message });
+          if (this.changes !== 1) return res.status(409).json({ success: false, error: 'UNQUALIFIED_EVIDENCE_AUTHORITY' });
 
           // Log append-only evidence acceptance event
           if (evidence.project_id) {
@@ -1084,6 +1110,7 @@ app.post('/api/evidence/:id/accept', requireAuth(db), requireRole(['OWNER', 'MAN
           res.json({ success: true, evidenceId: id, evidenceState: 'ACCEPTED', acceptedBy: req.user.userId, acceptedAt: now });
         }
       );
+      });
     }
   );
 });
@@ -1136,18 +1163,7 @@ app.post('/api/projects', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SEL
 });
 
 // ALLOWED_PROJECT_TRANSITIONS Adjacency Map (Canonical Sequence)
-const ALLOWED_PROJECT_TRANSITIONS = {
-  'EVIDENCE_INTAKE': ['RESEARCH_ACCEPTED'],
-  'RESEARCH_ACCEPTED': ['DNA_ACCEPTED'],
-  'DNA_ACCEPTED': ['MKL_FROZEN'],
-  'MKL_FROZEN': ['DRAFT_GENERATED', 'PRODUCT_TRUTH_VERIFIED', 'PRODUCT_TRUTH_CONFIRMED'],
-  'DRAFT_GENERATED': ['PRODUCT_TRUTH_VERIFIED', 'VALIDATED'],
-  'PRODUCT_TRUTH_VERIFIED': ['MANAGER_APPROVED'],
-  'PRODUCT_TRUTH_CONFIRMED': ['DRAFT_GENERATED'],
-  'VALIDATED': ['MANAGER_APPROVED'],
-  'MANAGER_APPROVED': ['PUBLISH_READY'],
-  'PUBLISH_READY': []
-};
+const ALLOWED_PROJECT_TRANSITIONS = projectStates.transitions;
 
 // PATCH /api/projects/:id/transition - Server-authoritative state transition
 app.patch('/api/projects/:id/transition', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
@@ -1182,7 +1198,11 @@ app.patch('/api/projects/:id/transition', requireAuth(db), requireRole(['OWNER',
           message: `Illegal transition from ${currentState} to ${targetState}. Allowed next state: ${allowedNext.join(', ') || 'NONE'}`
         });
       }
+      if (!projectStates.classifyTransition(currentState, targetState)) {
+        return res.status(400).json({ success: false, error: 'INVALID_STATE_TRANSITION' });
+      }
 
+      let publishSnapshot = null;
       // Evidence & Artifact Precondition Validation (Strict Project-Scoped - NO legacy fallbacks)
       const checkPreconditions = (next) => {
         if (targetState === 'RESEARCH_ACCEPTED') {
@@ -1301,17 +1321,32 @@ app.patch('/api/projects/:id/transition', requireAuth(db), requireRole(['OWNER',
             }
           );
         } else if (targetState === 'PUBLISH_READY') {
-          db.get(
-            `SELECT COUNT(*) as cnt FROM listings
-             WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ?
-               AND project_id = ? AND status = 'PUBLISH_READY'`,
+          db.all(
+            `SELECT l.*, EXISTS(SELECT 1 FROM workspace_memberships m WHERE m.user_id=l.approved_by
+               AND m.workspace_id=l.workspace_id AND m.role IN ('OWNER','MANAGER')) AS approval_authorized
+             FROM listings l WHERE l.tenant_id = ? AND l.workspace_id = ? AND l.marketplace = ?
+               AND l.project_id = ? AND l.status = 'PUBLISH_READY'`,
             [req.user.tenantId, req.user.workspaceId, req.user.marketplace, projectId],
-            (rErr, rRow) => {
-              if (rErr || !rRow || rRow.cnt === 0) {
+            (rErr, listingRows) => {
+              if (rErr) return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
+              const requestedId = req.body.listingId;
+              const requestedVersion = req.body.expectedVersion;
+              if ((requestedId !== undefined || requestedVersion !== undefined)
+                  && (!Number.isSafeInteger(requestedId) || !Number.isSafeInteger(requestedVersion))) {
+                return res.status(400).json({ success: false, error: 'EXPECTED_VERSION_REQUIRED' });
+              }
+              const candidates = (listingRows || []).filter(row => requestedId === undefined || row.id === requestedId);
+              if (requestedId !== undefined && !candidates.length) return res.status(404).json({ success: false, error: 'LISTING_NOT_FOUND' });
+              for (const row of candidates) {
+                if (requestedVersion !== undefined && requestedVersion !== row.listing_version) return res.status(412).json({ success: false, error: 'STALE_LISTING_VERSION' });
+                const decision = currentPublishDecision(row, screenListingIpOrFail);
+                if (decision.allowed) { publishSnapshot = row; break; }
+              }
+              if (!publishSnapshot) {
                 return res.status(400).json({
                   success: false,
                   error: 'MISSING_PUBLISH_PRECONDITION',
-                  message: 'Cannot transition project to PUBLISH_READY without at least 1 primary listing marked PUBLISH_READY bound specifically to this project.'
+                  message: 'Current listing/version/Product Truth/approval must pass publishGate.'
                 });
               }
               next();
@@ -1322,6 +1357,13 @@ app.patch('/api/projects/:id/transition', requireAuth(db), requireRole(['OWNER',
         }
       };
 
+      // Every legal forward edge uses current authority, never just row state.
+      db.all(`SELECT * FROM research_evidence WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ?
+        AND project_id = ? AND evidence_state = 'ACCEPTED'`,
+        [req.user.tenantId, req.user.workspaceId, req.user.marketplace, projectId], (authorityError, rows) => {
+      if (authorityError) return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
+      const qualifying = (rows || []).find(row => getEvidenceAcceptanceEligibility(row).eligible);
+      if (!qualifying) return res.status(400).json({ success: false, error: 'MISSING_QUALIFYING_EVIDENCE_PRECONDITION' });
       checkPreconditions((resolvedNotes) => {
         const now = new Date().toISOString();
         const updatedNotes = resolvedNotes || project.product_truth_notes || null;
@@ -1332,10 +1374,28 @@ app.patch('/api/projects/:id/transition', requireAuth(db), requireRole(['OWNER',
         db.run(
           `UPDATE research_projects
            SET state = ?, product_truth_notes = ?, validated_at = ?, validated_by = ?, updated_at = ?
-           WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
-          [targetState, updatedNotes, validatedAt, validatedBy, now, projectId, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+           WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ? AND state = ?
+             AND EXISTS (SELECT 1 FROM research_evidence e WHERE e.id = ? AND e.metadata = ? AND e.source = ?
+               AND e.evidence_state = 'ACCEPTED' AND e.project_id = research_projects.id
+               AND e.tenant_id = research_projects.tenant_id AND e.workspace_id = research_projects.workspace_id
+               AND e.marketplace = research_projects.marketplace)
+             AND (? IS NULL OR EXISTS (SELECT 1 FROM listings l WHERE l.id = ? AND l.project_id = research_projects.id
+               AND l.tenant_id = research_projects.tenant_id AND l.workspace_id = research_projects.workspace_id
+               AND l.marketplace = research_projects.marketplace AND l.status = 'PUBLISH_READY'
+               AND l.listing_version = ? AND l.payload = ? AND l.product_truth_card = ?
+               AND l.approved_hash = ? AND l.approved_context_hash = ? AND l.approved_version = ?
+               AND l.approved_by = ? AND l.approved_at = ?
+               AND EXISTS (SELECT 1 FROM workspace_memberships m WHERE m.user_id=l.approved_by
+                 AND m.workspace_id=l.workspace_id AND m.role IN ('OWNER','MANAGER'))))`,
+          [targetState, updatedNotes, validatedAt, validatedBy, now, projectId, req.user.tenantId, req.user.workspaceId, req.user.marketplace,
+            currentState, qualifying.id, qualifying.metadata, qualifying.source,
+            publishSnapshot?.id ?? null, publishSnapshot?.id ?? null, publishSnapshot?.listing_version ?? null,
+            publishSnapshot?.payload ?? null, publishSnapshot?.product_truth_card ?? null, publishSnapshot?.approved_hash ?? null,
+            publishSnapshot?.approved_context_hash ?? null, publishSnapshot?.approved_version ?? null,
+            publishSnapshot?.approved_by ?? null, publishSnapshot?.approved_at ?? null],
           function(uErr) {
             if (uErr) return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
+            if (this.changes !== 1) return res.status(409).json({ success: false, error: 'UNQUALIFIED_EVIDENCE_AUTHORITY' });
 
             // Append-Only Transition Event Audit Record
             db.run(
@@ -1350,6 +1410,7 @@ app.patch('/api/projects/:id/transition', requireAuth(db), requireRole(['OWNER',
             res.json({ success: true, projectId, previousState: currentState, state: targetState, productTruthNotes: updatedNotes, updatedAt: now });
           }
         );
+      });
       });
     }
   );
@@ -1370,11 +1431,21 @@ app.post('/api/projects/:id/adopt-evidence', requireAuth(db), requireRole(['OWNE
     (pErr, project) => {
       if (pErr || !project) return res.status(404).json({ success: false, error: 'PROJECT_NOT_FOUND' });
 
+      db.get(`SELECT * FROM research_evidence WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
+        [evidenceId, req.user.tenantId, req.user.workspaceId, req.user.marketplace], (eErr, evidence) => {
+      if (eErr) return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
+      if (!evidence || evidence.project_id !== null) return res.status(404).json({ success: false, error: 'UNSCOPED_EVIDENCE_NOT_FOUND' });
+      // Adoption may attach an unscoped row only to its ORIGINAL server-bound
+      // project. It cannot mint a new scope/hash or promote legacy research.
+      const eligibility = getEvidenceAcceptanceEligibility({ ...evidence, project_id: project.id });
+      if (!eligibility.eligible) return res.status(409).json({ success: false, error: eligibility.error });
       db.run(
         `UPDATE research_evidence
          SET project_id = ?
-         WHERE id = ? AND project_id IS NULL AND tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
-        [projectId, evidenceId, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+         WHERE id = ? AND project_id IS NULL AND tenant_id = ? AND workspace_id = ? AND marketplace = ?
+           AND metadata = ? AND source = ? AND evidence_state = ?`,
+        [projectId, evidenceId, req.user.tenantId, req.user.workspaceId, req.user.marketplace,
+          evidence.metadata, evidence.source, evidence.evidence_state],
         function(uErr) {
           if (uErr) return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
           if (this.changes === 0) return res.status(404).json({ success: false, error: 'UNSCOPED_EVIDENCE_NOT_FOUND' });
@@ -1392,6 +1463,7 @@ app.post('/api/projects/:id/adopt-evidence', requireAuth(db), requireRole(['OWNE
           res.json({ success: true, projectId, evidenceId, adoptedBy: req.user.userId });
         }
       );
+      });
     }
   );
 });
@@ -1588,7 +1660,7 @@ app.patch('/api/listings/:id', requireAuth(db), requireRole(['OWNER', 'MANAGER',
     `UPDATE listings
      SET amazonTitle = ?, etsyTitle = ?, categoryName = ?, payload = ?, status = ?,
          listing_version = listing_version + 1, approved_version = NULL,
-         approved_hash = NULL, approved_by = NULL, approved_at = NULL,
+         approved_hash = NULL, approved_context_hash = NULL, approved_by = NULL, approved_at = NULL,
          product_truth_notes = NULL, product_truth_card = NULL
      WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?
        AND listing_version = ?`,
@@ -1714,13 +1786,14 @@ app.patch('/api/listings/:id/approve', requireAuth(db), requireRole(['OWNER', 'M
     }
 
     const approvedHash = payloadHash;
+    const contextHash = approvalContextHash(row, canonicalTruthCard, req.user.userId);
     db.run(
       `UPDATE listings SET status = 'PUBLISH_READY', approved_version = listing_version,
-         approved_hash = ?, approved_by = ?, approved_at = CURRENT_TIMESTAMP,
+         approved_hash = ?, approved_context_hash = ?, approved_by = ?, approved_at = CURRENT_TIMESTAMP,
          product_truth_notes = ?, product_truth_card = ?
        WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?
-         AND listing_version = ?`,
-      [approvedHash, req.user.userId, truthNotes || null, JSON.stringify(canonicalTruthCard), id, req.user.tenantId, req.user.workspaceId, req.user.marketplace, expectedVersion],
+         AND listing_version = ? AND payload = ?`,
+      [approvedHash, contextHash, req.user.userId, truthNotes || null, JSON.stringify(canonicalTruthCard), id, req.user.tenantId, req.user.workspaceId, req.user.marketplace, expectedVersion, row.payload],
       function(updateErr) {
       if (updateErr) return res.status(500).json({ error: updateErr.message });
       if (this.changes !== 1) return res.status(412).json({ success: false, error: 'STALE_LISTING_VERSION' });
@@ -1737,44 +1810,20 @@ app.get('/api/listings/:id/export', requireAuth(db), requireRole(['OWNER', 'MANA
   const { id } = req.params;
 
   db.get(
-    `SELECT * FROM listings
-     WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
+    `SELECT l.*, EXISTS(SELECT 1 FROM workspace_memberships m WHERE m.user_id=l.approved_by
+       AND m.workspace_id=l.workspace_id AND m.role IN ('OWNER','MANAGER')) AS approval_authorized
+     FROM listings l WHERE l.id = ? AND l.tenant_id = ? AND l.workspace_id = ? AND l.marketplace = ?`,
     [id, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
     (err, row) => {
     if (err || !row) return res.status(404).json({ error: 'Listing not found.' });
 
-    let parsedPayload = {};
-    try { parsedPayload = JSON.parse(row.payload); } catch(e) {}
-    if (!row.approved_version || row.approved_version !== row.listing_version ||
-        !row.approved_hash || row.approved_hash !== approvalHash(parsedPayload)) {
-      return res.status(409).json({ success: false, error: 'APPROVAL_INVALIDATED' });
+    const decision = currentPublishDecision(row, screenListingIpOrFail);
+    if (!decision.allowed) {
+      if (decision.gate) return res.status(403).json({ error: `EXPORT_DENIED: Listing status "${decision.gate.final_status}" cannot be exported until PUBLISH_READY`, reasons: decision.gate.reasons });
+      return res.status(decision.status).json({ success: false, error: decision.error });
     }
-
-    // Defense-in-depth: re-screen before the gate runs. This protects a
-    // legacy row or one mutated outside the normal PATCH path whose stored
-    // ipVerdict/ipHits may not reflect its actual content (F-AL1). The hash
-    // check above already used the unscreened parsedPayload, so this
-    // reassignment cannot affect approval-hash validity.
-    try {
-      ({ listing: parsedPayload } = screenListingIpOrFail(parsedPayload));
-    } catch (error) {
-      console.error('IP Guard failed while exporting listing:', error);
-      return res.status(503).json({ success: false, error: 'IP_GUARD_UNAVAILABLE' });
-    }
-    parsedPayload.status = row.status;
-    parsedPayload.productTruthNotes = row.product_truth_notes || '';
-    try { parsedPayload.productTruthCard = JSON.parse(row.product_truth_card); } catch (_) { parsedPayload.productTruthCard = null; }
-    parsedPayload.productId = row.id;
-    parsedPayload.listingVersion = row.listing_version;
-    parsedPayload.marketplace = row.marketplace;
-
-    const gateRes = publishGate.evaluatePublishGate(parsedPayload);
-    if (!gateRes.canExport) {
-      return res.status(403).json({
-        error: `EXPORT_DENIED: Listing status "${gateRes.final_status}" cannot be exported until PUBLISH_READY`,
-        reasons: gateRes.reasons
-      });
-    }
+    const parsedPayload = decision.payload;
+    const gateRes = decision.gate;
 
     res.json({
       success: true,
@@ -2298,14 +2347,15 @@ function resolveServerAiAuthority(req, input = {}) {
   }
   return new Promise((resolve, reject) => {
     db.get(
-      `SELECT id, listing_version, approved_version, status, product_truth_card, payload
-       FROM listings WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
+      `SELECT l.*, EXISTS(SELECT 1 FROM workspace_memberships m WHERE m.user_id=l.approved_by
+         AND m.workspace_id=l.workspace_id AND m.role IN ('OWNER','MANAGER')) AS approval_authorized
+       FROM listings l WHERE l.id = ? AND l.tenant_id = ? AND l.workspace_id = ? AND l.marketplace = ?`,
       [Number(listingId), req.user.tenantId, req.user.workspaceId, req.user.marketplace],
       (err, row) => {
         if (err) return reject({ status: 500, error: 'DATABASE_ERROR' });
         if (!row) return reject({ status: 404, error: 'LISTING_NOT_FOUND' });
         if (row.listing_version !== expectedVersion) return reject({ status: 409, error: 'STALE_LISTING_VERSION' });
-        if (row.status !== 'PUBLISH_READY' || row.approved_version !== row.listing_version) {
+        if (!hasCurrentApprovalBinding(row)) {
           return reject({ status: 409, error: 'PRODUCT_TRUTH_REQUIRED' });
         }
         const productTruthCard = safeJsonParse(row.product_truth_card, null);
@@ -2798,7 +2848,7 @@ app.post('/api/research/smart-pull', requireAuth(db), requireRole(['OWNER', 'MAN
       evidenceState: 'INPUT_ONLY_UNVERIFIED',
       observedAt: null,
       importedAt,
-      contentHash: crypto.createHash('sha256').update(JSON.stringify({ projectId: project.id, asins })).digest('hex'),
+      contentHash: evidenceAuthority.canonicalHash({ projectId: project.id, asins }),
       providerResults: { amazonLiveConnector: 'NOT_INVOKED' },
       listings
     };
@@ -2877,12 +2927,13 @@ app.post('/api/research/smart-pull', requireAuth(db), requireRole(['OWNER', 'MAN
     evidenceState: partial ? 'PARTIAL_EVIDENCE' : 'RETRIEVED_NO_OBSERVED_AT',
     observedAt: null,
     importedAt,
-    contentHash: crypto.createHash('sha256').update(JSON.stringify({ searchRows, hotRows })).digest('hex'),
+    contentHash: evidenceAuthority.canonicalHash({ searchRows, hotRows }),
     providerResults,
     listings: listings.slice(0, 30)
   };
   try {
     responsePayload.evidenceId = await persistSmartPullArtifact(req, project, 'MCP_RETRIEVAL', searchSeed, {
+      canonicalPayload: { searchRows, hotRows },
       contentHash: responsePayload.contentHash, provider: responsePayload.provider, providerResults,
       evidenceState: responsePayload.evidenceState, observedAt: null, importedAt, response: responsePayload
     });

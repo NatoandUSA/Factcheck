@@ -1,7 +1,7 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 
 async function waitForServer(url, timeoutMs, getDiagnostics) {
   const deadline = Date.now() + timeoutMs;
@@ -22,49 +22,51 @@ async function waitForServer(url, timeoutMs, getDiagnostics) {
 async function shutdownChildProcess(child, options = {}) {
   const termGraceMs = options.termGraceMs ?? 1000;
   const killGraceMs = options.killGraceMs ?? 1000;
+  const pollMs = options.pollMs ?? 20;
   const pid = child?.pid;
   if (!pid) return { escalated: false };
 
-  const isAlive = () => {
-    try { process.kill(pid, 0); return true; } catch (error) {
+  const treeAlive = () => {
+    try {
+      process.kill(process.platform === 'win32' ? pid : -pid, 0);
+      return true;
+    } catch (error) {
       if (error.code === 'ESRCH') return false;
       throw error;
     }
   };
   const signalTree = signal => {
-    try {
-      if (process.platform === 'win32') {
-        child.kill(signal);
-      } else {
-        process.kill(-pid, signal);
+    if (process.platform === 'win32') {
+      const args = ['/PID', String(pid), '/T'];
+      if (signal === 'SIGKILL') args.push('/F');
+      const result = spawnSync('taskkill', args, { stdio: 'ignore' });
+      if (result.error) throw result.error;
+      if (result.status !== 0 && treeAlive()) {
+        throw new Error(`TASKKILL_FAILED pid=${pid} status=${result.status}`);
       }
+      return;
+    }
+    try {
+      process.kill(-pid, signal);
     } catch (error) {
       if (error.code !== 'ESRCH') throw error;
     }
   };
-  const waitForClose = timeoutMs => new Promise(resolve => {
-    if (!isAlive() && child.exitCode !== null) return resolve(true);
-    let settled = false;
-    const done = value => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      child.off('close', onClose);
-      resolve(value);
-    };
-    const onClose = () => done(!isAlive());
-    const timer = setTimeout(() => done(!isAlive()), timeoutMs);
-    child.once('close', onClose);
-  });
+  const waitForTreeExit = async timeoutMs => {
+    const deadline = Date.now() + timeoutMs;
+    while (treeAlive() && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, pollMs));
+    }
+    return !treeAlive();
+  };
 
   signalTree('SIGTERM');
-  if (await waitForClose(termGraceMs)) return { escalated: false };
+  if (await waitForTreeExit(termGraceMs)) return { escalated: false };
   signalTree('SIGKILL');
-  if (await waitForClose(killGraceMs)) return { escalated: true };
+  if (await waitForTreeExit(killGraceMs)) return { escalated: true };
   child.stdout?.destroy();
   child.stderr?.destroy();
-  if (isAlive()) throw new Error(`VITE_PROCESS_SHUTDOWN_TIMEOUT pid=${pid}`);
-  return { escalated: true };
+  throw new Error(`VITE_PROCESS_TREE_SHUTDOWN_TIMEOUT pgid=${pid}`);
 }
 
 async function runViteSmokeTest() {

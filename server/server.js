@@ -3140,7 +3140,18 @@ app.get('/api/master-keywords', requireAuth(db), requireRole(['OWNER', 'MANAGER'
       });
     });
 
-    res.json({ success: true, count: masterKeywords.length, marketplace: targetMarket, keywords: masterKeywords });
+    const query = typeof req.query.q === 'string' ? req.query.q.trim().toLowerCase() : '';
+    const filteredKeywords = query
+      ? masterKeywords.filter(item => item.keyword.toLowerCase().includes(query))
+      : masterKeywords;
+    res.json({
+      success: true,
+      count: filteredKeywords.length,
+      totalCount: masterKeywords.length,
+      marketplace: targetMarket,
+      query,
+      keywords: filteredKeywords
+    });
   });
 });
 
@@ -3329,6 +3340,13 @@ const handleReportUpload = async (req, res) => {
     const evaluatedKeywords = [];
     const flaggedIpKeywords = [];
     const seenKeywordsMap = new Map();
+    const rowAccounting = {
+      inputRows: rawRows.length,
+      canonicalRows: 0,
+      duplicateRows: 0,
+      invalidRows: 0,
+      ipRejectedRows: 0
+    };
 
     for (const r of rawRows) {
       let rawVal = String(r[kwKey] || '').trim();
@@ -3340,7 +3358,10 @@ const handleReportUpload = async (req, res) => {
       rawVal = rawVal.replace(/\s+/g, ' ').replace(/^["']|["']$/g, '').trim();
 
       const sanitizedKw = keywordRanker.sanitizeKeyword(rawVal);
-      if (!sanitizedKw) continue; // Discards ASINs, line numbers, delivery blacklist, and offensive terms
+      if (!sanitizedKw) {
+        rowAccounting.invalidRows += 1;
+        continue; // Discards ASINs, line numbers, delivery blacklist, and offensive terms
+      }
 
       const lower = sanitizedKw.toLowerCase();
 
@@ -3350,6 +3371,7 @@ const handleReportUpload = async (req, res) => {
         if (!flaggedIpKeywords.includes(sanitizedKw)) {
           flaggedIpKeywords.push(sanitizedKw);
         }
+        rowAccounting.ipRejectedRows += 1;
         continue; // Skip trademarked terms
       }
 
@@ -3362,6 +3384,7 @@ const handleReportUpload = async (req, res) => {
 
       // Fast deduplication & max-metric merge for multi-file Cerebro uploads
       if (seenKeywordsMap.has(lower)) {
+        rowAccounting.duplicateRows += 1;
         const existing = seenKeywordsMap.get(lower);
         if (searchVolume !== null && (existing.searchVolume === null || searchVolume > existing.searchVolume)) {
           existing.searchVolume = searchVolume;
@@ -3392,6 +3415,13 @@ const handleReportUpload = async (req, res) => {
       evaluatedKeywords.push(entry);
     }
 
+    rowAccounting.canonicalRows = evaluatedKeywords.length;
+    const accountedRows = rowAccounting.canonicalRows + rowAccounting.duplicateRows
+      + rowAccounting.invalidRows + rowAccounting.ipRejectedRows;
+    if (accountedRows !== rowAccounting.inputRows) {
+      throw new Error(`ROW_ACCOUNTING_MISMATCH input=${rowAccounting.inputRows} accounted=${accountedRows}`);
+    }
+
     if (evaluatedKeywords.length === 0) {
       return res.status(400).json({ 
         error: 'Không tìm thấy từ khóa hợp lệ. Các từ khóa có thể đã bị chặn do từ rác, ASIN code, từ tốc độ giao hàng hoặc bộ lọc IP.',
@@ -3403,8 +3433,10 @@ const handleReportUpload = async (req, res) => {
     const seedPhrase = req.body.seedPhrase || req.body.seedKeyword || targetCategory;
     const rankedKeywords = keywordRanker.rankKeywords(evaluatedKeywords, targetCategory, seedPhrase);
 
-    // Assign Strategic 5 Tiers (Amazon A10 & Data Dive Methodology)
-    const topKeywordsDetailed = rankedKeywords.slice(0, 100).map((item, idx) => {
+    // Assign strategic tiers to the complete canonical corpus. The first 100
+    // remain the UI preview, but persistence and server-side search are never
+    // truncated to that presentation window.
+    const allKeywordsDetailed = rankedKeywords.map((item, idx) => {
       let tier = 'Tier 5 (A+ Content & Brand Story)';
       let tierBadge = '✨ Tier 5 (A+ Content)';
 
@@ -3430,7 +3462,8 @@ const handleReportUpload = async (req, res) => {
       };
     });
 
-    const keywords = topKeywordsDetailed.map(k => k.keyword);
+    const keywords = allKeywordsDetailed.map(k => k.keyword);
+    const topKeywordsDetailed = allKeywordsDetailed.slice(0, 100);
     const trendingKeywordsStr = keywords.slice(0, 30).join(', ');
 
     // Insert into market_trends for AI Drafter
@@ -3438,7 +3471,7 @@ const handleReportUpload = async (req, res) => {
       if (pErr) return res.status(pErr.status || 400).json({ success: false, error: pErr.error, message: pErr.message });
       db.run(
         "INSERT INTO market_trends (category, trending_keywords, keywords_detailed, marketplace, tenant_id, workspace_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        [targetCategory, trendingKeywordsStr, JSON.stringify(topKeywordsDetailed), targetMarketplace, req.user.tenantId, req.user.workspaceId, targetProjectId],
+        [targetCategory, trendingKeywordsStr, JSON.stringify(allKeywordsDetailed), targetMarketplace, req.user.tenantId, req.user.workspaceId, targetProjectId],
         function(dbErr) {
           if (dbErr) return res.status(500).json({ error: dbErr.message });
           
@@ -3455,7 +3488,9 @@ const handleReportUpload = async (req, res) => {
             fileName: fileNames,
             category: targetCategory,
             totalRows: rawRows.length,
-            topKeywords: keywords,
+            canonicalRows: allKeywordsDetailed.length,
+            rowAccounting,
+            topKeywords: keywords.slice(0, 100),
             topKeywordsDetailed,
             flaggedIpKeywords,
             trendingKeywordsStr

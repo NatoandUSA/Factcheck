@@ -4,19 +4,38 @@ const MIGRATION_ID = '2026-09-02_project_state_registry';
 const all = (db, sql, args = []) => new Promise((resolve, reject) => db.all(sql, args, (e, rows) => e ? reject(e) : resolve(rows)));
 const run = (db, sql, args = []) => new Promise((resolve, reject) => db.run(sql, args, e => e ? reject(e) : resolve()));
 const quote = value => '"' + value.replace(/"/g, '""') + '"';
+const sameStateSet = (left, right) =>
+  left.length === right.length && [...left].sort().join(',') === [...right].sort().join(',');
+
+// Only explicitly observed, repo-bound predecessor lineages are migratable.
+// Never accept an arbitrary subset: a missing state can encode a different
+// authority contract and must remain fail-closed until separately registered.
+const LEGACY_STATE_LINEAGES = Object.freeze({
+  PRE_H0_NINE_STATE: Object.freeze(states.filter(state => state !== 'PRODUCT_TRUTH_VERIFIED')),
+  PRODUCTION_5C4153B_EIGHT_STATE: Object.freeze([
+    'EVIDENCE_INTAKE',
+    'RESEARCH_ACCEPTED',
+    'DNA_ACCEPTED',
+    'MKL_FROZEN',
+    'DRAFT_GENERATED',
+    'PRODUCT_TRUTH_VERIFIED',
+    'MANAGER_APPROVED',
+    'PUBLISH_READY'
+  ])
+});
 
 async function migrateProjectStates(db) {
   const [table] = await all(db, "SELECT sql FROM sqlite_master WHERE type='table' AND name='research_projects'");
   if (!table) return { skipped: true };
   const actual = schemaStates(table.sql);
-  const current = actual.length === states.length && [...actual].sort().join(',') === [...states].sort().join(',');
+  const current = sameStateSet(actual, states);
   if (current && /"?state"?\s+TEXT\s+NOT\s+NULL/i.test(table.sql)) {
     await run(db, 'INSERT OR IGNORE INTO schema_migrations(id) VALUES (?)', [MIGRATION_ID]);
     return { migrated: false };
   }
-  // The previous nine-state shape is the only supported source schema.
-  const legacy = states.filter(s => s !== 'PRODUCT_TRUTH_VERIFIED');
-  if (!current && [...actual].sort().join(',') !== [...legacy].sort().join(',')) throw new Error('UNRECOGNIZED_PROJECT_STATE_SCHEMA');
+  const sourceLineage = Object.entries(LEGACY_STATE_LINEAGES)
+    .find(([, lineageStates]) => sameStateSet(actual, lineageStates));
+  if (!current && !sourceLineage) throw new Error('UNRECOGNIZED_PROJECT_STATE_SCHEMA');
   await run(db, 'BEGIN IMMEDIATE');
   try {
     const before = await all(db, 'SELECT * FROM research_projects ORDER BY id');
@@ -43,10 +62,10 @@ async function migrateProjectStates(db) {
     if ((await all(db, 'PRAGMA foreign_key_check')).length) throw new Error('MIGRATED_FOREIGN_KEY_VIOLATION');
     await run(db, 'INSERT OR IGNORE INTO schema_migrations(id) VALUES (?)', [MIGRATION_ID]);
     await run(db, 'COMMIT');
-    return { migrated: true, preservedRows: before.length };
+    return { migrated: true, preservedRows: before.length, sourceLineage: sourceLineage?.[0] || 'CANONICAL_NULLABILITY_REPAIR' };
   } catch (error) {
     await run(db, 'ROLLBACK');
     throw error;
   }
 }
-module.exports = { MIGRATION_ID, migrateProjectStates };
+module.exports = { MIGRATION_ID, LEGACY_STATE_LINEAGES, migrateProjectStates };

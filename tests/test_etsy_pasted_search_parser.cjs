@@ -7,6 +7,7 @@ process.env.NODE_ENV = 'test';
 const { parseHeyEtsyPastedText, parseEtsySearchCsv, parseEtsySearchHtml } = require('../server/etsyPastedSearchParser');
 const { app, db, databaseReady } = require('../server/server');
 const { createSessionRecord } = require('../server/security/session');
+const { headers: richHeaders, csv: richCsv } = require('./fixtures/etsy_search_rich_67_sanitized.cjs');
 
 const SAMPLE = `Show filters
 Applied filters
@@ -490,6 +491,49 @@ async function waitForEtsyOwner() {
     assert.strictEqual(accept.status, 409);
     assert.strictEqual(accept.body.error, 'UNQUALIFIED_STAFF_PASTED_EVIDENCE');
     console.log('  🟢 HTTP contract: project required, preview zero-write, confirm persisted once, acceptance blocked.');
+
+    const richBefore = (await dbAll('SELECT id FROM research_evidence')).length;
+    const richPreviewForm = new FormData();
+    richPreviewForm.append('searchResultsFile', new Blob([richCsv], { type: 'text/csv' }), 'etsy-rich-67.csv');
+    richPreviewForm.append('seed', 'para mi hija');
+    richPreviewForm.append('projectId', String(projectId));
+    richPreviewForm.append('confirm', 'false');
+    const richPreviewResponse = await fetch(base + '/api/etsy/feed-search-results-file', {
+      method: 'POST', headers: { Origin: base, Cookie: `omni_session=${session.rawToken}` }, body: richPreviewForm
+    });
+    const richPreview = await richPreviewResponse.json();
+    assert.strictEqual(richPreviewResponse.status, 200);
+    assert.strictEqual(richPreview.count, 67);
+    assert.strictEqual(richPreview.headerDiagnostics.recognizedColumnCount, richHeaders.length);
+    assert.deepStrictEqual(richPreview.headerDiagnostics.unmappedColumns, []);
+    assert.strictEqual((await dbAll('SELECT id FROM research_evidence')).length, richBefore, 'Rich preview must be zero-write');
+
+    const richConfirmForm = new FormData();
+    richConfirmForm.append('searchResultsFile', new Blob([richCsv], { type: 'text/csv' }), 'etsy-rich-67.csv');
+    richConfirmForm.append('seed', 'para mi hija');
+    richConfirmForm.append('projectId', String(projectId));
+    richConfirmForm.append('confirm', 'true');
+    const richConfirmResponse = await fetch(base + '/api/etsy/feed-search-results-file', {
+      method: 'POST', headers: { Origin: base, Cookie: `omni_session=${session.rawToken}` }, body: richConfirmForm
+    });
+    const richCommitted = await richConfirmResponse.json();
+    assert.strictEqual(richConfirmResponse.status, 200);
+    assert.strictEqual(richCommitted.count, 67);
+    assert.deepStrictEqual(richCommitted.rowAccounting, {
+      inputRows: 67, validRows: 67, uniqueRows: 67,
+      duplicateRowsRemoved: 0, returnedRows: 67, truncatedRows: 0
+    });
+    for (let reload = 0; reload < 2; reload += 1) {
+      const reloadResponse = await fetch(base + `/api/projects/${projectId}/research-imports/ETSY_SEARCH_PASTE_V1`, {
+        headers: { Origin: base, Cookie: `omni_session=${session.rawToken}` }
+      });
+      const reloaded = await reloadResponse.json();
+      assert.strictEqual(reloadResponse.status, 200);
+      assert.strictEqual(reloaded.import.metadata.provider, 'ETSY_SEARCH_CSV');
+      assert.strictEqual(reloaded.import.metadata.sellers.length, 67);
+      assert.strictEqual(reloaded.import.metadata.headerDiagnostics.recognizedColumnCount, richHeaders.length);
+      assert.deepStrictEqual(reloaded.import.metadata.headerDiagnostics.unmappedColumns, []);
+    }
 
     const ui = fs.readFileSync(path.join(__dirname, '../src/components/EtsyWorkspace.jsx'), 'utf8');
     assert(ui.includes('Phân tích & Xem trước'));

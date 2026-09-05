@@ -63,6 +63,31 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
     setSeedPhrase(activeProject?.seed_phrase || '');
   }, [activeProject?.id]);
 
+  useEffect(() => {
+    const projectId = activeProject?.id;
+    if (!projectId) return;
+    let current = true;
+    fetch(`/api/projects/${projectId}/research-imports/ETSY_SEARCH_PASTE_V1`, { credentials: 'include' })
+      .then(parseJsonResponse)
+      .then(data => {
+        const metadata = data?.import?.metadata;
+        if (!current || activeProjectIdRef.current !== projectId || !metadata) return;
+        setScannedSellers(metadata.sellers || []);
+        setMcpResult({
+          source: data.import.source,
+          evidenceState: metadata.evidenceState,
+          provider: metadata.provider,
+          observedAt: metadata.observedAt,
+          importedAt: metadata.importedAt,
+          keywords: metadata.keywordCandidates || [],
+          sellers: metadata.sellers || [],
+          trendingKeywordsStr: (metadata.keywordCandidates || []).join(', ')
+        });
+      })
+      .catch(() => {});
+    return () => { current = false; };
+  }, [activeProject?.id]);
+
   const handleFeedSearchResults = async ({ confirm = false } = {}) => {
     if (!activeProject?.id) {
       if (onShowToast) onShowToast('Hãy chọn Active Project trước khi nạp Etsy Feed.');

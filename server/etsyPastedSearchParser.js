@@ -2,8 +2,6 @@ const crypto = require('crypto');
 const Papa = require('papaparse');
 const cheerio = require('cheerio');
 
-const MAX_IMPORTED_LISTINGS = 500;
-
 // Explicitly document every source column that this parser understands. New
 // columns never become silent data loss: parseEtsySearchCsv returns them in
 // `unmappedColumns` until a canonical, research-only projection is added.
@@ -368,7 +366,7 @@ function dedupeAndRank(sellers) {
     seen.add(identity);
     unique.push({ ...seller, sourceRank: unique.length + 1, id: `pasted-${unique.length + 1}` });
   }
-  return { sellers: unique.slice(0, MAX_IMPORTED_LISTINGS), parsedCount: unique.length, duplicatesRemoved };
+  return { sellers: unique, parsedCount: unique.length, duplicatesRemoved };
 }
 
 function finalizeParsedInput({ normalizedRaw, parserVersion, searchContext, sellers, inputFormat, headerDiagnostics = null, rowAccounting = null }) {
@@ -390,7 +388,7 @@ function finalizeParsedInput({ normalizedRaw, parserVersion, searchContext, sell
       returnedRows: deduped.sellers.length,
       truncatedRows: deduped.parsedCount - deduped.sellers.length
     },
-    truncated: deduped.parsedCount > MAX_IMPORTED_LISTINGS,
+    truncated: false,
     tagSuggestions: aggregateTagSuggestions(deduped.sellers)
   };
 }

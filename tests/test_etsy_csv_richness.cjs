@@ -226,8 +226,8 @@ assert.throws(() => parseEtsySearchCsv('listing_id,title,shop\n123,,A\n124,Good,
 
 const overLimitCsv = ['listing_id,title,shop', ...Array.from({ length: 501 }, (_, index) => `${index + 1},Item ${index + 1},Shop`)].join('\n');
 const overLimit = parseEtsySearchCsv(overLimitCsv);
-assert.deepStrictEqual(overLimit.rowAccounting, { inputRows: 501, validRows: 501, uniqueRows: 501, duplicateRowsRemoved: 0, returnedRows: 500, truncatedRows: 1 });
-assert.strictEqual(overLimit.truncated, true);
-assert.strictEqual(overLimit.sellers.length, 500);
+assert.deepStrictEqual(overLimit.rowAccounting, { inputRows: 501, validRows: 501, uniqueRows: 501, duplicateRowsRemoved: 0, returnedRows: 501, truncatedRows: 0 });
+assert.strictEqual(overLimit.truncated, false);
+assert.strictEqual(overLimit.sellers.length, 501, 'Complete CSV corpus must be returned; no silent row ceiling');
 
 console.log('Etsy CSV Richness parser contract passed.');

@@ -46,6 +46,7 @@
   "tests/test_strict_keyword_sanitizer.cjs",
   "tests/test_truth_evidence_ownership.test.cjs",
   "tests/test_vite_dev_runtime_smoke.test.cjs",
+  "tests/test_vite_process_shutdown.cjs",
   "tests/test_white_screen_failsafe.cjs",
   "tests/test_workflow_state_machine.test.cjs",
   "tests/test_workflow_truth_ui_contract.cjs",

@@ -19,6 +19,54 @@ async function waitForServer(url, timeoutMs, getDiagnostics) {
   );
 }
 
+async function shutdownChildProcess(child, options = {}) {
+  const termGraceMs = options.termGraceMs ?? 1000;
+  const killGraceMs = options.killGraceMs ?? 1000;
+  const pid = child?.pid;
+  if (!pid) return { escalated: false };
+
+  const isAlive = () => {
+    try { process.kill(pid, 0); return true; } catch (error) {
+      if (error.code === 'ESRCH') return false;
+      throw error;
+    }
+  };
+  const signalTree = signal => {
+    try {
+      if (process.platform === 'win32') {
+        child.kill(signal);
+      } else {
+        process.kill(-pid, signal);
+      }
+    } catch (error) {
+      if (error.code !== 'ESRCH') throw error;
+    }
+  };
+  const waitForClose = timeoutMs => new Promise(resolve => {
+    if (!isAlive() && child.exitCode !== null) return resolve(true);
+    let settled = false;
+    const done = value => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.off('close', onClose);
+      resolve(value);
+    };
+    const onClose = () => done(!isAlive());
+    const timer = setTimeout(() => done(!isAlive()), timeoutMs);
+    child.once('close', onClose);
+  });
+
+  signalTree('SIGTERM');
+  if (await waitForClose(termGraceMs)) return { escalated: false };
+  signalTree('SIGKILL');
+  if (await waitForClose(killGraceMs)) return { escalated: true };
+  child.stdout?.destroy();
+  child.stderr?.destroy();
+  if (isAlive()) throw new Error(`VITE_PROCESS_SHUTDOWN_TIMEOUT pid=${pid}`);
+  return { escalated: true };
+}
+
 async function runViteSmokeTest() {
   console.log('================================================================');
   console.log('  TESTING VITE DEV RUNTIME MODULE BOUNDARY & REAL VITE SERVER');
@@ -48,6 +96,7 @@ async function runViteSmokeTest() {
   let viteOutput = '';
   const viteProc = spawn(process.execPath, [viteCli, '--host', '127.0.0.1', '--port', '5179', '--strictPort'], {
     cwd: path.join(__dirname, '..'),
+    detached: process.platform !== 'win32',
     env: { ...process.env, NODE_ENV: 'development' }
   });
   viteProc.stdout.on('data', chunk => { viteOutput += chunk.toString(); });
@@ -76,20 +125,15 @@ async function runViteSmokeTest() {
     console.log('  🟢 ALL VITE DEV RUNTIME MODULE & SERVER SMOKE TESTS PASSED');
     console.log('================================================================\n');
   } finally {
-    if (process.platform === 'win32') {
-      try {
-        require('child_process').execSync(`taskkill /F /T /PID ${viteProc.pid}`, { stdio: 'ignore' });
-      } catch (_) {
-        viteProc.kill('SIGKILL');
-      }
-    } else {
-      viteProc.kill('SIGKILL');
-    }
+    await shutdownChildProcess(viteProc);
   }
-  process.exit(0);
 }
 
-runViteSmokeTest().catch(err => {
-  console.error('🔴 VITE SMOKE TEST FAILED:', err);
-  process.exit(1);
-});
+if (require.main === module) {
+  runViteSmokeTest().catch(err => {
+    console.error('🔴 VITE SMOKE TEST FAILED:', err);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = { waitForServer, shutdownChildProcess, runViteSmokeTest };

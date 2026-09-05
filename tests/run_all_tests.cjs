@@ -86,34 +86,45 @@ function runChild(command, args, options) {
     const stdout = [];
     const stderr = [];
     let timedOut = false;
+    let isolationViolation = false;
+    let isolationPids = [];
     let spawnError = null;
     let settled = false;
+    let cleanupStarted = false;
     let code = null;
     let signal = null;
     let timeoutTimer;
     let killTimer;
     let pipeTimer;
 
-    const finish = () => {
+    const resolveResult = () => {
       if (settled) return;
       settled = true;
       clearTimeout(timeoutTimer);
       clearTimeout(killTimer);
       clearTimeout(pipeTimer);
-      if (timedOut) signalOwnedProcesses(child, token, 'SIGKILL');
+      const survivingPids = tokenPids(token);
       resolve({
-        code, signal, timedOut, spawnError,
-        elapsedMs: Date.now() - startedAt,
+        code, signal, timedOut, isolationViolation, isolationPids,
+        spawnError, elapsedMs: Date.now() - startedAt,
         stdout: Buffer.concat(stdout).toString('utf8'),
         stderr: Buffer.concat(stderr).toString('utf8'),
-        survivingPids: tokenPids(token)
+        survivingPids
       });
     };
-    const forceFinish = () => {
-      signalOwnedProcesses(child, token, 'SIGKILL');
-      child.stdout.destroy();
-      child.stderr.destroy();
-      pipeTimer = setTimeout(finish, options.pipeGraceMs);
+    const cleanupOwned = markIsolation => {
+      if (cleanupStarted) return;
+      cleanupStarted = true;
+      clearTimeout(timeoutTimer);
+      isolationPids = tokenPids(token);
+      isolationViolation = markIsolation && isolationPids.length > 0;
+      signalOwnedProcesses(child, token, 'SIGTERM');
+      killTimer = setTimeout(() => {
+        signalOwnedProcesses(child, token, 'SIGKILL');
+        child.stdout.destroy();
+        child.stderr.destroy();
+        pipeTimer = setTimeout(resolveResult, options.pipeGraceMs);
+      }, options.killGraceMs);
     };
 
     child.stdout.on('data', chunk => stdout.push(chunk));
@@ -123,13 +134,15 @@ function runChild(command, args, options) {
     child.on('close', (exitCode, exitSignal) => {
       if (code === null) code = exitCode;
       if (signal === null) signal = exitSignal;
-      finish();
+      if (timedOut) return;
+      const owned = tokenPids(token);
+      if (owned.length > 0) cleanupOwned(true);
+      else resolveResult();
     });
 
     timeoutTimer = setTimeout(() => {
       timedOut = true;
-      signalOwnedProcesses(child, token, 'SIGTERM');
-      killTimer = setTimeout(forceFinish, options.killGraceMs);
+      cleanupOwned(false);
     }, options.timeoutMs);
   });
 }
@@ -148,6 +161,9 @@ async function ensureBuildArtifact(options) {
   if (result.stdout) process.stdout.write(result.stdout);
   if (result.stderr) process.stderr.write(result.stderr);
   if (result.spawnError) throw Object.assign(result.spawnError, { kind: 'SETUP_ERROR' });
+  if (result.isolationViolation || result.survivingPids.length > 0) {
+    throw Object.assign(new Error('BUILD_PROCESS_LEAK'), { kind: 'SETUP_ERROR' });
+  }
   if (result.timedOut) throw Object.assign(new Error('BUILD_TIMEOUT'), { kind: 'SETUP_ERROR' });
   if (result.code !== 0) throw Object.assign(new Error(`BUILD_EXIT_${result.code}`), { kind: 'SETUP_ERROR' });
   if (!fs.existsSync(artifactPath)) throw Object.assign(new Error('BUILD_ARTIFACT_MISSING'), { kind: 'SETUP_ERROR' });
@@ -227,6 +243,12 @@ async function runAllTests(options = {}) {
         if (result.stderr) process.stderr.write(result.stderr);
         if (result.spawnError) {
           throw Object.assign(result.spawnError, { kind: 'STARTUP_ERROR' });
+        }
+        if (result.isolationViolation || result.survivingPids.length > 0) {
+          throw Object.assign(
+            new Error(`DESCENDANT_PROCESS_LEAK detected=${result.isolationPids.join(',')} survivors=${result.survivingPids.join(',')}`),
+            { kind: 'ISOLATION_FAILURE' }
+          );
         }
         if (result.timedOut) {
           const survivors = result.survivingPids.length ? ` survivors=${result.survivingPids.join(',')}` : '';

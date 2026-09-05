@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const {
   discoverTestFiles, runAllTests, exitCodeForResult
 } = require('./run_all_tests.cjs');
@@ -16,6 +16,7 @@ const write = (name, source) => {
 };
 const subset = options => ({ mode: 'subset', prepareArtifacts: false, ...options });
 let measured = 0;
+let outsider = null;
 const check = assertion => { assertion(); measured++; };
 const relative = filename => path.relative(path.resolve(__dirname, '..'), filename).split(path.sep).join('/');
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -49,6 +50,25 @@ const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
         {detached:true,stdio:['ignore','inherit','inherit']}).unref();
     `);
 
+    const leakCases = [];
+    for (const [name, detached, exitCode] of [
+      ['normal_exit0', false, 0],
+      ['detached_exit0', true, 0],
+      ['normal_exit7', false, 7],
+      ['detached_exit7', true, 7]
+    ]) {
+      const sentinel = path.join(root, `${name}-sentinel`);
+      const descendantCode =
+        `setTimeout(()=>require('node:fs').writeFileSync(${JSON.stringify(sentinel)},'BAD'),600);setInterval(()=>{},1000)`;
+      const file = write(`${name}.cjs`, `
+        require('node:child_process').spawn(process.execPath,
+          ['-e',${JSON.stringify(descendantCode)}],
+          {detached:${detached},stdio:'ignore'}).unref();
+        process.exit(${exitCode});
+      `);
+      leakCases.push({ file, sentinel, exitCode });
+    }
+
     const accumulated = await runAllTests(subset({
       testFiles: [passOne, fail, passTwo], timeoutMs: 1000
     }));
@@ -76,6 +96,30 @@ const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
     await wait(1300);
     check(() => assert.equal(fs.existsSync(sentinelLeader), false));
     check(() => assert.equal(fs.existsSync(sentinelDetached), false));
+
+    const outsiderEnv = { ...process.env };
+    delete outsiderEnv.OMNI_RUNNER_TOKEN;
+    outsider = spawn(process.execPath, ['-e', 'setInterval(()=>{},1000)'], {
+      detached: true, stdio: 'ignore', env: outsiderEnv
+    });
+    outsider.unref();
+    for (const leak of leakCases) {
+      const isolated = await runAllTests(subset({
+        testFiles: [leak.file, passOne], timeoutMs: 2000,
+        killGraceMs: 100, pipeGraceMs: 100
+      }));
+      check(() => assert.deepEqual(
+        { passed: isolated.passed, failed: isolated.failed, unexecuted: isolated.unexecuted },
+        { passed: 1, failed: 1, unexecuted: 0 }
+      ));
+      check(() => assert.equal(isolated.failures[0].kind, 'ISOLATION_FAILURE'));
+    }
+    await wait(750);
+    for (const leak of leakCases) {
+      check(() => assert.equal(fs.existsSync(leak.sentinel), false));
+    }
+    check(() => assert.doesNotThrow(() => process.kill(outsider.pid, 0)));
+
     const watchdogWrapper = write('watchdog_wrapper.cjs', `
       const runner=require(${JSON.stringify(path.resolve(__dirname, 'run_all_tests.cjs'))});
       (async()=>{const r=await runner.runAllTests({
@@ -221,6 +265,7 @@ const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
     }), 0));
     console.log(`F-05 runner lifecycle measured=${measured} passed=${measured} failed=0 unexecuted=0`);
   } finally {
+    if (outsider && outsider.exitCode === null) outsider.kill('SIGKILL');
     fs.rmSync(root, { recursive: true, force: true });
   }
 })().catch(error => {

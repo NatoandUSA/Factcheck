@@ -23,34 +23,42 @@ async function shutdownChildProcess(child, options = {}) {
   const termGraceMs = options.termGraceMs ?? 1000;
   const killGraceMs = options.killGraceMs ?? 1000;
   const pollMs = options.pollMs ?? 20;
+  const taskkillTimeoutMs = options.taskkillTimeoutMs ?? 2000;
+  const platform = options.platform ?? process.platform;
+  const runTaskkill = options.spawnSyncFn ?? spawnSync;
   const pid = child?.pid;
   if (!pid) return { escalated: false };
 
-  const treeAlive = () => {
+  const treeAlive = options.treeAliveFn ?? (() => {
     try {
-      process.kill(process.platform === 'win32' ? pid : -pid, 0);
+      process.kill(platform === 'win32' ? pid : -pid, 0);
       return true;
     } catch (error) {
       if (error.code === 'ESRCH') return false;
       throw error;
     }
-  };
+  });
   const signalTree = signal => {
-    if (process.platform === 'win32') {
+    if (platform === 'win32') {
       const args = ['/PID', String(pid), '/T'];
       if (signal === 'SIGKILL') args.push('/F');
-      const result = spawnSync('taskkill', args, { stdio: 'ignore' });
-      if (result.error) throw result.error;
-      if (result.status !== 0 && treeAlive()) {
-        throw new Error(`TASKKILL_FAILED pid=${pid} status=${result.status}`);
-      }
-      return;
+      const result = runTaskkill('taskkill', args, {
+        stdio: 'ignore',
+        timeout: taskkillTimeoutMs,
+        windowsHide: true
+      });
+      return {
+        ok: !result.error && result.status === 0,
+        status: result.status,
+        error: result.error
+      };
     }
     try {
       process.kill(-pid, signal);
     } catch (error) {
       if (error.code !== 'ESRCH') throw error;
     }
+    return { ok: true, status: 0, error: null };
   };
   const waitForTreeExit = async timeoutMs => {
     const deadline = Date.now() + timeoutMs;
@@ -60,13 +68,19 @@ async function shutdownChildProcess(child, options = {}) {
     return !treeAlive();
   };
 
-  signalTree('SIGTERM');
-  if (await waitForTreeExit(termGraceMs)) return { escalated: false };
-  signalTree('SIGKILL');
+  const termResult = signalTree('SIGTERM');
+  const termExited = await waitForTreeExit(termGraceMs);
+  if (termResult.ok && termExited) return { escalated: false };
+
+  const forceResult = signalTree('SIGKILL');
+  if (!forceResult.ok) {
+    const detail = forceResult.error?.code || forceResult.error?.message || forceResult.status;
+    throw new Error(`TASKKILL_FORCE_TREE_FAILED pid=${pid} detail=${detail}`);
+  }
   if (await waitForTreeExit(killGraceMs)) return { escalated: true };
   child.stdout?.destroy();
   child.stderr?.destroy();
-  throw new Error(`VITE_PROCESS_TREE_SHUTDOWN_TIMEOUT pgid=${pid}`);
+  throw new Error(`VITE_PROCESS_TREE_SHUTDOWN_TIMEOUT pid=${pid} platform=${platform}`);
 }
 
 async function runViteSmokeTest() {

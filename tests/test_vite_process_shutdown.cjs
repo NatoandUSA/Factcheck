@@ -107,15 +107,74 @@ const check = assertion => { assertion(); measured++; };
     const cooperative = await shutdownChildProcess(activeChild, {
       termGraceMs: 500, killGraceMs: 300, pollMs: 10
     });
-    check(() => assert.equal(cooperative.escalated, false));
+    check(() => assert.equal(cooperative.escalated, process.platform === 'win32'));
     check(() => assert.equal(groupAlive(cooperativePgid), false));
+
+    const windowsCalls = [];
+    let windowsForced = false;
+    const windowsEscalation = await shutdownChildProcess({ pid: 4242 }, {
+      platform: 'win32',
+      termGraceMs: 0,
+      killGraceMs: 20,
+      pollMs: 1,
+      taskkillTimeoutMs: 321,
+      treeAliveFn: () => !windowsForced,
+      spawnSyncFn: (_command, args, options) => {
+        windowsCalls.push({ args, timeout: options.timeout });
+        if (args.includes('/F')) {
+          windowsForced = true;
+          return { status: 0 };
+        }
+        return { status: 128 };
+      }
+    });
+    check(() => assert.equal(windowsEscalation.escalated, true));
+    check(() => assert.deepEqual(windowsCalls.map(call => call.args), [
+      ['/PID', '4242', '/T'],
+      ['/PID', '4242', '/T', '/F']
+    ]));
+    check(() => assert.deepEqual(windowsCalls.map(call => call.timeout), [321, 321]));
+
+    let timeoutForced = false;
+    const timeoutEscalation = await shutdownChildProcess({ pid: 4343 }, {
+      platform: 'win32',
+      termGraceMs: 0,
+      killGraceMs: 20,
+      pollMs: 1,
+      taskkillTimeoutMs: 17,
+      treeAliveFn: () => !timeoutForced,
+      spawnSyncFn: (_command, args) => {
+        if (args.includes('/F')) {
+          timeoutForced = true;
+          return { status: 0 };
+        }
+        return { status: null, error: Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' }) };
+      }
+    });
+    check(() => assert.equal(timeoutEscalation.escalated, true));
+
+    await assert.rejects(
+      shutdownChildProcess({ pid: 4444 }, {
+        platform: 'win32',
+        termGraceMs: 0,
+        killGraceMs: 0,
+        treeAliveFn: () => true,
+        spawnSyncFn: () => ({ status: 128 })
+      }),
+      /TASKKILL_FORCE_TREE_FAILED pid=4444 detail=128/
+    );
+    measured++;
 
     console.log(`VITE_TREE_SHUTDOWN_RESULT measured=${measured} passed=${measured} failed=0 unexecuted=0`);
   } finally {
     if (activeChild && groupAlive(activeChild.pid)) {
       try {
-        if (process.platform === 'win32') activeChild.kill('SIGKILL');
-        else process.kill(-activeChild.pid, 'SIGKILL');
+        await shutdownChildProcess(activeChild, {
+          termGraceMs: 0,
+          killGraceMs: 500,
+          pollMs: 10,
+          taskkillTimeoutMs: 1000
+        });
       } catch (_) {}
     }
     fs.rmSync(root, { recursive: true, force: true });

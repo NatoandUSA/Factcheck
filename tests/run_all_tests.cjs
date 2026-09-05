@@ -1,113 +1,321 @@
-const { execFileSync } = require('child_process');
+const { spawn } = require('child_process');
+const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { childImportsDir } = require('./helpers/suiteIsolation.cjs');
 
-function runAllTests() {
-  console.log('================================================================');
-  console.log('  RUNNING OMNISELLER STUDIO SUITE - 100% EXECUTABLE ASSERTIONS');
-  console.log('================================================================\n');
+const REPO_ROOT = path.resolve(__dirname, '..');
+const DEFAULT_TIMEOUT_MS = 180000;
+const DEFAULT_KILL_GRACE_MS = 1000;
+const DEFAULT_PIPE_GRACE_MS = 250;
+const INVENTORY_PATH = path.join(__dirname, 'canonical_test_inventory.json');
+const EXCLUDED_DIRS = new Set(['helpers', 'fixtures']);
 
-const testFiles = [
-    'tests/test_product_truth_core.cjs',
-    'tests/test_ai_boundary_and_batch.cjs',
-    'tests/test_server_ai_truth_boundary.cjs',
-    'tests/spec_hash_vector.test.cjs',
-    'tests/security_controls_unit.test.cjs',
-    'tests/listing_scope_migration.test.cjs',
-    'tests/sec_auth_foundation.test.cjs',
-    'tests/route_registry_coverage.test.cjs',
-    'tests/ssrf_url_guard.test.cjs',
-    'tests/p0_route_security.test.cjs',
-    'tests/test_real_child_asin_batcher.cjs',
-    'tests/test_runtime_paths.cjs',
-    'tests/test_etsy_truth_semantics.cjs',
-    'tests/test_etsy_provenance_authority.cjs',
-    'tests/test_etsy_scanner_evidence_ui.cjs',
-    'tests/test_strict_keyword_sanitizer.cjs',
-    'tests/test_full_cerebro_mkl_flow.cjs',
-    'tests/test_white_screen_failsafe.cjs',
-    'tests/test_amazon_truth_boundary_remediation.cjs',
-    'tests/test_listing_truth_boundary.cjs',
-    'tests/test_malicious_model_outputs.cjs',
-    'tests/test_adversarial_control_plane.cjs',
-    'tests/test_p0_5_c_research_truth.cjs',
-    'tests/test_ytrends_unknown_defaults.cjs',
-    'tests/test_listing_ip_rescreen.cjs',
-    'tests/spec_simulator_and_mkl_truth.test.cjs',
-    'tests/spec_publish_gate_contracts.test.cjs',
-    'tests/server_revision.test.cjs',
-    'tests/vps_platform_scripts.test.cjs',
-    'tests/test_opportunity_truth_boundary.cjs',
-    'tests/test_truth_evidence_ownership.test.cjs',
-    'tests/test_workflow_state_machine.test.cjs',
-    'tests/test_project_scoped_evidence_workflow.test.cjs',
-    'tests/spec_etsy_mcp_truth_boundary.test.cjs',
-    'tests/spec_canonical_business_workflow.test.cjs',
-    'tests/test_backup_restore_and_migrations.cjs',
-    'tests/test_adversarial_staff_ui_flow.cjs',
-    'tests/test_multi_project_attribution.cjs',
-    'tests/test_workspace_switching_and_auth_security.cjs',
-    'tests/test_performance_and_latency.cjs',
-    'tests/test_database_fixture_isolation.cjs',
-    'tests/test_cross_tenant_isolation.cjs',
-    'tests/test_vite_dev_runtime_smoke.test.cjs',
-    'tests/test_login_rate_limiter_http.test.cjs',
-    'tests/test_legacy_migration_integrity.test.cjs',
-    'tests/test_workflow_truth_ui_contract.cjs',
-    'tests/test_audit_fixes_014a1f4.cjs',
-    'tests/test_smart_pull_hardening.cjs',
-    'tests/test_etsy_pasted_search_parser.cjs',
-    'tests/test_evidence_health.cjs',
-    'tests/test_zero_fabrication_boundary.cjs'
-  ];
+function normalizeEntry(testsDir, filename) {
+  return path.relative(REPO_ROOT, path.resolve(testsDir, filename)).split(path.sep).join('/');
+}
 
-  let passedCount = 0;
-  const suiteImportsRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'omniseller-suite-imports-'));
-
-  try {
-    testFiles.forEach((file, idx) => {
-    console.log(`[Test ${idx + 1}/${testFiles.length}] Executing ${file}...`);
-    try {
-      // Some deployment suites intentionally exercise cleanup paths. Restore
-      // the production artifact at the point where an HTTP test requires it,
-      // so canonical results do not depend on test order or a pre-existing
-      // dist directory.
-      if (file === 'tests/test_performance_and_latency.cjs' && !fs.existsSync(path.resolve(__dirname, '../dist/index.html'))) {
-        execFileSync(process.execPath, [path.resolve(__dirname, '../node_modules/vite/bin/vite.js'), 'build'], {
-          cwd: path.resolve(__dirname, '..'),
-          stdio: 'inherit',
-          timeout: 180000
-        });
+function scanEntrypoints(testsDir) {
+  const found = [];
+  const visit = (directory, relative = '') => {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        if (!EXCLUDED_DIRS.has(entry.name)) visit(path.join(directory, entry.name), path.join(relative, entry.name));
+      } else if (entry.isFile() && entry.name.endsWith('.cjs') && entry.name !== 'run_all_tests.cjs') {
+        found.push(normalizeEntry(testsDir, path.join(relative, entry.name)));
       }
-      const output = execFileSync(process.execPath, [file], {
-        encoding: 'utf-8',
-        cwd: path.resolve(__dirname, '..'),
-        env: { ...process.env, TEST_IMPORTS_DIR: childImportsDir(suiteImportsRoot, idx, file) },
-        timeout: 180000,
-        killSignal: 'SIGTERM'
-      });
-      console.log(output);
-      console.log(`✅ ${file} PASSED CLEANLY!\n`);
-      passedCount++;
-    } catch (err) {
-      const reason = err.code === 'ETIMEDOUT' ? 'TIMED OUT AFTER 180 SECONDS' : err.message;
-      console.error(`🔴 ${file} FAILED:`, reason);
-      throw err;
     }
-    });
+  };
+  visit(testsDir);
+  return found.sort();
+}
 
-    console.log('================================================================');
-    console.log(`  🟢 100% SUITE PASSED: ${passedCount}/${testFiles.length} TEST FILES EXECUTED!`);
-    console.log('================================================================');
-  } finally {
-    fs.rmSync(suiteImportsRoot, { recursive: true, force: true });
+function discoverTestFiles(testsDir = __dirname, inventoryPath = INVENTORY_PATH) {
+  const inventory = JSON.parse(fs.readFileSync(inventoryPath, 'utf8'));
+  if (!Array.isArray(inventory) || inventory.length === 0) throw new Error('INVALID_TEST_INVENTORY');
+  if (new Set(inventory).size !== inventory.length) throw new Error('DUPLICATE_TEST_INVENTORY_ENTRY');
+  const expected = inventory.map(file => file.split(path.sep).join('/')).sort();
+  const actual = scanEntrypoints(testsDir);
+  const missing = expected.filter(file => !actual.includes(file));
+  const unexpected = actual.filter(file => !expected.includes(file));
+  if (missing.length || unexpected.length) {
+    throw new Error(`TEST_INVENTORY_MISMATCH missing=[${missing.join(',')}] unexpected=[${unexpected.join(',')}]`);
+  }
+  return expected;
+}
+
+function tokenPids(token) {
+  if (process.platform !== 'linux') return [];
+  const pids = [];
+  for (const name of fs.readdirSync('/proc')) {
+    if (!/^\d+$/.test(name) || Number(name) === process.pid) continue;
+    try {
+      const env = fs.readFileSync(`/proc/${name}/environ`, 'utf8');
+      if (env.split('\0').includes(`OMNI_RUNNER_TOKEN=${token}`)) pids.push(Number(name));
+    } catch (_) {}
+  }
+  return pids;
+}
+
+function signalOwnedProcesses(child, token, signal) {
+  const targets = new Set(tokenPids(token));
+  if (child && child.pid) targets.add(child.pid);
+  if (process.platform !== 'win32' && child && child.pid) {
+    try { process.kill(-child.pid, signal); } catch (error) {
+      if (error.code !== 'ESRCH') throw error;
+    }
+  }
+  for (const pid of targets) {
+    try { process.kill(pid, signal); } catch (error) {
+      if (error.code !== 'ESRCH') throw error;
+    }
   }
 }
 
-try {
-  runAllTests();
-} catch (_error) {
-  process.exitCode = 1;
+function runChild(command, args, options) {
+  return new Promise(resolve => {
+    const token = crypto.randomBytes(16).toString('hex');
+    const startedAt = Date.now();
+    const child = spawn(command, args, {
+      cwd: options.cwd || REPO_ROOT,
+      detached: process.platform !== 'win32',
+      env: { ...options.env, OMNI_RUNNER_TOKEN: token },
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    const stdout = [];
+    const stderr = [];
+    let timedOut = false;
+    let isolationViolation = false;
+    let isolationPids = [];
+    let spawnError = null;
+    let settled = false;
+    let cleanupStarted = false;
+    let code = null;
+    let signal = null;
+    let timeoutTimer;
+    let killTimer;
+    let pipeTimer;
+
+    const resolveResult = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutTimer);
+      clearTimeout(killTimer);
+      clearTimeout(pipeTimer);
+      const survivingPids = tokenPids(token);
+      resolve({
+        code, signal, timedOut, isolationViolation, isolationPids,
+        spawnError, elapsedMs: Date.now() - startedAt,
+        stdout: Buffer.concat(stdout).toString('utf8'),
+        stderr: Buffer.concat(stderr).toString('utf8'),
+        survivingPids
+      });
+    };
+    const cleanupOwned = markIsolation => {
+      if (cleanupStarted) return;
+      cleanupStarted = true;
+      clearTimeout(timeoutTimer);
+      isolationPids = tokenPids(token);
+      isolationViolation = markIsolation && isolationPids.length > 0;
+      signalOwnedProcesses(child, token, 'SIGTERM');
+      killTimer = setTimeout(() => {
+        signalOwnedProcesses(child, token, 'SIGKILL');
+        child.stdout.destroy();
+        child.stderr.destroy();
+        pipeTimer = setTimeout(resolveResult, options.pipeGraceMs);
+      }, options.killGraceMs);
+    };
+
+    child.stdout.on('data', chunk => stdout.push(chunk));
+    child.stderr.on('data', chunk => stderr.push(chunk));
+    child.on('error', error => { spawnError = error; });
+    child.on('exit', (exitCode, exitSignal) => { code = exitCode; signal = exitSignal; });
+    child.on('close', (exitCode, exitSignal) => {
+      if (code === null) code = exitCode;
+      if (signal === null) signal = exitSignal;
+      if (timedOut) return;
+      const owned = tokenPids(token);
+      if (owned.length > 0) cleanupOwned(true);
+      else resolveResult();
+    });
+
+    timeoutTimer = setTimeout(() => {
+      timedOut = true;
+      cleanupOwned(false);
+    }, options.timeoutMs);
+  });
 }
+async function ensureBuildArtifact(options) {
+  const artifactPath = options.artifactPath || path.resolve(REPO_ROOT, 'dist/index.html');
+  if (fs.existsSync(artifactPath)) return { built: false };
+  const command = options.buildCommand || process.execPath;
+  const args = options.buildArgs || [path.resolve(REPO_ROOT, 'node_modules/vite/bin/vite.js'), 'build'];
+  const result = await runChild(command, args, {
+    cwd: options.buildCwd || REPO_ROOT,
+    timeoutMs: options.buildTimeoutMs || DEFAULT_TIMEOUT_MS,
+    killGraceMs: options.killGraceMs,
+    pipeGraceMs: options.pipeGraceMs,
+    env: { ...process.env, NODE_ENV: 'test', ...(options.buildEnv || {}) }
+  });
+  if (result.stdout) process.stdout.write(result.stdout);
+  if (result.stderr) process.stderr.write(result.stderr);
+  if (result.spawnError) throw Object.assign(result.spawnError, { kind: 'SETUP_ERROR' });
+  if (result.isolationViolation || result.survivingPids.length > 0) {
+    throw Object.assign(new Error('BUILD_PROCESS_LEAK'), { kind: 'SETUP_ERROR' });
+  }
+  if (result.timedOut) throw Object.assign(new Error('BUILD_TIMEOUT'), { kind: 'SETUP_ERROR' });
+  if (result.code !== 0) throw Object.assign(new Error(`BUILD_EXIT_${result.code}`), { kind: 'SETUP_ERROR' });
+  if (!fs.existsSync(artifactPath)) throw Object.assign(new Error('BUILD_ARTIFACT_MISSING'), { kind: 'SETUP_ERROR' });
+  return { built: true, command, args };
+}
+
+function printSummary(result) {
+  for (const error of result.harnessErrors) {
+    console.error(`🔴 HARNESS_ERROR phase=${error.phase} reason=${error.reason}`);
+  }
+  console.log('================================================================');
+  console.log(`SUITE_RESULT total=${result.total} passed=${result.passed} failed=${result.failed} unexecuted=${result.unexecuted} harness_errors=${result.harnessErrors.length}`);
+  console.log('================================================================');
+}
+
+async function runAllTests(options = {}) {
+  const timeoutMs = options.timeoutMs || DEFAULT_TIMEOUT_MS;
+  const killGraceMs = options.killGraceMs || DEFAULT_KILL_GRACE_MS;
+  const pipeGraceMs = options.pipeGraceMs || DEFAULT_PIPE_GRACE_MS;
+  const prepareArtifacts = options.prepareArtifacts !== false;
+  const mode = options.mode || 'canonical';
+  const failures = [];
+  const harnessErrors = [];
+  let testFiles = [];
+  let suiteImportsRoot = null;
+  let invoked = 0;
+  let passed = 0;
+  let failed = 0;
+  console.log('================================================================');
+  console.log('  RUNNING OMNISELLER STUDIO SUITE - EXECUTABLE ASSERTIONS');
+  console.log('================================================================\n');
+
+  try {
+    try {
+      if (mode === 'subset') {
+        if (!Array.isArray(options.testFiles) || options.testFiles.length === 0) {
+          throw new Error('EMPTY_EXPLICIT_SUBSET');
+        }
+        testFiles = [...options.testFiles];
+      } else if (mode === 'canonical') {
+        if (options.testFiles) throw new Error('CANONICAL_MODE_REJECTS_EXPLICIT_TEST_FILES');
+        testFiles = discoverTestFiles(options.testsDir || __dirname, options.inventoryPath || INVENTORY_PATH);
+      } else {
+        throw new Error(`INVALID_RUN_MODE_${mode}`);
+      }
+      suiteImportsRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'omniseller-suite-imports-'));
+    } catch (error) {
+      harnessErrors.push({ phase: 'discovery', reason: error.message });
+    }
+
+    for (const [idx, file] of testFiles.entries()) {
+      const absoluteFile = path.isAbsolute(file) ? file : path.resolve(REPO_ROOT, file);
+      if (!fs.existsSync(absoluteFile)) {
+        invoked++;
+        failed++;
+        failures.push({ file, kind: 'STARTUP_ERROR', reason: 'TEST_FILE_NOT_FOUND' });
+        console.error(`🔴 ${file} STARTUP_ERROR: TEST_FILE_NOT_FOUND\n`);
+        continue;
+      }
+
+      invoked++;
+      console.log(`[Test ${idx + 1}/${testFiles.length}] Executing ${file}...`);
+      try {
+        const performanceFile = options.performanceTestFile || 'tests/test_performance_and_latency.cjs';
+        if (prepareArtifacts && file === performanceFile) {
+          await ensureBuildArtifact({ ...options, killGraceMs, pipeGraceMs });
+        }
+        const result = await runChild(process.execPath, [absoluteFile], {
+          timeoutMs, killGraceMs, pipeGraceMs,
+          env: {
+            ...process.env,
+            NODE_ENV: 'test',
+            TEST_IMPORTS_DIR: childImportsDir(suiteImportsRoot, idx, file)
+          }
+        });
+        if (result.stdout) process.stdout.write(result.stdout);
+        if (result.stderr) process.stderr.write(result.stderr);
+        if (result.spawnError) {
+          throw Object.assign(result.spawnError, { kind: 'STARTUP_ERROR' });
+        }
+        if (result.isolationViolation || result.survivingPids.length > 0) {
+          throw Object.assign(
+            new Error(`DESCENDANT_PROCESS_LEAK detected=${result.isolationPids.join(',')} survivors=${result.survivingPids.join(',')}`),
+            { kind: 'ISOLATION_FAILURE' }
+          );
+        }
+        if (result.timedOut) {
+          const survivors = result.survivingPids.length ? ` survivors=${result.survivingPids.join(',')}` : '';
+          throw Object.assign(new Error(`TIMED OUT AFTER ${timeoutMs} MS${survivors}`), { kind: 'TIMEOUT' });
+        }
+        if (result.code !== 0) {
+          throw Object.assign(new Error(`TEST EXIT ${result.code}`), { kind: 'TEST_FAILURE' });
+        }
+        console.log(`✅ ${file} PASSED CLEANLY!\n`);
+        passed++;
+      } catch (error) {
+        failed++;
+        const kind = error.kind || 'TEST_FAILURE';
+        failures.push({ file, kind, reason: error.message });
+        console.error(`🔴 ${file} ${kind}: ${error.message}\n`);
+      }
+    }
+  } finally {
+    if (suiteImportsRoot) {
+      try {
+        const cleanup = options.cleanup || (root => fs.rmSync(root, { recursive: true, force: true }));
+        await cleanup(suiteImportsRoot);
+      } catch (error) {
+        harnessErrors.push({ phase: 'cleanup', reason: error.message });
+        console.error(`🔴 HARNESS CLEANUP ERROR: ${error.message}`);
+      }
+    }
+  }
+
+  const result = {
+    total: testFiles.length,
+    invoked,
+    passed,
+    failed,
+    unexecuted: Math.max(0, testFiles.length - invoked),
+    failures,
+    harnessErrors,
+    mode
+  };
+  printSummary(result);
+  return result;
+}
+
+const exitCodeForResult = result =>
+  result.failed > 0 || result.unexecuted > 0 || result.harnessErrors.length > 0 ? 1 : 0;
+async function main() {
+  const result = await runAllTests();
+  process.exitCode = exitCodeForResult(result);
+}
+
+if (require.main === module) {
+  main().catch(error => {
+    console.error(`HARNESS_FATAL: ${error.stack || error.message}`);
+    printSummary({
+      total: 0, passed: 0, failed: 0, unexecuted: 0,
+      harnessErrors: [{ phase: 'fatal', reason: error.message }]
+    });
+    process.exitCode = 1;
+  });
+}
+
+module.exports = {
+  INVENTORY_PATH,
+  scanEntrypoints,
+  discoverTestFiles,
+  runChild,
+  ensureBuildArtifact,
+  runAllTests,
+  exitCodeForResult
+};

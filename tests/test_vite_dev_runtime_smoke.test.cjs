@@ -1,7 +1,7 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 
 async function waitForServer(url, timeoutMs, getDiagnostics) {
   const deadline = Date.now() + timeoutMs;
@@ -17,6 +17,70 @@ async function waitForServer(url, timeoutMs, getDiagnostics) {
     `Timed out waiting for Vite dev server at ${url} after ${timeoutMs}ms.`
     + (diagnostics ? `\nVite output:\n${diagnostics}` : '')
   );
+}
+
+async function shutdownChildProcess(child, options = {}) {
+  const termGraceMs = options.termGraceMs ?? 1000;
+  const killGraceMs = options.killGraceMs ?? 1000;
+  const pollMs = options.pollMs ?? 20;
+  const taskkillTimeoutMs = options.taskkillTimeoutMs ?? 2000;
+  const platform = options.platform ?? process.platform;
+  const runTaskkill = options.spawnSyncFn ?? spawnSync;
+  const pid = child?.pid;
+  if (!pid) return { escalated: false };
+
+  const treeAlive = options.treeAliveFn ?? (() => {
+    try {
+      process.kill(platform === 'win32' ? pid : -pid, 0);
+      return true;
+    } catch (error) {
+      if (error.code === 'ESRCH') return false;
+      throw error;
+    }
+  });
+  const signalTree = signal => {
+    if (platform === 'win32') {
+      const args = ['/PID', String(pid), '/T'];
+      if (signal === 'SIGKILL') args.push('/F');
+      const result = runTaskkill('taskkill', args, {
+        stdio: 'ignore',
+        timeout: taskkillTimeoutMs,
+        windowsHide: true
+      });
+      return {
+        ok: !result.error && result.status === 0,
+        status: result.status,
+        error: result.error
+      };
+    }
+    try {
+      process.kill(-pid, signal);
+    } catch (error) {
+      if (error.code !== 'ESRCH') throw error;
+    }
+    return { ok: true, status: 0, error: null };
+  };
+  const waitForTreeExit = async timeoutMs => {
+    const deadline = Date.now() + timeoutMs;
+    while (treeAlive() && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, pollMs));
+    }
+    return !treeAlive();
+  };
+
+  const termResult = signalTree('SIGTERM');
+  const termExited = await waitForTreeExit(termGraceMs);
+  if (termResult.ok && termExited) return { escalated: false };
+
+  const forceResult = signalTree('SIGKILL');
+  if (!forceResult.ok) {
+    const detail = forceResult.error?.code || forceResult.error?.message || forceResult.status;
+    throw new Error(`TASKKILL_FORCE_TREE_FAILED pid=${pid} detail=${detail}`);
+  }
+  if (await waitForTreeExit(killGraceMs)) return { escalated: true };
+  child.stdout?.destroy();
+  child.stderr?.destroy();
+  throw new Error(`VITE_PROCESS_TREE_SHUTDOWN_TIMEOUT pid=${pid} platform=${platform}`);
 }
 
 async function runViteSmokeTest() {
@@ -48,6 +112,7 @@ async function runViteSmokeTest() {
   let viteOutput = '';
   const viteProc = spawn(process.execPath, [viteCli, '--host', '127.0.0.1', '--port', '5179', '--strictPort'], {
     cwd: path.join(__dirname, '..'),
+    detached: process.platform !== 'win32',
     env: { ...process.env, NODE_ENV: 'development' }
   });
   viteProc.stdout.on('data', chunk => { viteOutput += chunk.toString(); });
@@ -76,20 +141,15 @@ async function runViteSmokeTest() {
     console.log('  🟢 ALL VITE DEV RUNTIME MODULE & SERVER SMOKE TESTS PASSED');
     console.log('================================================================\n');
   } finally {
-    if (process.platform === 'win32') {
-      try {
-        require('child_process').execSync(`taskkill /F /T /PID ${viteProc.pid}`, { stdio: 'ignore' });
-      } catch (_) {
-        viteProc.kill('SIGKILL');
-      }
-    } else {
-      viteProc.kill('SIGKILL');
-    }
+    await shutdownChildProcess(viteProc);
   }
-  process.exit(0);
 }
 
-runViteSmokeTest().catch(err => {
-  console.error('🔴 VITE SMOKE TEST FAILED:', err);
-  process.exit(1);
-});
+if (require.main === module) {
+  runViteSmokeTest().catch(err => {
+    console.error('🔴 VITE SMOKE TEST FAILED:', err);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = { waitForServer, shutdownChildProcess, runViteSmokeTest };

@@ -18,66 +18,12 @@ function normalizeEntry(testsDir, filename) {
 
 /* Incoming H0 commits used a pre-F-05 static manifest. Reconcile its H0
  * additions with the F-05 canonical inventory without replacing the runner. */
-const LEGACY_PRE_F05_TEST_FILES = [
-    'tests/test_h0_publish_integrity.cjs',
-    'tests/test_h0_state_authority.cjs',
-    'tests/test_h0_state_migration.cjs',
-    'tests/test_h0_evidence_integrity.cjs',
-    'tests/test_product_truth_core.cjs',
-    'tests/test_ai_boundary_and_batch.cjs',
-    'tests/test_server_ai_truth_boundary.cjs',
-    'tests/spec_hash_vector.test.cjs',
-    'tests/security_controls_unit.test.cjs',
-    'tests/listing_scope_migration.test.cjs',
-    'tests/sec_auth_foundation.test.cjs',
-    'tests/route_registry_coverage.test.cjs',
-    'tests/ssrf_url_guard.test.cjs',
-    'tests/p0_route_security.test.cjs',
-    'tests/test_real_child_asin_batcher.cjs',
-    'tests/test_runtime_paths.cjs',
-    'tests/test_etsy_truth_semantics.cjs',
-    'tests/test_etsy_provenance_authority.cjs',
-    'tests/test_etsy_scanner_evidence_ui.cjs',
-    'tests/test_strict_keyword_sanitizer.cjs',
-    'tests/test_full_cerebro_mkl_flow.cjs',
-    'tests/test_white_screen_failsafe.cjs',
-    'tests/test_amazon_truth_boundary_remediation.cjs',
-    'tests/test_listing_truth_boundary.cjs',
-    'tests/test_malicious_model_outputs.cjs',
-    'tests/test_adversarial_control_plane.cjs',
-    'tests/test_p0_5_c_research_truth.cjs',
-    'tests/test_ytrends_unknown_defaults.cjs',
-    'tests/test_listing_ip_rescreen.cjs',
-    'tests/spec_simulator_and_mkl_truth.test.cjs',
-    'tests/spec_publish_gate_contracts.test.cjs',
-    'tests/server_revision.test.cjs',
-    'tests/vps_platform_scripts.test.cjs',
-    'tests/test_opportunity_truth_boundary.cjs',
-    'tests/test_truth_evidence_ownership.test.cjs',
-    'tests/test_workflow_state_machine.test.cjs',
-    'tests/test_project_scoped_evidence_workflow.test.cjs',
-    'tests/spec_etsy_mcp_truth_boundary.test.cjs',
-    'tests/spec_canonical_business_workflow.test.cjs',
-    'tests/test_backup_restore_and_migrations.cjs',
-    'tests/test_adversarial_staff_ui_flow.cjs',
-    'tests/test_multi_project_attribution.cjs',
-    'tests/test_workspace_switching_and_auth_security.cjs',
-    'tests/test_performance_and_latency.cjs',
-    'tests/test_database_fixture_isolation.cjs',
-    'tests/test_cross_tenant_isolation.cjs',
-    'tests/test_vite_dev_runtime_smoke.test.cjs',
-    'tests/test_login_rate_limiter_http.test.cjs',
-    'tests/test_legacy_migration_integrity.test.cjs',
-    'tests/test_workflow_truth_ui_contract.cjs',
-    'tests/test_audit_fixes_014a1f4.cjs',
-    'tests/test_smart_pull_hardening.cjs',
-    'tests/test_etsy_pasted_search_parser.cjs',
-    'tests/test_evidence_health.cjs',
-    'tests/test_zero_fabrication_boundary.cjs'
-  ];
-const H0_REQUIRED_TEST_FILES = new Set(
-  LEGACY_PRE_F05_TEST_FILES.filter(file => file.startsWith('tests/test_h0_'))
-);
+const H0_REQUIRED_TEST_FILES = new Set([
+  'tests/test_h0_evidence_integrity.cjs',
+  'tests/test_h0_publish_integrity.cjs',
+  'tests/test_h0_state_authority.cjs',
+  'tests/test_h0_state_migration.cjs'
+]);
 
 function scanEntrypoints(testsDir) {
   const found = [];
@@ -99,7 +45,10 @@ function discoverTestFiles(testsDir = __dirname, inventoryPath = INVENTORY_PATH)
   if (!Array.isArray(inventory) || inventory.length === 0) throw new Error('INVALID_TEST_INVENTORY');
   if (new Set(inventory).size !== inventory.length) throw new Error('DUPLICATE_TEST_INVENTORY_ENTRY');
   const expected = inventory.map(file => file.split(path.sep).join('/')).sort();
-  const missingH0 = [...H0_REQUIRED_TEST_FILES].filter(file => !expected.includes(file));
+  const isCanonicalInventory = path.resolve(inventoryPath) === path.resolve(INVENTORY_PATH);
+  const missingH0 = isCanonicalInventory
+    ? [...H0_REQUIRED_TEST_FILES].filter(file => !expected.includes(file))
+    : [];
   if (missingH0.length) {
     throw new Error(`H0_TEST_INVENTORY_MISMATCH missing=[${missingH0.join(',')}]`);
   }

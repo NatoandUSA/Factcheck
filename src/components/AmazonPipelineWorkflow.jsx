@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { 
   FileSpreadsheet, Layers, Sparkles, Database, ArrowRight, CheckCircle2, 
   Copy, UploadCloud, AlertCircle, Zap, ShieldCheck, Award, ExternalLink, RefreshCw
@@ -24,6 +24,7 @@ export default function AmazonPipelineWorkflow({
   const [xrayAsinsInput, setXrayAsinsInput] = useState('');
   const [xraySellers, setXraySellers] = useState([]);
   const [xrayProvenance, setXrayProvenance] = useState(null);
+  const [xrayCommitted, setXrayCommitted] = useState(false);
   const [xrayLoading, setXrayLoading] = useState(false);
   const [xrayError, setXrayError] = useState(null);
   const [isXrayDragging, setIsXrayDragging] = useState(false);
@@ -45,8 +46,26 @@ export default function AmazonPipelineWorkflow({
   const [drafting, setDrafting] = useState(false);
   const [draftedListing, setDraftedListing] = useState(null);
 
-  // B1: Handle Feed Xray — Supports Multi-File Upload
-  const handleXrayUpload = async (fileList) => {
+  useEffect(() => {
+    if (!activeProjectId) return;
+    let current = true;
+    fetch(`/api/projects/${activeProjectId}/research-imports/AMAZON_XRAY_REPORT_V1`, { credentials: 'include' })
+      .then(parseJsonResponse)
+      .then(data => {
+        const metadata = data?.import?.metadata;
+        if (!current || !metadata) return;
+        setBatches(metadata.batches || []);
+        setXraySellers(metadata.xraySellers || []);
+        setXrayProvenance(metadata.reportProvenance || null);
+        setXrayCommitted(true);
+        onUpdateXraySellers?.(metadata.xraySellers || []);
+      })
+      .catch(() => {});
+    return () => { current = false; };
+  }, [activeProjectId]);
+
+  // B1: Handle Feed Xray — preview first; the same files are reparsed on confirm.
+  const handleXrayUpload = async (fileList, confirm = false) => {
     if (!fileList || (fileList.length === 0 && !fileList[0])) return;
     if (!activeProjectId) {
       onShowToast?.('Tạo hoặc chọn Active Project trước khi nạp Xray để dữ liệu được bind đúng project.');
@@ -65,6 +84,7 @@ export default function AmazonPipelineWorkflow({
     formData.append('marketplace', 'AMAZON');
     formData.append('seedPhrase', seedPhrase || selectedCategory);
     if (activeProjectId) formData.append('projectId', activeProjectId);
+    formData.append('confirm', String(confirm));
 
     let outcome;
     try {
@@ -82,6 +102,7 @@ export default function AmazonPipelineWorkflow({
     setBatches(outcome.batches);
     setXraySellers(outcome.xraySellers);
     setXrayProvenance(outcome.reportProvenance || null);
+    setXrayCommitted(outcome.status === 'SUCCESS' && outcome.committed === true);
     if (onUpdateXraySellers && outcome.xraySellers) {
       onUpdateXraySellers(outcome.xraySellers);
     }
@@ -306,6 +327,17 @@ export default function AmazonPipelineWorkflow({
             Hỗ trợ chọn nhiều file Xray cùng lúc — Hệ thống tự động gộp ASINs, loại trùng và chia Batch 10
           </div>
         </div>
+
+        {xraySellers.length > 0 && !xrayCommitted && (
+          <button
+            type="button"
+            disabled={xrayLoading}
+            onClick={() => handleXrayUpload(xrayFiles, true)}
+            style={{ marginTop: '12px', padding: '10px 16px', borderRadius: '8px', border: 0, background: '#0369a1', color: 'white', fontWeight: 700 }}
+          >
+            Xác nhận lưu Xray vào project
+          </button>
+        )}
 
         {xrayError && (
           <div style={{

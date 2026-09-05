@@ -107,6 +107,8 @@ function deriveXrayUploadOutcome({ ok, data, error } = {}) {
     reportProvenance: data.reportProvenance && typeof data.reportProvenance === 'object'
       ? data.reportProvenance
       : null,
+    committed: data.committed === true,
+    evidenceId: Number.isInteger(data.evidenceId) ? data.evidenceId : null,
     toastMessage: `✓ [B1] Đã nạp & bóc tách thành công file Xray! Tự động tạo ${batches.length} Batch ở B2.`,
     toastType: 'success',
     errorMessage: null

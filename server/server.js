@@ -859,6 +859,44 @@ app.get('/api/projects/:projectId/evidence-health', requireAuth(db), requireRole
   });
 });
 
+// Reload the latest project-bound research import without promoting it to
+// accepted evidence or Product Truth. Scope is always recomputed from session.
+app.get('/api/projects/:projectId/research-imports/:kind', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
+  const allowedKinds = new Set([XRAY_REPORT_ARTIFACT_KIND, ETSY_SEARCH_PASTE_ARTIFACT_KIND]);
+  if (!allowedKinds.has(req.params.kind)) {
+    return res.status(400).json({ success: false, error: 'UNKNOWN_RESEARCH_IMPORT_KIND' });
+  }
+  parseAndValidateProject(db, req, req.params.projectId, (projectErr, project) => {
+    if (projectErr) return res.status(projectErr.status).json({ success: false, error: projectErr.error, message: projectErr.message });
+    db.all(
+      `SELECT id, source, evidence_state, metadata, created_at
+       FROM research_evidence
+       WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ? AND project_id = ?
+         AND source = 'STAFF_MANUAL_ASSERTION'
+       ORDER BY id DESC`,
+      [req.user.tenantId, req.user.workspaceId, req.user.marketplace, project.id],
+      (queryErr, rows) => {
+        if (queryErr) return res.status(500).json({ success: false, error: 'RESEARCH_IMPORT_READ_FAILED' });
+        const match = (rows || []).map(row => ({ row, metadata: parseEvidenceMetadata(row) }))
+          .find(item => item.metadata.kind === req.params.kind);
+        if (!match) return res.json({ success: true, projectId: project.id, kind: req.params.kind, import: null });
+        res.json({
+          success: true,
+          projectId: project.id,
+          kind: req.params.kind,
+          import: {
+            evidenceId: match.row.id,
+            source: match.row.source,
+            evidenceState: match.row.evidence_state,
+            createdAt: match.row.created_at,
+            metadata: match.metadata
+          }
+        });
+      }
+    );
+  });
+});
+
 // Generic client intake is deliberately separate from provider-controlled
 // provenance. MCP_RETRIEVAL is created only by server-owned provider paths.
 const CLIENT_ALLOWED_EVIDENCE_SOURCES = [
@@ -944,6 +982,7 @@ function requireProjectContext(req, rawProjectId) {
 // staff-entered ASINs and partial provider responses stay observable but can
 // never be promoted to ACCEPTED merely by a ledger action.
 const SMART_PULL_ARTIFACT_KIND = 'SMART_PULL_ARTIFACT_V1';
+const XRAY_REPORT_ARTIFACT_KIND = 'AMAZON_XRAY_REPORT_V1';
 const ETSY_SEARCH_PASTE_ARTIFACT_KIND = 'ETSY_SEARCH_PASTE_V1';
 const ACCEPTABLE_SMART_PULL_STATES = new Set([
   'RETRIEVED_NO_OBSERVED_AT',
@@ -3241,22 +3280,46 @@ const handleReportUpload = async (req, res) => {
         });
       }
 
+      let project;
+      try {
+        project = await requireProjectContext(req, req.body.projectId);
+      } catch (err) {
+        return res.status(err.status || 500).json({ success: false, error: err.error || 'PROJECT_CONTEXT_ERROR', message: err.message });
+      }
+      const confirm = req.body?.confirm === true || String(req.body?.confirm || '').toLowerCase() === 'true';
+      const artifacts = uploadedFiles.map(file => ({
+        fileName: path.basename(file.originalname),
+        sha256: crypto.createHash('sha256').update(fs.readFileSync(file.path)).digest('hex')
+      }));
+      const reportHash = evidenceAuthority.canonicalHash({
+        kind: XRAY_REPORT_ARTIFACT_KIND,
+        projectId: project.id,
+        seedKeyword: batchResult.seedKeyword,
+        artifacts,
+        rows: batchResult.batches
+      });
       const reportProvenance = {
-        state: 'SOURCE_REPORTED',
+        state: 'UNVERIFIED_INPUT',
         sourceKind: 'STAFF_UPLOADED_XRAY_REPORT',
+        provider: 'HELIUM10_XRAY',
         ingestedAt: new Date().toISOString(),
         captureTime: null,
         tenantId: req.user.tenantId,
         workspaceId: req.user.workspaceId,
-        // This report is not persisted as a project evidence record by this
-        // endpoint, so it must not claim a project binding from client input.
-        projectId: null,
-        projectBinding: 'NOT_PERSISTED',
-        artifacts: uploadedFiles.map(file => ({
-          fileName: file.originalname,
-          sha256: crypto.createHash('sha256').update(fs.readFileSync(file.path)).digest('hex')
-        }))
+        marketplace: req.user.marketplace,
+        projectId: project.id,
+        projectBinding: 'PERSISTED_RESEARCH_ONLY',
+        contentHash: reportHash,
+        artifacts
       };
+      const rowAccounting = {
+        inputRows: rawRows.length,
+        acceptedRows: batchResult.totalCleanAsins,
+        rejectedRows: batchResult.rejectedCount
+      };
+      if (rowAccounting.acceptedRows + rowAccounting.rejectedRows !== rowAccounting.inputRows) {
+        throw new Error('XRAY_ROW_ACCOUNTING_MISMATCH');
+      }
 
       // Extract rich sellers list for Learning Box & Staff Review
       const xraySellers = (batchResult.batches || []).flatMap(b => b.items || []).map((item, idx) => ({
@@ -3303,21 +3366,60 @@ const handleReportUpload = async (req, res) => {
         shopName: item.seller || null
       }));
 
-      return res.json({
+      const responsePayload = {
         success: true,
         isXray: true,
         reportType: 'HELIUM10_XRAY',
+        preview: confirm !== true,
+        committed: confirm === true,
+        projectId: project.id,
         fileNames,
         filesUploadedCount: uploadedFiles.length,
         seedKeyword: batchResult.seedKeyword,
         totalInputAsins: batchResult.totalInputAsins,
         totalCleanAsins: batchResult.totalCleanAsins,
         rejectedCount: batchResult.rejectedCount,
+        rowAccounting,
         batchCount: batchResult.batchCount,
         batches: batchResult.batches,
         xraySellers,
         reportProvenance
+      };
+      if (confirm !== true) return res.json(responsePayload);
+
+      const metadata = {
+        kind: XRAY_REPORT_ARTIFACT_KIND,
+        evidenceState: 'UNVERIFIED_INPUT',
+        authority: 'NONE',
+        provider: 'HELIUM10_XRAY',
+        contentHash: reportHash,
+        rowAccounting,
+        reportProvenance,
+        batches: batchResult.batches,
+        xraySellers
+      };
+      const existing = await new Promise((resolve, reject) => {
+        db.get(
+          `SELECT id FROM research_evidence
+           WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ? AND project_id = ?
+             AND source = 'STAFF_MANUAL_ASSERTION' AND metadata LIKE ?
+           ORDER BY id DESC LIMIT 1`,
+          [req.user.tenantId, req.user.workspaceId, req.user.marketplace, project.id, `%\"contentHash\":\"${reportHash}\"%`],
+          (err, row) => err ? reject(err) : resolve(row)
+        );
       });
+      if (existing) return res.json({ ...responsePayload, evidenceId: existing.id, duplicateSubmission: true });
+
+      const evidenceId = await new Promise((resolve, reject) => {
+        db.run(
+          `INSERT INTO research_evidence
+            (tenant_id, workspace_id, marketplace, project_id, seed_phrase, source, actor_id, evidence_state, metadata)
+           VALUES (?, ?, ?, ?, ?, 'STAFF_MANUAL_ASSERTION', ?, 'OBSERVED', ?)`,
+          [req.user.tenantId, req.user.workspaceId, req.user.marketplace, project.id, batchResult.seedKeyword, req.user.userId, JSON.stringify(metadata)],
+          function(err) { err ? reject(err) : resolve(this.lastID); }
+        );
+      });
+      return res.json({ ...responsePayload, evidenceId, duplicateSubmission: false });
     }
 
     // Detect all multi-dimensional Helium 10 & Data Dive Cerebro columns

@@ -56,6 +56,7 @@
   "tests/test_workflow_state_machine.test.cjs",
   "tests/test_workflow_truth_ui_contract.cjs",
   "tests/test_workspace_switching_and_auth_security.cjs",
+  "tests/test_xray_project_persistence.cjs",
   "tests/test_ytrends_unknown_defaults.cjs",
   "tests/test_zero_fabrication_boundary.cjs",
   "tests/vps_platform_scripts.test.cjs"

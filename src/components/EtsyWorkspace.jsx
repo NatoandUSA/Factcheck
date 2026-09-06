@@ -67,24 +67,41 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
     const projectId = activeProject?.id;
     if (!projectId) return;
     let current = true;
-    fetch(`/api/projects/${projectId}/research-imports/ETSY_SEARCH_PASTE_V1`, { credentials: 'include' })
-      .then(parseJsonResponse)
+    fetch(`/api/projects/${encodeURIComponent(projectId)}/research-imports/ETSY_SEARCH_PASTE_V1`, { credentials: 'include' })
+      .then(async response => {
+        const data = await parseJsonResponse(response);
+        const validImport = data?.import === null
+          || (data?.import && typeof data.import === 'object' && !Array.isArray(data.import)
+            && data.import.metadata && typeof data.import.metadata === 'object' && !Array.isArray(data.import.metadata)
+            && Array.isArray(data.import.metadata.sellers) && Array.isArray(data.import.metadata.keywordCandidates));
+        if (!response.ok || data?.success !== true || !validImport) {
+          throw new Error(data?.error || 'ETSY_REHYDRATION_FAILED');
+        }
+        return data;
+      })
       .then(data => {
-        const metadata = data?.import?.metadata;
-        if (!current || activeProjectIdRef.current !== projectId || !metadata) return;
-        setScannedSellers(metadata.sellers || []);
+        if (!current || activeProjectIdRef.current !== projectId) return;
+        const metadata = data.import?.metadata;
+        if (!metadata) return;
+        setScannedSellers(Array.isArray(metadata.sellers) ? metadata.sellers : []);
         setMcpResult({
           source: data.import.source,
           evidenceState: metadata.evidenceState,
           provider: metadata.provider,
           observedAt: metadata.observedAt,
           importedAt: metadata.importedAt,
-          keywords: metadata.keywordCandidates || [],
-          sellers: metadata.sellers || [],
-          trendingKeywordsStr: (metadata.keywordCandidates || []).join(', ')
+          keywords: Array.isArray(metadata.keywordCandidates) ? metadata.keywordCandidates : [],
+          sellers: Array.isArray(metadata.sellers) ? metadata.sellers : [],
+          trendingKeywordsStr: (Array.isArray(metadata.keywordCandidates) ? metadata.keywordCandidates : []).join(', ')
         });
       })
-      .catch(() => {});
+      .catch(error => {
+        if (!current || activeProjectIdRef.current !== projectId) return;
+        setScannedSellers([]);
+        setMcpResult(null);
+        setFeedPreview(null);
+        onShowToast?.(`Không thể tải lại dữ liệu Etsy cho project hiện tại: ${error.message || 'UNKNOWN_ERROR'}`, 'error');
+      });
     return () => { current = false; };
   }, [activeProject?.id]);
 

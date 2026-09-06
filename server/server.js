@@ -3308,7 +3308,7 @@ const handleReportUpload = async (req, res) => {
         workspaceId: req.user.workspaceId,
         marketplace: req.user.marketplace,
         projectId: project.id,
-        projectBinding: 'PERSISTED_RESEARCH_ONLY',
+        projectBinding: confirm === true ? 'PERSISTED_RESEARCH_ONLY' : 'PREVIEW_NOT_PERSISTED',
         contentHash: reportHash,
         artifacts
       };

@@ -1,4 +1,6 @@
 const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
 process.env.NODE_ENV = 'test';
 const { app, db, databaseReady } = require('../server/server');
 const { createSessionRecord } = require('../server/security/session');
@@ -71,6 +73,7 @@ async function amazonOwner() {
     assert.strictEqual(preview.body.preview, true);
     assert.strictEqual(preview.body.committed, false);
     assert.strictEqual(preview.body.projectId, projectId);
+    assert.strictEqual(preview.body.reportProvenance.projectBinding, 'PREVIEW_NOT_PERSISTED');
     assert.deepStrictEqual(preview.body.rowAccounting, {
       inputRows: 2, acceptedRows: 1, rejectedRows: 1
     });
@@ -79,6 +82,7 @@ async function amazonOwner() {
     const committed = await upload(projectId, true);
     assert.strictEqual(committed.status, 200);
     assert.strictEqual(committed.body.committed, true);
+    assert.strictEqual(committed.body.reportProvenance.projectBinding, 'PERSISTED_RESEARCH_ONLY');
     assert.ok(committed.body.evidenceId);
     const stored = await all('SELECT * FROM research_evidence WHERE id=?', [committed.body.evidenceId]);
     assert.strictEqual(stored.length, 1);
@@ -93,6 +97,20 @@ async function amazonOwner() {
     assert.strictEqual(metadata.authority, 'NONE');
     assert.strictEqual(metadata.provider, 'HELIUM10_XRAY');
     assert.strictEqual(metadata.xraySellers.length, 1);
+    assert.strictEqual(metadata.reportProvenance.projectBinding, 'PERSISTED_RESEARCH_ONLY');
+
+    const amazonUi = fs.readFileSync(path.join(__dirname, '../src/components/AmazonPipelineWorkflow.jsx'), 'utf8');
+    const etsyUi = fs.readFileSync(path.join(__dirname, '../src/components/EtsyWorkspace.jsx'), 'utf8');
+    assert.ok(amazonUi.includes('clearProjectXrayState();\n    if (!requestedProjectId)'),
+      'Project-bound Xray state must clear before rehydration starts');
+    assert.ok(amazonUi.includes('activeProjectIdRef.current !== requestedProjectId'),
+      'Late Amazon responses must be bound to the requested project');
+    assert.ok(!amazonUi.includes('.catch(() => {})'), 'Amazon rehydration errors must not be swallowed');
+    assert.ok(amazonUi.includes('Không thể tải lại dữ liệu Xray cho project hiện tại'),
+      'Amazon rehydration failure must be surfaced to staff');
+    assert.ok(!etsyUi.includes('.catch(() => {})'), 'Etsy rehydration errors must not be swallowed');
+    assert.ok(etsyUi.includes('Không thể tải lại dữ liệu Etsy cho project hiện tại'),
+      'Etsy rehydration failure must be surfaced to staff');
 
     for (let reload = 0; reload < 2; reload += 1) {
       const response = await fetch(
@@ -117,7 +135,7 @@ async function amazonOwner() {
     assert.strictEqual(accept.status, 409);
     assert.ok(/^UNQUALIFIED_/.test(accept.body.error));
 
-    console.log('R2_XRAY: measured=30 passed=30 failed=0 unexecuted=0');
+    console.log('R2_XRAY: measured=39 passed=39 failed=0 unexecuted=0');
   } finally {
     await new Promise(resolve => server.close(resolve));
     db.close();

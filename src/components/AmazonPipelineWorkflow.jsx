@@ -46,21 +46,56 @@ export default function AmazonPipelineWorkflow({
   const [drafting, setDrafting] = useState(false);
   const [draftedListing, setDraftedListing] = useState(null);
 
+  const activeProjectIdRef = useRef(null);
+  activeProjectIdRef.current = activeProjectId || null;
+
   useEffect(() => {
-    if (!activeProjectId) return;
+    const requestedProjectId = activeProjectId || null;
     let current = true;
-    fetch(`/api/projects/${activeProjectId}/research-imports/AMAZON_XRAY_REPORT_V1`, { credentials: 'include' })
-      .then(parseJsonResponse)
+    const clearProjectXrayState = () => {
+      setBatches([]);
+      setActiveBatchIndex(0);
+      setXraySellers([]);
+      setXrayProvenance(null);
+      setXrayCommitted(false);
+      setXrayError(null);
+      onUpdateXraySellers?.([]);
+    };
+
+    // Clear synchronously on every project switch. A prior project's rows
+    // must never remain visible while the next project's import is loading.
+    clearProjectXrayState();
+    if (!requestedProjectId) return () => { current = false; };
+
+    fetch(`/api/projects/${encodeURIComponent(requestedProjectId)}/research-imports/AMAZON_XRAY_REPORT_V1`, { credentials: 'include' })
+      .then(async response => {
+        const data = await parseJsonResponse(response);
+        const validImport = data?.import === null
+          || (data?.import && typeof data.import === 'object' && !Array.isArray(data.import)
+            && data.import.metadata && typeof data.import.metadata === 'object' && !Array.isArray(data.import.metadata)
+            && Array.isArray(data.import.metadata.batches) && Array.isArray(data.import.metadata.xraySellers));
+        if (!response.ok || data?.success !== true || !validImport) {
+          throw new Error(data?.error || 'XRAY_REHYDRATION_FAILED');
+        }
+        return data;
+      })
       .then(data => {
-        const metadata = data?.import?.metadata;
-        if (!current || !metadata) return;
-        setBatches(metadata.batches || []);
-        setXraySellers(metadata.xraySellers || []);
+        if (!current || activeProjectIdRef.current !== requestedProjectId) return;
+        const metadata = data.import?.metadata;
+        if (!metadata) return;
+        setBatches(Array.isArray(metadata.batches) ? metadata.batches : []);
+        setXraySellers(Array.isArray(metadata.xraySellers) ? metadata.xraySellers : []);
         setXrayProvenance(metadata.reportProvenance || null);
         setXrayCommitted(true);
-        onUpdateXraySellers?.(metadata.xraySellers || []);
+        onUpdateXraySellers?.(Array.isArray(metadata.xraySellers) ? metadata.xraySellers : []);
       })
-      .catch(() => {});
+      .catch(error => {
+        if (!current || activeProjectIdRef.current !== requestedProjectId) return;
+        clearProjectXrayState();
+        const message = `Không thể tải lại dữ liệu Xray cho project hiện tại: ${error.message || 'UNKNOWN_ERROR'}`;
+        setXrayError(message);
+        onShowToast?.(message, 'error');
+      });
     return () => { current = false; };
   }, [activeProjectId]);
 

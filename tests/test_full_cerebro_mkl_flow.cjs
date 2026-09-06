@@ -181,28 +181,25 @@ async function testFullCerebroMklFlow() {
     console.log(`Keywords Returned to Frontend Preview: ${uploadRes.data?.topKeywordsDetailed?.length}`);
 
     console.log('\nStep 2: Testing GET /api/master-keywords DB Persistence...');
-    const dbRes = await httpGet(TEST_PORT, '/api/master-keywords?marketplace=AMAZON', cookie);
+    const projectId = projRes.data.projectId;
+    const dbRes = await httpGet(TEST_PORT, `/api/master-keywords?projectId=${projectId}`, cookie);
     assert.strictEqual(dbRes.status, 200, 'GET master-keywords status must be 200');
-    assert.strictEqual(
-      dbRes.data?.keywords?.length,
-      uploadRes.data.canonicalRows,
-      'Reload must return the complete persisted canonical corpus'
-    );
+    assert.strictEqual(dbRes.data?.projectId, projectId);
+    assert.strictEqual(dbRes.data?.keywords?.length, 100, 'Default response must be bounded to 100');
+    assert.strictEqual(dbRes.data?.returnedCount, 100);
     assert.strictEqual(dbRes.data?.totalCount, uploadRes.data.canonicalRows);
 
-    const reloadRes = await httpGet(TEST_PORT, '/api/master-keywords?marketplace=AMAZON', cookie);
+    const reloadRes = await httpGet(TEST_PORT, `/api/master-keywords?projectId=${projectId}`, cookie);
     assert.strictEqual(reloadRes.status, 200, 'Second reload must return HTTP 200');
-    assert.strictEqual(
-      reloadRes.data?.keywords?.length,
-      uploadRes.data.canonicalRows,
-      'Second reload must preserve the complete canonical corpus'
-    );
+    assert.strictEqual(reloadRes.data?.totalCount, uploadRes.data.canonicalRows,
+      'Second reload must preserve the complete canonical corpus');
 
-    const beyondPreviewKeyword = reloadRes.data.keywords.at(-1)?.keyword;
-    assert.ok(beyondPreviewKeyword, 'A keyword beyond the 100-row preview must exist');
+    const beyondPreviewKeyword = 'walldicor crose';
+    assert.ok(!reloadRes.data.keywords.some(item => item.keyword === beyondPreviewKeyword),
+      'Control keyword must remain outside the bounded first page');
     const searchRes = await httpGet(
       TEST_PORT,
-      `/api/master-keywords?marketplace=AMAZON&q=${encodeURIComponent(beyondPreviewKeyword)}`,
+      `/api/master-keywords?projectId=${projectId}&q=${encodeURIComponent(beyondPreviewKeyword)}`,
       cookie
     );
     assert.strictEqual(searchRes.status, 200, 'Full-corpus search must return HTTP 200');

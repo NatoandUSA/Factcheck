@@ -157,9 +157,9 @@ async function run() {
   const workspaceSrc = fs.readFileSync(path.join(ROOT, 'src', 'components', 'EtsyWorkspace.jsx'), 'utf8');
   assert.ok(workspaceSrc.includes("data.source !== 'ETSY_MCP_LIVE'"));
   assert.ok(workspaceSrc.includes("data.evidenceState !== 'OBSERVED'"));
-  assert.ok(workspaceSrc.includes("t.marketplace === 'ETSY'"));
-  assert.ok(workspaceSrc.includes('Number(t.project_id) === Number(requestedProjectId)'));
-  assert.ok(workspaceSrc.includes('&& t.keywords_detailed'));
+  assert.ok(workspaceSrc.includes('/api/trends?projectId=${encodeURIComponent(requestedProjectId)}'));
+  assert.ok(workspaceSrc.includes('Number(trendsData.projectId) !== Number(requestedProjectId)'));
+  assert.ok(workspaceSrc.includes('trendsData.trends.filter(trend => trend.keywords_detailed)'));
   console.log('  🟢 Etsy workspace refuses non-live MCP responses as new listing evidence.');
 
   assert.ok(!serverSrc.includes('overview.opportunity_score || 50'), 'background MCP log must not turn missing opportunity into 50');

@@ -69,14 +69,11 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
     if (!activeProject?.id) return;
     const requestedProjectId = activeProject.id;
     try {
-      const res = await fetch('/api/trends', { credentials: 'include' });
+      const res = await fetch(`/api/trends?projectId=${encodeURIComponent(requestedProjectId)}`, { credentials: 'include' });
       if (res.ok) {
-        const trends = await res.json();
-        if (activeProjectIdRef.current !== requestedProjectId) return;
-        const amzTrends = (trends || []).filter(t => (
-          t.marketplace === 'AMAZON'
-          && Number(t.project_id) === Number(requestedProjectId)
-        ));
+        const data = await res.json();
+        if (activeProjectIdRef.current !== requestedProjectId || Number(data.projectId) !== Number(requestedProjectId)) return;
+        const amzTrends = Array.isArray(data.trends) ? data.trends : [];
         if (amzTrends.length > 0) {
           const latest = amzTrends[0];
           let detailed = [];

@@ -6,6 +6,7 @@ import {
 import MasterKeywordTable from './MasterKeywordTable';
 import { parseJsonResponse } from '../utils/apiResponse';
 import { deriveXrayUploadOutcome } from '../utils/xrayUploadOutcome.js';
+import { createProjectBoundLoader } from '../utils/projectBoundLoader.js';
 
 export default function AmazonPipelineWorkflow({ 
   seedPhrase, 
@@ -46,13 +47,11 @@ export default function AmazonPipelineWorkflow({
   const [drafting, setDrafting] = useState(false);
   const [draftedListing, setDraftedListing] = useState(null);
 
-  const activeProjectIdRef = useRef(null);
-  activeProjectIdRef.current = activeProjectId || null;
+  const xrayLoaderRef = useRef(null);
+  if (!xrayLoaderRef.current) xrayLoaderRef.current = createProjectBoundLoader();
 
   useEffect(() => {
-    const requestedProjectId = activeProjectId || null;
-    let current = true;
-    const clearProjectXrayState = () => {
+    const clear = () => {
       setBatches([]);
       setActiveBatchIndex(0);
       setXraySellers([]);
@@ -61,42 +60,32 @@ export default function AmazonPipelineWorkflow({
       setXrayError(null);
       onUpdateXraySellers?.([]);
     };
-
-    // Clear synchronously on every project switch. A prior project's rows
-    // must never remain visible while the next project's import is loading.
-    clearProjectXrayState();
-    if (!requestedProjectId) return () => { current = false; };
-
-    fetch(`/api/projects/${encodeURIComponent(requestedProjectId)}/research-imports/AMAZON_XRAY_REPORT_V1`, { credentials: 'include' })
-      .then(async response => {
-        const data = await parseJsonResponse(response);
-        const validImport = data?.import === null
-          || (data?.import && typeof data.import === 'object' && !Array.isArray(data.import)
-            && data.import.metadata && typeof data.import.metadata === 'object' && !Array.isArray(data.import.metadata)
-            && Array.isArray(data.import.metadata.batches) && Array.isArray(data.import.metadata.xraySellers));
-        if (!response.ok || data?.success !== true || !validImport) {
-          throw new Error(data?.error || 'XRAY_REHYDRATION_FAILED');
-        }
-        return data;
-      })
-      .then(data => {
-        if (!current || activeProjectIdRef.current !== requestedProjectId) return;
+    xrayLoaderRef.current.load({
+      projectId: activeProjectId,
+      url: `/api/projects/${encodeURIComponent(activeProjectId || '')}/research-imports/AMAZON_XRAY_REPORT_V1`,
+      clear,
+      select: data => {
+        if (data.import === null) return null;
         const metadata = data.import?.metadata;
-        if (!metadata) return;
-        setBatches(Array.isArray(metadata.batches) ? metadata.batches : []);
-        setXraySellers(Array.isArray(metadata.xraySellers) ? metadata.xraySellers : []);
+        if (!metadata || !Array.isArray(metadata.batches) || !Array.isArray(metadata.xraySellers)) {
+          throw new Error('XRAY_REHYDRATION_MALFORMED');
+        }
+        return metadata;
+      },
+      apply: metadata => {
+        setBatches(metadata.batches);
+        setXraySellers(metadata.xraySellers);
         setXrayProvenance(metadata.reportProvenance || null);
         setXrayCommitted(true);
-        onUpdateXraySellers?.(Array.isArray(metadata.xraySellers) ? metadata.xraySellers : []);
-      })
-      .catch(error => {
-        if (!current || activeProjectIdRef.current !== requestedProjectId) return;
-        clearProjectXrayState();
+        onUpdateXraySellers?.(metadata.xraySellers);
+      },
+      onError: error => {
         const message = `Không thể tải lại dữ liệu Xray cho project hiện tại: ${error.message || 'UNKNOWN_ERROR'}`;
         setXrayError(message);
         onShowToast?.(message, 'error');
-      });
-    return () => { current = false; };
+      }
+    });
+    return () => xrayLoaderRef.current.dispose();
   }, [activeProjectId]);
 
   // B1: Handle Feed Xray — preview first; the same files are reparsed on confirm.
@@ -738,7 +727,7 @@ export default function AmazonPipelineWorkflow({
         )}
 
         {/* Master Keyword Table */}
-        <MasterKeywordTable marketplace="AMAZON" keywords={cerebroKeywords} onShowToast={onShowToast} />
+        <MasterKeywordTable marketplace="AMAZON" activeProjectId={activeProjectId} keywords={cerebroKeywords} onShowToast={onShowToast} />
 
       </div>
 

@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { createProjectBoundLoader } from '../utils/projectBoundLoader.js';
 import { Database, Search, ShieldCheck, ShieldAlert, Sparkles, RefreshCw, Zap, Award, Layers, Tag } from 'lucide-react';
 
-export default function MasterKeywordTable({ marketplace = 'AMAZON', keywords: passedKeywords, onShowToast }) {
+export default function MasterKeywordTable({ marketplace = 'AMAZON', activeProjectId, keywords: passedKeywords, onShowToast }) {
   const [keywords, setKeywords] = useState([]);
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -11,28 +12,37 @@ export default function MasterKeywordTable({ marketplace = 'AMAZON', keywords: p
   const themeColor = isAmazon ? '#0284c7' : '#ea580c';
   const themeBg = isAmazon ? '#f0f9ff' : '#fff7ed';
 
-  const fetchMasterKeywords = async () => {
-    try {
-      setLoading(true);
-      const res = await fetch(`/api/master-keywords?marketplace=${marketplace}`, { credentials: 'include' });
-      if (res.ok) {
-        const data = await res.json();
-        setKeywords(data.keywords || []);
-      }
-    } catch (err) {
-      console.error('Failed to fetch master keywords:', err);
-    } finally {
-      setLoading(false);
-    }
+  const keywordLoaderRef = useRef(null);
+  if (!keywordLoaderRef.current) keywordLoaderRef.current = createProjectBoundLoader();
+
+  const fetchMasterKeywords = () => {
+    setLoading(true);
+    return keywordLoaderRef.current.load({
+      projectId: activeProjectId,
+      url: `/api/master-keywords?projectId=${encodeURIComponent(activeProjectId || '')}&q=${encodeURIComponent(searchTerm)}&limit=100&offset=0`,
+      clear: () => setKeywords([]),
+      select: data => {
+        if (!Array.isArray(data.keywords)) throw new Error('MASTER_KEYWORDS_MALFORMED');
+        return data.keywords.length ? data.keywords : null;
+      },
+      apply: rows => setKeywords(rows),
+      onError: error => onShowToast?.(
+        `Không thể tải Master Keywords cho project hiện tại: ${error.message || 'UNKNOWN_ERROR'}`,
+        'error'
+      )
+    }).finally(() => setLoading(false));
   };
 
   useEffect(() => {
-    if (passedKeywords && Array.isArray(passedKeywords) && passedKeywords.length > 0) {
-      setKeywords(passedKeywords);
-    } else {
-      fetchMasterKeywords();
+    if (Array.isArray(passedKeywords) && passedKeywords.length > 0 && !searchTerm) {
+      keywordLoaderRef.current.dispose();
+      setKeywords(passedKeywords.slice(0, 100));
+      setLoading(false);
+      return undefined;
     }
-  }, [marketplace, passedKeywords]);
+    fetchMasterKeywords();
+    return () => keywordLoaderRef.current.dispose();
+  }, [marketplace, activeProjectId, passedKeywords, searchTerm]);
 
 
   const filtered = keywords.filter(k => {

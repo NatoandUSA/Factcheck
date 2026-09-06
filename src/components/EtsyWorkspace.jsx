@@ -12,6 +12,7 @@ import SmartPullAnalyticsBar from './SmartPullAnalyticsBar';
 import ProjectSetupCard from './ProjectSetupCard';
 import ProjectEvidenceGate from './ProjectEvidenceGate';
 import { parseJsonResponse } from '../utils/apiResponse';
+import { createProjectBoundLoader } from '../utils/projectBoundLoader.js';
 
 export default function EtsyWorkspace({ onSelectListing, onApproveListing, onShowToast, onViewHistory }) {
   const [seedPhrase, setSeedPhrase] = useState('');
@@ -38,6 +39,8 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
   const feedFileInputRef = useRef(null);
   const activeProjectIdRef = useRef(null);
   activeProjectIdRef.current = activeProject?.id || null;
+  const persistedSearchLoaderRef = useRef(null);
+  if (!persistedSearchLoaderRef.current) persistedSearchLoaderRef.current = createProjectBoundLoader();
 
   const refreshEvidenceHealth = React.useCallback(async (projectId) => {
     if (!projectId) return;
@@ -65,44 +68,42 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
 
   useEffect(() => {
     const projectId = activeProject?.id;
-    if (!projectId) return;
-    let current = true;
-    fetch(`/api/projects/${encodeURIComponent(projectId)}/research-imports/ETSY_SEARCH_PASTE_V1`, { credentials: 'include' })
-      .then(async response => {
-        const data = await parseJsonResponse(response);
-        const validImport = data?.import === null
-          || (data?.import && typeof data.import === 'object' && !Array.isArray(data.import)
-            && data.import.metadata && typeof data.import.metadata === 'object' && !Array.isArray(data.import.metadata)
-            && Array.isArray(data.import.metadata.sellers) && Array.isArray(data.import.metadata.keywordCandidates));
-        if (!response.ok || data?.success !== true || !validImport) {
-          throw new Error(data?.error || 'ETSY_REHYDRATION_FAILED');
-        }
-        return data;
-      })
-      .then(data => {
-        if (!current || activeProjectIdRef.current !== projectId) return;
+    const clear = () => {
+      setScannedSellers([]);
+      setMcpResult(null);
+      setFeedPreview(null);
+    };
+    persistedSearchLoaderRef.current.load({
+      projectId,
+      url: `/api/projects/${encodeURIComponent(projectId || '')}/research-imports/ETSY_SEARCH_PASTE_V1`,
+      clear,
+      select: data => {
+        if (data.import === null) return null;
         const metadata = data.import?.metadata;
-        if (!metadata) return;
-        setScannedSellers(Array.isArray(metadata.sellers) ? metadata.sellers : []);
+        if (!metadata || !Array.isArray(metadata.sellers) || !Array.isArray(metadata.keywordCandidates)) {
+          throw new Error('ETSY_REHYDRATION_MALFORMED');
+        }
+        return { source: data.import.source, metadata };
+      },
+      apply: ({ source, metadata }) => {
+        setScannedSellers(metadata.sellers);
         setMcpResult({
-          source: data.import.source,
+          source,
           evidenceState: metadata.evidenceState,
           provider: metadata.provider,
           observedAt: metadata.observedAt,
           importedAt: metadata.importedAt,
-          keywords: Array.isArray(metadata.keywordCandidates) ? metadata.keywordCandidates : [],
-          sellers: Array.isArray(metadata.sellers) ? metadata.sellers : [],
-          trendingKeywordsStr: (Array.isArray(metadata.keywordCandidates) ? metadata.keywordCandidates : []).join(', ')
+          keywords: metadata.keywordCandidates,
+          sellers: metadata.sellers,
+          trendingKeywordsStr: metadata.keywordCandidates.join(', ')
         });
-      })
-      .catch(error => {
-        if (!current || activeProjectIdRef.current !== projectId) return;
-        setScannedSellers([]);
-        setMcpResult(null);
-        setFeedPreview(null);
-        onShowToast?.(`Không thể tải lại dữ liệu Etsy cho project hiện tại: ${error.message || 'UNKNOWN_ERROR'}`, 'error');
-      });
-    return () => { current = false; };
+      },
+      onError: error => onShowToast?.(
+        `Không thể tải lại dữ liệu Etsy cho project hiện tại: ${error.message || 'UNKNOWN_ERROR'}`,
+        'error'
+      )
+    });
+    return () => persistedSearchLoaderRef.current.dispose();
   }, [activeProject?.id]);
 
   const handleFeedSearchResults = async ({ confirm = false } = {}) => {
@@ -208,15 +209,13 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
     const requestedProjectId = activeProject.id;
     await refreshEvidenceHealth(requestedProjectId);
     try {
-      const trendsRes = await fetch('/api/trends', { credentials: 'include' });
+      const trendsRes = await fetch(`/api/trends?projectId=${encodeURIComponent(requestedProjectId)}`, { credentials: 'include' });
       if (trendsRes.ok) {
         const trendsData = await trendsRes.json();
-        if (activeProjectIdRef.current !== requestedProjectId) return;
-        const etsyTrends = (trendsData || []).filter(t => (
-          t.marketplace === 'ETSY'
-          && Number(t.project_id) === Number(requestedProjectId)
-          && t.keywords_detailed
-        ));
+        if (activeProjectIdRef.current !== requestedProjectId || Number(trendsData.projectId) !== Number(requestedProjectId)) return;
+        const etsyTrends = Array.isArray(trendsData.trends)
+          ? trendsData.trends.filter(trend => trend.keywords_detailed)
+          : [];
         setTrends(etsyTrends);
       }
     } catch (e) {
@@ -831,7 +830,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
             </button>
           </div>
 
-          <MasterKeywordTable marketplace="ETSY" onShowToast={onShowToast} />
+          <MasterKeywordTable marketplace="ETSY" activeProjectId={activeProject?.id || null} onShowToast={onShowToast} />
         </div>
       )}
 

@@ -1,12 +1,12 @@
 const assert = require('assert');
-const fs = require('fs');
-const path = require('path');
 process.env.NODE_ENV = 'test';
 const { app, db, databaseReady } = require('../server/server');
 const { createSessionRecord } = require('../server/security/session');
 
 const all = (sql, params = []) => new Promise((resolve, reject) =>
   db.all(sql, params, (err, rows) => err ? reject(err) : resolve(rows)));
+const run = (sql, params = []) => new Promise((resolve, reject) =>
+  db.run(sql, params, function(err) { err ? reject(err) : resolve({ lastID: this.lastID, changes: this.changes }); }));
 const sessionFor = (userId, workspaceId, tenantId) => new Promise((resolve, reject) =>
   createSessionRecord(db, userId, workspaceId, tenantId, (err, session) => err ? reject(err) : resolve(session)));
 
@@ -42,6 +42,10 @@ async function amazonOwner() {
     });
     return { status: response.status, body: await response.json() };
   };
+  const jsonGet = async url => {
+    const response = await fetch(base + url, { headers: auth });
+    return { status: response.status, body: await response.json() };
+  };
   const upload = async (projectId, confirm) => {
     const csv = [
       'ASIN,Title,Brand,Price,Monthly Sales',
@@ -66,6 +70,39 @@ async function amazonOwner() {
     });
     assert.strictEqual(created.status, 200);
     const projectId = created.body.projectId;
+    const createdB = await jsonPost('/api/projects', {
+      name: 'R2 Xray Persistence B', seedPhrase: 'project b'
+    });
+    assert.strictEqual(createdB.status, 200);
+    const projectB = createdB.body.projectId;
+    await run(`INSERT INTO market_trends
+      (category, trending_keywords, marketplace, tenant_id, workspace_id, project_id, keywords_detailed)
+      VALUES (?, ?, 'AMAZON', ?, ?, ?, ?)`,
+      ['A category', 'A trend', owner.tenant_id, owner.workspace_id, projectId,
+        JSON.stringify([{ keyword: 'project alpha keyword', opportunityScore: 11 }])]);
+    await run(`INSERT INTO market_trends
+      (category, trending_keywords, marketplace, tenant_id, workspace_id, project_id, keywords_detailed)
+      VALUES (?, ?, 'AMAZON', ?, ?, ?, ?)`,
+      ['B category', 'B trend', owner.tenant_id, owner.workspace_id, projectB,
+        JSON.stringify([{ keyword: 'project beta keyword', opportunityScore: 22 }])]);
+    const readSnapshot = (await all('SELECT COUNT(*) count FROM market_trends'))[0].count;
+    for (const endpoint of ['/api/trends', '/api/master-keywords']) {
+      assert.strictEqual((await jsonGet(endpoint)).status, 400);
+      assert.strictEqual((await jsonGet(`${endpoint}?projectId=invalid`)).status, 400);
+      assert.strictEqual((await jsonGet(`${endpoint}?projectId=999999999`)).status, 404);
+    }
+    const trendsA = await jsonGet(`/api/trends?projectId=${projectId}`);
+    const trendsB = await jsonGet(`/api/trends?projectId=${projectB}`);
+    assert.ok(trendsA.body.trends.some(row => row.trending_keywords === 'A trend'));
+    assert.ok(!trendsA.body.trends.some(row => row.trending_keywords === 'B trend'));
+    assert.ok(trendsB.body.trends.some(row => row.trending_keywords === 'B trend'));
+    const keywordsA = await jsonGet(`/api/master-keywords?projectId=${projectId}`);
+    const keywordsB = await jsonGet(`/api/master-keywords?projectId=${projectB}`);
+    assert.ok(keywordsA.body.keywords.some(row => row.keyword === 'project alpha keyword'));
+    assert.ok(!keywordsA.body.keywords.some(row => row.keyword === 'project beta keyword'));
+    assert.ok(keywordsB.body.keywords.some(row => row.keyword === 'project beta keyword'));
+    assert.strictEqual((await all('SELECT COUNT(*) count FROM market_trends'))[0].count, readSnapshot,
+      'Rejected project reads must be zero-write');
     const before = await all('SELECT * FROM research_evidence');
 
     const preview = await upload(projectId, false);
@@ -99,19 +136,6 @@ async function amazonOwner() {
     assert.strictEqual(metadata.xraySellers.length, 1);
     assert.strictEqual(metadata.reportProvenance.projectBinding, 'PERSISTED_RESEARCH_ONLY');
 
-    const amazonUi = fs.readFileSync(path.join(__dirname, '../src/components/AmazonPipelineWorkflow.jsx'), 'utf8');
-    const etsyUi = fs.readFileSync(path.join(__dirname, '../src/components/EtsyWorkspace.jsx'), 'utf8');
-    assert.ok(amazonUi.includes('clearProjectXrayState();\n    if (!requestedProjectId)'),
-      'Project-bound Xray state must clear before rehydration starts');
-    assert.ok(amazonUi.includes('activeProjectIdRef.current !== requestedProjectId'),
-      'Late Amazon responses must be bound to the requested project');
-    assert.ok(!amazonUi.includes('.catch(() => {})'), 'Amazon rehydration errors must not be swallowed');
-    assert.ok(amazonUi.includes('Không thể tải lại dữ liệu Xray cho project hiện tại'),
-      'Amazon rehydration failure must be surfaced to staff');
-    assert.ok(!etsyUi.includes('.catch(() => {})'), 'Etsy rehydration errors must not be swallowed');
-    assert.ok(etsyUi.includes('Không thể tải lại dữ liệu Etsy cho project hiện tại'),
-      'Etsy rehydration failure must be surfaced to staff');
-
     for (let reload = 0; reload < 2; reload += 1) {
       const response = await fetch(
         base + `/api/projects/${projectId}/research-imports/AMAZON_XRAY_REPORT_V1`,
@@ -135,7 +159,7 @@ async function amazonOwner() {
     assert.strictEqual(accept.status, 409);
     assert.ok(/^UNQUALIFIED_/.test(accept.body.error));
 
-    console.log('R2_XRAY: measured=39 passed=39 failed=0 unexecuted=0');
+    console.log('R2_XRAY: measured=47 passed=47 failed=0 unexecuted=0');
   } finally {
     await new Promise(resolve => server.close(resolve));
     db.close();

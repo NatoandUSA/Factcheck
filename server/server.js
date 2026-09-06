@@ -3113,84 +3113,87 @@ Allowed values: WARM, MINIMAL, CELEBRATORY.`;
   }
 });
 
-// API: Get Master Keyword List Across Processed Files (Marketplace-specific separation)
+// API: Get the project-bound Master Keyword List. The complete corpus stays
+// persisted, while search is applied before bounded presentation pagination.
 app.get('/api/master-keywords', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
-  // Marketplace is server-derived from the authenticated session
-  const targetMarket = req.user.marketplace;
+  const parseBoundedInteger = (value, fallback, max) => {
+    if (value === undefined || value === null || value === '') return fallback;
+    if (!/^\d+$/.test(String(value))) return null;
+    const parsed = Number(value);
+    return Number.isSafeInteger(parsed) && parsed <= max ? parsed : null;
+  };
+  const limit = parseBoundedInteger(req.query.limit, 100, 250);
+  const offset = parseBoundedInteger(req.query.offset, 0, Number.MAX_SAFE_INTEGER);
+  if (limit === null || limit < 1 || offset === null) {
+    return res.status(400).json({ success: false, error: 'INVALID_PAGINATION' });
+  }
 
-  db.all(
-    "SELECT * FROM market_trends WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ? ORDER BY discoveredAt DESC",
-    [req.user.tenantId, req.user.workspaceId, targetMarket],
-    (err, rows) => {
-    if (err) return res.status(500).json({ error: 'DATABASE_ERROR' });
-    
-    const masterKeywords = [];
-    const seen = new Set();
-
-    // rows is already marketplace-filtered by the SQL WHERE clause above
-    // (legacy NULL-marketplace rows are excluded by that same condition).
-    rows.forEach(r => {
-      // Only surface keywords with real persisted Volume/CPR/Score data.
-      // Rows uploaded before this tracking existed have no way to recover
-      // that data, and showing keywords with no evidence behind them is
-      // exactly what staff need this list to NOT do.
-      if (!r.keywords_detailed) return;
-      let detailed = null;
-      try { detailed = JSON.parse(r.keywords_detailed); } catch (e) { return; }
-      if (!Array.isArray(detailed)) return;
-
-      const kws = detailed;
-      kws.forEach((kwItem, idx) => {
-        const cleanKw = (kwItem.keyword || '').trim();
-        if (cleanKw && cleanKw.length > 2 && !seen.has(cleanKw.toLowerCase())) {
-          seen.add(cleanKw.toLowerCase());
-          const ipRes = ipGuard.screenText(cleanKw);
-
-          let tierBadge = kwItem.tierBadge;
-          if (!tierBadge) {
-            tierBadge = targetMarket === 'AMAZON' ? '👑 Tier 1 (Title Hook)' : '🎯 Valid Tag (<=20 chars)';
-            if (masterKeywords.length >= 10 && masterKeywords.length < 35) {
-              tierBadge = targetMarket === 'AMAZON' ? '💎 Tier 2 (5 Bullets)' : '🎯 Secondary Tag';
-            } else if (masterKeywords.length >= 35) {
-              tierBadge = targetMarket === 'AMAZON' ? '📦 Tier 3 (Backend Fuel)' : '📝 Title Keyword';
+  parseAndValidateProject(db, req, req.query.projectId, (projectErr, project) => {
+    if (projectErr) return res.status(projectErr.status).json({ success: false, error: projectErr.error, message: projectErr.message });
+    const targetMarket = req.user.marketplace;
+    db.all(
+      `SELECT * FROM market_trends
+       WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ? AND project_id = ?
+       ORDER BY discoveredAt DESC`,
+      [req.user.tenantId, req.user.workspaceId, targetMarket, project.id],
+      (err, rows) => {
+        if (err) return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
+        const masterKeywords = [];
+        const seen = new Set();
+        (rows || []).forEach(r => {
+          if (!r.keywords_detailed) return;
+          let detailed;
+          try { detailed = JSON.parse(r.keywords_detailed); } catch (_) { return; }
+          if (!Array.isArray(detailed)) return;
+          detailed.forEach(kwItem => {
+            const cleanKw = typeof kwItem?.keyword === 'string' ? kwItem.keyword.trim() : '';
+            if (!cleanKw || cleanKw.length <= 2 || seen.has(cleanKw.toLowerCase())) return;
+            seen.add(cleanKw.toLowerCase());
+            const ipRes = ipGuard.screenText(cleanKw);
+            let tierBadge = kwItem.tierBadge;
+            if (!tierBadge) {
+              tierBadge = targetMarket === 'AMAZON' ? '👑 Tier 1 (Title Hook)' : '🎯 Valid Tag (<=20 chars)';
+              if (masterKeywords.length >= 10 && masterKeywords.length < 35) {
+                tierBadge = targetMarket === 'AMAZON' ? '💎 Tier 2 (5 Bullets)' : '🎯 Secondary Tag';
+              } else if (masterKeywords.length >= 35) {
+                tierBadge = targetMarket === 'AMAZON' ? '📦 Tier 3 (Backend Fuel)' : '📝 Title Keyword';
+              }
             }
-          }
-
-          masterKeywords.push({
-            keyword: cleanKw,
-            category: r.category || (targetMarket === 'AMAZON' ? 'Amazon FBM' : 'Etsy Handmade'),
-            discoveredAt: r.discoveredAt,
-            ipVerdict: ipRes.verdict,
-            tierBadge,
-            ipHits: ipRes.hits.map(h => h.term),
-            volume: kwItem.volume ?? kwItem.searchVolume ?? null,
-            cpr: kwItem.cpr ?? null,
-            competingProducts: kwItem.competingProducts ?? null,
-            titleDensity: kwItem.titleDensity ?? kwItem.density ?? null,
-            // kwItem.score is rankKeywords' internal sort-only heuristic (it
-            // uses hidden 100/10/8 defaults for missing metrics) -- it must
-            // never leak into the Staff-facing opportunityScore when the real
-            // one is null, or this API route re-fabricates exactly what
-            // rankKeywords was fixed to stop doing (P0.5-C truth fix).
-            opportunityScore: kwItem.opportunityScore ?? null,
-            scoringState: kwItem.scoringState ?? (kwItem.opportunityScore != null ? 'SCORED' : 'INSUFFICIENT_EVIDENCE')
+            masterKeywords.push({
+              keyword: cleanKw,
+              category: r.category || (targetMarket === 'AMAZON' ? 'Amazon FBM' : 'Etsy Handmade'),
+              discoveredAt: r.discoveredAt,
+              ipVerdict: ipRes.verdict,
+              tierBadge,
+              ipHits: ipRes.hits.map(h => h.term),
+              volume: kwItem.volume ?? kwItem.searchVolume ?? null,
+              cpr: kwItem.cpr ?? null,
+              competingProducts: kwItem.competingProducts ?? null,
+              titleDensity: kwItem.titleDensity ?? kwItem.density ?? null,
+              opportunityScore: kwItem.opportunityScore ?? null,
+              scoringState: kwItem.scoringState ?? (kwItem.opportunityScore != null ? 'SCORED' : 'INSUFFICIENT_EVIDENCE')
+            });
           });
-        }
-      });
-    });
-
-    const query = typeof req.query.q === 'string' ? req.query.q.trim().toLowerCase() : '';
-    const filteredKeywords = query
-      ? masterKeywords.filter(item => item.keyword.toLowerCase().includes(query))
-      : masterKeywords;
-    res.json({
-      success: true,
-      count: filteredKeywords.length,
-      totalCount: masterKeywords.length,
-      marketplace: targetMarket,
-      query,
-      keywords: filteredKeywords
-    });
+        });
+        const query = typeof req.query.q === 'string' ? req.query.q.trim().toLowerCase() : '';
+        const filtered = query
+          ? masterKeywords.filter(item => item.keyword.toLowerCase().includes(query))
+          : masterKeywords;
+        const keywords = filtered.slice(offset, offset + limit);
+        res.json({
+          success: true,
+          projectId: project.id,
+          marketplace: targetMarket,
+          query,
+          totalCount: masterKeywords.length,
+          filteredCount: filtered.length,
+          returnedCount: keywords.length,
+          limit,
+          offset,
+          keywords
+        });
+      }
+    );
   });
 });
 
@@ -3677,14 +3680,20 @@ app.get('/api/analytics-summary', requireAuth(db), requireRole(['OWNER', 'MANAGE
     });
   });
 });
-// API: Get all imported keyword trends
+// API: Get imported keyword trends for one canonical project only.
 app.get('/api/trends', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
-  db.all(
-    "SELECT * FROM market_trends WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ? ORDER BY discoveredAt DESC LIMIT 30",
-    [req.user.tenantId, req.user.workspaceId, req.user.marketplace],
-    (err, rows) => {
-    if (err) return res.status(500).json({ error: 'DATABASE_ERROR' });
-    res.json(rows);
+  parseAndValidateProject(db, req, req.query.projectId, (projectErr, project) => {
+    if (projectErr) return res.status(projectErr.status).json({ success: false, error: projectErr.error, message: projectErr.message });
+    db.all(
+      `SELECT * FROM market_trends
+       WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ? AND project_id = ?
+       ORDER BY discoveredAt DESC LIMIT 30`,
+      [req.user.tenantId, req.user.workspaceId, req.user.marketplace, project.id],
+      (err, rows) => {
+        if (err) return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
+        res.json({ success: true, projectId: project.id, trends: rows || [] });
+      }
+    );
   });
 });
 

@@ -44,6 +44,7 @@
   "tests/test_project_setup_and_stage_guidance.cjs",
   "tests/test_real_child_asin_batcher.cjs",
   "tests/test_runner_accounting.cjs",
+  "tests/test_rr01_production_state_lineage.cjs",
   "tests/test_runtime_paths.cjs",
   "tests/test_server_ai_truth_boundary.cjs",
   "tests/test_smart_pull_hardening.cjs",

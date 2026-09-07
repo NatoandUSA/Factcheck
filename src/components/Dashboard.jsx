@@ -10,7 +10,6 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import AsinBatcherWidget from './AsinBatcherWidget';
-import MasterKeywordTable from './MasterKeywordTable';
 import GoogleTrendsWidget from './GoogleTrendsWidget';
 import UnifiedIpGateModal from './UnifiedIpGateModal';
 import { parseJsonResponse } from '../utils/apiResponse';
@@ -1025,9 +1024,6 @@ export default function Dashboard({ onSelectListing, onApproveListing, onShowToa
 
       {/* Step 2: Helium 10 Xray ASIN Batching Assistant */}
       <AsinBatcherWidget onShowToast={onShowToast} />
-
-      {/* Step 4: Master Keyword List Table */}
-      <MasterKeywordTable />
 
       {/* Section 3: Helium 10 Keyword Batches Queue (Xem chi tiết từng đợt import) */}
       <div className="studio-panel" style={{ padding: '28px' }}>

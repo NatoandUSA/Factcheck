@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { createProjectBoundLoader } from '../utils/projectBoundLoader.js';
 import { Database, Search, ShieldCheck, ShieldAlert, Sparkles, RefreshCw, Zap, Award, Layers, Tag } from 'lucide-react';
 
-export default function MasterKeywordTable({ marketplace = 'AMAZON', activeProjectId, keywords: passedKeywords, onShowToast }) {
+export default function MasterKeywordTable({ marketplace = 'AMAZON', activeProjectId, onShowToast }) {
   const [keywords, setKeywords] = useState([]);
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -34,15 +34,9 @@ export default function MasterKeywordTable({ marketplace = 'AMAZON', activeProje
   };
 
   useEffect(() => {
-    if (Array.isArray(passedKeywords) && passedKeywords.length > 0 && !searchTerm) {
-      keywordLoaderRef.current.dispose();
-      setKeywords(passedKeywords.slice(0, 100));
-      setLoading(false);
-      return undefined;
-    }
     fetchMasterKeywords();
     return () => keywordLoaderRef.current.dispose();
-  }, [marketplace, activeProjectId, passedKeywords, searchTerm]);
+  }, [marketplace, activeProjectId, searchTerm]);
 
 
   const filtered = keywords.filter(k => {

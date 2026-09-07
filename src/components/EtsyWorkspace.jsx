@@ -41,6 +41,8 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
   activeProjectIdRef.current = activeProject?.id || null;
   const persistedSearchLoaderRef = useRef(null);
   if (!persistedSearchLoaderRef.current) persistedSearchLoaderRef.current = createProjectBoundLoader();
+  const trendLoaderRef = useRef(null);
+  if (!trendLoaderRef.current) trendLoaderRef.current = createProjectBoundLoader();
 
   const refreshEvidenceHealth = React.useCallback(async (projectId) => {
     if (!projectId) return;
@@ -200,33 +202,34 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
     setActiveStage('workflow');
   };
 
-  const fetchData = async () => {
-    if (!activeProject?.id) {
-      setTrends([]);
-      setEvidenceHealth(null);
-      return;
-    }
-    const requestedProjectId = activeProject.id;
-    await refreshEvidenceHealth(requestedProjectId);
-    try {
-      const trendsRes = await fetch(`/api/trends?projectId=${encodeURIComponent(requestedProjectId)}`, { credentials: 'include' });
-      if (trendsRes.ok) {
-        const trendsData = await trendsRes.json();
-        if (activeProjectIdRef.current !== requestedProjectId || Number(trendsData.projectId) !== Number(requestedProjectId)) return;
-        const etsyTrends = Array.isArray(trendsData.trends)
-          ? trendsData.trends.filter(trend => trend.keywords_detailed)
-          : [];
-        setTrends(etsyTrends);
-      }
-    } catch (e) {
-      console.warn('Failed to fetch Etsy workspace data', e);
-    }
-  };
+  const fetchData = React.useCallback(async () => {
+    const requestedProjectId = activeProject?.id;
+    if (!requestedProjectId) setEvidenceHealth(null);
+    else await refreshEvidenceHealth(requestedProjectId);
+    return trendLoaderRef.current.load({
+      projectId: requestedProjectId,
+      url: `/api/trends?projectId=${encodeURIComponent(requestedProjectId)}`,
+      clear: () => setTrends([]),
+      select: trendsData => {
+        if (Number(trendsData.projectId) !== Number(requestedProjectId)) {
+          throw new Error('PROJECT_RESPONSE_SCOPE_MISMATCH');
+        }
+        if (!Array.isArray(trendsData.trends)) throw new Error('ETSY_TREND_SUMMARY_MALFORMED');
+        return trendsData.trends.length ? trendsData.trends : null;
+      },
+      apply: summaries => setTrends(summaries),
+      onError: error => onShowToast?.(
+        `Không thể tải tóm tắt Etsy cho project hiện tại: ${error.message || 'UNKNOWN_ERROR'}`,
+        'error'
+      )
+    });
+  }, [activeProject?.id, refreshEvidenceHealth, onShowToast]);
 
   useEffect(() => {
     fetchData();
     fetchProjects();
-  }, [fetchProjects, activeProject?.id, refreshEvidenceHealth]);
+    return () => trendLoaderRef.current.dispose();
+  }, [fetchData, fetchProjects]);
   const handleTransition = async (targetState) => {
     if (!activeProject) return;
     const requestedProjectId = activeProject.id;

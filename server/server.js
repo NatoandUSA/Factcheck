@@ -3685,7 +3685,13 @@ app.get('/api/trends', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER
   parseAndValidateProject(db, req, req.query.projectId, (projectErr, project) => {
     if (projectErr) return res.status(projectErr.status).json({ success: false, error: projectErr.error, message: projectErr.message });
     db.all(
-      `SELECT * FROM market_trends
+      `SELECT id, category, trending_keywords, marketplace, project_id, discoveredAt, processed,
+              CASE
+                WHEN json_valid(keywords_detailed) AND json_type(keywords_detailed) = 'array'
+                THEN json_array_length(keywords_detailed)
+                ELSE 0
+              END AS keywordCount
+       FROM market_trends
        WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ? AND project_id = ?
        ORDER BY discoveredAt DESC LIMIT 30`,
       [req.user.tenantId, req.user.workspaceId, req.user.marketplace, project.id],

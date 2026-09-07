@@ -727,7 +727,7 @@ export default function AmazonPipelineWorkflow({
         )}
 
         {/* Master Keyword Table */}
-        <MasterKeywordTable marketplace="AMAZON" activeProjectId={activeProjectId} keywords={cerebroKeywords} onShowToast={onShowToast} />
+        <MasterKeywordTable marketplace="AMAZON" activeProjectId={activeProjectId} onShowToast={onShowToast} />
 
       </div>
 

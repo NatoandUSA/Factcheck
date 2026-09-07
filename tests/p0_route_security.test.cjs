@@ -122,8 +122,8 @@ async function main() {
     assert.strictEqual(projectRes.status, 200);
     const projectId = projectData.projectId;
     const trendInsert = await dbRun(
-      "INSERT INTO market_trends (category, trending_keywords, marketplace, tenant_id, workspace_id, project_id) VALUES (?, ?, ?, ?, ?, ?)",
-      ['Jewelry', 'test keyword', 'AMAZON', amzWs.tenant_id, amzWs.workspace_id, projectId]
+      "INSERT INTO market_trends (category, trending_keywords, keywords_detailed, marketplace, tenant_id, workspace_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      ['Jewelry', 'test keyword', JSON.stringify([{ keyword: 'private full-corpus keyword' }]), 'AMAZON', amzWs.tenant_id, amzWs.workspace_id, projectId]
     );
     const trendId = trendInsert.lastID;
 
@@ -138,8 +138,13 @@ async function main() {
     });
     const sameWorkspacePayload = await sameWorkspaceRes.json();
     const sameWorkspaceTrends = sameWorkspacePayload.trends;
-    assert(sameWorkspaceTrends.some(t => t.id === trendId), 'Owning workspace must see its own trend via GET /api/trends');
-    console.log('🟢 Item 3: cross-workspace trend draft returns IDOR-safe 404; owning workspace can still see it.');
+    const returnedTrend = sameWorkspaceTrends.find(t => t.id === trendId);
+    assert(returnedTrend, 'Owning workspace must see its own trend via GET /api/trends');
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(returnedTrend, 'keywords_detailed'), false,
+      'Trend reload must not expose the full keyword corpus');
+    assert.strictEqual(returnedTrend.keywordCount, 1,
+      'Trend summary must retain bounded keyword accounting');
+    console.log('🟢 Item 3: trend draft is IDOR-safe; owning workspace receives summary-only trend data.');
 
     // --- 9. Legacy unscoped rows are API-invisible ---
     const legacyInsert = await dbRun(

@@ -11,6 +11,7 @@ import MarketBenchmarkWidget from './MarketBenchmarkWidget';
 import SmartPullAnalyticsBar from './SmartPullAnalyticsBar';
 import ProjectSetupCard from './ProjectSetupCard';
 import ProjectEvidenceGate from './ProjectEvidenceGate';
+import { createProjectBoundLoader } from '../utils/projectBoundLoader.js';
 
 export default function AmazonWorkspace({ onSelectListing, onApproveListing, onShowToast }) {
   const [seedPhrase, setSeedPhrase] = useState('');
@@ -30,6 +31,8 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
   const [drafting, setDrafting] = useState(false);
   const activeProjectIdRef = useRef(null);
   activeProjectIdRef.current = activeProject?.id || null;
+  const trendLoaderRef = useRef(null);
+  if (!trendLoaderRef.current) trendLoaderRef.current = createProjectBoundLoader();
 
   const handleUpdateXraySellers = React.useCallback((sellers) => {
     setXraySellers(Array.isArray(sellers) ? sellers : []);
@@ -64,40 +67,33 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
     setActiveStage('workflow');
   };
 
-  // Also load latest trend if available to populate cerebroSummary
-  const fetchLatestTrend = React.useCallback(async () => {
-    if (!activeProject?.id) return;
-    const requestedProjectId = activeProject.id;
-    try {
-      const res = await fetch('/api/trends', { credentials: 'include' });
-      if (res.ok) {
-        const trends = await res.json();
-        if (activeProjectIdRef.current !== requestedProjectId) return;
-        const amzTrends = (trends || []).filter(t => (
-          t.marketplace === 'AMAZON'
-          && Number(t.project_id) === Number(requestedProjectId)
-        ));
-        if (amzTrends.length > 0) {
-          const latest = amzTrends[0];
-          let detailed = [];
-          try { detailed = JSON.parse(latest.keywords_detailed || '[]'); } catch (e) {}
-          if (!cerebroSummary) {
-            setCerebroSummary({ trendId: latest.id, totalRows: detailed.length });
-          }
-          if (cerebroKeywords.length === 0 && detailed.length > 0) {
-            setCerebroKeywords(detailed);
-          }
-          if (!seedPhrase && latest.category) {
-            setSeedPhrase(latest.category);
-          }
-        }
-      }
-    } catch (e) {}
-  }, [activeProject?.id, cerebroSummary, cerebroKeywords.length, seedPhrase]);
+  // Trend reload is summary-only. Full keyword rows are loaded exclusively by
+  // MasterKeywordTable from the project-bound master-keywords endpoint.
+  const fetchLatestTrend = React.useCallback(() => {
+    const requestedProjectId = activeProject?.id;
+    return trendLoaderRef.current.load({
+      projectId: requestedProjectId,
+      url: `/api/trends?projectId=${encodeURIComponent(requestedProjectId)}`,
+      clear: () => setCerebroSummary(null),
+      select: data => {
+        if (!Array.isArray(data.trends)) throw new Error('TREND_SUMMARY_MALFORMED');
+        return data.trends[0] || null;
+      },
+      apply: latest => {
+        setCerebroSummary({ trendId: latest.id, totalRows: latest.keywordCount || 0 });
+        if (!seedPhrase && latest.category) setSeedPhrase(latest.category);
+      },
+      onError: error => onShowToast?.(
+        `Không thể tải tóm tắt trend cho project hiện tại: ${error.message || 'UNKNOWN_ERROR'}`,
+        'error'
+      )
+    });
+  }, [activeProject?.id, seedPhrase, onShowToast]);
 
   React.useEffect(() => {
     fetchProjects();
     fetchLatestTrend();
+    return () => trendLoaderRef.current.dispose();
   }, [fetchProjects, fetchLatestTrend]);
 
   const handleTransition = async (targetState) => {
@@ -464,7 +460,7 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
             </button>
           </div>
 
-          <MasterKeywordTable marketplace="AMAZON" keywords={cerebroKeywords} onShowToast={onShowToast} />
+          <MasterKeywordTable marketplace="AMAZON" activeProjectId={activeProject?.id || null} onShowToast={onShowToast} />
         </div>
       )}
 

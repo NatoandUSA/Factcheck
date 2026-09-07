@@ -113,9 +113,17 @@ async function main() {
     console.log('🟢 Item 2: SELLER role correctly denied 403 on OWNER/MANAGER-only route.');
 
     // --- 3. Cross-workspace trend draft returns IDOR-safe 404 ---
+    const projectRes = await fetch(`http://127.0.0.1:${port}/api/projects`, {
+      method: 'POST',
+      headers: { ...origin, 'Content-Type': 'application/json', Cookie: ownerAmzCookie },
+      body: JSON.stringify({ name: 'P0 scoped project', seedPhrase: 'test keyword' })
+    });
+    const projectData = await projectRes.json();
+    assert.strictEqual(projectRes.status, 200);
+    const projectId = projectData.projectId;
     const trendInsert = await dbRun(
-      "INSERT INTO market_trends (category, trending_keywords, marketplace, tenant_id, workspace_id) VALUES (?, ?, ?, ?, ?)",
-      ['Jewelry', 'test keyword', 'AMAZON', amzWs.tenant_id, amzWs.workspace_id]
+      "INSERT INTO market_trends (category, trending_keywords, keywords_detailed, marketplace, tenant_id, workspace_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      ['Jewelry', 'test keyword', JSON.stringify([{ keyword: 'private full-corpus keyword' }]), 'AMAZON', amzWs.tenant_id, amzWs.workspace_id, projectId]
     );
     const trendId = trendInsert.lastID;
 
@@ -125,23 +133,29 @@ async function main() {
     });
     assert.strictEqual(crossWorkspaceRes.status, 404, `Cross-workspace trend draft must return 404, got ${crossWorkspaceRes.status}`);
 
-    const sameWorkspaceRes = await fetch(`http://127.0.0.1:${port}/api/trends`, {
+    const sameWorkspaceRes = await fetch(`http://127.0.0.1:${port}/api/trends?projectId=${projectId}`, {
       headers: { ...origin, Cookie: ownerAmzCookie }
     });
-    const sameWorkspaceTrends = await sameWorkspaceRes.json();
-    assert(sameWorkspaceTrends.some(t => t.id === trendId), 'Owning workspace must see its own trend via GET /api/trends');
-    console.log('🟢 Item 3: cross-workspace trend draft returns IDOR-safe 404; owning workspace can still see it.');
+    const sameWorkspacePayload = await sameWorkspaceRes.json();
+    const sameWorkspaceTrends = sameWorkspacePayload.trends;
+    const returnedTrend = sameWorkspaceTrends.find(t => t.id === trendId);
+    assert(returnedTrend, 'Owning workspace must see its own trend via GET /api/trends');
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(returnedTrend, 'keywords_detailed'), false,
+      'Trend reload must not expose the full keyword corpus');
+    assert.strictEqual(returnedTrend.keywordCount, 1,
+      'Trend summary must retain bounded keyword accounting');
+    console.log('🟢 Item 3: trend draft is IDOR-safe; owning workspace receives summary-only trend data.');
 
     // --- 9. Legacy unscoped rows are API-invisible ---
     const legacyInsert = await dbRun(
       "INSERT INTO market_trends (category, trending_keywords, marketplace, keywords_detailed) VALUES (?, ?, ?, ?)",
       ['Jewelry', 'legacy unscoped keyword', 'AMAZON', JSON.stringify([{ keyword: 'legacy unscoped keyword', tierBadge: 'x' }])]
     );
-    const legacyTrendRes = await fetch(`http://127.0.0.1:${port}/api/trends`, { headers: { ...origin, Cookie: ownerAmzCookie } });
+    const legacyTrendRes = await fetch(`http://127.0.0.1:${port}/api/trends?projectId=${projectId}`, { headers: { ...origin, Cookie: ownerAmzCookie } });
     const legacyTrends = await legacyTrendRes.json();
-    assert(!legacyTrends.some(t => t.id === legacyInsert.lastID), 'Legacy unscoped trend row must not appear in GET /api/trends');
+    assert(!legacyTrends.trends.some(t => t.id === legacyInsert.lastID), 'Legacy unscoped trend row must not appear in GET /api/trends');
 
-    const mklRes = await fetch(`http://127.0.0.1:${port}/api/master-keywords?marketplace=AMAZON`, { headers: { ...origin, Cookie: ownerAmzCookie } });
+    const mklRes = await fetch(`http://127.0.0.1:${port}/api/master-keywords?projectId=${projectId}`, { headers: { ...origin, Cookie: ownerAmzCookie } });
     const mklData = await mklRes.json();
     assert(!mklData.keywords.some(k => k.keyword === 'legacy unscoped keyword'), 'Legacy unscoped keyword must not appear in master-keywords');
     console.log('🟢 Item 9: legacy unscoped market_trends row is invisible to both /api/trends and /api/master-keywords.');
@@ -156,7 +170,7 @@ async function main() {
     const pullEtsyBody = await pullEtsyFromAmazonRes.json();
     assert.strictEqual(pullEtsyBody.error, 'MARKETPLACE_MISMATCH');
 
-    const mklQueryOverrideRes = await fetch(`http://127.0.0.1:${port}/api/master-keywords?marketplace=ETSY`, {
+    const mklQueryOverrideRes = await fetch(`http://127.0.0.1:${port}/api/master-keywords?projectId=${projectId}&marketplace=ETSY`, {
       headers: { ...origin, Cookie: ownerAmzCookie }
     });
     const mklQueryOverrideData = await mklQueryOverrideRes.json();

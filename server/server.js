@@ -859,6 +859,44 @@ app.get('/api/projects/:projectId/evidence-health', requireAuth(db), requireRole
   });
 });
 
+// Reload the latest project-bound research import without promoting it to
+// accepted evidence or Product Truth. Scope is always recomputed from session.
+app.get('/api/projects/:projectId/research-imports/:kind', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
+  const allowedKinds = new Set([XRAY_REPORT_ARTIFACT_KIND, ETSY_SEARCH_PASTE_ARTIFACT_KIND]);
+  if (!allowedKinds.has(req.params.kind)) {
+    return res.status(400).json({ success: false, error: 'UNKNOWN_RESEARCH_IMPORT_KIND' });
+  }
+  parseAndValidateProject(db, req, req.params.projectId, (projectErr, project) => {
+    if (projectErr) return res.status(projectErr.status).json({ success: false, error: projectErr.error, message: projectErr.message });
+    db.all(
+      `SELECT id, source, evidence_state, metadata, created_at
+       FROM research_evidence
+       WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ? AND project_id = ?
+         AND source = 'STAFF_MANUAL_ASSERTION'
+       ORDER BY id DESC`,
+      [req.user.tenantId, req.user.workspaceId, req.user.marketplace, project.id],
+      (queryErr, rows) => {
+        if (queryErr) return res.status(500).json({ success: false, error: 'RESEARCH_IMPORT_READ_FAILED' });
+        const match = (rows || []).map(row => ({ row, metadata: parseEvidenceMetadata(row) }))
+          .find(item => item.metadata.kind === req.params.kind);
+        if (!match) return res.json({ success: true, projectId: project.id, kind: req.params.kind, import: null });
+        res.json({
+          success: true,
+          projectId: project.id,
+          kind: req.params.kind,
+          import: {
+            evidenceId: match.row.id,
+            source: match.row.source,
+            evidenceState: match.row.evidence_state,
+            createdAt: match.row.created_at,
+            metadata: match.metadata
+          }
+        });
+      }
+    );
+  });
+});
+
 // Generic client intake is deliberately separate from provider-controlled
 // provenance. MCP_RETRIEVAL is created only by server-owned provider paths.
 const CLIENT_ALLOWED_EVIDENCE_SOURCES = [
@@ -944,6 +982,7 @@ function requireProjectContext(req, rawProjectId) {
 // staff-entered ASINs and partial provider responses stay observable but can
 // never be promoted to ACCEPTED merely by a ledger action.
 const SMART_PULL_ARTIFACT_KIND = 'SMART_PULL_ARTIFACT_V1';
+const XRAY_REPORT_ARTIFACT_KIND = 'AMAZON_XRAY_REPORT_V1';
 const ETSY_SEARCH_PASTE_ARTIFACT_KIND = 'ETSY_SEARCH_PASTE_V1';
 const ACCEPTABLE_SMART_PULL_STATES = new Set([
   'RETRIEVED_NO_OBSERVED_AT',
@@ -3074,73 +3113,87 @@ Allowed values: WARM, MINIMAL, CELEBRATORY.`;
   }
 });
 
-// API: Get Master Keyword List Across Processed Files (Marketplace-specific separation)
+// API: Get the project-bound Master Keyword List. The complete corpus stays
+// persisted, while search is applied before bounded presentation pagination.
 app.get('/api/master-keywords', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
-  // Marketplace is server-derived from the authenticated session
-  const targetMarket = req.user.marketplace;
+  const parseBoundedInteger = (value, fallback, max) => {
+    if (value === undefined || value === null || value === '') return fallback;
+    if (!/^\d+$/.test(String(value))) return null;
+    const parsed = Number(value);
+    return Number.isSafeInteger(parsed) && parsed <= max ? parsed : null;
+  };
+  const limit = parseBoundedInteger(req.query.limit, 100, 250);
+  const offset = parseBoundedInteger(req.query.offset, 0, Number.MAX_SAFE_INTEGER);
+  if (limit === null || limit < 1 || offset === null) {
+    return res.status(400).json({ success: false, error: 'INVALID_PAGINATION' });
+  }
 
-  db.all(
-    "SELECT * FROM market_trends WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ? ORDER BY discoveredAt DESC",
-    [req.user.tenantId, req.user.workspaceId, targetMarket],
-    (err, rows) => {
-    if (err) return res.status(500).json({ error: 'DATABASE_ERROR' });
-    
-    const masterKeywords = [];
-    const seen = new Set();
-
-    // rows is already marketplace-filtered by the SQL WHERE clause above
-    // (legacy NULL-marketplace rows are excluded by that same condition).
-    rows.forEach(r => {
-      // Only surface keywords with real persisted Volume/CPR/Score data.
-      // Rows uploaded before this tracking existed have no way to recover
-      // that data, and showing keywords with no evidence behind them is
-      // exactly what staff need this list to NOT do.
-      if (!r.keywords_detailed) return;
-      let detailed = null;
-      try { detailed = JSON.parse(r.keywords_detailed); } catch (e) { return; }
-      if (!Array.isArray(detailed)) return;
-
-      const kws = detailed;
-      kws.forEach((kwItem, idx) => {
-        const cleanKw = (kwItem.keyword || '').trim();
-        if (cleanKw && cleanKw.length > 2 && !seen.has(cleanKw.toLowerCase())) {
-          seen.add(cleanKw.toLowerCase());
-          const ipRes = ipGuard.screenText(cleanKw);
-
-          let tierBadge = kwItem.tierBadge;
-          if (!tierBadge) {
-            tierBadge = targetMarket === 'AMAZON' ? '👑 Tier 1 (Title Hook)' : '🎯 Valid Tag (<=20 chars)';
-            if (masterKeywords.length >= 10 && masterKeywords.length < 35) {
-              tierBadge = targetMarket === 'AMAZON' ? '💎 Tier 2 (5 Bullets)' : '🎯 Secondary Tag';
-            } else if (masterKeywords.length >= 35) {
-              tierBadge = targetMarket === 'AMAZON' ? '📦 Tier 3 (Backend Fuel)' : '📝 Title Keyword';
+  parseAndValidateProject(db, req, req.query.projectId, (projectErr, project) => {
+    if (projectErr) return res.status(projectErr.status).json({ success: false, error: projectErr.error, message: projectErr.message });
+    const targetMarket = req.user.marketplace;
+    db.all(
+      `SELECT * FROM market_trends
+       WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ? AND project_id = ?
+       ORDER BY discoveredAt DESC`,
+      [req.user.tenantId, req.user.workspaceId, targetMarket, project.id],
+      (err, rows) => {
+        if (err) return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
+        const masterKeywords = [];
+        const seen = new Set();
+        (rows || []).forEach(r => {
+          if (!r.keywords_detailed) return;
+          let detailed;
+          try { detailed = JSON.parse(r.keywords_detailed); } catch (_) { return; }
+          if (!Array.isArray(detailed)) return;
+          detailed.forEach(kwItem => {
+            const cleanKw = typeof kwItem?.keyword === 'string' ? kwItem.keyword.trim() : '';
+            if (!cleanKw || cleanKw.length <= 2 || seen.has(cleanKw.toLowerCase())) return;
+            seen.add(cleanKw.toLowerCase());
+            const ipRes = ipGuard.screenText(cleanKw);
+            let tierBadge = kwItem.tierBadge;
+            if (!tierBadge) {
+              tierBadge = targetMarket === 'AMAZON' ? '👑 Tier 1 (Title Hook)' : '🎯 Valid Tag (<=20 chars)';
+              if (masterKeywords.length >= 10 && masterKeywords.length < 35) {
+                tierBadge = targetMarket === 'AMAZON' ? '💎 Tier 2 (5 Bullets)' : '🎯 Secondary Tag';
+              } else if (masterKeywords.length >= 35) {
+                tierBadge = targetMarket === 'AMAZON' ? '📦 Tier 3 (Backend Fuel)' : '📝 Title Keyword';
+              }
             }
-          }
-
-          masterKeywords.push({
-            keyword: cleanKw,
-            category: r.category || (targetMarket === 'AMAZON' ? 'Amazon FBM' : 'Etsy Handmade'),
-            discoveredAt: r.discoveredAt,
-            ipVerdict: ipRes.verdict,
-            tierBadge,
-            ipHits: ipRes.hits.map(h => h.term),
-            volume: kwItem.volume ?? kwItem.searchVolume ?? null,
-            cpr: kwItem.cpr ?? null,
-            competingProducts: kwItem.competingProducts ?? null,
-            titleDensity: kwItem.titleDensity ?? kwItem.density ?? null,
-            // kwItem.score is rankKeywords' internal sort-only heuristic (it
-            // uses hidden 100/10/8 defaults for missing metrics) -- it must
-            // never leak into the Staff-facing opportunityScore when the real
-            // one is null, or this API route re-fabricates exactly what
-            // rankKeywords was fixed to stop doing (P0.5-C truth fix).
-            opportunityScore: kwItem.opportunityScore ?? null,
-            scoringState: kwItem.scoringState ?? (kwItem.opportunityScore != null ? 'SCORED' : 'INSUFFICIENT_EVIDENCE')
+            masterKeywords.push({
+              keyword: cleanKw,
+              category: r.category || (targetMarket === 'AMAZON' ? 'Amazon FBM' : 'Etsy Handmade'),
+              discoveredAt: r.discoveredAt,
+              ipVerdict: ipRes.verdict,
+              tierBadge,
+              ipHits: ipRes.hits.map(h => h.term),
+              volume: kwItem.volume ?? kwItem.searchVolume ?? null,
+              cpr: kwItem.cpr ?? null,
+              competingProducts: kwItem.competingProducts ?? null,
+              titleDensity: kwItem.titleDensity ?? kwItem.density ?? null,
+              opportunityScore: kwItem.opportunityScore ?? null,
+              scoringState: kwItem.scoringState ?? (kwItem.opportunityScore != null ? 'SCORED' : 'INSUFFICIENT_EVIDENCE')
+            });
           });
-        }
-      });
-    });
-
-    res.json({ success: true, count: masterKeywords.length, marketplace: targetMarket, keywords: masterKeywords });
+        });
+        const query = typeof req.query.q === 'string' ? req.query.q.trim().toLowerCase() : '';
+        const filtered = query
+          ? masterKeywords.filter(item => item.keyword.toLowerCase().includes(query))
+          : masterKeywords;
+        const keywords = filtered.slice(offset, offset + limit);
+        res.json({
+          success: true,
+          projectId: project.id,
+          marketplace: targetMarket,
+          query,
+          totalCount: masterKeywords.length,
+          filteredCount: filtered.length,
+          returnedCount: keywords.length,
+          limit,
+          offset,
+          keywords
+        });
+      }
+    );
   });
 });
 
@@ -3230,22 +3283,46 @@ const handleReportUpload = async (req, res) => {
         });
       }
 
+      let project;
+      try {
+        project = await requireProjectContext(req, req.body.projectId);
+      } catch (err) {
+        return res.status(err.status || 500).json({ success: false, error: err.error || 'PROJECT_CONTEXT_ERROR', message: err.message });
+      }
+      const confirm = req.body?.confirm === true || String(req.body?.confirm || '').toLowerCase() === 'true';
+      const artifacts = uploadedFiles.map(file => ({
+        fileName: path.basename(file.originalname),
+        sha256: crypto.createHash('sha256').update(fs.readFileSync(file.path)).digest('hex')
+      }));
+      const reportHash = evidenceAuthority.canonicalHash({
+        kind: XRAY_REPORT_ARTIFACT_KIND,
+        projectId: project.id,
+        seedKeyword: batchResult.seedKeyword,
+        artifacts,
+        rows: batchResult.batches
+      });
       const reportProvenance = {
-        state: 'SOURCE_REPORTED',
+        state: 'UNVERIFIED_INPUT',
         sourceKind: 'STAFF_UPLOADED_XRAY_REPORT',
+        provider: 'HELIUM10_XRAY',
         ingestedAt: new Date().toISOString(),
         captureTime: null,
         tenantId: req.user.tenantId,
         workspaceId: req.user.workspaceId,
-        // This report is not persisted as a project evidence record by this
-        // endpoint, so it must not claim a project binding from client input.
-        projectId: null,
-        projectBinding: 'NOT_PERSISTED',
-        artifacts: uploadedFiles.map(file => ({
-          fileName: file.originalname,
-          sha256: crypto.createHash('sha256').update(fs.readFileSync(file.path)).digest('hex')
-        }))
+        marketplace: req.user.marketplace,
+        projectId: project.id,
+        projectBinding: confirm === true ? 'PERSISTED_RESEARCH_ONLY' : 'PREVIEW_NOT_PERSISTED',
+        contentHash: reportHash,
+        artifacts
       };
+      const rowAccounting = {
+        inputRows: rawRows.length,
+        acceptedRows: batchResult.totalCleanAsins,
+        rejectedRows: batchResult.rejectedCount
+      };
+      if (rowAccounting.acceptedRows + rowAccounting.rejectedRows !== rowAccounting.inputRows) {
+        throw new Error('XRAY_ROW_ACCOUNTING_MISMATCH');
+      }
 
       // Extract rich sellers list for Learning Box & Staff Review
       const xraySellers = (batchResult.batches || []).flatMap(b => b.items || []).map((item, idx) => ({
@@ -3292,21 +3369,60 @@ const handleReportUpload = async (req, res) => {
         shopName: item.seller || null
       }));
 
-      return res.json({
+      const responsePayload = {
         success: true,
         isXray: true,
         reportType: 'HELIUM10_XRAY',
+        preview: confirm !== true,
+        committed: confirm === true,
+        projectId: project.id,
         fileNames,
         filesUploadedCount: uploadedFiles.length,
         seedKeyword: batchResult.seedKeyword,
         totalInputAsins: batchResult.totalInputAsins,
         totalCleanAsins: batchResult.totalCleanAsins,
         rejectedCount: batchResult.rejectedCount,
+        rowAccounting,
         batchCount: batchResult.batchCount,
         batches: batchResult.batches,
         xraySellers,
         reportProvenance
+      };
+      if (confirm !== true) return res.json(responsePayload);
+
+      const metadata = {
+        kind: XRAY_REPORT_ARTIFACT_KIND,
+        evidenceState: 'UNVERIFIED_INPUT',
+        authority: 'NONE',
+        provider: 'HELIUM10_XRAY',
+        contentHash: reportHash,
+        rowAccounting,
+        reportProvenance,
+        batches: batchResult.batches,
+        xraySellers
+      };
+      const existing = await new Promise((resolve, reject) => {
+        db.get(
+          `SELECT id FROM research_evidence
+           WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ? AND project_id = ?
+             AND source = 'STAFF_MANUAL_ASSERTION' AND metadata LIKE ?
+           ORDER BY id DESC LIMIT 1`,
+          [req.user.tenantId, req.user.workspaceId, req.user.marketplace, project.id, `%\"contentHash\":\"${reportHash}\"%`],
+          (err, row) => err ? reject(err) : resolve(row)
+        );
       });
+      if (existing) return res.json({ ...responsePayload, evidenceId: existing.id, duplicateSubmission: true });
+
+      const evidenceId = await new Promise((resolve, reject) => {
+        db.run(
+          `INSERT INTO research_evidence
+            (tenant_id, workspace_id, marketplace, project_id, seed_phrase, source, actor_id, evidence_state, metadata)
+           VALUES (?, ?, ?, ?, ?, 'STAFF_MANUAL_ASSERTION', ?, 'OBSERVED', ?)`,
+          [req.user.tenantId, req.user.workspaceId, req.user.marketplace, project.id, batchResult.seedKeyword, req.user.userId, JSON.stringify(metadata)],
+          function(err) { err ? reject(err) : resolve(this.lastID); }
+        );
+      });
+      return res.json({ ...responsePayload, evidenceId, duplicateSubmission: false });
     }
 
     // Detect all multi-dimensional Helium 10 & Data Dive Cerebro columns
@@ -3329,6 +3445,13 @@ const handleReportUpload = async (req, res) => {
     const evaluatedKeywords = [];
     const flaggedIpKeywords = [];
     const seenKeywordsMap = new Map();
+    const rowAccounting = {
+      inputRows: rawRows.length,
+      canonicalRows: 0,
+      duplicateRows: 0,
+      invalidRows: 0,
+      ipRejectedRows: 0
+    };
 
     for (const r of rawRows) {
       let rawVal = String(r[kwKey] || '').trim();
@@ -3340,7 +3463,10 @@ const handleReportUpload = async (req, res) => {
       rawVal = rawVal.replace(/\s+/g, ' ').replace(/^["']|["']$/g, '').trim();
 
       const sanitizedKw = keywordRanker.sanitizeKeyword(rawVal);
-      if (!sanitizedKw) continue; // Discards ASINs, line numbers, delivery blacklist, and offensive terms
+      if (!sanitizedKw) {
+        rowAccounting.invalidRows += 1;
+        continue; // Discards ASINs, line numbers, delivery blacklist, and offensive terms
+      }
 
       const lower = sanitizedKw.toLowerCase();
 
@@ -3350,6 +3476,7 @@ const handleReportUpload = async (req, res) => {
         if (!flaggedIpKeywords.includes(sanitizedKw)) {
           flaggedIpKeywords.push(sanitizedKw);
         }
+        rowAccounting.ipRejectedRows += 1;
         continue; // Skip trademarked terms
       }
 
@@ -3362,6 +3489,7 @@ const handleReportUpload = async (req, res) => {
 
       // Fast deduplication & max-metric merge for multi-file Cerebro uploads
       if (seenKeywordsMap.has(lower)) {
+        rowAccounting.duplicateRows += 1;
         const existing = seenKeywordsMap.get(lower);
         if (searchVolume !== null && (existing.searchVolume === null || searchVolume > existing.searchVolume)) {
           existing.searchVolume = searchVolume;
@@ -3392,6 +3520,13 @@ const handleReportUpload = async (req, res) => {
       evaluatedKeywords.push(entry);
     }
 
+    rowAccounting.canonicalRows = evaluatedKeywords.length;
+    const accountedRows = rowAccounting.canonicalRows + rowAccounting.duplicateRows
+      + rowAccounting.invalidRows + rowAccounting.ipRejectedRows;
+    if (accountedRows !== rowAccounting.inputRows) {
+      throw new Error(`ROW_ACCOUNTING_MISMATCH input=${rowAccounting.inputRows} accounted=${accountedRows}`);
+    }
+
     if (evaluatedKeywords.length === 0) {
       return res.status(400).json({ 
         error: 'Không tìm thấy từ khóa hợp lệ. Các từ khóa có thể đã bị chặn do từ rác, ASIN code, từ tốc độ giao hàng hoặc bộ lọc IP.',
@@ -3403,8 +3538,10 @@ const handleReportUpload = async (req, res) => {
     const seedPhrase = req.body.seedPhrase || req.body.seedKeyword || targetCategory;
     const rankedKeywords = keywordRanker.rankKeywords(evaluatedKeywords, targetCategory, seedPhrase);
 
-    // Assign Strategic 5 Tiers (Amazon A10 & Data Dive Methodology)
-    const topKeywordsDetailed = rankedKeywords.slice(0, 100).map((item, idx) => {
+    // Assign strategic tiers to the complete canonical corpus. The first 100
+    // remain the UI preview, but persistence and server-side search are never
+    // truncated to that presentation window.
+    const allKeywordsDetailed = rankedKeywords.map((item, idx) => {
       let tier = 'Tier 5 (A+ Content & Brand Story)';
       let tierBadge = '✨ Tier 5 (A+ Content)';
 
@@ -3430,7 +3567,8 @@ const handleReportUpload = async (req, res) => {
       };
     });
 
-    const keywords = topKeywordsDetailed.map(k => k.keyword);
+    const keywords = allKeywordsDetailed.map(k => k.keyword);
+    const topKeywordsDetailed = allKeywordsDetailed.slice(0, 100);
     const trendingKeywordsStr = keywords.slice(0, 30).join(', ');
 
     // Insert into market_trends for AI Drafter
@@ -3438,7 +3576,7 @@ const handleReportUpload = async (req, res) => {
       if (pErr) return res.status(pErr.status || 400).json({ success: false, error: pErr.error, message: pErr.message });
       db.run(
         "INSERT INTO market_trends (category, trending_keywords, keywords_detailed, marketplace, tenant_id, workspace_id, project_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        [targetCategory, trendingKeywordsStr, JSON.stringify(topKeywordsDetailed), targetMarketplace, req.user.tenantId, req.user.workspaceId, targetProjectId],
+        [targetCategory, trendingKeywordsStr, JSON.stringify(allKeywordsDetailed), targetMarketplace, req.user.tenantId, req.user.workspaceId, targetProjectId],
         function(dbErr) {
           if (dbErr) return res.status(500).json({ error: dbErr.message });
           
@@ -3455,7 +3593,9 @@ const handleReportUpload = async (req, res) => {
             fileName: fileNames,
             category: targetCategory,
             totalRows: rawRows.length,
-            topKeywords: keywords,
+            canonicalRows: allKeywordsDetailed.length,
+            rowAccounting,
+            topKeywords: keywords.slice(0, 100),
             topKeywordsDetailed,
             flaggedIpKeywords,
             trendingKeywordsStr
@@ -3540,14 +3680,26 @@ app.get('/api/analytics-summary', requireAuth(db), requireRole(['OWNER', 'MANAGE
     });
   });
 });
-// API: Get all imported keyword trends
+// API: Get imported keyword trends for one canonical project only.
 app.get('/api/trends', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
-  db.all(
-    "SELECT * FROM market_trends WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ? ORDER BY discoveredAt DESC LIMIT 30",
-    [req.user.tenantId, req.user.workspaceId, req.user.marketplace],
-    (err, rows) => {
-    if (err) return res.status(500).json({ error: 'DATABASE_ERROR' });
-    res.json(rows);
+  parseAndValidateProject(db, req, req.query.projectId, (projectErr, project) => {
+    if (projectErr) return res.status(projectErr.status).json({ success: false, error: projectErr.error, message: projectErr.message });
+    db.all(
+      `SELECT id, category, trending_keywords, marketplace, project_id, discoveredAt, processed,
+              CASE
+                WHEN json_valid(keywords_detailed) AND json_type(keywords_detailed) = 'array'
+                THEN json_array_length(keywords_detailed)
+                ELSE 0
+              END AS keywordCount
+       FROM market_trends
+       WHERE tenant_id = ? AND workspace_id = ? AND marketplace = ? AND project_id = ?
+       ORDER BY discoveredAt DESC LIMIT 30`,
+      [req.user.tenantId, req.user.workspaceId, req.user.marketplace, project.id],
+      (err, rows) => {
+        if (err) return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
+        res.json({ success: true, projectId: project.id, trends: rows || [] });
+      }
+    );
   });
 });
 

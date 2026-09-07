@@ -30,8 +30,8 @@ assert.ok(pastedParser.includes("evidenceProvider: 'HEYETSY_PASTED_TEXT'"), 'Sta
 assert.ok(server.includes("provider: 'YTRENDS_MCP'"), 'Live Smart Pull responses must retain their MCP provider label');
 assert.ok(server.includes("evidenceState: 'RETRIEVED_NO_OBSERVED_AT'"), 'MCP retrieval without provider observation time must not claim OBSERVED');
 assert.strictEqual(etsy.includes("evidenceState: 'OBSERVED'"), false, 'Client must consume server provenance rather than invent OBSERVED state');
-assert.ok(etsy.includes('Number(t.project_id) === Number(requestedProjectId)'), 'Etsy trends must be scoped to the selected project');
-assert.ok(amazon.includes('Number(t.project_id) === Number(requestedProjectId)'), 'Amazon trends must be scoped to the selected project');
+assert.ok(etsy.includes('/api/trends?projectId=${encodeURIComponent(requestedProjectId)}'), 'Etsy trends must request the selected project');
+assert.ok(amazon.includes('/api/trends?projectId=${encodeURIComponent(requestedProjectId)}'), 'Amazon trends must request the selected project');
 assert.ok(etsy.includes('activeProjectIdRef.current !== requestedProjectId'), 'Etsy must reject stale async responses after a project switch');
 assert.ok(amazon.includes('activeProjectIdRef.current !== requestedProjectId'), 'Amazon must reject stale async responses after a project switch');
 assert.ok(etsy.includes('setScannedSellers([])'), 'Etsy must clear seller evidence when project context changes');

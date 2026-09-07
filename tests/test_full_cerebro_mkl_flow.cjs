@@ -166,18 +166,50 @@ async function testFullCerebroMklFlow() {
 
     assert.strictEqual(uploadRes.status, 200, 'Upload Cerebro file status must be HTTP 200 OK');
     assert.strictEqual(uploadRes.data?.totalRows, 27018, 'Total parsed rows must be 27018');
-    assert.strictEqual(uploadRes.data?.topKeywordsDetailed?.length, 100, 'Returned MKL items count must be 100');
+    assert.strictEqual(uploadRes.data?.topKeywordsDetailed?.length, 100, 'UI preview must remain bounded to 100');
+    assert.ok(uploadRes.data?.canonicalRows > 100, 'Canonical corpus must not be truncated to the 100-row preview');
+    assert.deepStrictEqual(
+      Object.values(uploadRes.data.rowAccounting).reduce((sum, value) => sum + value, 0)
+        - uploadRes.data.rowAccounting.inputRows,
+      uploadRes.data.rowAccounting.inputRows,
+      'Every raw row must be accounted exactly once'
+    );
 
     console.log(`Upload HTTP Status: ${uploadRes.status} (Processed 27,018 rows in ${duration}s)`);
     console.log(`Total Rows Parsed: ${uploadRes.data?.totalRows}`);
-    console.log(`Keywords Returned to Frontend State: ${uploadRes.data?.topKeywordsDetailed?.length}`);
+    console.log(`Canonical Rows Persisted: ${uploadRes.data?.canonicalRows}`);
+    console.log(`Keywords Returned to Frontend Preview: ${uploadRes.data?.topKeywordsDetailed?.length}`);
 
     console.log('\nStep 2: Testing GET /api/master-keywords DB Persistence...');
-    const dbRes = await httpGet(TEST_PORT, '/api/master-keywords?marketplace=AMAZON', cookie);
+    const projectId = projRes.data.projectId;
+    const dbRes = await httpGet(TEST_PORT, `/api/master-keywords?projectId=${projectId}`, cookie);
     assert.strictEqual(dbRes.status, 200, 'GET master-keywords status must be 200');
-    assert.ok(dbRes.data?.keywords?.length > 0, 'DB keywords count must be > 0');
+    assert.strictEqual(dbRes.data?.projectId, projectId);
+    assert.strictEqual(dbRes.data?.keywords?.length, 100, 'Default response must be bounded to 100');
+    assert.strictEqual(dbRes.data?.returnedCount, 100);
+    assert.strictEqual(dbRes.data?.totalCount, uploadRes.data.canonicalRows);
+
+    const reloadRes = await httpGet(TEST_PORT, `/api/master-keywords?projectId=${projectId}`, cookie);
+    assert.strictEqual(reloadRes.status, 200, 'Second reload must return HTTP 200');
+    assert.strictEqual(reloadRes.data?.totalCount, uploadRes.data.canonicalRows,
+      'Second reload must preserve the complete canonical corpus');
+
+    const beyondPreviewKeyword = 'walldicor crose';
+    assert.ok(!reloadRes.data.keywords.some(item => item.keyword === beyondPreviewKeyword),
+      'Control keyword must remain outside the bounded first page');
+    const searchRes = await httpGet(
+      TEST_PORT,
+      `/api/master-keywords?projectId=${projectId}&q=${encodeURIComponent(beyondPreviewKeyword)}`,
+      cookie
+    );
+    assert.strictEqual(searchRes.status, 200, 'Full-corpus search must return HTTP 200');
+    assert.ok(
+      searchRes.data.keywords.some(item => item.keyword === beyondPreviewKeyword),
+      'Server search must find a persisted keyword beyond the preview window'
+    );
 
     console.log(`DB Keywords Count: ${dbRes.data?.keywords?.length}`);
+    console.log(`Full-Corpus Search Match: ${beyondPreviewKeyword}`);
 
     console.log('\n================================================================');
     console.log('  🟢 100% OPERATIONAL SUCCESS: REAL CEREBRO FILE PARSED & POPULATED!');

@@ -12,6 +12,7 @@ import SmartPullAnalyticsBar from './SmartPullAnalyticsBar';
 import ProjectSetupCard from './ProjectSetupCard';
 import ProjectEvidenceGate from './ProjectEvidenceGate';
 import { parseJsonResponse } from '../utils/apiResponse';
+import { createProjectBoundLoader } from '../utils/projectBoundLoader.js';
 
 export default function EtsyWorkspace({ onSelectListing, onApproveListing, onShowToast, onViewHistory }) {
   const [seedPhrase, setSeedPhrase] = useState('');
@@ -38,6 +39,10 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
   const feedFileInputRef = useRef(null);
   const activeProjectIdRef = useRef(null);
   activeProjectIdRef.current = activeProject?.id || null;
+  const persistedSearchLoaderRef = useRef(null);
+  if (!persistedSearchLoaderRef.current) persistedSearchLoaderRef.current = createProjectBoundLoader();
+  const trendLoaderRef = useRef(null);
+  if (!trendLoaderRef.current) trendLoaderRef.current = createProjectBoundLoader();
 
   const refreshEvidenceHealth = React.useCallback(async (projectId) => {
     if (!projectId) return;
@@ -61,6 +66,46 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
     setFeedPreview(null);
     setEvidenceHealth(null);
     setSeedPhrase(activeProject?.seed_phrase || '');
+  }, [activeProject?.id]);
+
+  useEffect(() => {
+    const projectId = activeProject?.id;
+    const clear = () => {
+      setScannedSellers([]);
+      setMcpResult(null);
+      setFeedPreview(null);
+    };
+    persistedSearchLoaderRef.current.load({
+      projectId,
+      url: `/api/projects/${encodeURIComponent(projectId || '')}/research-imports/ETSY_SEARCH_PASTE_V1`,
+      clear,
+      select: data => {
+        if (data.import === null) return null;
+        const metadata = data.import?.metadata;
+        if (!metadata || !Array.isArray(metadata.sellers) || !Array.isArray(metadata.keywordCandidates)) {
+          throw new Error('ETSY_REHYDRATION_MALFORMED');
+        }
+        return { source: data.import.source, metadata };
+      },
+      apply: ({ source, metadata }) => {
+        setScannedSellers(metadata.sellers);
+        setMcpResult({
+          source,
+          evidenceState: metadata.evidenceState,
+          provider: metadata.provider,
+          observedAt: metadata.observedAt,
+          importedAt: metadata.importedAt,
+          keywords: metadata.keywordCandidates,
+          sellers: metadata.sellers,
+          trendingKeywordsStr: metadata.keywordCandidates.join(', ')
+        });
+      },
+      onError: error => onShowToast?.(
+        `Không thể tải lại dữ liệu Etsy cho project hiện tại: ${error.message || 'UNKNOWN_ERROR'}`,
+        'error'
+      )
+    });
+    return () => persistedSearchLoaderRef.current.dispose();
   }, [activeProject?.id]);
 
   const handleFeedSearchResults = async ({ confirm = false } = {}) => {
@@ -157,35 +202,34 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
     setActiveStage('workflow');
   };
 
-  const fetchData = async () => {
-    if (!activeProject?.id) {
-      setTrends([]);
-      setEvidenceHealth(null);
-      return;
-    }
-    const requestedProjectId = activeProject.id;
-    await refreshEvidenceHealth(requestedProjectId);
-    try {
-      const trendsRes = await fetch('/api/trends', { credentials: 'include' });
-      if (trendsRes.ok) {
-        const trendsData = await trendsRes.json();
-        if (activeProjectIdRef.current !== requestedProjectId) return;
-        const etsyTrends = (trendsData || []).filter(t => (
-          t.marketplace === 'ETSY'
-          && Number(t.project_id) === Number(requestedProjectId)
-          && t.keywords_detailed
-        ));
-        setTrends(etsyTrends);
-      }
-    } catch (e) {
-      console.warn('Failed to fetch Etsy workspace data', e);
-    }
-  };
+  const fetchData = React.useCallback(async () => {
+    const requestedProjectId = activeProject?.id;
+    if (!requestedProjectId) setEvidenceHealth(null);
+    else await refreshEvidenceHealth(requestedProjectId);
+    return trendLoaderRef.current.load({
+      projectId: requestedProjectId,
+      url: `/api/trends?projectId=${encodeURIComponent(requestedProjectId)}`,
+      clear: () => setTrends([]),
+      select: trendsData => {
+        if (Number(trendsData.projectId) !== Number(requestedProjectId)) {
+          throw new Error('PROJECT_RESPONSE_SCOPE_MISMATCH');
+        }
+        if (!Array.isArray(trendsData.trends)) throw new Error('ETSY_TREND_SUMMARY_MALFORMED');
+        return trendsData.trends.length ? trendsData.trends : null;
+      },
+      apply: summaries => setTrends(summaries),
+      onError: error => onShowToast?.(
+        `Không thể tải tóm tắt Etsy cho project hiện tại: ${error.message || 'UNKNOWN_ERROR'}`,
+        'error'
+      )
+    });
+  }, [activeProject?.id, refreshEvidenceHealth, onShowToast]);
 
   useEffect(() => {
     fetchData();
     fetchProjects();
-  }, [fetchProjects, activeProject?.id, refreshEvidenceHealth]);
+    return () => trendLoaderRef.current.dispose();
+  }, [fetchData, fetchProjects]);
   const handleTransition = async (targetState) => {
     if (!activeProject) return;
     const requestedProjectId = activeProject.id;
@@ -789,7 +833,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
             </button>
           </div>
 
-          <MasterKeywordTable marketplace="ETSY" onShowToast={onShowToast} />
+          <MasterKeywordTable marketplace="ETSY" activeProjectId={activeProject?.id || null} onShowToast={onShowToast} />
         </div>
       )}
 

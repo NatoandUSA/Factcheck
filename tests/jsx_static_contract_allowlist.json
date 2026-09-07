@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "baseline": "0420c46cf90377c22d2ae256d5d64e0d53ff1441",
+  "entries": {
+    "tests/spec_etsy_mcp_truth_boundary.test.cjs": "static-prohibition",
+    "tests/spec_simulator_and_mkl_truth.test.cjs": "static-prohibition",
+    "tests/test_ai_boundary_and_batch.cjs": "behavioral-debt",
+    "tests/test_amazon_truth_boundary_remediation.cjs": "static-prohibition",
+    "tests/test_etsy_pasted_search_parser.cjs": "behavioral-debt",
+    "tests/test_etsy_scanner_evidence_ui.cjs": "behavioral-debt",
+    "tests/test_etsy_truth_semantics.cjs": "static-prohibition",
+    "tests/test_listing_truth_boundary.cjs": "static-prohibition",
+    "tests/test_p0_5_c_research_truth.cjs": "static-prohibition",
+    "tests/test_project_setup_and_stage_guidance.cjs": "behavioral-debt",
+    "tests/test_smart_pull_hardening.cjs": "static-prohibition",
+    "tests/test_truth_evidence_ownership.test.cjs": "static-prohibition",
+    "tests/test_vite_dev_runtime_smoke.test.cjs": "runtime-shape",
+    "tests/test_workflow_truth_ui_contract.cjs": "behavioral-debt",
+    "tests/test_zero_fabrication_boundary.cjs": "static-prohibition"
+  }
+}

@@ -41,7 +41,7 @@ export default function EtsyMultiSellerScanner({ seedPhrase, category, onShowToa
       const source = initialSellers[0]?.evidenceProvider || initialSellers[0]?.evidenceSource || 'UNKNOWN_SOURCE';
       setEvidenceMessage(`Đã nạp ${initialSellers.length} listing evidence từ ${source}. Thứ tự hiển thị không mặc định là performance ranking.`);
     } else {
-      setSellers([]);
+      setSellers(current => current.length === 0 ? current : []);
       setSynthesizedResult(null);
       setEvidenceMessage('Seed đã thay đổi. Cần nạp seller evidence mới; hệ thống không tự tạo Top Seller giả.');
     }

@@ -68,8 +68,11 @@ process.env.NODE_ENV = 'test';
   let root = createRoot(document.getElementById('root'));
   await act(async () => root.render(React.createElement(MasterKeywordTable, {
     marketplace: 'AMAZON', activeProjectId: 1,
+    keywords: [{ keyword: 'FORGED_PROP_BYPASS' }],
     onShowToast: message => toasts.push(message)
   })));
+  check(!document.body.textContent.includes('FORGED_PROP_BYPASS'),
+    'MasterKeywordTable must reject reintroduced passedKeywords bypass data');
   await act(async () => root.render(React.createElement(MasterKeywordTable, {
     marketplace: 'AMAZON', activeProjectId: 2,
     onShowToast: message => toasts.push(message)
@@ -129,8 +132,14 @@ process.env.NODE_ENV = 'test';
       }
       const matched = text.match(/projectId=(\d+)/) || text.match(/projects\/(\d+)/);
       const scopedId = matched ? Number(matched[1]) : projectId;
+      if (text.startsWith('/api/evidence?')) {
+        return response({ success: true, projectId: scopedId, evidence: [] });
+      }
       if (text.startsWith('/api/trends')) {
-        return response({ success: true, projectId: scopedId, trends: [] });
+        return response({
+          success: true, projectId: scopedId,
+          trends: [{ id: projectId * 10, category: 'summary', keywordCount: 67 }]
+        });
       }
       if (text.startsWith('/api/master-keywords')) {
         return response({ success: true, projectId: scopedId, keywords: [] });
@@ -167,6 +176,10 @@ process.env.NODE_ENV = 'test';
       check(Boolean(stageButton), 'Etsy outer workspace must expose its real MKL stage');
       await act(async () => stageButton.click());
       for (let index = 0; index < 4; index += 1) await flush();
+      const draftButton = [...document.querySelectorAll('button')]
+        .find(button => button.textContent.includes('TẠO ETSY LISTING'));
+      check(Boolean(draftButton) && draftButton.disabled === false,
+        'Etsy must consume summary trends without requiring keywords_detailed');
     }
     check(urls.some(url => url.startsWith(
       `/api/master-keywords?projectId=${projectId}`

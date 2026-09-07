@@ -1,3 +1,11 @@
+export const PROJECT_SCOPED_RESEARCH_GET_CONSUMERS = Object.freeze([
+  'ProjectEvidenceGate:evidence',
+  'SmartPullAnalyticsBar:persisted-evidence',
+  'AmazonWorkspace:trend-summary',
+  'EtsyWorkspace:trend-summary',
+  'MasterKeywordTable:master-keywords'
+]);
+
 export function createProjectBoundLoader(fetchImpl = (...args) => fetch(...args)) {
   let generation = 0;
   let controller = null;

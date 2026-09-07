@@ -1,28 +1,42 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { CheckCircle2, CircleAlert, RefreshCw, ShieldCheck } from 'lucide-react';
 import { parseJsonResponse } from '../utils/apiResponse';
+import { createProjectBoundLoader } from '../utils/projectBoundLoader.js';
 
 export default function ProjectEvidenceGate({ activeProject, onTransition, onShowToast, accent = '#0284c7' }) {
   const [evidence, setEvidence] = useState([]);
   const [loading, setLoading] = useState(false);
   const [actingId, setActingId] = useState(null);
+  const activeProjectIdRef = useRef(activeProject?.id || null);
+  activeProjectIdRef.current = activeProject?.id || null;
+  const evidenceLoaderRef = useRef(null);
+  if (!evidenceLoaderRef.current) evidenceLoaderRef.current = createProjectBoundLoader();
 
-  const reload = useCallback(async () => {
-    if (!activeProject?.id) return setEvidence([]);
-    setLoading(true);
-    try {
-      const response = await fetch(`/api/evidence?projectId=${encodeURIComponent(activeProject.id)}`, { credentials: 'include' });
-      const data = await parseJsonResponse(response);
-      if (!response.ok) throw new Error(data.message || data.error || 'EVIDENCE_LOAD_FAILED');
-      setEvidence(Array.isArray(data.evidence) ? data.evidence : []);
-    } catch (error) {
-      onShowToast?.(`Không tải được evidence của project: ${error.message}`);
-    } finally {
-      setLoading(false);
-    }
+  const reload = useCallback(() => {
+    const requestedProjectId = activeProject?.id;
+    setLoading(Boolean(requestedProjectId));
+    return evidenceLoaderRef.current.load({
+      projectId: requestedProjectId,
+      url: `/api/evidence?projectId=${encodeURIComponent(requestedProjectId)}`,
+      clear: () => setEvidence([]),
+      select: data => {
+        if (!Array.isArray(data.evidence)) throw new Error('EVIDENCE_RELOAD_MALFORMED');
+        return data.evidence.length ? data.evidence : null;
+      },
+      apply: rows => setEvidence(rows),
+      onError: error => onShowToast?.(
+        `Không tải được evidence của project: ${error.message || 'EVIDENCE_LOAD_FAILED'}`,
+        'error'
+      )
+    }).finally(() => {
+      if (activeProjectIdRef.current === requestedProjectId) setLoading(false);
+    });
   }, [activeProject?.id, onShowToast]);
 
-  useEffect(() => { reload(); }, [reload]);
+  useEffect(() => {
+    reload();
+    return () => evidenceLoaderRef.current.dispose();
+  }, [reload]);
 
   const accept = async (id) => {
     setActingId(id);

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { AlertCircle, CheckCircle2, Database, RefreshCw, ShieldCheck, Sparkles, Tag, Users, Zap } from 'lucide-react';
 import { parseJsonResponse } from '../utils/apiResponse';
+import { createProjectBoundLoader } from '../utils/projectBoundLoader.js';
 
 const STATE_LABELS = {
   RETRIEVED_NO_OBSERVED_AT: 'Retrieved evidence — observation time unknown',
@@ -16,28 +17,32 @@ export default function SmartPullAnalyticsBar({ marketplace = 'ETSY', activeProj
   const activeProjectIdRef = useRef(activeProjectId || null);
   activeProjectIdRef.current = activeProjectId || null;
 
+  const evidenceLoaderRef = useRef(null);
+  if (!evidenceLoaderRef.current) evidenceLoaderRef.current = createProjectBoundLoader();
+
   useEffect(() => {
-    setIntelligence(null);
     setQueryInput(initialSeed || '');
     setLoading(false);
-    if (!activeProjectId) return undefined;
     const requestedProjectId = activeProjectId;
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch(`/api/evidence?projectId=${encodeURIComponent(requestedProjectId)}`, { credentials: 'include' });
-        const data = await parseJsonResponse(res);
-        if (!res.ok || cancelled || activeProjectIdRef.current !== requestedProjectId || Number(data.projectId) !== Number(requestedProjectId)) return;
-        const artifact = (data.evidence || []).map(row => {
+    evidenceLoaderRef.current.load({
+      projectId: requestedProjectId,
+      url: `/api/evidence?projectId=${encodeURIComponent(requestedProjectId)}`,
+      clear: () => setIntelligence(null),
+      select: data => {
+        if (!Array.isArray(data.evidence)) throw new Error('SMART_PULL_RELOAD_MALFORMED');
+        const artifact = data.evidence.map(row => {
           try { return { row, metadata: JSON.parse(row.metadata || '{}') }; } catch (_) { return null; }
         }).find(item => item?.metadata?.kind === 'SMART_PULL_ARTIFACT_V1');
-        if (artifact?.metadata?.response) setIntelligence(artifact.metadata.response);
-      } catch (_) {
-        // Reload is optional display restoration; failed reads must not invent a result.
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [activeProjectId, initialSeed]);
+        return artifact?.metadata?.response || null;
+      },
+      apply: response => setIntelligence(response),
+      onError: error => onShowToast?.(
+        `Không thể tải lại Smart Pull cho project hiện tại: ${error.message || 'SMART_PULL_RELOAD_FAILED'}`,
+        'error'
+      )
+    });
+    return () => evidenceLoaderRef.current.dispose();
+  }, [activeProjectId, initialSeed, onShowToast]);
 
   const handleSmartPull = async () => {
     if (!activeProjectId) {

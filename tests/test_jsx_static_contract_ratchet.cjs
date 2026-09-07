@@ -27,4 +27,17 @@ const unlisted = candidates.filter(name => !allowedNames.includes(name));
 assert.deepStrictEqual(unlisted, [], `Unlisted source-text JSX assertions: ${unlisted.join(', ')}`);
 assert.ok(!allowedNames.includes('tests/test_project_bound_react_wiring.cjs'),
   'Executable React wiring test must not be admitted to static-test debt');
-console.log(`RR_TEST_RATCHET measured=${allowedNames.length + candidates.length + 1} passed=${allowedNames.length + candidates.length + 1} failed=0 unexecuted=0`);
+
+const loaderConsumers = [
+  'src/components/ProjectEvidenceGate.jsx',
+  'src/components/SmartPullAnalyticsBar.jsx'
+];
+for (const name of loaderConsumers) {
+  const source = fs.readFileSync(path.join(root, '..', name), 'utf8');
+  assert.ok(source.includes('createProjectBoundLoader'),
+    `${name} must use the canonical project-bound loader`);
+  assert.ok(!/fetch\(\s*[`'"]\/api\/evidence\?projectId=/.test(source),
+    `${name} must not restore a direct evidence GET fetch`);
+}
+const measured = allowedNames.length + candidates.length + 1 + (loaderConsumers.length * 2);
+console.log(`RR_TEST_RATCHET measured=${measured} passed=${measured} failed=0 unexecuted=0`);

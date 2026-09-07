@@ -85,6 +85,11 @@ async function amazonOwner() {
       VALUES (?, ?, 'AMAZON', ?, ?, ?, ?)`,
       ['B category', 'B trend', owner.tenant_id, owner.workspace_id, projectB,
         JSON.stringify([{ keyword: 'project beta keyword', opportunityScore: 22 }])]);
+    await run(`INSERT INTO market_trends
+      (category, trending_keywords, marketplace, tenant_id, workspace_id, project_id, keywords_detailed)
+      VALUES (?, ?, 'ETSY', ?, ?, ?, ?)`,
+      ['Cross-market category', 'cross marketplace trend', owner.tenant_id, owner.workspace_id, projectId,
+        JSON.stringify([{ keyword: 'cross marketplace keyword', opportunityScore: 99 }])]);
     const readSnapshot = (await all('SELECT COUNT(*) count FROM market_trends'))[0].count;
     for (const endpoint of ['/api/trends', '/api/master-keywords']) {
       assert.strictEqual((await jsonGet(endpoint)).status, 400);
@@ -100,6 +105,10 @@ async function amazonOwner() {
     const keywordsB = await jsonGet(`/api/master-keywords?projectId=${projectB}`);
     assert.ok(keywordsA.body.keywords.some(row => row.keyword === 'project alpha keyword'));
     assert.ok(!keywordsA.body.keywords.some(row => row.keyword === 'project beta keyword'));
+    assert.ok(!keywordsA.body.keywords.some(row => row.keyword === 'cross marketplace keyword'),
+      'Master keywords must reject same-project rows from a different marketplace');
+    assert.ok(!trendsA.body.trends.some(row => row.trending_keywords === 'cross marketplace trend'),
+      'Trend summaries must reject same-project rows from a different marketplace');
     assert.ok(keywordsB.body.keywords.some(row => row.keyword === 'project beta keyword'));
     assert.strictEqual((await all('SELECT COUNT(*) count FROM market_trends'))[0].count, readSnapshot,
       'Rejected project reads must be zero-write');

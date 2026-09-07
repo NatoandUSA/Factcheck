@@ -43,6 +43,7 @@
   "tests/test_product_truth_core.cjs",
   "tests/test_project_bound_react_wiring.cjs",
   "tests/test_project_scoped_evidence_workflow.test.cjs",
+  "tests/test_project_scoped_reload_consumers.cjs",
   "tests/test_project_setup_and_stage_guidance.cjs",
   "tests/test_research_consumer_runtime_wiring.cjs",
   "tests/test_real_child_asin_batcher.cjs",

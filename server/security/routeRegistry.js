@@ -72,6 +72,7 @@ const ROUTES = [
   { method: 'GET', path: '/api/staff-workflow/:projectId', public: false },
   { method: 'POST', path: '/api/staff-workflow/:projectId/files', public: false },
   { method: 'POST', path: '/api/staff-workflow/:projectId/draft', public: false },
+  { method: 'POST', path: '/api/staff-workflow/:projectId/intelligence/preview', public: false },
   { method: 'GET', path: '/api/staff-workflow/:projectId/export', public: false },
   { method: 'GET', path: '/api/agents', public: false },
   { method: 'GET', path: '/api/agents/logs', public: false },

@@ -8,6 +8,7 @@ const asin = require('./asinSelector');
 const keyword = require('./keywordEngine');
 const allocation = require('./allocation');
 const amazon = require('./amazonComposer');
+const storedResearch = require('./storedResearch');
 
 module.exports = {
   ip,
@@ -15,5 +16,6 @@ module.exports = {
   asin,
   keyword,
   allocation,
-  amazon
+  amazon,
+  storedResearch
 };

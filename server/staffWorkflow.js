@@ -4,7 +4,8 @@ const crypto = require('node:crypto');
 const multer = require('multer');
 const { readWorksheetWithSignature } = require('./services/spreadsheetReader');
 const { parseEtsySearchCsv } = require('./etsyPastedSearchParser');
-const ipGuard = require('./ipGuard');
+const commerceIntelligence = require('./commerceIntelligence');
+const reviewIpLibrary = commerceIntelligence.ip.loadLibrary();
 const { requireAuth, requireRole } = require('./middleware/auth');
 const run = (db,q,p=[]) => new Promise((resolve,reject)=>db.run(q,p,function(e){e?reject(e):resolve({changes:this.changes,id:this.lastID});}));
 const all = (db,q,p=[]) => new Promise((resolve,reject)=>db.all(q,p,(e,r)=>e?reject(e):resolve(r)));
@@ -13,7 +14,7 @@ const fail = (code,status=400) => Object.assign(new Error(code),{status,code});
 const text = (value,max=2000) => { if(typeof value!=='string'||value.length>max)throw fail('INVALID_TEXT'); return value.trim(); };
 const object = value => value && typeof value==='object' && !Array.isArray(value);
 const parse = value => JSON.parse(value);
-const FIELD_NAMES = ['productName','productType','recipient','design','materials','dimensions','variants','personalization','processing','shipping','sourceNote','intro'];
+const FIELD_NAMES = ['productName','productType','recipient','occasion','design','materials','dimensions','sizes','colors','variants','features','personalization','care','packaging','shipFrom','processing','shipping','sourceNote','intro'];
 
 async function migrateStaffWorkflow(db) {
   // Additive and idempotent; one atomic DDL statement per independent table.
@@ -104,7 +105,7 @@ function sanitizeDraft(value) {
   return result;
 }
 function screening(draft) {
-  try{return ipGuard.screenText([draft.title,draft.description,...draft.bullets,...draft.keywords].join('\n'));}
+  try{return commerceIntelligence.ip.screen([draft.title,draft.description,...draft.bullets,...draft.keywords].join('\n'), reviewIpLibrary);}
   catch(e){throw fail('IP_GUARD_UNAVAILABLE',503);}
 }
 function exportText(project,record) {
@@ -146,6 +147,56 @@ function registerStaffWorkflow(app,db) {
     }
     res.json({success:true,projectId:p.id,preview:!commit,committed:commit,alreadyImported:Boolean(prior),fileId:id,fileHash,fileName:req.file.originalname,accounting:parsed.accounting,sample:parsed.rows.slice(0,3).map(row=>({title:row.title||row['Product Details']||row['Keyword Phrase']||row['TITLE - 75']||'',id:row.listingId||row.ASIN||''}))});
   }));
+  app.post('/api/staff-workflow/:projectId/intelligence/preview',auth,role,handler(async(req,res,p)=>{
+    const body=req.body||{};
+    if(body.factsConfirmed!==true)throw fail('CONFIRM_PRODUCT_INFORMATION_REQUIRED');
+    const facts=sanitizeFacts(body.facts||{});
+    const research=await corpus(db,p.id);
+    if(!research.files.length)throw fail('IMPORT_REQUIRED');
+    if(body.sourceHash!==research.sourceHash)throw fail('RESEARCH_CHANGED_RELOAD',409);
+
+    if(p.marketplace!=='AMAZON') {
+      return res.json({success:true,zeroWrite:true,projectId:p.id,marketplace:p.marketplace,
+        sourceHash:research.sourceHash,status:'MARKETPLACE_INTELLIGENCE_ADAPTER_NOT_IMPLEMENTED'});
+    }
+
+    const records=await all(db,'SELECT kind,rows_json,file_name,file_hash FROM staff_research_files WHERE project_id=? ORDER BY id',[p.id]);
+    const grouped={XRAY:[],CEREBRO:[],REFERENCE:[]};
+    for(const record of records) if(grouped[record.kind]) grouped[record.kind].push(...parse(record.rows_json));
+    const normalized=commerceIntelligence.storedResearch.normalizeCerebroRows(grouped.CEREBRO);
+    if(!normalized.keywords.length)throw fail('CEREBRO_REQUIRED');
+
+    const anchors=(Array.isArray(body.anchors)?body.anchors:String(body.anchors||'').split(/[,\n]/)).map(x=>String(x).trim()).filter(Boolean);
+    const negatives=(Array.isArray(body.negativeKeywords)?body.negativeKeywords:String(body.negativeKeywords||'').split(/[,\n]/)).map(x=>String(x).trim()).filter(Boolean);
+    const scored=commerceIntelligence.keyword.scoreKeywords(normalized.keywords,{
+      anchors,negativeKeywords:negatives,minSearchVolume:Number(body.minSearchVolume)||0,
+      library:reviewIpLibrary,screen:commerceIntelligence.ip.screen
+    });
+    const truth=commerceIntelligence.storedResearch.factsToAmazonTruth(facts);
+    const draft=commerceIntelligence.amazon.compose(scored,truth,{
+      titleLimit:Number(body.titleLimit)||75,highlightLimit:Number(body.highlightLimit)||125,
+      searchTermBytes:Number(body.searchTermBytes)||249,excludeReviewKeywords:body.excludeReviewKeywords===true,
+      labelLanguage:facts.language==='es'?'ES':'EN'
+    });
+
+    const xrayRows=commerceIntelligence.storedResearch.normalizeXrayRows(grouped.XRAY);
+    const ownAsins=commerceIntelligence.storedResearch.extractOwnAsinsFromReferenceRows(grouped.REFERENCE);
+    const asinSelection=xrayRows.length?commerceIntelligence.asin.selectAsinBatches(xrayRows,{
+      anchors,library:reviewIpLibrary,screen:commerceIntelligence.ip.screen,ownAsins,
+      priceFloor:body.priceFloor??null,priceCeiling:body.priceCeiling??null,targetPrice:body.targetPrice??null,
+      maxPerBrand:Number(body.maxPerBrand)||2
+    }):null;
+    const wire=k=>({phrase:k.phrase,searchVolume:k.searchVolume,keywordSales:k.keywordSales,titleDensity:k.titleDensity,
+      competingProducts:k.competingProducts,cpr:k.cpr,bid:k.bid,positionRank:k.positionRank,score:Number(k.score.toFixed(4)),
+      relevance:Number(k.relevance.toFixed(3)),suspectedBrand:k.suspectedBrand,rareReviewToken:k.rareReviewToken,ipVerdict:k.ipVerdict});
+    res.json({success:true,zeroWrite:true,projectId:p.id,marketplace:p.marketplace,sourceHash:research.sourceHash,
+      accounting:{...normalized.accounting,inputUniquePhrases:scored.meta.inputUniquePhrases,scoredPhrases:scored.length,
+        preRejected:scored.meta.preRejected.length,rejectedPhrases:draft.coverage.rejectedPhrases},
+      metricAvailability:scored.meta.metricAvailability,topKeywords:scored.slice(0,100).map(wire),
+      rejectedCount:draft.rejectedKeywords.length,rejectedPreview:draft.rejectedKeywords.slice(0,100),
+      asinSelection:asinSelection?{...asinSelection,rejectedPreview:asinSelection.rejectedPreview}:null,draft});
+  }));
+
   app.post('/api/staff-workflow/:projectId/draft',auth,role,handler(async(req,res,p)=>{
     const body=req.body||{};
     if(!Number.isSafeInteger(body.expectedVersion)||body.expectedVersion<0)throw fail('EXPECTED_VERSION_REQUIRED');

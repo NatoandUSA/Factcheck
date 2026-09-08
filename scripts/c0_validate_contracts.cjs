@@ -135,6 +135,7 @@ const requiredTrackAComponents = new Set([
   '01_PRODUCT_TRUTH.json',
   '02_RESEARCH_SOURCE_MANIFEST.json',
   '03_AMAZON_DRAFT.json',
+  '03_AMAZON_DRAFT.csv',
   '03_AMAZON_DRAFT.txt',
   '04_KEYWORD_DISPOSITION.csv',
   '05_CLAIM_IP_POLICY_REPORT.json',

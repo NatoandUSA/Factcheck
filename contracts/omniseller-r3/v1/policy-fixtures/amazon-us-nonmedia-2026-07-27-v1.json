@@ -1,0 +1,36 @@
+{
+  "schemaVersion": "omniseller.policy-contract.v1",
+  "policyContractId": "amazon-us-nonmedia-2026-07-27-v1",
+  "marketplace": "AMAZON",
+  "site": "US",
+  "locales": ["en-US", "es-US"],
+  "effectiveFrom": "2026-07-27T00:00:00Z",
+  "checkedAt": "2026-09-08T00:00:00Z",
+  "verificationStatus": "PUBLIC_BASELINE",
+  "approvalCritical": true,
+  "supersedes": null,
+  "cohort": {
+    "mediaClass": "NON_MEDIA",
+    "productTypeIds": [],
+    "categoryIds": [],
+    "sellerAccountIds": []
+  },
+  "sourceRefs": [
+    {
+      "kind": "PUBLIC_URL",
+      "url": "https://sellercentral.amazon.com/seller-forums/discussions/t/145b6d0f-999c-4555-896c-c694bda2e470",
+      "capturedAt": "2026-09-08T00:00:00Z"
+    },
+    {
+      "kind": "PUBLIC_URL",
+      "url": "https://sellercentral.amazon.com/seller-forums/discussions/t/d73f6ef2-6a10-4ae5-b2bf-140066b8b299",
+      "capturedAt": "2026-09-08T00:00:00Z"
+    }
+  ],
+  "rules": {
+    "title": { "maxChars": 75, "counting": "UNICODE_CODE_POINTS" },
+    "itemHighlights": { "maxChars": 125, "counting": "UNICODE_CODE_POINTS" },
+    "bullets": { "targetCount": 5, "maxChars": null },
+    "genericKeywords": { "maxUtf8Bytes": 249, "allowCommas": false }
+  }
+}

@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://omniseller.local/contracts/r3/v1/track-a-handoff-manifest.schema.json",
+  "title": "Track A Non-Canonical Handoff Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "packageId",
+    "classification",
+    "authority",
+    "watermark",
+    "generatedAt",
+    "requiresTrackBRevalidation",
+    "bindings",
+    "components"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "omniseller.track-a-handoff.v1" },
+    "packageId": { "type": "string", "minLength": 1 },
+    "classification": { "const": "TEMPORARY_NON_CANONICAL" },
+    "authority": { "const": "NONE" },
+    "watermark": { "const": "INTERNAL WORKING DRAFT — NOT APPROVED — NOT FOR MARKETPLACE SUBMISSION" },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "requiresTrackBRevalidation": { "const": true },
+    "bindings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["donorCommit", "policyContractId", "policyContractHash", "claimTaxonomyVersion", "claimValidatorVersion", "ipCorpusVersion", "parserVersion", "strategyVersion"],
+      "properties": {
+        "donorCommit": { "type": "string" },
+        "policyContractId": { "type": "string" },
+        "policyContractHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "claimTaxonomyVersion": { "type": "string" },
+        "claimValidatorVersion": { "type": "string" },
+        "ipCorpusVersion": { "type": "string" },
+        "parserVersion": { "type": "string" },
+        "strategyVersion": { "type": "string" }
+      }
+    },
+    "components": {
+      "type": "array",
+      "minItems": 7,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "sha256", "bytes", "mediaType"],
+        "properties": {
+          "name": { "type": "string" },
+          "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "bytes": { "type": "integer", "minimum": 0 },
+          "mediaType": { "type": "string" }
+        }
+      }
+    }
+  }
+}

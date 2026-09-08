@@ -112,7 +112,7 @@ The production build executed successfully inside the suite. This receipt does n
 | Contract coherence | PASS | AJV 2020 positive/negative validation and taxonomy invariants pass |
 | Baseline inventory | PASS | five surfaces, four writers, three renderer calls reproduced |
 | Baseline suite | DEBT — 60/65 | two provider and three Windows process failures |
-| Independent review | CHANGES REQUESTED on `161ada543` | remediation applied; new exact-commit re-review still required |
+| Independent review | ACCEPT through `ec5bbae4b` | policy, composer/cutover and Track-A/taxonomy lanes independently accepted exact content |
 | Production safety | PASS | no deploy, publish or production write |
 
 ## Next authorized implementation order
@@ -125,3 +125,13 @@ The production build executed successfully inside the suite. This receipt does n
 6. Obtain independent exact-commit review before Wave 1 merge or any VPS action.
 
 Baseline provider/process debt is tracked separately and must not be hidden inside R3 feature commits.
+
+## Independent exact-content verdict
+
+Commit `ec5bbae4b80a9017567bd7a91fd1d303bbf68472` received three read-only `ACCEPT` verdicts:
+
+- policy contract: AJV 2020, exact-scope evidence, lifecycle and cross-field invariants accepted;
+- composer/cutover: five-surface/four-writer inventory and atomic-cutover specifications accepted;
+- Track A/taxonomy: exact eight-component bundle, accounting invariant and token-level legacy adapter accepted.
+
+This acceptance closes C0 contract review only. It does not claim that behavioral RED cases, Track A release conditions, baseline provider/process debt, Wave 1, merge or deployment are complete.

@@ -107,6 +107,8 @@ R3 does not redefine numeric `C1–C8` into a different `C1–C14` sequence. Ren
 
 Canonical code uses stable string IDs. Legacy C labels may remain display aliases only.
 
+The donor's C4 and C7 are mixed token buckets, not one-to-one semantic classes. Adapter mapping is mandatory at token/pattern level: for example C4 contains capability, performance, environmental and safety terms; C7 contains social-proof, commercial-promise and comparative terms. `SAFETY`, `DIGITAL`, `PRICE/SCARCITY` and `COMPARATIVE` have no dedicated legacy class even where some legacy tokens exist. A class-wide one-to-many authority promotion is forbidden.
+
 ### 2.4 Approval adjudication
 
 R3 adopts scoped approvals, not one global boolean:
@@ -806,6 +808,8 @@ Minimum Track A handoff bundle:
 ```
 
 Every component binds SHA-256, byte count and generator/validator versions. Product Truth is labeled `STAFF_INPUT_UNVERIFIED`; human-readable outputs carry `INTERNAL WORKING DRAFT — NOT APPROVED — NOT FOR MARKETPLACE SUBMISSION`. Full keyword accounting may not be sliced at 200 rows.
+
+The envelope requires the exact eight safe component names, rejects duplicate/unrecognized/path-traversal names, and binds `inputObservations == accountedObservations` through a reusable post-schema invariant.
 
 Requirements:
 

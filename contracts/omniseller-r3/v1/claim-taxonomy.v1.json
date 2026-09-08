@@ -18,7 +18,11 @@
     "PRICE_DISCOUNT_SCARCITY_COMMERCIAL_PROMISE",
     "COMPARATIVE_SUPERLATIVE_EXCLUSIVITY"
   ],
-  "legacyDisplayAliases": {
+  "legacyAdapterPolicy": {
+    "mappingGranularity": "TOKEN_OR_PATTERN",
+    "classWideOneToManyPromotionForbidden": true
+  },
+  "legacyClassCandidateTargets": {
     "C1": ["COMPOSITION_MATERIAL_PURITY"],
     "C2": ["COMPONENT_GEMSTONE_INCLUDED_PART"],
     "C3": ["MEASURE_DIMENSION_WEIGHT_QUANTITY_CAPACITY"],
@@ -37,5 +41,11 @@
     ],
     "C8": ["PACKAGING_ACCESSORY_INCLUDED_EXTRA"]
   },
-  "uncoveredByLegacyDonor": ["DIGITAL_FORMAT_LICENSE_USAGE_RIGHT"]
+  "stableClassesWithoutDedicatedLegacyClass": [
+    "SAFETY_MEDICAL_HEALTH_AGE_COMPLIANCE",
+    "DIGITAL_FORMAT_LICENSE_USAGE_RIGHT",
+    "PRICE_DISCOUNT_SCARCITY_COMMERCIAL_PROMISE",
+    "COMPARATIVE_SUPERLATIVE_EXCLUSIVITY"
+  ],
+  "stableClassesWithNoLegacyTokenCoverage": ["DIGITAL_FORMAT_LICENSE_USAGE_RIGHT"]
 }

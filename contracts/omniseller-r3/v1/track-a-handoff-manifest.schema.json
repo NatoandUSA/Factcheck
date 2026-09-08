@@ -11,7 +11,9 @@
     "authority",
     "watermark",
     "generatedAt",
+    "productTruthState",
     "requiresTrackBRevalidation",
+    "keywordAccounting",
     "bindings",
     "components"
   ],
@@ -22,7 +24,18 @@
     "authority": { "const": "NONE" },
     "watermark": { "const": "INTERNAL WORKING DRAFT — NOT APPROVED — NOT FOR MARKETPLACE SUBMISSION" },
     "generatedAt": { "type": "string", "format": "date-time" },
+    "productTruthState": { "const": "STAFF_INPUT_UNVERIFIED" },
     "requiresTrackBRevalidation": { "const": true },
+    "keywordAccounting": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["inputObservations", "accountedObservations", "complete"],
+      "properties": {
+        "inputObservations": { "type": "integer", "minimum": 0 },
+        "accountedObservations": { "type": "integer", "minimum": 0 },
+        "complete": { "const": true }
+      }
+    },
     "bindings": {
       "type": "object",
       "additionalProperties": false,
@@ -41,17 +54,39 @@
     "components": {
       "type": "array",
       "minItems": 8,
+      "maxItems": 8,
       "items": {
         "type": "object",
         "additionalProperties": false,
         "required": ["name", "sha256", "bytes", "mediaType"],
         "properties": {
-          "name": { "type": "string" },
+          "name": {
+            "enum": [
+              "01_PRODUCT_TRUTH.json",
+              "02_RESEARCH_SOURCE_MANIFEST.json",
+              "03_AMAZON_DRAFT.json",
+              "03_AMAZON_DRAFT.txt",
+              "04_KEYWORD_DISPOSITION.csv",
+              "05_CLAIM_IP_POLICY_REPORT.json",
+              "06_PPC_REVIEW.csv",
+              "07_TRACK_B_IMPORT_RECEIPT_TEMPLATE.json"
+            ]
+          },
           "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
           "bytes": { "type": "integer", "minimum": 0 },
           "mediaType": { "type": "string" }
         }
       }
     }
-  }
+  },
+  "allOf": [
+    { "properties": { "components": { "type": "array", "contains": { "type": "object", "properties": { "name": { "const": "01_PRODUCT_TRUTH.json" } }, "required": ["name"] } } } },
+    { "properties": { "components": { "type": "array", "contains": { "type": "object", "properties": { "name": { "const": "02_RESEARCH_SOURCE_MANIFEST.json" } }, "required": ["name"] } } } },
+    { "properties": { "components": { "type": "array", "contains": { "type": "object", "properties": { "name": { "const": "03_AMAZON_DRAFT.json" } }, "required": ["name"] } } } },
+    { "properties": { "components": { "type": "array", "contains": { "type": "object", "properties": { "name": { "const": "03_AMAZON_DRAFT.txt" } }, "required": ["name"] } } } },
+    { "properties": { "components": { "type": "array", "contains": { "type": "object", "properties": { "name": { "const": "04_KEYWORD_DISPOSITION.csv" } }, "required": ["name"] } } } },
+    { "properties": { "components": { "type": "array", "contains": { "type": "object", "properties": { "name": { "const": "05_CLAIM_IP_POLICY_REPORT.json" } }, "required": ["name"] } } } },
+    { "properties": { "components": { "type": "array", "contains": { "type": "object", "properties": { "name": { "const": "06_PPC_REVIEW.csv" } }, "required": ["name"] } } } },
+    { "properties": { "components": { "type": "array", "contains": { "type": "object", "properties": { "name": { "const": "07_TRACK_B_IMPORT_RECEIPT_TEMPLATE.json" } }, "required": ["name"] } } } }
+  ]
 }

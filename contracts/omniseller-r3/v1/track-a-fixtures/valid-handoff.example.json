@@ -5,7 +5,13 @@
   "authority": "NONE",
   "watermark": "INTERNAL WORKING DRAFT — NOT APPROVED — NOT FOR MARKETPLACE SUBMISSION",
   "generatedAt": "2026-09-09T00:00:00Z",
+  "productTruthState": "STAFF_INPUT_UNVERIFIED",
   "requiresTrackBRevalidation": true,
+  "keywordAccounting": {
+    "inputObservations": 1099,
+    "accountedObservations": 1099,
+    "complete": true
+  },
   "bindings": {
     "donorCommit": "UNCOMMITTED_DONOR_SHA256_MANIFEST",
     "policyContractId": "amazon-us-nonmedia-2026-07-27-v1",

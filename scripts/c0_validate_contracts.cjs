@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const Ajv2020 = require('ajv/dist/2020');
 const { validatePolicyContractInvariants } = require('../shared/policyContractInvariants.cjs');
+const { validateTrackAHandoffInvariants } = require('../shared/trackAHandoffInvariants.cjs');
 
 const root = path.resolve(__dirname, '..');
 const contractRoot = path.join(root, 'contracts', 'omniseller-r3', 'v1');
@@ -41,6 +42,20 @@ const taxonomy = load('claim-taxonomy.v1.json');
 if (taxonomy.value.claimIds.length !== 14) fail('CLAIM_ID_COUNT_MISMATCH');
 if (new Set(taxonomy.value.claimIds).size !== taxonomy.value.claimIds.length) fail('DUPLICATE_CLAIM_ID');
 if (taxonomy.value.identityDoesNotProveAttribute !== true) fail('IDENTITY_ATTRIBUTE_INVARIANT_MISSING');
+if (taxonomy.value.legacyAdapterPolicy?.mappingGranularity !== 'TOKEN_OR_PATTERN') fail('LEGACY_MAPPING_MUST_BE_TOKEN_LEVEL');
+if (taxonomy.value.legacyAdapterPolicy?.classWideOneToManyPromotionForbidden !== true) fail('LEGACY_CLASS_WIDE_PROMOTION_MUST_BE_FORBIDDEN');
+const withoutDedicatedLegacyClass = new Set(taxonomy.value.stableClassesWithoutDedicatedLegacyClass || []);
+for (const id of [
+  'SAFETY_MEDICAL_HEALTH_AGE_COMPLIANCE',
+  'DIGITAL_FORMAT_LICENSE_USAGE_RIGHT',
+  'PRICE_DISCOUNT_SCARCITY_COMMERCIAL_PROMISE',
+  'COMPARATIVE_SUPERLATIVE_EXCLUSIVITY'
+]) {
+  if (!withoutDedicatedLegacyClass.has(id)) fail(`LEGACY_DEDICATED_CLASS_GAP_MISSING_${id}`);
+}
+if (JSON.stringify(taxonomy.value.stableClassesWithNoLegacyTokenCoverage) !== JSON.stringify(['DIGITAL_FORMAT_LICENSE_USAGE_RIGHT'])) {
+  fail('LEGACY_TOKEN_COVERAGE_GAP_MISMATCH');
+}
 
 const redCases = load('c0-red-cases.json');
 const requiredRedCases = [
@@ -115,6 +130,7 @@ assertValid(validateLifecycle, lifecycleEvent, 'APPEND_ONLY_LIFECYCLE_EVENT');
 
 const trackA = load(path.join('track-a-fixtures', 'valid-handoff.example.json'));
 assertValid(validateTrackA, trackA.value, 'TRACK_A_HANDOFF');
+if (!validateTrackAHandoffInvariants(trackA.value).valid) fail('TRACK_A_ACCOUNTING_INVARIANT_INVALID');
 const requiredTrackAComponents = new Set([
   '01_PRODUCT_TRUTH.json',
   '02_RESEARCH_SOURCE_MANIFEST.json',
@@ -138,7 +154,16 @@ trackAMissingComponent.components.pop();
 assertInvalid(validateTrackA, trackAMissingComponent, 'TRACK_A_MISSING_COMPONENT');
 const trackAWrongComponent = clone(trackA.value);
 trackAWrongComponent.components[0].name = 'UNRECOGNIZED.json';
-if (hasRequiredTrackAComponents(trackAWrongComponent)) fail('TRACK_A_WRONG_COMPONENT_EXPECTED_INVALID');
+assertInvalid(validateTrackA, trackAWrongComponent, 'TRACK_A_WRONG_COMPONENT');
+const trackADuplicateComponent = clone(trackA.value);
+trackADuplicateComponent.components[0].name = trackADuplicateComponent.components[1].name;
+assertInvalid(validateTrackA, trackADuplicateComponent, 'TRACK_A_DUPLICATE_COMPONENT');
+const trackATraversalComponent = clone(trackA.value);
+trackATraversalComponent.components[0].name = '../../outside.json';
+assertInvalid(validateTrackA, trackATraversalComponent, 'TRACK_A_TRAVERSAL_COMPONENT');
+const trackAAccountingMismatch = clone(trackA.value);
+trackAAccountingMismatch.keywordAccounting.accountedObservations -= 1;
+if (validateTrackAHandoffInvariants(trackAAccountingMismatch).valid) fail('TRACK_A_ACCOUNTING_MISMATCH_EXPECTED_INVALID');
 
 for (const [name, artifact] of Object.entries({ taxonomy, redCases, policySchema, lifecycleSchema, trackASchema, amazon, etsy, trackA })) {
   console.log(`C0_CONTRACT_OK ${name} artifactByteSha256=${artifact.artifactByteHash}`);

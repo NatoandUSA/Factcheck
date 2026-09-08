@@ -69,10 +69,10 @@ C0_CONTRACT_OK taxonomy artifactByteSha256=b0e785623b4dcca781f6d8c51e0f9c17683a8
 C0_CONTRACT_OK redCases artifactByteSha256=499de2526a9247656d5aa5a94ec55fce562268fb9d8a4d223244aacba93a0f42
 C0_CONTRACT_OK policySchema artifactByteSha256=cebca4dc12215af9a5cbcc127deab298ce40a2d2b6333983c38dea61c589753c
 C0_CONTRACT_OK lifecycleSchema artifactByteSha256=7d749c803afaede705737782d70052436418a37f826b830b414cc9f6bcc4d8fb
-C0_CONTRACT_OK trackASchema artifactByteSha256=b4630a403f49ee845c60960f17aaa60b0883cde07ba86926074e635677875df9
+C0_CONTRACT_OK trackASchema artifactByteSha256=750e774e7f71ead7f2baf4f26e4366e8c65809fe3dd9c0ced18d14d8974b63ba
 C0_CONTRACT_OK amazon artifactByteSha256=e06ce99e02b0e5a6a6f497efdf8e18f2c1ff787030fa526e520365a27de18037
 C0_CONTRACT_OK etsy artifactByteSha256=ba9d0d73e418285a3030905378d51e260547ad7ec35505df1e2ee5b013d2df5a
-C0_CONTRACT_OK trackA artifactByteSha256=53395c6f1165e33d2b72b2141014ddfdd898f4b87b22924e5693e4626d109b58
+C0_CONTRACT_OK trackA artifactByteSha256=f91ac4563ddf684ce7221e6b8a6a7a6833e0fd652ca80b01f1f239a59688c240
 C0_JSON_SCHEMA_2020_POSITIVE_NEGATIVE_VALIDATION PASS
 ```
 
@@ -112,7 +112,7 @@ The production build executed successfully inside the suite. This receipt does n
 | Contract coherence | PASS | AJV 2020 positive/negative validation and taxonomy invariants pass |
 | Baseline inventory | PASS | five surfaces, four writers, three renderer calls reproduced |
 | Baseline suite | DEBT — 60/65 | two provider and three Windows process failures |
-| Independent review | ACCEPT through `ec5bbae4b` | policy, composer/cutover and Track-A/taxonomy lanes independently accepted exact content |
+| Independent review | PENDING current-head recheck | three lanes accepted `ec5bbae4b`; exact-nine CSV correction was added afterward from Track-A review |
 | Production safety | PASS | no deploy, publish or production write |
 
 ## Next authorized implementation order
@@ -132,6 +132,6 @@ Commit `ec5bbae4b80a9017567bd7a91fd1d303bbf68472` received three read-only `ACCE
 
 - policy contract: AJV 2020, exact-scope evidence, lifecycle and cross-field invariants accepted;
 - composer/cutover: five-surface/four-writer inventory and atomic-cutover specifications accepted;
-- Track A/taxonomy: exact eight-component bundle, accounting invariant and token-level legacy adapter accepted.
+- Track A/taxonomy: exact nine-component bundle (JSON + CSV + TXT draft views), accounting invariant and token-level legacy adapter accepted after resolving the eight-versus-nine inconsistency.
 
-This acceptance closes C0 contract review only. It does not claim that behavioral RED cases, Track A release conditions, baseline provider/process debt, Wave 1, merge or deployment are complete.
+After those verdicts, the Track-A reviewer identified a JSON+CSV+TXT documentation/schema mismatch. The bundle was corrected from eight to nine exact components; current-head acceptance must therefore be rerun. This does not claim that behavioral RED cases, Track A release conditions, baseline provider/process debt, Wave 1, merge or deployment are complete.

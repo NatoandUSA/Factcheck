@@ -809,7 +809,7 @@ Minimum Track A handoff bundle:
 
 Every component binds SHA-256, byte count and generator/validator versions. Product Truth is labeled `STAFF_INPUT_UNVERIFIED`; human-readable outputs carry `INTERNAL WORKING DRAFT — NOT APPROVED — NOT FOR MARKETPLACE SUBMISSION`. Full keyword accounting may not be sliced at 200 rows.
 
-The envelope requires the exact eight safe component names, rejects duplicate/unrecognized/path-traversal names, and binds `inputObservations == accountedObservations` through a reusable post-schema invariant.
+The envelope requires the exact nine safe component names, including deterministic JSON, CSV and TXT draft views; it rejects duplicate/unrecognized/path-traversal names and binds `inputObservations == accountedObservations` through a reusable post-schema invariant.
 
 Requirements:
 

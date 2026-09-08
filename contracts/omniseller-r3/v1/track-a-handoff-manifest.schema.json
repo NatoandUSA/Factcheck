@@ -53,8 +53,8 @@
     },
     "components": {
       "type": "array",
-      "minItems": 8,
-      "maxItems": 8,
+      "minItems": 9,
+      "maxItems": 9,
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -65,6 +65,7 @@
               "01_PRODUCT_TRUTH.json",
               "02_RESEARCH_SOURCE_MANIFEST.json",
               "03_AMAZON_DRAFT.json",
+              "03_AMAZON_DRAFT.csv",
               "03_AMAZON_DRAFT.txt",
               "04_KEYWORD_DISPOSITION.csv",
               "05_CLAIM_IP_POLICY_REPORT.json",
@@ -83,6 +84,7 @@
     { "properties": { "components": { "type": "array", "contains": { "type": "object", "properties": { "name": { "const": "01_PRODUCT_TRUTH.json" } }, "required": ["name"] } } } },
     { "properties": { "components": { "type": "array", "contains": { "type": "object", "properties": { "name": { "const": "02_RESEARCH_SOURCE_MANIFEST.json" } }, "required": ["name"] } } } },
     { "properties": { "components": { "type": "array", "contains": { "type": "object", "properties": { "name": { "const": "03_AMAZON_DRAFT.json" } }, "required": ["name"] } } } },
+    { "properties": { "components": { "type": "array", "contains": { "type": "object", "properties": { "name": { "const": "03_AMAZON_DRAFT.csv" } }, "required": ["name"] } } } },
     { "properties": { "components": { "type": "array", "contains": { "type": "object", "properties": { "name": { "const": "03_AMAZON_DRAFT.txt" } }, "required": ["name"] } } } },
     { "properties": { "components": { "type": "array", "contains": { "type": "object", "properties": { "name": { "const": "04_KEYWORD_DISPOSITION.csv" } }, "required": ["name"] } } } },
     { "properties": { "components": { "type": "array", "contains": { "type": "object", "properties": { "name": { "const": "05_CLAIM_IP_POLICY_REPORT.json" } }, "required": ["name"] } } } },

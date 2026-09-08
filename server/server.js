@@ -382,7 +382,7 @@ const ensureTestDatabaseFixtures = () => {
   }
   return ensureFixturesForDb(db);
 };
-const databaseReady = runMigrations(db).then(() => {
+const databaseReady = runMigrations(db).then(() => require('./staffWorkflow').migrateStaffWorkflow(db)).then(() => {
   if (process.env.NODE_ENV === 'test') return ensureTestDatabaseFixtures();
   return ensureLegacyDefaultAgents(db);
 });
@@ -4163,6 +4163,8 @@ if (fs.existsSync(distDir)) {
     res.sendFile(path.join(distDir, 'index.html'));
   });
 }
+
+require('./staffWorkflow').registerStaffWorkflow(app, db);
 
 // Final safety net: any error passed via next(err), or thrown/rejected inside
 // an async route handler (auto-forwarded by Express 5), lands here instead of

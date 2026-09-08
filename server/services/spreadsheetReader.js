@@ -17,7 +17,9 @@ async function readWorksheetWithSignature(filePath, options = {}) {
   const { targetSheetName = null } = options;
   const workbook = new ExcelJS.Workbook();
 
-  if (/\.csv$/i.test(filePath)) {
+  if (Buffer.isBuffer(filePath)) {
+    await workbook.xlsx.load(filePath, { ignoreNodes: ['dataValidations', 'extLst', 'hyperlinks', 'pageSetup', 'printOptions'] });
+  } else if (/\.csv$/i.test(filePath)) {
     await workbook.csv.readFile(filePath);
   } else {
     await workbook.xlsx.readFile(filePath, {

@@ -63,5 +63,6 @@
   "tests/test_xray_project_persistence.cjs",
   "tests/test_ytrends_unknown_defaults.cjs",
   "tests/test_zero_fabrication_boundary.cjs",
-  "tests/vps_platform_scripts.test.cjs"
+  "tests/vps_platform_scripts.test.cjs",
+  "tests/test_staff_editorial_workflow.cjs"
 ]

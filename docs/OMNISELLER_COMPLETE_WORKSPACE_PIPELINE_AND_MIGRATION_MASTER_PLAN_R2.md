@@ -1141,4 +1141,3 @@ REAL PRODUCT TRUTH
 ```
 
 Track A đưa draft an toàn đến staff sớm. Track B biến tinh hoa của hai tháng xây dựng thành một cấu trúc canonical trên VPS. Không hệ thống cũ nào bị bỏ trước parity; không donor nào được merge nguyên khối; không claim hoặc prompt nào được phép biến research thành sự thật về sản phẩm.
-

@@ -791,4 +791,3 @@ IMPLEMENT I1 → I5 BEFORE CALLING THE WORKFLOW LOSSLESS
 ```
 
 Thiết kế đúng không ép mọi metric vào một score. Thiết kế đúng giữ toàn bộ evidence, chuẩn hóa đúng ý nghĩa, tách parser khỏi business filters, và cho mọi quyết định downstream một đường truy ngược đến file, sheet, row và cell nguồn.
-

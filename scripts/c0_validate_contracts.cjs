@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const Ajv2020 = require('ajv/dist/2020');
+const { validatePolicyContractInvariants } = require('../shared/policyContractInvariants.cjs');
 
 const root = path.resolve(__dirname, '..');
 const contractRoot = path.join(root, 'contracts', 'omniseller-r3', 'v1');
@@ -30,6 +31,11 @@ const assertValid = (validator, value, id) => {
 const assertInvalid = (validator, value, id) => {
   if (validator(value)) fail(`${id}_EXPECTED_INVALID`);
 };
+const assertPolicyContractValid = (value, id) => {
+  assertValid(validatePolicy, value, id);
+  const invariantResult = validatePolicyContractInvariants(value);
+  if (!invariantResult.valid) fail(`${id}_INVARIANT_INVALID ${JSON.stringify(invariantResult.violations)}`);
+};
 
 const taxonomy = load('claim-taxonomy.v1.json');
 if (taxonomy.value.claimIds.length !== 14) fail('CLAIM_ID_COUNT_MISMATCH');
@@ -56,10 +62,12 @@ for (const id of requiredRedCases) if (!redIds.has(id)) fail(`MISSING_RED_CASE_$
 
 const amazon = load(path.join('policy-fixtures', 'amazon-us-nonmedia-2026-07-27-v1.json'));
 const etsy = load(path.join('policy-fixtures', 'etsy-us-general-2026-09-08-v1.json'));
-assertValid(validatePolicy, amazon.value, 'AMAZON_PUBLIC_BASELINE');
-assertValid(validatePolicy, etsy.value, 'ETSY_PUBLIC_BASELINE');
+assertPolicyContractValid(amazon.value, 'AMAZON_PUBLIC_BASELINE');
+assertPolicyContractValid(etsy.value, 'ETSY_PUBLIC_BASELINE');
 if (amazon.value.approvalEligibility !== 'DRAFT_ONLY') fail('PUBLIC_BASELINE_MUST_BE_DRAFT_ONLY');
-if (etsy.value.rules.tags.targetCount > etsy.value.rules.tags.maxCount) fail('ETSY_TARGET_EXCEEDS_POLICY_MAX');
+const etsyTargetExceedsMax = clone(etsy.value);
+etsyTargetExceedsMax.rules.tags.maxCount = 5;
+if (validatePolicyContractInvariants(etsyTargetExceedsMax).valid) fail('ETSY_TARGET_EXCEEDS_MAX_EXPECTED_INVALID');
 
 const emptyRules = clone(amazon.value);
 emptyRules.rules = {};
@@ -83,7 +91,7 @@ ownerConfirmed.sourceRefs.push({
   capturedAt: '2026-09-09T00:00:00Z',
   actorId: 'owner-1'
 });
-assertValid(validatePolicy, ownerConfirmed, 'OWNER_CONFIRMED_EXACT_SCOPE');
+assertPolicyContractValid(ownerConfirmed, 'OWNER_CONFIRMED_EXACT_SCOPE');
 const ownerEmptyScope = clone(ownerConfirmed);
 ownerEmptyScope.cohort.categoryIds = [];
 ownerEmptyScope.cohort.sellerAccountIds = [];

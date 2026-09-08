@@ -15,5 +15,14 @@
     "occurredAt": { "type": "string", "format": "date-time" },
     "reasonCode": { "type": "string", "minLength": 1 },
     "supersedingPolicyContractId": { "type": ["string", "null"] }
-  }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "eventType": { "const": "SUPERSEDED" } }, "required": ["eventType"] },
+      "then": {
+        "required": ["supersedingPolicyContractId"],
+        "properties": { "supersedingPolicyContractId": { "type": "string", "minLength": 1 } }
+      }
+    }
+  ]
 }

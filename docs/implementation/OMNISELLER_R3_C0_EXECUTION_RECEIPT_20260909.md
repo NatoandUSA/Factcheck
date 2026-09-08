@@ -22,7 +22,7 @@ No production/VPS deployment, publish operation, canonical DB migration or legac
 - Amazon US and Etsy US baseline policy fixtures;
 - stable 14-family claim taxonomy with legacy C1–C8 aliases;
 - Track A non-canonical handoff-manifest schema;
-- controlled RED-case inventory and executable probe;
+- controlled RED-case specification inventory and baseline inventory probe;
 - implementation assignments and atomic-cutover rules.
 
 ## Independent source-audit corrections
@@ -62,13 +62,13 @@ The donor claim guard/composer remains valuable, but current global unauthentica
 
 Command: `node scripts/c0_validate_contracts.cjs`
 
-The validator uses AJV 8 in Draft 2020 mode. It tests positive Amazon/Etsy/Track-A fixtures and negative empty-rules, evidence, scope, authority-escalation and missing-component cases. Artifact hashes printed by the command are SHA-256 of exact stored UTF-8 bytes, not semantic/canonicalized JSON hashes.
+The validator uses AJV 8 in Draft 2020 mode plus the reusable runtime-neutral policy invariant validator. It tests positive Amazon/Etsy/Track-A fixtures and negative empty-rules, evidence, scope, Etsy target-over-maximum, authority-escalation and missing-component cases. Artifact hashes printed by the command are SHA-256 of exact stored UTF-8 bytes, not semantic/canonicalized JSON hashes.
 
 ```text
 C0_CONTRACT_OK taxonomy artifactByteSha256=c6c71f7dbdfdc836abb2eb5d7634c11adee1ec0b737049bd1992ae5c663f2498
 C0_CONTRACT_OK redCases artifactByteSha256=499de2526a9247656d5aa5a94ec55fce562268fb9d8a4d223244aacba93a0f42
 C0_CONTRACT_OK policySchema artifactByteSha256=cebca4dc12215af9a5cbcc127deab298ce40a2d2b6333983c38dea61c589753c
-C0_CONTRACT_OK lifecycleSchema artifactByteSha256=31bd63bf2de269bcd8cc6da3ecef5cf01727a3884cfad924bc801bd2a52ea832
+C0_CONTRACT_OK lifecycleSchema artifactByteSha256=7d749c803afaede705737782d70052436418a37f826b830b414cc9f6bcc4d8fb
 C0_CONTRACT_OK trackASchema artifactByteSha256=9cb91a33e2ab62b1fc45f5c1c2eb91cd832c1c7408678363f14ca5743625c676
 C0_CONTRACT_OK amazon artifactByteSha256=e06ce99e02b0e5a6a6f497efdf8e18f2c1ff787030fa526e520365a27de18037
 C0_CONTRACT_OK etsy artifactByteSha256=ba9d0d73e418285a3030905378d51e260547ad7ec35505df1e2ee5b013d2df5a

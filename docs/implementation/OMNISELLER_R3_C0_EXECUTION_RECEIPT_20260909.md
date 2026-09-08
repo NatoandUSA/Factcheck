@@ -1,13 +1,16 @@
 # OmniSeller R3 — C0 Execution Receipt
 
-Date: 2026-09-09 (Asia/Bangkok)  
-Baseline: `8dd56569832164ecd3b0ddd62caea254fdade452`  
-Branch: `codex/omniseller-r3-c0`  
+Date: 2026-09-09 (Asia/Bangkok)
+
+Baseline: `8dd56569832164ecd3b0ddd62caea254fdade452`
+
+Branch: `codex/omniseller-r3-c0`
+
 Worktree: `D:\Claude\Factcheck\scratch\omniseller-r3-c0`
 
 ## Outcome
 
-Status: **C0 CONTRACT PACKAGE CREATED — CONTROLLED RED CONFIRMED — NOT READY FOR WAVE 1 MERGE**.
+Status: **C0 CONTRACT PACKAGE CREATED — BASELINE INVENTORIED — NOT READY FOR WAVE 1 MERGE**.
 
 No production/VPS deployment, publish operation, canonical DB migration or legacy-route behavior change occurred.
 
@@ -55,31 +58,35 @@ The donor claim guard/composer remains valuable, but current global unauthentica
 
 ## Validation receipts
 
-### C0 contract validation
+### C0 JSON Schema 2020 and invariant validation
 
 Command: `node scripts/c0_validate_contracts.cjs`
 
-```text
-C0_CONTRACT_OK taxonomy sha256=c6c71f7dbdfdc836abb2eb5d7634c11adee1ec0b737049bd1992ae5c663f2498
-C0_CONTRACT_OK redCases sha256=47fecc1e301c5aa5e21e02d8a450d42575f41a589928e1c0a5cf3f2705f1fd62
-C0_CONTRACT_OK amazon sha256=f34d30c637fab07b16843b03ad5a30b45d9aa80e08d948b86e40954ef58d3709
-C0_CONTRACT_OK etsy sha256=7e5403d4797118c6a2b697e057ae0e933e30bd1ebc7375ef3858e99756989e8e
-C0_CONTRACT_VALIDATION PASS
-```
-
-### Controlled RED probe
-
-Command: `node scripts/c0_r3_red_probe.cjs`
+The validator uses AJV 8 in Draft 2020 mode. It tests positive Amazon/Etsy/Track-A fixtures and negative empty-rules, evidence, scope, authority-escalation and missing-component cases. Artifact hashes printed by the command are SHA-256 of exact stored UTF-8 bytes, not semantic/canonicalized JSON hashes.
 
 ```text
-RED SINGLE_CANONICAL_COMPOSER_WRITE_PATH — baselineLegacyListingInsertCount=4; canonicalRepository=false
-RED LEGACY_COMPOSERS_ZERO_WRITE_AFTER_CUTOVER — legacySurfacesStillPresent=5
-RED POLICY_CONTRACT_MUTATION_75_TO_200 — runtime resolver/enforcer not implemented
-RED PRODUCT_NAME_DOES_NOT_PROVE_MATERIAL — stable-ID registry/guard not implemented
-C0_RED_PROBE total=4 red=4 green=0
+C0_CONTRACT_OK taxonomy artifactByteSha256=c6c71f7dbdfdc836abb2eb5d7634c11adee1ec0b737049bd1992ae5c663f2498
+C0_CONTRACT_OK redCases artifactByteSha256=499de2526a9247656d5aa5a94ec55fce562268fb9d8a4d223244aacba93a0f42
+C0_CONTRACT_OK policySchema artifactByteSha256=cebca4dc12215af9a5cbcc127deab298ce40a2d2b6333983c38dea61c589753c
+C0_CONTRACT_OK lifecycleSchema artifactByteSha256=31bd63bf2de269bcd8cc6da3ecef5cf01727a3884cfad924bc801bd2a52ea832
+C0_CONTRACT_OK trackASchema artifactByteSha256=9cb91a33e2ab62b1fc45f5c1c2eb91cd832c1c7408678363f14ca5743625c676
+C0_CONTRACT_OK amazon artifactByteSha256=e06ce99e02b0e5a6a6f497efdf8e18f2c1ff787030fa526e520365a27de18037
+C0_CONTRACT_OK etsy artifactByteSha256=ba9d0d73e418285a3030905378d51e260547ad7ec35505df1e2ee5b013d2df5a
+C0_CONTRACT_OK trackA artifactByteSha256=fb500720ecfc51e6c20fc0acdbdcbd097936d254c5515302c2319edda68b8bf9
+C0_JSON_SCHEMA_2020_POSITIVE_NEGATIVE_VALIDATION PASS
 ```
 
-Exit `1` is intentional in C0. This probe is not in the canonical inventory. Each case must enter the canonical inventory in the same commit that makes it green.
+### Baseline inventory probe
+
+Command: `node scripts/c0_baseline_inventory_probe.cjs`
+
+```text
+C0_BASELINE_INVENTORY legacySurfaces=5 directListingInserts=4 rendererCalls=3
+C0_BASELINE_INVENTORY PASS
+NOTE This probe records baseline debt only; it never certifies future runtime behavior.
+```
+
+Behavioral RED requirements live in `c0-red-cases.json`. They are not claimed as executed until real static/integration tests are added to the canonical inventory.
 
 ### Baseline canonical suite — Node 22.23.2
 
@@ -101,11 +108,11 @@ The production build executed successfully inside the suite. This receipt does n
 
 | Gate | Status | Evidence |
 | --- | --- | --- |
-| Preservation | PASS | exact baseline plus donor/input SHA-256 manifest |
-| Contract coherence | PASS for structural C0 lint | policy/taxonomy/Track A schemas and fixtures |
-| Controlled RED | PASS | four expected runtime blockers reproduced |
+| Preservation | PARTIAL | exact local hashes verified; durable archive/tag/upstream receipt still required |
+| Contract coherence | PASS | AJV 2020 positive/negative validation and taxonomy invariants pass |
+| Baseline inventory | PASS | five surfaces, four writers, three renderer calls reproduced |
 | Baseline suite | DEBT — 60/65 | two provider and three Windows process failures |
-| Independent review | PARTIAL | three parallel source audits completed; final exact-commit review still required |
+| Independent review | CHANGES REQUESTED on `161ada543` | remediation applied; new exact-commit re-review still required |
 | Production safety | PASS | no deploy, publish or production write |
 
 ## Next authorized implementation order

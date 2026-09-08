@@ -1,8 +1,10 @@
 # Real Input Import Contract & Gap Audit — Hija R1
 
-**Ngày audit:** 2026-09-08  
-**Phạm vi:** 3 Etsy CSV + Amazon Xray + Amazon Cerebro  
-**Mục đích:** khóa contract để OmniSeller nhập, lưu, phân tích và giải trình toàn bộ dữ liệu nguồn mà không âm thầm làm mất cột, dòng, trạng thái thiếu dữ liệu hoặc provenance.  
+**Ngày audit:** 2026-09-08
+
+**Phạm vi:** 3 Etsy CSV + Amazon Xray + Amazon Cerebro
+
+**Mục đích:** khóa contract để OmniSeller nhập, lưu, phân tích và giải trình toàn bộ dữ liệu nguồn mà không âm thầm làm mất cột, dòng, trạng thái thiếu dữ liệu hoặc provenance.
 **Trạng thái:** **CHANGES REQUIRED — CURRENT IMPORT IS NOT LOSSLESS**
 
 ---
@@ -789,5 +791,4 @@ IMPLEMENT I1 → I5 BEFORE CALLING THE WORKFLOW LOSSLESS
 ```
 
 Thiết kế đúng không ép mọi metric vào một score. Thiết kế đúng giữ toàn bộ evidence, chuẩn hóa đúng ý nghĩa, tách parser khỏi business filters, và cho mọi quyết định downstream một đường truy ngược đến file, sheet, row và cell nguồn.
-
 

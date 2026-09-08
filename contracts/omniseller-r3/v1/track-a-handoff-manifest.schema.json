@@ -40,7 +40,7 @@
     },
     "components": {
       "type": "array",
-      "minItems": 7,
+      "minItems": 8,
       "items": {
         "type": "object",
         "additionalProperties": false,

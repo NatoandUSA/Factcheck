@@ -1,11 +1,16 @@
 # OmniSeller Master Final R3 — Canonical Implementation Plan
 
-**Issued:** 2026-09-08, Asia/Bangkok  
-**Canonical integration baseline:** `NatoandUSA/Factcheck main@8dd56569832164ecd3b0ddd62caea254fdade452`  
-**Plan status:** **FINAL IMPLEMENTATION CONTRACT**  
-**Implementation status:** **NOT YET COMPLETE**  
-**Production/deploy/marketplace authority:** **LOCKED**  
-**Phase 1:** Amazon US + Etsy US, `en-US`/`es-US`, manual marketplace submission only  
+**Issued:** 2026-09-08, Asia/Bangkok
+
+**Canonical integration baseline:** `NatoandUSA/Factcheck main@8dd56569832164ecd3b0ddd62caea254fdade452`
+
+**Plan status:** **FINAL IMPLEMENTATION CONTRACT**
+
+**Implementation status:** **NOT YET COMPLETE**
+
+**Production/deploy/marketplace authority:** **LOCKED**
+
+**Phase 1:** Amazon US + Etsy US, `en-US`/`es-US`, manual marketplace submission only
 **Binding real-input contract:** `docs/REAL_INPUT_IMPORT_CONTRACT_AND_GAP_AUDIT_HIJA_R1.md`
 
 ---
@@ -1252,18 +1257,39 @@ Policy contract minimum:
 
 ```json
 {
-  "marketplace": "AMAZON_US",
+  "schemaVersion": "omniseller.policy-contract.v1",
   "policyContractId": "amazon-us-nonmedia-2026-07-27-v1",
+  "marketplace": "AMAZON",
+  "site": "US",
+  "locales": ["en-US", "es-US"],
+  "effectiveFrom": "2026-07-27T00:00:00Z",
   "checkedAt": "2026-09-08T00:00:00Z",
+  "verificationStatus": "PUBLIC_BASELINE",
+  "approvalEligibility": "DRAFT_ONLY",
   "approvalCritical": true,
-  "sourceRefs": [],
-  "rules": {}
+  "cohort": {
+    "mediaClass": "NON_MEDIA",
+    "productTypeIds": [],
+    "categoryIds": [],
+    "sellerAccountIds": []
+  },
+  "sourceRefs": [{
+    "kind": "PUBLIC_URL",
+    "url": "https://sellercentral.amazon.com/seller-forums/discussions/t/145b6d0f-999c-4555-896c-c694bda2e470",
+    "capturedAt": "2026-09-08T00:00:00Z"
+  }],
+  "rules": {
+    "title": { "maxChars": 75, "counting": "UNICODE_CODE_POINTS" },
+    "itemHighlights": { "maxChars": 125, "counting": "UNICODE_CODE_POINTS" },
+    "bullets": { "targetCount": 5, "maxChars": null },
+    "genericKeywords": { "maxUtf8Bytes": 249, "allowCommas": false }
+  }
 }
 ```
 
-Policy source URL alone is not a reproducible rule. Authenticated category/account rules must be recorded by staff/Owner when public documentation is insufficient.
+Public baseline contracts may drive a blocked/safe draft but are never approval-eligible. Authenticated category/account rules must be recorded by staff/Owner as an exact-scope `OWNER_CONFIRMED_ACCOUNT_CATEGORY` contract before approval/export.
 
-Historical revisions retain their policy contract; updates create a new contract and trigger targeted revalidation, not silent mutation.
+The contract file is immutable and identified by SHA-256 of its exact stored UTF-8 bytes (`policyContractArtifactHash`); formatting changes therefore create a different artifact. `SUPERSEDED` and `REVOKED` are separate append-only lifecycle events binding the original artifact hash, never mutations of `verificationStatus`. Historical revisions retain their exact contract bytes; updates create a new contract and trigger targeted revalidation, not silent mutation.
 
 ---
 

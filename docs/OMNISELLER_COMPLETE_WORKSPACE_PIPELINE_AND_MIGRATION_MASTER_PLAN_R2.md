@@ -1,9 +1,12 @@
 # OmniSeller Complete Workspace, Pipeline & Migration Master Plan — R2
 
-**Ngày khóa kế hoạch:** 2026-09-08  
-**Owner:** Internal Commerce Team  
-**Integration baseline:** `NatoandUSA/Factcheck main@8dd56569832164ecd3b0ddd62caea254fdade452`  
-**Trạng thái:** **FINAL PLAN FOR MULTI-AGENT REVIEW — IMPLEMENTATION NOT YET AUTHORIZED AS COMPLETE**  
+**Ngày khóa kế hoạch:** 2026-09-08
+
+**Owner:** Internal Commerce Team
+
+**Integration baseline:** `NatoandUSA/Factcheck main@8dd56569832164ecd3b0ddd62caea254fdade452`
+
+**Trạng thái:** **FINAL PLAN FOR MULTI-AGENT REVIEW — IMPLEMENTATION NOT YET AUTHORIZED AS COMPLETE**
 **Phạm vi:** Amazon US + Etsy US, listing EN/ES theo keyword đầu vào, manual publication, dừng tại `SUBMITTED` trong Phase 1.
 
 ---
@@ -1138,5 +1141,4 @@ REAL PRODUCT TRUTH
 ```
 
 Track A đưa draft an toàn đến staff sớm. Track B biến tinh hoa của hai tháng xây dựng thành một cấu trúc canonical trên VPS. Không hệ thống cũ nào bị bỏ trước parity; không donor nào được merge nguyên khối; không claim hoặc prompt nào được phép biến research thành sự thật về sản phẩm.
-
 

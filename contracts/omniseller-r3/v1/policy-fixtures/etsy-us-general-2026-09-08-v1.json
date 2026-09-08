@@ -7,6 +7,7 @@
   "effectiveFrom": "2026-09-08T00:00:00Z",
   "checkedAt": "2026-09-08T00:00:00Z",
   "verificationStatus": "PUBLIC_BASELINE",
+  "approvalEligibility": "DRAFT_ONLY",
   "approvalCritical": true,
   "supersedes": null,
   "cohort": {

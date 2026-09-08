@@ -1,14 +1,35 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const Ajv2020 = require('ajv/dist/2020');
 
 const root = path.resolve(__dirname, '..');
 const contractRoot = path.join(root, 'contracts', 'omniseller-r3', 'v1');
 const load = relative => {
   const bytes = fs.readFileSync(path.join(contractRoot, relative));
-  return { value: JSON.parse(bytes.toString('utf8')), hash: crypto.createHash('sha256').update(bytes).digest('hex') };
+  return {
+    value: JSON.parse(bytes.toString('utf8')),
+    artifactByteHash: crypto.createHash('sha256').update(bytes).digest('hex')
+  };
 };
+const clone = value => JSON.parse(JSON.stringify(value));
 const fail = message => { throw new Error(message); };
+
+const ajv = new Ajv2020({ allErrors: true, strict: true, strictRequired: false });
+ajv.addFormat('date-time', /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/);
+const policySchema = load('policy-contract.schema.json');
+const lifecycleSchema = load('policy-lifecycle-event.schema.json');
+const trackASchema = load('track-a-handoff-manifest.schema.json');
+const validatePolicy = ajv.compile(policySchema.value);
+const validateLifecycle = ajv.compile(lifecycleSchema.value);
+const validateTrackA = ajv.compile(trackASchema.value);
+
+const assertValid = (validator, value, id) => {
+  if (!validator(value)) fail(`${id}_EXPECTED_VALID ${ajv.errorsText(validator.errors)}`);
+};
+const assertInvalid = (validator, value, id) => {
+  if (validator(value)) fail(`${id}_EXPECTED_INVALID`);
+};
 
 const taxonomy = load('claim-taxonomy.v1.json');
 if (taxonomy.value.claimIds.length !== 14) fail('CLAIM_ID_COUNT_MISMATCH');
@@ -18,7 +39,16 @@ if (taxonomy.value.identityDoesNotProveAttribute !== true) fail('IDENTITY_ATTRIB
 const redCases = load('c0-red-cases.json');
 const requiredRedCases = [
   'POLICY_CONTRACT_MUTATION_75_TO_200',
+  'POLICY_CLIENT_OVERRIDE_FORBIDDEN',
+  'POLICY_COMPOSER_VALIDATOR_PARITY',
+  'POLICY_UNKNOWN_OR_AMBIGUOUS_FAILS_CLOSED',
+  'ETSY_POLICY_VS_QUALITY_TARGET',
   'SINGLE_CANONICAL_COMPOSER_WRITE_PATH',
+  'LEGACY_AUTH_BEFORE_RETIREMENT_RESPONSE',
+  'CHAT_RESEARCH_MODE_ZERO_WRITE',
+  'NO_LEGACY_UI_COMPOSER_CALLERS',
+  'ROOT_V1_TRANSACTION_ROLLBACK_AND_IDEMPOTENCY',
+  'RECURSIVE_SQL_WRITER_ALLOWLIST',
   'PRODUCT_NAME_DOES_NOT_PROVE_MATERIAL'
 ];
 const redIds = new Set(redCases.value.cases.map(item => item.id));
@@ -26,13 +56,83 @@ for (const id of requiredRedCases) if (!redIds.has(id)) fail(`MISSING_RED_CASE_$
 
 const amazon = load(path.join('policy-fixtures', 'amazon-us-nonmedia-2026-07-27-v1.json'));
 const etsy = load(path.join('policy-fixtures', 'etsy-us-general-2026-09-08-v1.json'));
-if (amazon.value.rules.title.maxChars !== 75) fail('AMAZON_TITLE_BASELINE_MISMATCH');
-if (amazon.value.rules.itemHighlights.maxChars !== 125) fail('AMAZON_HIGHLIGHT_BASELINE_MISMATCH');
-if (amazon.value.rules.genericKeywords.maxUtf8Bytes !== 249) fail('AMAZON_SEARCH_BYTES_MISMATCH');
-if (etsy.value.rules.tags.maxCount !== 13 || etsy.value.rules.tags.targetCount !== 13) fail('ETSY_TAG_CONTRACT_MISMATCH');
-if (etsy.value.rules.tags.maxCount < etsy.value.rules.tags.targetCount) fail('ETSY_TARGET_EXCEEDS_POLICY_MAX');
+assertValid(validatePolicy, amazon.value, 'AMAZON_PUBLIC_BASELINE');
+assertValid(validatePolicy, etsy.value, 'ETSY_PUBLIC_BASELINE');
+if (amazon.value.approvalEligibility !== 'DRAFT_ONLY') fail('PUBLIC_BASELINE_MUST_BE_DRAFT_ONLY');
+if (etsy.value.rules.tags.targetCount > etsy.value.rules.tags.maxCount) fail('ETSY_TARGET_EXCEEDS_POLICY_MAX');
 
-for (const [name, artifact] of Object.entries({ taxonomy, redCases, amazon, etsy })) {
-  console.log(`C0_CONTRACT_OK ${name} sha256=${artifact.hash}`);
+const emptyRules = clone(amazon.value);
+emptyRules.rules = {};
+assertInvalid(validatePolicy, emptyRules, 'AMAZON_EMPTY_RULES');
+const publicApproval = clone(amazon.value);
+publicApproval.approvalEligibility = 'APPROVAL_ELIGIBLE';
+assertInvalid(validatePolicy, publicApproval, 'PUBLIC_BASELINE_APPROVAL_ELIGIBLE');
+const publicWithoutUrl = clone(amazon.value);
+delete publicWithoutUrl.sourceRefs[0].url;
+assertInvalid(validatePolicy, publicWithoutUrl, 'PUBLIC_SOURCE_WITHOUT_URL');
+
+const ownerConfirmed = clone(amazon.value);
+ownerConfirmed.policyContractId = 'amazon-us-account-category-confirmed-v1';
+ownerConfirmed.verificationStatus = 'OWNER_CONFIRMED_ACCOUNT_CATEGORY';
+ownerConfirmed.approvalEligibility = 'APPROVAL_ELIGIBLE';
+ownerConfirmed.cohort.categoryIds = ['JEWELRY_NECKLACE'];
+ownerConfirmed.cohort.sellerAccountIds = ['ACCOUNT_ALIAS_MAIN'];
+ownerConfirmed.sourceRefs.push({
+  kind: 'OWNER_ATTESTATION',
+  artifactHash: 'a'.repeat(64),
+  capturedAt: '2026-09-09T00:00:00Z',
+  actorId: 'owner-1'
+});
+assertValid(validatePolicy, ownerConfirmed, 'OWNER_CONFIRMED_EXACT_SCOPE');
+const ownerEmptyScope = clone(ownerConfirmed);
+ownerEmptyScope.cohort.categoryIds = [];
+ownerEmptyScope.cohort.sellerAccountIds = [];
+assertInvalid(validatePolicy, ownerEmptyScope, 'OWNER_CONFIRMED_EMPTY_SCOPE');
+const ownerWithoutEvidence = clone(ownerConfirmed);
+ownerWithoutEvidence.sourceRefs = amazon.value.sourceRefs;
+assertInvalid(validatePolicy, ownerWithoutEvidence, 'OWNER_CONFIRMED_WITHOUT_BOUND_EVIDENCE');
+
+const lifecycleEvent = {
+  schemaVersion: 'omniseller.policy-lifecycle-event.v1',
+  eventId: 'event-1',
+  policyContractId: ownerConfirmed.policyContractId,
+  policyContractArtifactHash: 'b'.repeat(64),
+  eventType: 'REVOKED',
+  actorId: 'owner-1',
+  occurredAt: '2026-09-09T01:00:00Z',
+  reasonCode: 'ACCOUNT_POLICY_CHANGED',
+  supersedingPolicyContractId: null
+};
+assertValid(validateLifecycle, lifecycleEvent, 'APPEND_ONLY_LIFECYCLE_EVENT');
+
+const trackA = load(path.join('track-a-fixtures', 'valid-handoff.example.json'));
+assertValid(validateTrackA, trackA.value, 'TRACK_A_HANDOFF');
+const requiredTrackAComponents = new Set([
+  '01_PRODUCT_TRUTH.json',
+  '02_RESEARCH_SOURCE_MANIFEST.json',
+  '03_AMAZON_DRAFT.json',
+  '03_AMAZON_DRAFT.txt',
+  '04_KEYWORD_DISPOSITION.csv',
+  '05_CLAIM_IP_POLICY_REPORT.json',
+  '06_PPC_REVIEW.csv',
+  '07_TRACK_B_IMPORT_RECEIPT_TEMPLATE.json'
+]);
+const hasRequiredTrackAComponents = value => {
+  const names = value.components.map(component => component.name);
+  return new Set(names).size === names.length && [...requiredTrackAComponents].every(name => names.includes(name));
+};
+if (!hasRequiredTrackAComponents(trackA.value)) fail('TRACK_A_REQUIRED_COMPONENT_SET_INVALID');
+const trackAAuthorityEscalation = clone(trackA.value);
+trackAAuthorityEscalation.authority = 'APPROVED';
+assertInvalid(validateTrackA, trackAAuthorityEscalation, 'TRACK_A_AUTHORITY_ESCALATION');
+const trackAMissingComponent = clone(trackA.value);
+trackAMissingComponent.components.pop();
+assertInvalid(validateTrackA, trackAMissingComponent, 'TRACK_A_MISSING_COMPONENT');
+const trackAWrongComponent = clone(trackA.value);
+trackAWrongComponent.components[0].name = 'UNRECOGNIZED.json';
+if (hasRequiredTrackAComponents(trackAWrongComponent)) fail('TRACK_A_WRONG_COMPONENT_EXPECTED_INVALID');
+
+for (const [name, artifact] of Object.entries({ taxonomy, redCases, policySchema, lifecycleSchema, trackASchema, amazon, etsy, trackA })) {
+  console.log(`C0_CONTRACT_OK ${name} artifactByteSha256=${artifact.artifactByteHash}`);
 }
-console.log('C0_CONTRACT_VALIDATION PASS');
+console.log('C0_JSON_SCHEMA_2020_POSITIVE_NEGATIVE_VALIDATION PASS');

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://omniseller.local/contracts/r3/v1/policy-lifecycle-event.schema.json",
+  "title": "Append-only Policy Contract Lifecycle Event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "eventId", "policyContractId", "policyContractArtifactHash", "eventType", "actorId", "occurredAt", "reasonCode"],
+  "properties": {
+    "schemaVersion": { "const": "omniseller.policy-lifecycle-event.v1" },
+    "eventId": { "type": "string", "minLength": 1 },
+    "policyContractId": { "type": "string", "minLength": 1 },
+    "policyContractArtifactHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "eventType": { "enum": ["SUPERSEDED", "REVOKED"] },
+    "actorId": { "type": "string", "minLength": 1 },
+    "occurredAt": { "type": "string", "format": "date-time" },
+    "reasonCode": { "type": "string", "minLength": 1 },
+    "supersedingPolicyContractId": { "type": ["string", "null"] }
+  }
+}

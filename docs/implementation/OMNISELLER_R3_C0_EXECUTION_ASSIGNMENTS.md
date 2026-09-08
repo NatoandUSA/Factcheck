@@ -1,9 +1,12 @@
 # OmniSeller R3 — C0 Execution Assignments and Acceptance
 
-Date: 2026-09-08 (Asia/Bangkok)  
-Baseline: `8dd56569832164ecd3b0ddd62caea254fdade452`  
-Branch: `codex/omniseller-r3-c0`  
-Worktree: `D:\Claude\Factcheck\scratch\omniseller-r3-c0`  
+Date: 2026-09-08 (Asia/Bangkok)
+
+Baseline: `8dd56569832164ecd3b0ddd62caea254fdade452`
+
+Branch: `codex/omniseller-r3-c0`
+
+Worktree: `D:\Claude\Factcheck\scratch\omniseller-r3-c0`
 Release posture: implementation only; no merge, VPS deploy or production write is authorized.
 
 ## 1. Final review decision
@@ -32,7 +35,8 @@ No donor branch is merged wholesale.
 
 ### C0-B — policy contract
 
-Source-audit owner: policy-contract reviewer.  
+Source-audit owner: policy-contract reviewer.
+
 Implementation owner: integration owner after review.
 
 Deliverables:
@@ -45,7 +49,8 @@ Deliverables:
 
 ### C0-C — claim taxonomy and Track A compatibility
 
-Source-audit owner: donor/Track-A reviewer.  
+Source-audit owner: donor/Track-A reviewer.
+
 Implementation owner: integration owner; donor author may supply a bounded patch only.
 
 Deliverables:
@@ -59,7 +64,8 @@ Deliverables:
 
 ### C0-D — single composer and writer inventory
 
-Source-audit owner: composer-route reviewer.  
+Source-audit owner: composer-route reviewer.
+
 Implementation owner: integration owner in Wave 1–2 cutover.
 
 Frozen legacy surfaces:
@@ -108,15 +114,15 @@ Every component has SHA-256 and byte count. Product Truth state is `STAFF_INPUT_
 
 ### Gate C0.2 — contract coherence
 
-- policy, claim taxonomy and Track A manifest schemas validate their fixtures;
+- AJV 2020 validates positive and negative policy/Track A fixtures; taxonomy invariants are checked executablely;
 - every approval-critical output binds version and hash;
 - unknown taxonomy/policy inputs fail closed for approval/export.
 
-### Gate C0.3 — controlled RED evidence
+### Gate C0.3 — baseline inventory and RED specifications
 
-Run `node scripts/c0_r3_red_probe.cjs`. Non-zero is expected only in C0 and is recorded as a controlled RED receipt. The probe is outside the canonical test inventory so baseline CI remains meaningful.
+Run `node scripts/c0_baseline_inventory_probe.cjs`. It must reproduce exactly five legacy surfaces and four direct baseline listing inserts. This is an inventory receipt only; it cannot certify future runtime behavior.
 
-Before any Wave 1 merge, each RED case becomes an executable green test and enters `tests/canonical_test_inventory.json` in the same commit as its implementation.
+The RED-case manifest is a specification inventory, not a behavioral test. Before any Wave 1 merge, each applicable RED case becomes an executable canonical test and enters `tests/canonical_test_inventory.json` in the same commit as its implementation.
 
 ### Gate C0.4 — independent review
 

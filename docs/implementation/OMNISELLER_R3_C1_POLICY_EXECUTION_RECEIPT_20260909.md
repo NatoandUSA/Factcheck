@@ -10,7 +10,7 @@ Branch: `codex/omniseller-r3-c1-policy`
 
 Worktree: `D:\Claude\Factcheck\scratch\omniseller-r3-c1-policy`
 
-C1 implementation commit before this receipt: `f2e025f95f69bd03b7c186f63ecea99e70d9b925`
+C1 implementation commit before this receipt: `d22489ed5eeed3c09c8432efed74d0c11141a7b6`
 
 ## 1. Outcome
 
@@ -39,6 +39,7 @@ Two read-only reviewers reproduced the original C1 fail-open behavior at commit 
 | AJV was not declared by the server workspace | P2 | AJV 8 is now a direct runtime dependency of `server/package.json` |
 | Invalid UTF-8 and duplicate JSON keys produced ambiguous artifacts | P1 | Fatal UTF-8 decoding, BOM rejection and duplicate-key-safe structural parsing now precede schema validation |
 | Future evidence or pre-existing lifecycle events could create temporal authority | P1 | Source capture must precede contract check; check must precede resolution time; lifecycle events must follow the relevant checked/effective times |
+| A retained APPROVAL resolution issued before a known later revoke could still be used after the revoke | P1 | Fixed at `d22489ed5`: approval/export now require a genuine decision-time server context, exact scope/purpose continuity and re-resolution against the issuing authoritative lifecycle snapshot; time rewind and stale/replaced/revoked resolutions fail closed |
 
 ## 3. Authority boundary
 
@@ -87,6 +88,8 @@ Approval-eligible artifacts additionally receive a server-owned tenant/workspace
 - Semantic JSON reserialization does not reproduce the same binding unless bytes are identical.
 - A lifecycle snapshot must state `completeThrough` and contain schema-valid append-only events.
 - Approval/export fails closed when the snapshot does not cover the effective time.
+- Approval/export enforcement re-resolves at the decision time; it does not trust an earlier resolution merely because that object was originally genuine.
+- The policy binding records decision `effectiveAt`, `mediaClass`, lifecycle `completeThrough` and the exact lifecycle snapshot digest.
 - `REVOKED` removes the exact artifact hash.
 - `SUPERSEDED` requires a real newer contract in the same authority scope and exact cohort.
 - The embedded legacy `supersedes` field is not trusted as lifecycle authority.
@@ -119,7 +122,7 @@ C1_POLICY_REGISTRY PASS groups=10
 C0_JSON_SCHEMA_2020_POSITIVE_NEGATIVE_VALIDATION PASS
 ```
 
-The ten C1 groups cover contract mutation, exact-byte hashing, client override attacks, composer/validator parity, forged resolution rejection, purpose separation, unknown/ambiguous/scope failure, runtime schema/date invariants, Etsy policy-versus-quality behavior, required surfaces and bullet limits, plus lifecycle revoke/supersede/completeness behavior.
+The ten C1 groups cover contract mutation, exact-byte hashing, client override attacks, composer/validator parity, forged resolution rejection, purpose separation, unknown/ambiguous/scope failure, runtime schema/date invariants, Etsy policy-versus-quality behavior, required surfaces and bullet limits, lifecycle revoke/supersede/completeness behavior, and retained pre-revocation resolution replay at decision time.
 
 Additional evidence:
 
@@ -139,11 +142,13 @@ An independent reviewer must re-run the previously successful attacks on the exa
 1. empty/malformed surfaces cannot acquire policy eligibility;
 2. forged and cross-purpose resolutions fail;
 3. owner policy cannot cross tenant/workspace;
-4. revoked/superseded/incomplete lifecycle state fails closed;
+4. revoked/superseded/incomplete lifecycle state fails closed, including reuse of a genuine pre-revocation APPROVAL resolution after the revoke time;
 5. client override depth, prototype, encoded and canonical-field attacks fail;
 6. focused Node 22 test, C0 validator, production build and diff check remain clean.
 
 Even after that acceptance, route integration is a separate commit and review gate.
+
+The registry snapshot is a server-authoritative input. A loader must never claim `completeThrough` beyond the point for which lifecycle event ingestion is actually complete. If the decision time is beyond that boundary, resolution fails closed with `POLICY_LIFECYCLE_SNAPSHOT_INCOMPLETE`; route integration must obtain the current authoritative snapshot rather than trusting client input or a process-lifetime cache.
 
 ## 7. Assigned next implementation sequence
 

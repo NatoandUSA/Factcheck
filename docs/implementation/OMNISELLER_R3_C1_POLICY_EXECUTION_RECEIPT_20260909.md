@@ -10,7 +10,7 @@ Branch: `codex/omniseller-r3-c1-policy`
 
 Worktree: `D:\Claude\Factcheck\scratch\omniseller-r3-c1-policy`
 
-C1 implementation commit before this receipt: `d22489ed5eeed3c09c8432efed74d0c11141a7b6`
+C1 implementation commit before this receipt: `1a0ab224b4faaf94ea2184520b139e5857c78f70`
 
 ## 1. Outcome
 
@@ -40,6 +40,7 @@ Two read-only reviewers reproduced the original C1 fail-open behavior at commit 
 | Invalid UTF-8 and duplicate JSON keys produced ambiguous artifacts | P1 | Fatal UTF-8 decoding, BOM rejection and duplicate-key-safe structural parsing now precede schema validation |
 | Future evidence or pre-existing lifecycle events could create temporal authority | P1 | Source capture must precede contract check; check must precede resolution time; lifecycle events must follow the relevant checked/effective times |
 | A retained APPROVAL resolution issued before a known later revoke could still be used after the revoke | P1 | Fixed at `d22489ed5`: approval/export now require a genuine decision-time server context, exact scope/purpose continuity and re-resolution against the issuing authoritative lifecycle snapshot; time rewind and stale/replaced/revoked resolutions fail closed |
+| The registry's public lifecycle/artifact properties could be replaced after a genuine resolution was issued | P1 | Fixed at `1a0ab224b`: the registry instance and nested authority state are immutable, enforcement calls the captured audited resolver, and replacement of snapshot, digest or artifacts is a permanent regression fixture |
 
 ## 3. Authority boundary
 
@@ -148,7 +149,7 @@ An independent reviewer must re-run the previously successful attacks on the exa
 
 Even after that acceptance, route integration is a separate commit and review gate.
 
-The registry snapshot is a server-authoritative input. A loader must never claim `completeThrough` beyond the point for which lifecycle event ingestion is actually complete. If the decision time is beyond that boundary, resolution fails closed with `POLICY_LIFECYCLE_SNAPSHOT_INCOMPLETE`; route integration must obtain the current authoritative snapshot rather than trusting client input or a process-lifetime cache.
+The registry snapshot is a server-authoritative input. A loader must never claim `completeThrough` beyond the point for which lifecycle event ingestion is actually complete. If the decision time is beyond that boundary, resolution fails closed with `INCOMPLETE_POLICY_LIFECYCLE_SNAPSHOT`; route integration must obtain the current authoritative snapshot rather than trusting client input or a process-lifetime cache.
 
 ## 7. Assigned next implementation sequence
 

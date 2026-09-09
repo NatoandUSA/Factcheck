@@ -85,6 +85,12 @@ function assertStoredRevisionIntegrity(row) {
     || hashBytes(row.dependency_manifest_json) !== row.dependency_manifest_hash) {
     throw new RevisionStoreError('REVISION_INTEGRITY_FAILURE', 500);
   }
+  const hasValidation = row.validation_accounting_json != null;
+  const hasValidationHash = row.validation_accounting_hash != null;
+  if (hasValidation !== hasValidationHash
+    || (hasValidation && hashBytes(row.validation_accounting_json) !== row.validation_accounting_hash)) {
+    throw new RevisionStoreError('REVISION_INTEGRITY_FAILURE', 500);
+  }
 }
 
 function requiredScope(scope) {
@@ -225,15 +231,17 @@ async function createListingWithRevisionUnlocked(db, rawScope, input, hooks = {}
   const requestedContent = strictClone(input?.content);
   const requestedContentJson = canonicalJson(requestedContent);
   const requestHash = hashBytes(requestEnvelope('CREATE_LISTING_V1', {
-    scope: { tenantId: scope.tenantId, workspaceId: scope.workspaceId, marketplace: scope.marketplace, actorId: scope.actorId },
+    scope: { tenantId: scope.tenantId, workspaceId: scope.workspaceId, marketplace: scope.marketplace },
     projectId, idempotencyKey, changeReason, content: JSON.parse(requestedContentJson),
     proposedDependencies: input?.dependencies || {}
   }));
   const preflightReplay = await receiptReplay(db, scope, 'CREATE_LISTING_V1', idempotencyKey, requestHash);
   if (preflightReplay) return preflightReplay;
-  const preparedContent = await prepareContent(hooks, { operation: 'CREATE_LISTING_V1', scope, projectId }, requestedContent);
-  const contentJson = canonicalJson(preparedContent);
+  const prepared = await prepareContent(hooks, { operation: 'CREATE_LISTING_V1', scope, projectId }, requestedContent);
+  const contentJson = canonicalJson(prepared.content);
   const contentHash = hashBytes(contentJson);
+  const validationJson = prepared.validationAccounting == null ? null : canonicalJson(prepared.validationAccounting);
+  const validationHash = validationJson == null ? null : hashBytes(validationJson);
   const dependencies = finalizeDependencies(await resolveDependencies(hooks, {
     operation: 'CREATE_LISTING_V1', scope, projectId
   }, input?.dependencies), 'LISTING');
@@ -254,9 +262,11 @@ async function createListingWithRevisionUnlocked(db, rawScope, input, hooks = {}
     if (hooks.afterRoot) await hooks.afterRoot(root.lastID);
     const revision = await run(db, `INSERT INTO listing_revisions
       (listing_id,tenant_id,workspace_id,marketplace,project_id,revision_number,parent_revision_id,
-       content_json,content_hash,dependency_manifest_json,dependency_manifest_hash,change_reason,created_by)
-      VALUES (?,?,?,?,?,1,NULL,?,?,?,?,?,?)`, [root.lastID, scope.tenantId, scope.workspaceId, scope.marketplace,
-      projectId, contentJson, contentHash, dependencyJson, dependencyHash, changeReason, scope.actorId]);
+       content_json,content_hash,dependency_manifest_json,dependency_manifest_hash,validation_accounting_json,
+       validation_accounting_hash,change_reason,created_by)
+      VALUES (?,?,?,?,?,1,NULL,?,?,?,?,?,?,?,?)`, [root.lastID, scope.tenantId, scope.workspaceId, scope.marketplace,
+      projectId, contentJson, contentHash, dependencyJson, dependencyHash, validationJson, validationHash,
+      changeReason, scope.actorId]);
     if (hooks.afterRevision) await hooks.afterRevision(revision.lastID);
     const head = await run(db, 'UPDATE listings SET head_revision_id=? WHERE id=? AND head_revision_id IS NULL', [revision.lastID, root.lastID]);
     if (head.changes !== 1) throw new RevisionStoreError('REVISION_CONFLICT', 409);
@@ -283,14 +293,16 @@ async function appendListingRevisionUnlocked(db, rawScope, listingIdInput, input
   const requestedContent = strictClone(input?.content);
   const requestedContentJson = canonicalJson(requestedContent);
   const requestHash = hashBytes(requestEnvelope('APPEND_LISTING_REVISION', {
-    scope: { tenantId: scope.tenantId, workspaceId: scope.workspaceId, marketplace: scope.marketplace, actorId: scope.actorId },
+    scope: { tenantId: scope.tenantId, workspaceId: scope.workspaceId, marketplace: scope.marketplace },
     listingId, projectId, parentRevisionId, expectedHeadRevisionId, idempotencyKey,
     changeReason, content: JSON.parse(requestedContentJson), proposedDependencies: input?.dependencies || {}
   }));
   const preflightReplay = await receiptReplay(db, scope, 'APPEND_LISTING_REVISION', idempotencyKey, requestHash);
   if (preflightReplay) return preflightReplay;
-  const preparedContent = await prepareContent(hooks, { operation: 'APPEND_LISTING_REVISION', scope, listingId, projectId }, requestedContent);
-  const contentJson = canonicalJson(preparedContent);
+  const prepared = await prepareContent(hooks, { operation: 'APPEND_LISTING_REVISION', scope, listingId, projectId }, requestedContent);
+  const contentJson = canonicalJson(prepared.content);
+  const validationJson = prepared.validationAccounting == null ? null : canonicalJson(prepared.validationAccounting);
+  const validationHash = validationJson == null ? null : hashBytes(validationJson);
   const dependencies = finalizeDependencies(await resolveDependencies(hooks, {
     operation: 'APPEND_LISTING_REVISION', scope, projectId, listingId
   }, input?.dependencies), 'LISTING');
@@ -305,7 +317,7 @@ async function appendListingRevisionUnlocked(db, rawScope, listingIdInput, input
     await assertDependenciesCurrent(hooks, { operation: 'APPEND_LISTING_REVISION', scope, listingId, projectId }, dependencies);
     if (root.head_revision_id !== expectedHeadRevisionId) throw new RevisionStoreError('REVISION_CONFLICT', 409);
     const parent = await get(db, `SELECT id,revision_number,content_json,content_hash,
-      dependency_manifest_json,dependency_manifest_hash FROM listing_revisions
+      dependency_manifest_json,dependency_manifest_hash,validation_accounting_json,validation_accounting_hash FROM listing_revisions
       WHERE id=? AND listing_id=? AND tenant_id=? AND workspace_id=? AND marketplace=? AND project_id=?`,
       [parentRevisionId, listingId, scope.tenantId, scope.workspaceId, scope.marketplace, projectId]);
     if (!parent) throw new RevisionStoreError('REVISION_NOT_FOUND', 404);
@@ -315,10 +327,11 @@ async function appendListingRevisionUnlocked(db, rawScope, listingIdInput, input
     const dependencyHash = hashBytes(dependencyJson);
     const inserted = await run(db, `INSERT INTO listing_revisions
       (listing_id,tenant_id,workspace_id,marketplace,project_id,revision_number,parent_revision_id,
-       content_json,content_hash,dependency_manifest_json,dependency_manifest_hash,change_reason,created_by)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`, [listingId, scope.tenantId, scope.workspaceId, scope.marketplace,
+       content_json,content_hash,dependency_manifest_json,dependency_manifest_hash,validation_accounting_json,
+       validation_accounting_hash,change_reason,created_by)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [listingId, scope.tenantId, scope.workspaceId, scope.marketplace,
       projectId, revisionNumber, parentRevisionId, contentJson, contentHash, dependencyJson, dependencyHash,
-      changeReason, scope.actorId]);
+      validationJson, validationHash, changeReason, scope.actorId]);
     if (hooks.afterRevision) await hooks.afterRevision(inserted.lastID);
     const content = JSON.parse(contentJson);
     const update = await run(db, `UPDATE listings SET head_revision_id=?,listing_version=?,payload=?,
@@ -352,7 +365,7 @@ async function appendCreativeRevisionUnlocked(db, rawScope, listingIdInput, inpu
   const changeReason = requiredReason(input?.changeReason);
   const contentJson = canonicalJson(input?.content);
   const requestHash = hashBytes(requestEnvelope('APPEND_CREATIVE_REVISION', {
-    scope: { tenantId: scope.tenantId, workspaceId: scope.workspaceId, marketplace: scope.marketplace, actorId: scope.actorId },
+    scope: { tenantId: scope.tenantId, workspaceId: scope.workspaceId, marketplace: scope.marketplace },
     listingId, projectId, listingRevisionId, parentRevisionId, expectedHeadRevisionId,
     idempotencyKey, changeReason, content: JSON.parse(contentJson),
     proposedDependencies: input?.dependencies || {}
@@ -436,8 +449,12 @@ async function getListingRevision(db, rawScope, listingIdInput, revisionIdInput,
   let dependencies;
   try { dependencies = JSON.parse(row.dependency_manifest_json); }
   catch (_) { throw new RevisionStoreError('REVISION_INTEGRITY_FAILURE', 500); }
+  let validationAccounting = null;
+  try { validationAccounting = row.validation_accounting_json == null ? null : JSON.parse(row.validation_accounting_json); }
+  catch (_) { throw new RevisionStoreError('REVISION_INTEGRITY_FAILURE', 500); }
   return Object.freeze({ ...row, content, contentRaw: row.content_json,
-    contentParseState: content === null && row.content_json !== 'null' ? 'MALFORMED_LEGACY_JSON' : 'PARSED', dependencies });
+    contentParseState: content === null && row.content_json !== 'null' ? 'MALFORMED_LEGACY_JSON' : 'PARSED',
+    dependencies, validationAccounting });
 }
 
 async function getCreativeRevision(db, rawScope, listingIdInput, revisionIdInput, projectIdInput) {
@@ -459,8 +476,16 @@ async function getCreativeRevision(db, rawScope, listingIdInput, revisionIdInput
 }
 
 async function prepareContent(hooks, context, content) {
-  if (typeof hooks.prepareContent !== 'function') return strictClone(content);
-  return strictClone(await hooks.prepareContent(Object.freeze({ ...context, content: strictClone(content) })));
+  if (typeof hooks.prepareContent !== 'function') {
+    return Object.freeze({ content: strictClone(content), validationAccounting: null });
+  }
+  const prepared = await hooks.prepareContent(Object.freeze({ ...context, content: strictClone(content) }));
+  if (prepared && typeof prepared === 'object' && !Array.isArray(prepared)
+    && Object.prototype.hasOwnProperty.call(prepared, 'content')) {
+    return Object.freeze({ content: strictClone(prepared.content),
+      validationAccounting: prepared.validationAccounting == null ? null : strictClone(prepared.validationAccounting) });
+  }
+  return Object.freeze({ content: strictClone(prepared), validationAccounting: null });
 }
 
 async function assertDependenciesCurrent(hooks, context, dependencies) {
@@ -486,7 +511,8 @@ async function listListingRevisions(db, rawScope, listingIdInput, projectIdInput
     }
     return Object.freeze({ ...row, content, contentRaw: row.content_json,
       contentParseState: content === null && row.content_json !== 'null' ? 'MALFORMED_LEGACY_JSON' : 'PARSED',
-      dependencies: JSON.parse(row.dependency_manifest_json) });
+      dependencies: JSON.parse(row.dependency_manifest_json),
+      validationAccounting: row.validation_accounting_json == null ? null : JSON.parse(row.validation_accounting_json) });
   });
 }
 

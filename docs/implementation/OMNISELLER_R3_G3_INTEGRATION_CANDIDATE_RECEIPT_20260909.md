@@ -69,7 +69,7 @@ Each mutation has an exact top-level allowlist. The server derives tenant, works
 ```text
 G2 immutable revisions                         40/40 PASS
 G3 project Product Truth revisions             18/18 PASS
-G3 canonical HTTP bootstrap                     33/33 PASS
+G3 canonical HTTP bootstrap                     40/40 PASS
 C1 policy contract registry                     10 groups PASS
 C2 claim guard                                  18/18 PASS
 C2 IP matcher                                   12/12 PASS
@@ -95,6 +95,8 @@ Independent review of local SHA `38834d6dc789e0f7e277f652e4cd2b731dbffe1a` retur
 2. Canonical listing writes now place selected Product Truth identity in the server-derived request envelope, replay a committed receipt before mutable validation, and assert the exact Product Truth head ID/hash inside the same `BEGIN IMMEDIATE` transaction that commits the listing revision.
 
 Permanent regression probes cover cross-actor Product Truth/listing/creative replay, replay after Product Truth head advancement, zero extra writes on replay, and rejection of a new stale-head write.
+
+Independent review round 2 confirmed those original flaws closed and identified two remediation regressions. The successor keeps the predecessor request-envelope hashes compatible while enforcing actor ownership through immutable receipt `created_by`, so same-actor retries survive an upgrade and cross-actor retries remain blocked. It also persists C2 validation accounting and its SHA-256 hash on every canonical listing revision. Save, edit, history and reopen therefore retain backend-keyword exclusions and flagged PPC claims instead of losing their only warning signal.
 
 ## Explicitly not certified in G3
 

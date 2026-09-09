@@ -1450,8 +1450,10 @@ app.post('/api/projects/:id/listings', requireAuth(db), requireRole(['OWNER', 'M
       projectId, idempotencyKey: body.idempotencyKey, changeReason: body.changeReason,
       content: body.content, dependencies: { productTruthRevisionId: Number(body.productTruthRevisionId) }
     }, {
-      prepareContent: async ({ content }) => (await validateCanonicalDraft(db, scope, projectId,
-        body.productTruthRevisionId, content)).content,
+      prepareContent: async ({ content }) => {
+        const validated = await validateCanonicalDraft(db, scope, projectId, body.productTruthRevisionId, content);
+        return { content: validated.content, validationAccounting: validated.guardAccounting };
+      },
       resolveDependencies: async () => (await validateCanonicalDraft(db, scope, projectId,
         body.productTruthRevisionId, body.content)).dependencies,
       assertDependenciesCurrent: async ({ dependencies }) => assertCanonicalDependenciesCurrent(
@@ -1459,7 +1461,7 @@ app.post('/api/projects/:id/listings', requireAuth(db), requireRole(['OWNER', 'M
     });
     const persisted = await getListingRevision(db, scope, result.listingId, result.revisionId, projectId);
     res.status(result.revisionNumber === 1 ? 201 : 200).json({ success: true, ...result,
-      status: 'NEEDS_QA', content: persisted.content });
+      status: 'NEEDS_QA', content: persisted.content, guardAccounting: persisted.validationAccounting });
   } catch (error) {
     rejectRevisionStore(res, error);
   }
@@ -1491,15 +1493,18 @@ app.post('/api/listings/:id/revisions', requireAuth(db), requireRole(['OWNER', '
       changeReason: body.changeReason, content: body.content,
       dependencies: { productTruthRevisionId: Number(body.productTruthRevisionId) }
     }, {
-      prepareContent: async ({ content }) => (await validateCanonicalDraft(db, scope, root.project_id,
-        body.productTruthRevisionId, content)).content,
+      prepareContent: async ({ content }) => {
+        const validated = await validateCanonicalDraft(db, scope, root.project_id, body.productTruthRevisionId, content);
+        return { content: validated.content, validationAccounting: validated.guardAccounting };
+      },
       resolveDependencies: async () => (await validateCanonicalDraft(db, scope, root.project_id,
         body.productTruthRevisionId, body.content)).dependencies,
       assertDependenciesCurrent: async ({ dependencies }) => assertCanonicalDependenciesCurrent(
         db, scope, root.project_id, dependencies)
     });
     const persisted = await getListingRevision(db, scope, listingId, result.revisionId, root.project_id);
-    res.json({ success: true, ...result, status: 'NEEDS_QA', content: persisted.content });
+    res.json({ success: true, ...result, status: 'NEEDS_QA', content: persisted.content,
+      guardAccounting: persisted.validationAccounting });
   } catch (error) {
     rejectRevisionStore(res, error);
   }

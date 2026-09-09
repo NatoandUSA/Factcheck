@@ -280,6 +280,12 @@ async function migrateProjectProductTruthRevisions(db) {
   await addColumnIfMissing(db, columns, 'product_family_version', 'TEXT NULL', 'research_projects');
   await addColumnIfMissing(db, columns, 'head_product_truth_revision_id',
     'INTEGER NULL REFERENCES product_truth_revisions(id)', 'research_projects');
+  const listingRevisionTables = await all(db, "SELECT name FROM sqlite_master WHERE type='table' AND name='listing_revisions'");
+  if (listingRevisionTables.length) {
+    const revisionColumns = new Set((await all(db, 'PRAGMA table_info(listing_revisions)')).map(column => column.name));
+    await addColumnIfMissing(db, revisionColumns, 'validation_accounting_json', 'TEXT NULL', 'listing_revisions');
+    await addColumnIfMissing(db, revisionColumns, 'validation_accounting_hash', 'TEXT NULL', 'listing_revisions');
+  }
   await run(db, `CREATE TABLE IF NOT EXISTS product_truth_revisions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     tenant_id TEXT NOT NULL,

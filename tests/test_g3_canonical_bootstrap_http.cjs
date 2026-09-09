@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 process.env.NODE_ENV = 'test';
 process.env.OMNI_MASTER_KEY ||= Buffer.alloc(32, 91).toString('base64');
 
@@ -141,6 +142,23 @@ async function main() {
   assert.equal(staleNewWrite.status, 409, JSON.stringify(staleNewWrite.body));
   assert.equal(staleNewWrite.body.error, 'STALE_PRODUCT_TRUTH_REVISION');
 
+  const flagged = await request(`/api/projects/${project.body.projectId}/listings`, 'POST', {
+    idempotencyKey: key(8), changeReason: 'PERSIST_C2_ACCOUNTING',
+    productTruthRevisionId: truthV2.body.productTruthRevisionId,
+    content: { ...preview.body.content, amazonSearchTerms: '18k gold necklace', ppcKeywords: ['18k gold necklace'] }
+  });
+  assert.equal(flagged.status, 201, JSON.stringify(flagged.body));
+  assert.equal(flagged.body.content.amazonSearchTerms, '');
+  assert.deepEqual(flagged.body.content.ppcKeywords, ['18k gold necklace']);
+  assert.equal(flagged.body.guardAccounting.backendExcluded.length, 1);
+  assert.ok(flagged.body.guardAccounting.ppcFlagged.length >= 1);
+  const flaggedRow = await get(`SELECT validation_accounting_json,validation_accounting_hash
+    FROM listing_revisions WHERE id=?`, [flagged.body.revisionId]);
+  assert.equal(crypto.createHash('sha256').update(flaggedRow.validation_accounting_json).digest('hex'),
+    flaggedRow.validation_accounting_hash);
+  const reopenedFlagged = await request(`/api/listings/${flagged.body.listingId}/revisions/${flagged.body.revisionId}`);
+  assert.deepEqual(reopenedFlagged.body.revision.validationAccounting, flagged.body.guardAccounting);
+
   const beforeLegacy = await get('SELECT head_revision_id,listing_version,payload FROM listings WHERE id=?', [created.body.listingId]);
   const legacyEdit = await request(`/api/listings/${created.body.listingId}`, 'PATCH', {
     expectedVersion: 2, amazonTitle: 'Legacy bypass', etsyTitle: '', categoryName: '', payload: editedContent
@@ -165,7 +183,7 @@ async function main() {
   });
   assert.equal(forbidden.status, 400);
   assert.equal(forbidden.body.error, 'UNEXPECTED_REQUEST_FIELD');
-  console.log('G3 canonical HTTP bootstrap: 33/33 PASS');
+  console.log('G3 canonical HTTP bootstrap: 40/40 PASS');
 }
 
 main().catch(error => { console.error(error); process.exitCode = 1; }).finally(async () => {

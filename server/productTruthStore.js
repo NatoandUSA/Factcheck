@@ -103,7 +103,7 @@ async function appendUnlocked(db, rawScope, projectIdInput, input = {}, hooks = 
     throw new ProductTruthStoreError('INVALID_REVISION_PARENT', 400);
   }
   const requestHash = hashBytes(canonicalJson({ operation: 'APPEND_PRODUCT_TRUTH',
-    scope: { tenantId: scope.tenantId, workspaceId: scope.workspaceId, marketplace: scope.marketplace, actorId: scope.actorId },
+    scope: { tenantId: scope.tenantId, workspaceId: scope.workspaceId, marketplace: scope.marketplace },
     projectId, idempotencyKey, changeReason, expectedHeadRevisionId, snapshot }));
   const preflight = await replay(db, scope, 'APPEND_PRODUCT_TRUTH', idempotencyKey, requestHash);
   if (preflight) return preflight;
@@ -159,7 +159,7 @@ async function confirmUnlocked(db, rawScope, projectIdInput, revisionIdInput, in
   const idempotencyKey = keyOf(input.idempotencyKey);
   const reason = reasonOf(input.reason);
   const requestHash = hashBytes(canonicalJson({ operation: 'CONFIRM_PRODUCT_TRUTH',
-    scope: { tenantId: scope.tenantId, workspaceId: scope.workspaceId, marketplace: scope.marketplace, actorId: scope.actorId },
+    scope: { tenantId: scope.tenantId, workspaceId: scope.workspaceId, marketplace: scope.marketplace },
     projectId, revisionId, idempotencyKey, reason }));
   const preflight = await replay(db, scope, 'CONFIRM_PRODUCT_TRUTH', idempotencyKey, requestHash);
   if (preflight) return preflight;

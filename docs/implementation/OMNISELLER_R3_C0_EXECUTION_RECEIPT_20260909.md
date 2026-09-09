@@ -64,6 +64,8 @@ Command: `node scripts/c0_validate_contracts.cjs`
 
 The validator uses AJV 8 in Draft 2020 mode plus the reusable runtime-neutral policy invariant validator. It tests positive Amazon/Etsy/Track-A fixtures and negative empty-rules, evidence, scope, Etsy target-over-maximum, authority-escalation and missing-component cases. Artifact hashes printed by the command are SHA-256 of exact stored UTF-8 bytes, not semantic/canonicalized JSON hashes.
 
+Contract JSON is forced to `eol=lf` by `.gitattributes`, preventing Windows CRLF checkout from changing an approval-critical artifact hash for the same Git content.
+
 ```text
 C0_CONTRACT_OK taxonomy artifactByteSha256=b0e785623b4dcca781f6d8c51e0f9c17683a889405eb3bbffe87f602c74faafd
 C0_CONTRACT_OK redCases artifactByteSha256=499de2526a9247656d5aa5a94ec55fce562268fb9d8a4d223244aacba93a0f42

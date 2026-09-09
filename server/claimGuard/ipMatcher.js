@@ -268,4 +268,3 @@ module.exports = {
   tokenize,
   variantsOf
 };
-

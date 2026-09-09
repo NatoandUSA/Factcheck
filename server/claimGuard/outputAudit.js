@@ -34,7 +34,7 @@ function auditOutput(fields, truth, options = {}) {
   const flagged = violations.filter(item => item.action === ACTIONS.ALLOW_WITH_FLAG);
   return Object.freeze({
     clean: violations.length === 0,
-    publishable: blocking.length === 0,
+    claimSurfaceBlockingFree: blocking.length === 0,
     violations: Object.freeze(violations),
     blocking: Object.freeze(blocking),
     excluded: Object.freeze(excluded),

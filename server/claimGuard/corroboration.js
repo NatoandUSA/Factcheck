@@ -2,6 +2,9 @@
 
 const { fold, scanClaims } = require('./lexicalScanner');
 
+const VALID_CORROBORATIONS = new WeakSet();
+const CORROBORATION_STATE = new WeakMap();
+
 function deepFreeze(value) {
   if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
   for (const child of Object.values(value)) deepFreeze(child);
@@ -25,11 +28,9 @@ const C = Object.freeze({
   COMPARATIVE: 'COMPARATIVE_SUPERLATIVE_EXCLUSIVITY'
 });
 
-// Identity paths are intentionally restricted to CAPABILITY. In particular,
-// a product name/type cannot prove material, purity, measure, included items,
-// packaging or fulfilment.
+// Product identity is deliberately absent. Names/types route a product; they
+// do not prove any customer-facing attribute or production capability.
 const FIELD_RULES = deepFreeze([
-  { paths: ['productName', 'productType', 'identity.productName', 'identity.productType', 'productIdentity.productName', 'productIdentity.productType'], claimIds: [C.CAPABILITY], identity: true },
   { paths: ['materials', 'material', 'composition', 'purity'], claimIds: [C.MATERIAL] },
   { paths: ['gemstones', 'gemstone', 'components', 'includedItems'], claimIds: [C.COMPONENT] },
   { paths: ['sizes', 'size', 'dimensions', 'dimension', 'weight', 'quantity', 'capacity'], claimIds: [C.MEASURE] },
@@ -93,15 +94,27 @@ function buildCorroboration(truth = {}) {
     }
   }
 
-  return Object.freeze({ supported, sources });
+  const evidence = Object.freeze([...supported].sort().map(key => {
+    const separator = key.indexOf('\u0000');
+    return Object.freeze({
+      claimId: key.slice(0, separator),
+      token: key.slice(separator + 1),
+      sourcePaths: Object.freeze([...(sources.get(key) || [])].sort())
+    });
+  }));
+  const handle = Object.freeze({ claimCount: supported.size, evidence });
+  VALID_CORROBORATIONS.add(handle);
+  CORROBORATION_STATE.set(handle, { supported, sources });
+  return handle;
 }
 
 function corroborates(corroboration, claim) {
-  return Boolean(corroboration && corroboration.supported && corroboration.supported.has(claimKey(claim)));
+  if (!corroboration || !VALID_CORROBORATIONS.has(corroboration)) return false;
+  return CORROBORATION_STATE.get(corroboration).supported.has(claimKey(claim));
 }
 
 function unverifiedClaims(text, truthOrCorroboration = {}) {
-  const corroboration = truthOrCorroboration.supported instanceof Set
+  const corroboration = truthOrCorroboration && VALID_CORROBORATIONS.has(truthOrCorroboration)
     ? truthOrCorroboration
     : buildCorroboration(truthOrCorroboration);
   return scanClaims(text).filter(claim => !corroborates(corroboration, claim));

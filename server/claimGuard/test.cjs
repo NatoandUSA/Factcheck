@@ -47,10 +47,10 @@ test('product identity cannot prove material, purity, dimensions, included items
   assert(families.has('FULFILLMENT_PROCESSING_DELIVERY'));
 });
 
-test('identity may corroborate an explicitly named capability only', () => {
+test('product identity never corroborates a capability or process claim', () => {
   const truth = { productName: 'Personalized necklace' };
-  assert.equal(guard.auditComposedOutput({ title: 'Personalized necklace' }, truth).publishable, true);
-  assert.equal(guard.auditComposedOutput({ title: 'Laser engraved necklace' }, truth).publishable, false);
+  assert.equal(guard.auditComposedOutput({ title: 'Personalized necklace' }, truth).claimSurfaceBlockingFree, false);
+  assert.equal(guard.auditComposedOutput({ title: 'Laser engraved necklace' }, truth).claimSurfaceBlockingFree, false);
 });
 
 test('personalization entitlement proves personalization but not engraving method', () => {
@@ -92,14 +92,14 @@ test('unknown surfaces fail closed', () => {
 
 test('second pass catches template and staff-edit injected claims', () => {
   const truth = { materials: ['stainless steel'] };
-  assert.equal(guard.auditComposedOutput({ description: 'Template: genuine diamond' }, truth).publishable, false);
-  assert.equal(guard.auditEditedOutput({ description: 'Edited: waterproof' }, truth).publishable, false);
+  assert.equal(guard.auditComposedOutput({ description: 'Template: genuine diamond' }, truth).claimSurfaceBlockingFree, false);
+  assert.equal(guard.auditEditedOutput({ description: 'Edited: waterproof' }, truth).claimSurfaceBlockingFree, false);
 });
 
 test('nested image prompts receive the same blocking audit as visible copy', () => {
   const truth = { materials: ['stainless steel'] };
   const result = guard.auditOutput({ creative: { prompts: ['Macro photo of 925 silver pendant'] } }, truth, { surface: guard.SURFACES.IMAGE_PROMPT });
-  assert.equal(result.publishable, false);
+  assert.equal(result.claimSurfaceBlockingFree, false);
   assert(result.blocking.some(item => item.field === 'creative.prompts[0]'));
 });
 
@@ -143,6 +143,26 @@ test('ordinary Hija audience and occasion phrases are not treated as product att
   for (const text of ['necklace for daughter from mom', 'birthday gift for daughter necklace', 'regalo para mi hija navidad']) {
     assert.equal(guard.unverifiedClaims(text, truth).length, 0, text);
   }
+});
+
+test('corroboration is opaque and forged or caller-mutated sets cannot authorize claims', () => {
+  const empty = guard.buildCorroboration({});
+  assert.equal(Object.isFrozen(empty), true);
+  assert.equal(empty.supported, undefined);
+  assert.equal(guard.evaluateText('silver 925', empty, guard.SURFACES.VISIBLE_COPY).allowed, false);
+  const forged = { supported: new Set(['COMPOSITION_MATERIAL_PURITY\u0000925']) };
+  assert.equal(guard.evaluateText('925', forged, guard.SURFACES.VISIBLE_COPY).allowed, false);
+});
+
+test('claim audit returns no publish or approval authority boolean', () => {
+  const audit = guard.auditOutput({ backend: 'silver 925' }, {}, {
+    surface: guard.SURFACES.BACKEND_SEARCH
+  });
+  assert.equal(audit.claimSurfaceBlockingFree, true);
+  assert.equal('publishable' in audit, false);
+  assert.equal('canApprove' in audit, false);
+  assert.equal('canExport' in audit, false);
+  assert(audit.excluded.length > 0);
 });
 
 process.stdout.write(`# ${passed} passed / 0 failed / 0 unexecuted\n`);

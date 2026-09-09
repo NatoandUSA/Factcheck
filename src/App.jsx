@@ -61,7 +61,12 @@ export default function App() {
           ...item.payload,
           dbId: item.id,
           status: item.status,
-          generatedAt: item.generatedAt
+          generatedAt: item.generatedAt,
+          listingVersion: item.listing_version,
+          productTruthCard: (() => {
+            try { return typeof item.product_truth_card === 'string' ? JSON.parse(item.product_truth_card) : item.product_truth_card; }
+            catch (_) { return null; }
+          })()
         }));
         setHistory(backendHistory);
         return;
@@ -108,15 +113,17 @@ export default function App() {
         status: 'NEEDS_QA'
       };
 
-      // Post to backend to enforce AMZ-style strict gating. The backend is the
-      // sole catalog authority: if this write doesn't succeed, the listing is
-      // NOT_PERSISTED and must not be shown or saved as if it were.
+      // Replace content on the exact Product Truth-bound listing. Creating a
+      // second row here would orphan the truth card on the source row.
       try {
-        const res = await fetch('/api/listings', {
-          method: 'POST',
+        const sourceListingId = verifiedProjection.context.productId;
+        const sourceVersion = verifiedProjection.context.listingVersion;
+        const res = await fetch(`/api/listings/${sourceListingId}`, {
+          method: 'PATCH',
           credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
+            expectedVersion: sourceVersion,
             amazonTitle: enrichedResult.amazonTitle,
             etsyTitle: enrichedResult.etsyTitle,
             categoryName: enrichedResult.categoryName,
@@ -125,8 +132,10 @@ export default function App() {
         });
         if (res.ok) {
           const dbData = await res.json();
-          enrichedResult.dbId = dbData.id;
+          enrichedResult.dbId = sourceListingId;
           enrichedResult.status = dbData.status; // NEEDS_QA
+          enrichedResult.listingVersion = dbData.listingVersion;
+          enrichedResult.productTruthCard = dbData.productTruthCard;
         } else {
           enrichedResult.status = 'NOT_PERSISTED';
         }
@@ -189,20 +198,15 @@ export default function App() {
       showToast('Error: Cannot approve an offline listing.');
       return;
     }
-    // Approval consumes an already-created structured evidence card. A text
-    // prompt is not evidence and must never manufacture factual authority.
-    if (!listingToApprove.productTruthCard) {
-      showToast('Approval blocked: create a version-bound Product Truth Card first.');
-      return;
-    }
+    // The server loads the exact persisted Product Truth Card. The browser is
+    // never an evidence-authority transport during approval.
     try {
       const res = await fetch(`/api/listings/${listingToApprove.dbId}/approve`, {
         method: 'PATCH',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          expectedVersion: listingToApprove.listingVersion || listingToApprove.listing_version || 1,
-          productTruthCard: listingToApprove.productTruthCard
+          expectedVersion: listingToApprove.listingVersion || listingToApprove.listing_version || 1
         })
       });
       if (!res.ok) {

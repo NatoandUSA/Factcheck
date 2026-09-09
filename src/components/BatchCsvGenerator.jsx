@@ -99,10 +99,23 @@ export default function BatchCsvGenerator({ onShowToast, onSaveListing }) {
     onShowToast('Batch processing complete!');
   };
 
-  const exportAllResultsCsv = () => {
+  const exportAllResultsCsv = async () => {
     if (results.length === 0) return;
-
-    const exportRows = results.map(r => ({
+    try {
+      const authoritative = [];
+      for (const result of results) {
+        const listingId = result?.batchSource?.productId;
+        if (!listingId) throw new Error('BATCH_RESULT_NOT_BOUND_TO_LISTING');
+        const response = await fetch(`/api/listings/${encodeURIComponent(listingId)}/export`, {
+          credentials: 'include'
+        });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok || body.success !== true) {
+          throw new Error(body.error || `EXPORT_DENIED_LISTING_${listingId}`);
+        }
+        authoritative.push(body.listing);
+      }
+      const exportRows = authoritative.map(r => ({
       Category: r.categoryName,
       Amazon_Title: r.amazonTitle,
       Amazon_Bullet_1: r.amazonBullets?.[0] || '',
@@ -116,15 +129,19 @@ export default function BatchCsvGenerator({ onShowToast, onSaveListing }) {
       Etsy_13_Tags: (r.etsyTags || []).join(', '),
       Etsy_Personalization_Box: r.etsyPersonalizationInstructions,
       Etsy_Description: r.etsyDescription
-    }));
+      }));
 
-    const csv = Papa.unparse(exportRows);
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.download = `OmniSeller_Batch_Export_${Date.now()}.csv`;
-    link.click();
-    onShowToast('Exported all generated listings to CSV!');
+      const csv = Papa.unparse(exportRows);
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = `OmniSeller_Batch_Export_${Date.now()}.csv`;
+      link.click();
+      URL.revokeObjectURL(link.href);
+      onShowToast('Exported Manager-approved canonical listings to CSV.');
+    } catch (error) {
+      onShowToast(`Batch export blocked: ${error.message}`);
+    }
   };
 
   return (

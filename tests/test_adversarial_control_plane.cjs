@@ -210,12 +210,12 @@ async function main() {
       );
       quickDraftListingId = inserted.lastID;
       const exportBefore = await http(port, amazonCookie, 'GET', `/api/listings/${quickDraftListingId}/export`);
-      assert.strictEqual(exportBefore.response.status, 409);
-      assert.strictEqual(exportBefore.payload.error, 'APPROVAL_INVALIDATED');
+      assert.strictEqual(exportBefore.response.status, 403);
+      assert.strictEqual(exportBefore.payload.error, 'PRODUCT_TRUTH_REQUIRED');
 
       const approveWithoutTruth = await http(port, amazonCookie, 'PATCH', `/api/listings/${quickDraftListingId}/approve`, { expectedVersion: 1 });
-      assert.strictEqual(approveWithoutTruth.response.status, 400);
-      assert.strictEqual(approveWithoutTruth.payload.error, 'PRODUCT_TRUTH_CARD_INVALID');
+      assert.strictEqual(approveWithoutTruth.response.status, 409);
+      assert.strictEqual(approveWithoutTruth.payload.error, 'PRODUCT_TRUTH_REQUIRED');
 
       const row = await dbGet('SELECT approved_hash, approved_version, product_truth_notes, status FROM listings WHERE id = ?', [quickDraftListingId]);
       assert.strictEqual(row.approved_hash, null);

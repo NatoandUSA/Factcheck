@@ -19,6 +19,8 @@
   "tests/test_backup_restore_and_migrations.cjs",
   "tests/test_c1_policy_contract_registry.cjs",
   "tests/test_c2_claim_guard.cjs",
+  "tests/test_c3_claim_policy_integration.cjs",
+  "tests/test_c3_product_truth_attestation.cjs",
   "tests/test_cross_tenant_isolation.cjs",
   "tests/test_database_fixture_isolation.cjs",
   "tests/test_etsy_csv_richness.cjs",

@@ -32,6 +32,7 @@ const ROUTES = [
   { method: 'POST', path: '/api/listings', public: false },
   { method: 'GET', path: '/api/listings', public: false },
   { method: 'PATCH', path: '/api/listings/:id', public: false },
+  { method: 'PUT', path: '/api/listings/:id/product-truth', public: false },
   { method: 'PATCH', path: '/api/listings/:id/approve', public: false },
   { method: 'GET', path: '/api/listings/:id/export', public: false },
   { method: 'POST', path: '/api/listings/:id/feedback', public: false },

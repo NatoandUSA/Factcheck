@@ -1,12 +1,15 @@
 import React, { useState } from 'react';
 import { History, Eye, Trash2, Download, Search, Sparkles, TrendingUp, ChevronDown, ChevronUp, AlertCircle, RefreshCw, CheckCircle } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import ProductTruthEditor from './ProductTruthEditor';
 
 export default function ListingHistory({ history, onSelectListing, onDeleteListing, onClearHistory, onShowToast, onRefresh, onApproveListing }) {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL'); // 'ALL' | 'NEEDS_QA' | 'APPROVED'
   const [expandedFeedbackId, setExpandedFeedbackId] = useState(null);
+  const [expandedTruthId, setExpandedTruthId] = useState(null);
   const [syncing, setSyncing] = useState(false);
+  const [creatingShell, setCreatingShell] = useState(false);
   const [showToast, setShowToast] = useState(false);
   const { user } = useAuth();
 
@@ -19,6 +22,39 @@ export default function ListingHistory({ history, onSelectListing, onDeleteListi
     setSyncing(false);
     setShowToast(true);
     setTimeout(() => setShowToast(false), 2000);
+  };
+
+  const createProductTruthShell = async () => {
+    setCreatingShell(true);
+    try {
+      const response = await fetch('/api/listings', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          amazonTitle: 'Product Truth Intake',
+          etsyTitle: 'Product Truth Intake',
+          categoryName: 'STANDARD_PRINT_ON_DEMAND',
+          payload: {
+            amazonTitle: 'Product Truth Intake',
+            etsyTitle: 'Product Truth Intake',
+            categoryName: 'STANDARD_PRINT_ON_DEMAND',
+            amazonBullets: [], amazonSearchTerms: '', amazonDescription: '',
+            etsyTags: [], etsyDescription: '',
+            evidenceState: 'STAFF_INPUT_UNVERIFIED', status: 'NEEDS_QA'
+          }
+        })
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || 'LISTING_SHELL_CREATE_FAILED');
+      onShowToast?.(`Đã tạo hồ sơ #${result.id}. Mở Product Truth để nhập dữ liệu thật.`);
+      await onRefresh?.();
+      setExpandedTruthId(result.id);
+    } catch (error) {
+      onShowToast?.(`Không thể tạo hồ sơ Product Truth: ${error.message}`);
+    } finally {
+      setCreatingShell(false);
+    }
   };
 
   const isManager = user?.role === 'MANAGER' || user?.role === 'OWNER' || user?.role === 'ADMIN';
@@ -88,6 +124,9 @@ export default function ListingHistory({ history, onSelectListing, onDeleteListi
         </div>
 
         <div style={{ display: 'flex', gap: '8px' }}>
+          <button className="btn btn-primary btn-sm" onClick={createProductTruthShell} disabled={creatingShell}>
+            <span>{creatingShell ? 'Đang tạo...' : '+ Tạo hồ sơ Product Truth'}</span>
+          </button>
           {onRefresh && (
             <button className="btn btn-secondary btn-sm" onClick={handleRefresh} disabled={syncing}>
               <RefreshCw size={14} className={syncing ? "spin-icon" : ""} />
@@ -199,6 +238,13 @@ export default function ListingHistory({ history, onSelectListing, onDeleteListi
               </div>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <button
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => setExpandedTruthId(expandedTruthId === item.dbId ? null : item.dbId)}
+                  disabled={!item.dbId}
+                >
+                  <span>Product Truth</span>
+                </button>
                 {isManager && item.status === 'NEEDS_QA' && onApproveListing && (
                   <button
                     className="btn btn-sm"
@@ -241,6 +287,18 @@ export default function ListingHistory({ history, onSelectListing, onDeleteListi
                   <Trash2 size={14} />
                 </button>
               </div>
+
+              {expandedTruthId === item.dbId && (
+                <ProductTruthEditor
+                  listing={item}
+                  onCancel={() => setExpandedTruthId(null)}
+                  onShowToast={onShowToast}
+                  onSaved={async () => {
+                    await onRefresh?.();
+                    setExpandedTruthId(null);
+                  }}
+                />
+              )}
               
               {expandedFeedbackId === item.id && (
                 <div style={{ width: '100%', marginTop: '16px', padding: '16px', background: 'var(--bg-subtle)', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>

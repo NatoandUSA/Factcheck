@@ -2,7 +2,6 @@ const assert = require('node:assert/strict');
 process.env.NODE_ENV = 'test';
 const { app, db, databaseReady } = require('../server/server');
 const { createSessionRecord } = require('../server/security/session');
-const { makeProductTruthCard } = require('./helpers/productTruth.cjs');
 const { runMigrations } = require('../server/database/migrations');
 const all = (sql,args=[]) => new Promise((resolve,reject)=>db.all(sql,args,(e,r)=>e?reject(e):resolve(r)));
 const run = (sql,args=[]) => new Promise((resolve,reject)=>db.run(sql,args,function(e){e?reject(e):resolve(this.lastID);}));
@@ -21,7 +20,9 @@ async function main(){
   const payload={amazonTitle:'Neutral Family Gift Idea',amazonDescription:'Human checked neutral product description.',amazonBullets:['One','Two','Three','Four','Five'],amazonSearchTerms:'neutral family gift',netProfit:8.5,netMargin:35,categoryName:'APPAREL'};
   const listingId=await run(`INSERT INTO listings(tenant_id,workspace_id,marketplace,project_id,amazonTitle,categoryName,status,authorId,payload)
     VALUES (?,?,?,?,'Neutral Family Gift Idea','APPAREL','NEEDS_QA',?,?)`,[owner.tenantId,owner.workspaceId,owner.marketplace,projectId,owner.userId,JSON.stringify(payload)]);
-  const approved=await request(`/api/listings/${listingId}/approve`,'PATCH',{expectedVersion:1,productTruthCard:makeProductTruthCard(listingId,1)});
+  const truth=await request(`/api/listings/${listingId}/product-truth`,'PUT',{expectedVersion:1,facts:{productType:{disposition:'ASSERTED',value:'APPAREL',basis:'PHYSICAL_INSPECTION'}}});
+  assert.equal(truth.status,200,JSON.stringify(truth));measured++;
+  const approved=await request(`/api/listings/${listingId}/approve`,'PATCH',{expectedVersion:truth.body.listingVersion});
   assert.equal(approved.status,200,JSON.stringify(approved));measured++;
   const [baseline]=await all('SELECT * FROM listings WHERE id=?',[listingId]);
   const [otherUser]=await all('SELECT id FROM users WHERE id<>? LIMIT 1',[owner.userId]);
@@ -31,23 +32,25 @@ async function main(){
   const exportGood=await request(`/api/listings/${listingId}/export`,'GET');assert.equal(exportGood.status,200,JSON.stringify(exportGood));measured++;
   const target=`/api/projects/${projectId}/transition`;
   async function reject(route,method,body,status){const before=await snapshot();const r=await request(route,method,body);assert.equal(r.status,status,JSON.stringify(r));assert.deepEqual(await snapshot(),before);measured++;}
-  const transition={targetState:'PUBLISH_READY',listingId,expectedVersion:1};
+  const transition={targetState:'PUBLISH_READY',listingId,expectedVersion:baseline.listing_version};
   await reject(target,'PATCH',{...transition,expectedVersion:999},412);
   await reject(target,'PATCH',{...transition,listingId:999999},404);
   await reject(target,'PATCH',{...transition,expectedVersion:'1'},400);
   for(const [column,value] of [
     ['payload',JSON.stringify({...payload,amazonTitle:'changed'})],['payload','bad json'],
-    ['listing_version',2],['approved_version',2],['approved_hash','f'.repeat(64)],
+    ['listing_version',baseline.listing_version+1],['approved_version',baseline.approved_version+1],['approved_hash','f'.repeat(64)],
     ['approved_context_hash',null],['approved_by',otherUser.id],['approved_at',null],
-    ['product_truth_card',JSON.stringify(makeProductTruthCard(listingId,2))],
-    ['product_truth_card',JSON.stringify(makeProductTruthCard(listingId,1,{state:'UNVERIFIED'}))],
+    ['product_truth_card',JSON.stringify({...JSON.parse(baseline.product_truth_card),listingVersion:baseline.listing_version+1})],
+    ['product_truth_card',JSON.stringify({...JSON.parse(baseline.product_truth_card),state:'UNVERIFIED'})],
     ['project_id',otherProject],['tenant_id','wrong'],['workspace_id',otherWorkspace.id],['marketplace','ETSY']
   ]){
     await run(`UPDATE listings SET ${column}=? WHERE id=?`,[value,listingId]);
     // Without a client selection, missing scope is a non-enumerating project
     // precondition failure. Exact selected listing uses 404.
     await reject(target,'PATCH',{targetState:'PUBLISH_READY'},400);
-    const routeStatus=['tenant_id','workspace_id','marketplace'].includes(column)?404:409;
+    const routeStatus=['tenant_id','workspace_id','marketplace'].includes(column)
+      ? 404
+      : ['listing_version','product_truth_card'].includes(column) ? 403 : 409;
     await reject(`/api/listings/${listingId}/export`,'GET',{},routeStatus);
     await run(`UPDATE listings SET ${column}=? WHERE id=?`,[baseline[column],listingId]);
   }

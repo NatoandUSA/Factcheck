@@ -87,6 +87,8 @@ async function runZeroFabricationSuite() {
   assert.ok(batchCsvSource.includes('prepareVerifiedBatchRow(row)'), 'Batch CSV must use the canonical GPT2 preflight');
   assert.strictEqual(batchCsvSource.includes('categoryObj.sampleBrief'), false, 'Batch CSV must not inject sampleBrief');
   assert.strictEqual(batchCsvSource.includes('categoryObj.defaultMaterials'), false, 'Batch CSV must not inject defaultMaterials');
+  assert.ok(batchCsvSource.includes('/api/listings/${encodeURIComponent(listingId)}/export'), 'Batch CSV download must consume the gated server export route');
+  assert.ok(batchCsvSource.includes('body.success !== true'), 'Batch CSV download must fail closed when any canonical export is denied');
   assert.strictEqual(batchCsvSource.includes('sourceRow: row'), false, 'Raw CSV prose must not be persisted inside the generated listing');
   console.log('  🟢 Batch CSV generator is wired to evidence-bound preflight.');
 

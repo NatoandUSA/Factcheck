@@ -5,6 +5,8 @@ const MARKET_TRENDS_MARKETPLACE_MIGRATION = '005_market_trends_marketplace';
 const WORKSPACE_OWNERSHIP_MIGRATION = '006_market_trends_and_templates_ownership';
 const PRODUCT_TRUTH_ATTESTATION_MIGRATION = '007_listing_product_truth_attestation';
 const PRODUCT_TRUTH_CARD_MIGRATION = '008_listing_product_truth_card';
+const IMMUTABLE_REVISIONS_MIGRATION = '009_immutable_listing_creative_revisions';
+const crypto = require('node:crypto');
 
 function run(db, sql, params = []) {
   return new Promise((resolve, reject) => {
@@ -136,6 +138,116 @@ async function migrateProductTruthAttestation(db) {
 async function migrateProductTruthCard(db) {
   const columns = new Set((await all(db, 'PRAGMA table_info(listings)')).map(column => column.name));
   await addColumnIfMissing(db, columns, 'product_truth_card', 'TEXT NULL');
+}
+
+function sha256Bytes(value) {
+  return crypto.createHash('sha256').update(Buffer.from(String(value), 'utf8')).digest('hex');
+}
+
+async function migrateImmutableRevisions(db) {
+  const listingTable = await all(db, "SELECT name FROM sqlite_master WHERE type='table' AND name='listings'");
+  if (!listingTable.length) return;
+  const columns = new Set((await all(db, 'PRAGMA table_info(listings)')).map(column => column.name));
+  await addColumnIfMissing(db, columns, 'head_revision_id', 'INTEGER NULL REFERENCES listing_revisions(id)');
+  await addColumnIfMissing(db, columns, 'head_creative_revision_id', 'INTEGER NULL REFERENCES creative_revisions(id)');
+
+  await run(db, `CREATE TABLE IF NOT EXISTS listing_revisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    listing_id INTEGER NOT NULL REFERENCES listings(id),
+    tenant_id TEXT NOT NULL,
+    workspace_id INTEGER NOT NULL,
+    marketplace TEXT NOT NULL CHECK(marketplace IN ('AMAZON','ETSY')),
+    project_id INTEGER NULL,
+    revision_number INTEGER NOT NULL CHECK(revision_number >= 1),
+    parent_revision_id INTEGER NULL REFERENCES listing_revisions(id),
+    content_json TEXT NOT NULL,
+    content_hash TEXT NOT NULL CHECK(length(content_hash) = 64),
+    dependency_manifest_json TEXT NOT NULL,
+    dependency_manifest_hash TEXT NOT NULL CHECK(length(dependency_manifest_hash) = 64),
+    change_reason TEXT NOT NULL,
+    created_by INTEGER NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    migrated_from_legacy INTEGER NOT NULL DEFAULT 0 CHECK(migrated_from_legacy IN (0,1)),
+    UNIQUE(listing_id, revision_number)
+  )`);
+  await run(db, `CREATE INDEX IF NOT EXISTS idx_listing_revisions_scope
+    ON listing_revisions(tenant_id, workspace_id, marketplace, project_id, listing_id, revision_number)`);
+
+  await run(db, `CREATE TABLE IF NOT EXISTS creative_revisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    listing_id INTEGER NOT NULL REFERENCES listings(id),
+    listing_revision_id INTEGER NOT NULL REFERENCES listing_revisions(id),
+    tenant_id TEXT NOT NULL,
+    workspace_id INTEGER NOT NULL,
+    marketplace TEXT NOT NULL CHECK(marketplace IN ('AMAZON','ETSY')),
+    project_id INTEGER NULL,
+    revision_number INTEGER NOT NULL CHECK(revision_number >= 1),
+    parent_revision_id INTEGER NULL REFERENCES creative_revisions(id),
+    content_json TEXT NOT NULL,
+    content_hash TEXT NOT NULL CHECK(length(content_hash) = 64),
+    dependency_manifest_json TEXT NOT NULL,
+    dependency_manifest_hash TEXT NOT NULL CHECK(length(dependency_manifest_hash) = 64),
+    change_reason TEXT NOT NULL,
+    created_by INTEGER NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(listing_id, revision_number)
+  )`);
+  await run(db, `CREATE INDEX IF NOT EXISTS idx_creative_revisions_scope
+    ON creative_revisions(tenant_id, workspace_id, marketplace, project_id, listing_id, revision_number)`);
+
+  await run(db, `CREATE TABLE IF NOT EXISTS listing_write_receipts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id TEXT NOT NULL,
+    workspace_id INTEGER NOT NULL,
+    marketplace TEXT NOT NULL CHECK(marketplace IN ('AMAZON','ETSY')),
+    project_id INTEGER NULL,
+    listing_id INTEGER NULL REFERENCES listings(id),
+    operation TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    request_hash TEXT NOT NULL CHECK(length(request_hash) = 64),
+    response_json TEXT NOT NULL,
+    created_by INTEGER NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id, workspace_id, marketplace, operation, idempotency_key)
+  )`);
+
+  for (const table of ['listing_revisions', 'creative_revisions', 'listing_write_receipts']) {
+    await run(db, `CREATE TRIGGER IF NOT EXISTS ${table}_immutable_update
+      BEFORE UPDATE ON ${table} BEGIN SELECT RAISE(ABORT, 'IMMUTABLE_REVISION'); END`);
+    await run(db, `CREATE TRIGGER IF NOT EXISTS ${table}_immutable_delete
+      BEFORE DELETE ON ${table} BEGIN SELECT RAISE(ABORT, 'IMMUTABLE_REVISION'); END`);
+  }
+
+  const legacyDependency = JSON.stringify({
+    state: 'LEGACY_UNKNOWN',
+    productTruthHash: null,
+    researchSnapshotHash: null,
+    intelligenceSnapshotHash: null,
+    policyBindingHash: null,
+    claimIpBindingHash: null,
+    validatorHash: null
+  });
+  const legacyDependencyHash = sha256Bytes(legacyDependency);
+  const projection = name => columns.has(name) ? name : `NULL AS ${name}`;
+  const rows = await all(db, `SELECT id, tenant_id, workspace_id, marketplace,
+    ${projection('project_id')}, ${projection('listing_version')}, ${projection('payload')},
+    ${projection('authorId')}, head_revision_id FROM listings
+    WHERE tenant_id IS NOT NULL AND workspace_id IS NOT NULL AND marketplace IN ('AMAZON','ETSY')`);
+  for (const row of rows) {
+    if (row.head_revision_id != null) continue;
+    const content = typeof row.payload === 'string' ? row.payload : 'null';
+    const revisionNumber = Number.isInteger(row.listing_version) && row.listing_version >= 1 ? row.listing_version : 1;
+    await run(db, `INSERT OR IGNORE INTO listing_revisions
+      (listing_id,tenant_id,workspace_id,marketplace,project_id,revision_number,parent_revision_id,
+       content_json,content_hash,dependency_manifest_json,dependency_manifest_hash,change_reason,created_by,migrated_from_legacy)
+      VALUES (?,?,?,?,?,?,NULL,?,?,?,?,?,?,1)`, [
+      row.id, row.tenant_id, row.workspace_id, row.marketplace, row.project_id ?? null,
+      revisionNumber, content, sha256Bytes(content), legacyDependency, legacyDependencyHash,
+      'LEGACY_SNAPSHOT_NO_HISTORY_INVENTED', row.authorId ?? null
+    ]);
+    const revision = await all(db, 'SELECT id FROM listing_revisions WHERE listing_id=? AND revision_number=?', [row.id, revisionNumber]);
+    if (revision.length === 1) await run(db, 'UPDATE listings SET head_revision_id=? WHERE id=? AND head_revision_id IS NULL', [revision[0].id, row.id]);
+  }
 }
 
 async function runMigrations(db) {
@@ -277,6 +389,18 @@ async function runMigrations(db) {
       throw error;
     }
   }
+  const immutableRevisionsApplied = await all(db, 'SELECT id FROM schema_migrations WHERE id = ?', [IMMUTABLE_REVISIONS_MIGRATION]);
+  if (immutableRevisionsApplied.length === 0) {
+    await run(db, 'BEGIN IMMEDIATE');
+    try {
+      await migrateImmutableRevisions(db);
+      await run(db, 'INSERT INTO schema_migrations (id) VALUES (?)', [IMMUTABLE_REVISIONS_MIGRATION]);
+      await run(db, 'COMMIT');
+    } catch (error) {
+      try { await run(db, 'ROLLBACK'); } catch (_) {}
+      throw error;
+    }
+  }
 }
 
 async function migrateAgentWorkspaceScope(db) {
@@ -364,6 +488,7 @@ module.exports = {
   WORKSPACE_OWNERSHIP_MIGRATION,
   PRODUCT_TRUTH_ATTESTATION_MIGRATION,
   PRODUCT_TRUTH_CARD_MIGRATION,
+  IMMUTABLE_REVISIONS_MIGRATION,
   AGENT_WORKSPACE_SCOPE_MIGRATION,
   PROJECT_SCOPED_EVIDENCE_MIGRATION,
   CANONICAL_DAG_MIGRATION,

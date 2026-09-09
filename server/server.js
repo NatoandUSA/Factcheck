@@ -46,6 +46,135 @@ const { buildEvidenceHealth } = require('./evidenceHealth');
 const evidenceAuthority = require('./evidenceAuthority');
 const projectStates = require('./projectStateRegistry');
 const { approvalContextHash, hasCurrentApprovalBinding, currentPublishDecision } = require('./currentPublishDecision');
+const { evaluateListingGuard } = require('./listingGuard');
+const { buildStaffAttestedCard, normalizeSnapshot, productTruthAuthorityHash, validateStaffAttestedCard } = require('./productTruthAttestation');
+const { assertNoClientPolicyOverrides } = require('./policy/contractRegistry');
+
+function rejectListingGuard(res, error) {
+  const code = error?.code || 'LISTING_GUARD_UNAVAILABLE';
+  const clientContractFailure = code.startsWith('CLIENT_');
+  const claimFailure = code === 'UNVERIFIED_OUTPUT_CLAIM';
+  return res.status(clientContractFailure ? 409 : claimFailure ? 422 : 503).json({
+    success: false,
+    error: code,
+    ...(error?.details && typeof error.details === 'object' ? error.details : {})
+  });
+}
+
+function resolvePersistedProductTruth(row, callback) {
+  if (typeof row?.product_truth_card !== 'string' || !row.product_truth_card.trim()) {
+    return callback(Object.assign(new Error('PRODUCT_TRUTH_REQUIRED'), { code: 'PRODUCT_TRUTH_REQUIRED' }));
+  }
+  let card;
+  try { card = JSON.parse(row.product_truth_card); } catch (_) {
+    return callback(Object.assign(new Error('PRODUCT_TRUTH_REQUIRED'), { code: 'PRODUCT_TRUTH_REQUIRED' }));
+  }
+  if (!card || typeof card !== 'object' || Array.isArray(card)) {
+    return callback(Object.assign(new Error('PRODUCT_TRUTH_REQUIRED'), { code: 'PRODUCT_TRUTH_REQUIRED' }));
+  }
+  const source = card?.attestation;
+  if (source?.kind !== 'STAFF_ATTESTATION_V1' || !/^\d+$/.test(String(source.id || ''))) {
+    return callback(Object.assign(new Error('PRODUCT_TRUTH_AUTHORITY_INVALID'), { code: 'PRODUCT_TRUTH_AUTHORITY_INVALID' }));
+  }
+  db.get(
+    `SELECT * FROM audit_events WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?
+       AND actor_id = ? AND action IN ('product_truth:attest', 'product_truth:rebind') AND resource_type = 'listing'
+       AND resource_id = ? AND outcome = 'SUCCESS'`,
+    [source.id, row.tenant_id, row.workspace_id, row.marketplace, source.actorId, String(row.id)],
+    (error, event) => {
+      if (error) return callback(Object.assign(error, { code: 'PRODUCT_TRUTH_AUTHORITY_UNAVAILABLE' }));
+      if (!event || event.content_hash !== productTruthAuthorityHash(card)) {
+        return callback(Object.assign(new Error('PRODUCT_TRUTH_AUTHORITY_INVALID'), { code: 'PRODUCT_TRUTH_AUTHORITY_INVALID' }));
+      }
+      const validation = validateStaffAttestedCard(card, { productId: row.id, listingVersion: row.listing_version });
+      if (!validation.valid) {
+        return callback(Object.assign(new Error('PRODUCT_TRUTH_CARD_INVALID'), { code: 'PRODUCT_TRUTH_CARD_INVALID', reasons: validation.errors }));
+      }
+      callback(null, card, event);
+    }
+  );
+}
+
+function snapshotFromProductTruthCard(card) {
+  return Object.freeze({
+    asserted: Object.freeze(Object.fromEntries(Object.entries(card?.facts || {}).map(([fact, entry]) => [fact, Object.freeze({
+      value: entry.value,
+      basis: entry.basis || 'OTHER',
+      basisNote: entry.basisNote || null
+    })]))),
+    unknown: Object.freeze(card?.unknownFacts && typeof card.unknownFacts === 'object' ? card.unknownFacts : {})
+  });
+}
+
+function persistListingEdit({ row, user, payload, status, truthCard, ipScreening, ipAddress, projectId = row.project_id }, callback) {
+  const targetVersion = row.listing_version + 1;
+  const updateParams = reboundCard => [
+    payload.amazonTitle, payload.etsyTitle, payload.categoryName, JSON.stringify(payload), status,
+    reboundCard ? JSON.stringify(reboundCard) : null, projectId ?? null, row.id, user.tenantId, user.workspaceId,
+    user.marketplace, row.listing_version, row.payload
+  ];
+  const updateSql = `UPDATE listings
+    SET amazonTitle = ?, etsyTitle = ?, categoryName = ?, payload = ?, status = ?,
+        listing_version = listing_version + 1, approved_version = NULL,
+        approved_hash = NULL, approved_context_hash = NULL, approved_by = NULL, approved_at = NULL,
+        product_truth_notes = NULL, product_truth_card = ?, project_id = ?
+    WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?
+      AND listing_version = ? AND payload = ?`;
+
+  if (!truthCard) {
+    return db.run(updateSql, updateParams(null), function onUpdate(error) {
+      callback(error, { changes: this?.changes || 0, listingVersion: targetVersion, productTruthCard: null });
+    });
+  }
+
+  const snapshot = snapshotFromProductTruthCard(truthCard);
+  const rollback = error => db.run('ROLLBACK', () => callback(error));
+  db.serialize(() => {
+    db.run('BEGIN IMMEDIATE', beginError => {
+      if (beginError) return callback(beginError);
+      const metadata = {
+        schemaVersion: 'product-truth-rebind.v1', listingId: String(row.id),
+        previousVersion: row.listing_version, targetVersion,
+        previousAttestationId: truthCard.attestation?.id || null,
+        actorRole: user.role, snapshot
+      };
+      db.run(
+        `INSERT INTO audit_events
+          (tenant_id, workspace_id, marketplace, actor_id, action, resource_type, resource_id, outcome, ip_address, metadata)
+         VALUES (?, ?, ?, ?, 'product_truth:rebind', 'listing', ?, 'PENDING', ?, ?)`,
+        [user.tenantId, user.workspaceId, user.marketplace, user.userId, String(row.id), ipAddress, JSON.stringify(metadata)],
+        function onEvent(eventError) {
+          if (eventError) return rollback(eventError);
+          const eventId = this.lastID;
+          const reboundCard = buildStaffAttestedCard({
+            productId: row.id, listingVersion: targetVersion, snapshot,
+            actorId: user.userId, auditEventId: eventId,
+            ipEvidence: {
+              state: ipScreening.result.verdict === 'BLOCK' ? 'BLOCKED' : 'CLEARED',
+              subjectId: String(row.id), listingVersion: targetVersion,
+              checkerVersion: 'server-ip-guard-v1', checkedAt: new Date().toISOString()
+            }
+          });
+          const contentHash = productTruthAuthorityHash(reboundCard);
+          db.run(updateSql, updateParams(reboundCard), function onUpdate(updateError) {
+            if (updateError || this.changes !== 1) return rollback(updateError || Object.assign(new Error('STALE_LISTING_VERSION'), { code: 'STALE_LISTING_VERSION' }));
+            db.run(
+              `UPDATE audit_events SET outcome='SUCCESS', content_hash=?, metadata=?
+               WHERE id=? AND tenant_id=? AND workspace_id=? AND marketplace=? AND outcome='PENDING'`,
+              [contentHash, JSON.stringify({ ...metadata, contentHash }), eventId, user.tenantId, user.workspaceId, user.marketplace],
+              function onFinalize(auditError) {
+                if (auditError || this.changes !== 1) return rollback(auditError || new Error('AUDIT_FINALIZE_FAILED'));
+                db.run('COMMIT', commitError => commitError
+                  ? rollback(commitError)
+                  : callback(null, { changes: 1, listingVersion: targetVersion, productTruthCard: reboundCard }));
+              }
+            );
+          });
+        }
+      );
+    });
+  });
+}
 
 // Make crashes visible instead of dying silently with no trace (systemd will
 // still restart the process via Restart=always; this just ensures the cause
@@ -173,12 +302,15 @@ db.serialize(() => {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       tenant_id TEXT,
       actor_id INTEGER,
+      workspace_id INTEGER,
+      marketplace TEXT,
       action TEXT NOT NULL,
       resource_type TEXT NOT NULL,
       resource_id TEXT,
       outcome TEXT NOT NULL,
       ip_address TEXT,
       timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+      content_hash TEXT,
       metadata TEXT
     )
   `);
@@ -1564,16 +1696,14 @@ app.post('/api/listings', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SEL
   }
 
   const proceedWithCreation = () => {
-    const listingData = { amazonTitle, etsyTitle, categoryName, ...payload };
-    const ipResult = ipGuard.screenListing(listingData);
-    const oppResult = opportunityScorer.calculateOpportunityScore(listingData);
+    const listingData = { ...payload, amazonTitle, etsyTitle, categoryName };
 
     const rawKws = `${amazonTitle || ''} ${etsyTitle || ''}`.split(/\s+/);
     const searchTerms = payload.amazonSearchTerms || keywordRanker.buildAmazonSearchTerms(rawKws);
     const etsyTags = (payload.etsyTags && payload.etsyTags.length > 0) ? payload.etsyTags : keywordRanker.buildEtsyTags(rawKws, categoryName);
 
-    const updatedPayload = {
-      ...payload,
+    const candidatePayload = {
+      ...listingData,
       amazonTitle,
       etsyTitle,
       categoryName,
@@ -1583,12 +1713,30 @@ app.post('/api/listings', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SEL
       // the Publish Gate can catch it, rather than silently asserting unverified
       // material/quality claims that a manager could approve without noticing
       // they were never real (GPT/Manus P0.5 audit, listing truth boundary).
-      amazonDescription: payload.amazonDescription || '',
+      amazonDescription: payload.amazonDescription || ''
+    };
+
+    let guardResult;
+    try {
+      guardResult = evaluateListingGuard({ listing: candidatePayload, clientPayload: req.body });
+    } catch (error) {
+      return rejectListingGuard(res, error);
+    }
+
+    const ipResult = ipGuard.screenListing(guardResult.listing);
+    const oppResult = opportunityScorer.calculateOpportunityScore(guardResult.listing);
+    const updatedPayload = {
+      ...guardResult.listing,
       ipVerdict: ipResult.verdict,
       ipHits: ipResult.hits,
       opportunityScore: oppResult.overallScore,
       verdict: oppResult.verdict,
-      metrics: oppResult.metrics
+      metrics: oppResult.metrics,
+      claimGuard: {
+        version: 'c2-r1',
+        backendExcluded: guardResult.backendExcluded,
+        ppcFlagged: guardResult.ppcFlagged
+      }
     };
 
     const status = (ipResult.verdict === 'BLOCK') ? 'IP_RISK_BLOCKED' : 'NEEDS_QA';
@@ -1682,57 +1830,218 @@ app.patch('/api/listings/:id', requireAuth(db), requireRole(['OWNER', 'MANAGER',
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
     return res.status(400).json({ success: false, error: 'INVALID_LISTING_PAYLOAD' });
   }
-  let screened;
-  try {
-    // Client-provided ipVerdict/ipHits are never authoritative -- re-screen the
-    // exact post-edit content before persisting so an edit cannot bypass the
-    // IP gate after a previously benign draft was created (F-AL1: this route
-    // previously persisted the client's payload as-is with no re-screen at all).
-    screened = screenListingIpOrFail({ ...payload, amazonTitle, etsyTitle, categoryName });
-  } catch (error) {
-    console.error('IP Guard failed while updating listing:', error);
-    return res.status(503).json({ success: false, error: 'IP_GUARD_UNAVAILABLE' });
-  }
-  const newPayload = screened.listing;
-  const nextStatus = screened.result.verdict === 'BLOCK' ? 'IP_RISK_BLOCKED' : 'NEEDS_QA';
-  db.run(
-    `UPDATE listings
-     SET amazonTitle = ?, etsyTitle = ?, categoryName = ?, payload = ?, status = ?,
-         listing_version = listing_version + 1, approved_version = NULL,
-         approved_hash = NULL, approved_context_hash = NULL, approved_by = NULL, approved_at = NULL,
-         product_truth_notes = NULL, product_truth_card = NULL
-     WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?
-       AND listing_version = ?`,
-    [newPayload.amazonTitle, newPayload.etsyTitle, newPayload.categoryName, JSON.stringify(newPayload), nextStatus, req.params.id,
-      req.user.tenantId, req.user.workspaceId, req.user.marketplace, expectedVersion],
-    function onUpdate(err) {
-      if (err) return res.status(500).json({ success: false, error: 'LISTING_UPDATE_FAILED' });
-      if (this.changes !== 1) {
-        return db.get(
-          `SELECT id FROM listings WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
-          [req.params.id, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
-          (lookupErr, row) => {
-            if (lookupErr || !row) return res.status(404).json({ success: false, error: 'LISTING_NOT_FOUND' });
-            res.status(412).json({ success: false, error: 'STALE_LISTING_VERSION' });
-          }
-        );
+  db.get(
+    `SELECT * FROM listings WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
+    [req.params.id, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+    (lookupErr, row) => {
+      if (lookupErr) return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
+      if (!row) return res.status(404).json({ success: false, error: 'LISTING_NOT_FOUND' });
+      if (row.listing_version !== expectedVersion) {
+        return res.status(412).json({ success: false, error: 'STALE_LISTING_VERSION' });
       }
-      res.json({
-        success: true,
-        listingVersion: expectedVersion + 1,
+      const continueEdit = productTruthCard => {
+      let guardResult;
+      let screened;
+      try {
+        guardResult = evaluateListingGuard({
+          listing: { ...payload, amazonTitle, etsyTitle, categoryName },
+          productTruthCard,
+          context: { productId: row.id, listingVersion: row.listing_version },
+          clientPayload: req.body
+        });
+        // Client-provided ipVerdict/ipHits are never authoritative -- re-screen the
+        // exact post-edit content before persisting so an edit cannot bypass the IP gate.
+        screened = screenListingIpOrFail(guardResult.listing);
+      } catch (error) {
+        if (error?.code === 'UNVERIFIED_OUTPUT_CLAIM' || error?.code?.startsWith('CLIENT_')) {
+          return rejectListingGuard(res, error);
+        }
+        console.error('Listing guard failed while updating listing:', error);
+        return res.status(503).json({ success: false, error: 'LISTING_GUARD_UNAVAILABLE' });
+      }
+      const newPayload = {
+        ...screened.listing,
+        claimGuard: {
+          version: 'c2-r1',
+          backendExcluded: guardResult.backendExcluded,
+          ppcFlagged: guardResult.ppcFlagged
+        }
+      };
+      const nextStatus = screened.result.verdict === 'BLOCK' ? 'IP_RISK_BLOCKED' : 'NEEDS_QA';
+      persistListingEdit({
+        row,
+        user: req.user,
+        payload: newPayload,
         status: nextStatus,
-        ipVerdict: newPayload.ipVerdict,
-        ipHits: newPayload.ipHits
+        truthCard: productTruthCard,
+        ipScreening: screened,
+        ipAddress: req.ip
+      }, (err, result) => {
+          if (err) return res.status(err.code === 'STALE_LISTING_VERSION' ? 412 : 500).json({ success: false, error: err.code || 'LISTING_UPDATE_FAILED' });
+          if (result.changes !== 1) return res.status(412).json({ success: false, error: 'STALE_LISTING_VERSION' });
+          res.json({
+            success: true,
+            listingVersion: result.listingVersion,
+            status: nextStatus,
+            ipVerdict: newPayload.ipVerdict,
+            ipHits: newPayload.ipHits,
+            claimGuard: newPayload.claimGuard,
+            productTruthCard: result.productTruthCard
+          });
+      });
+      };
+      if (!row.product_truth_card) return continueEdit(null);
+      resolvePersistedProductTruth(row, (truthError, productTruthCard) => {
+        if (truthError) return res.status(422).json({ success: false, error: truthError.code, reasons: truthError.reasons });
+        continueEdit(productTruthCard);
       });
     }
   );
+});
+
+// Full Product Truth replacement. Staff supply assertions/unknowns; the
+// server owns evidence identity, listing binding, IP evidence, versioning,
+// approval invalidation and audit provenance.
+app.put('/api/listings/:id/product-truth', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
+  const { expectedVersion, facts, notes } = req.body || {};
+  const allowedKeys = new Set(['expectedVersion', 'facts', 'notes']);
+  const forbiddenKey = Object.keys(req.body || {}).find(key => !allowedKeys.has(key));
+  if (forbiddenKey) {
+    return res.status(409).json({ success: false, error: 'PRODUCT_TRUTH_CLIENT_AUTHORITY_FORBIDDEN', path: forbiddenKey });
+  }
+  if (!Number.isInteger(expectedVersion) || expectedVersion < 1) {
+    return res.status(400).json({ success: false, error: 'EXPECTED_VERSION_REQUIRED' });
+  }
+  let snapshot;
+  try {
+    snapshot = normalizeSnapshot(facts);
+  } catch (error) {
+    return res.status(400).json({ success: false, error: error.code || 'INVALID_PRODUCT_TRUTH', fact: error.fact, path: error.path });
+  }
+  const truthNotes = notes == null ? '' : String(notes).trim();
+  if (truthNotes.length > 4000) return res.status(400).json({ success: false, error: 'PRODUCT_TRUTH_NOTES_TOO_LARGE' });
+
+  const rollback = (status, body) => db.run('ROLLBACK', () => res.status(status).json(body));
+  db.serialize(() => {
+    db.run('BEGIN IMMEDIATE', beginError => {
+      if (beginError) return res.status(503).json({ success: false, error: 'PRODUCT_TRUTH_TRANSACTION_UNAVAILABLE' });
+      db.get(
+        `SELECT * FROM listings WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
+        [req.params.id, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+        (readError, row) => {
+          if (readError) return rollback(500, { success: false, error: 'DATABASE_ERROR' });
+          if (!row) return rollback(404, { success: false, error: 'LISTING_NOT_FOUND' });
+          if (row.listing_version !== expectedVersion) {
+            return rollback(412, { success: false, error: 'STALE_LISTING_VERSION' });
+          }
+          let listing;
+          let ipScreening;
+          try {
+            listing = JSON.parse(row.payload);
+            ipScreening = screenListingIpOrFail(listing);
+          } catch (error) {
+            return rollback(503, { success: false, error: error instanceof SyntaxError ? 'MALFORMED_LISTING_PAYLOAD' : 'IP_GUARD_UNAVAILABLE' });
+          }
+          const targetVersion = expectedVersion + 1;
+          const initialMetadata = {
+            schemaVersion: 'product-truth-attestation.v1',
+            listingId: String(row.id),
+            previousVersion: expectedVersion,
+            targetVersion,
+            actorRole: req.user.role,
+            snapshot
+          };
+          db.run(
+            `INSERT INTO audit_events
+              (tenant_id, workspace_id, marketplace, actor_id, action, resource_type, resource_id, outcome, ip_address, metadata)
+             VALUES (?, ?, ?, ?, 'product_truth:attest', 'listing', ?, 'PENDING', ?, ?)`,
+            [req.user.tenantId, req.user.workspaceId, req.user.marketplace, req.user.userId, String(row.id), req.ip, JSON.stringify(initialMetadata)],
+            function onEvent(eventError) {
+              if (eventError) return rollback(500, { success: false, error: 'AUDIT_WRITE_FAILED' });
+              const auditEventId = this.lastID;
+              const card = buildStaffAttestedCard({
+                productId: row.id,
+                listingVersion: targetVersion,
+                snapshot,
+                actorId: req.user.userId,
+                auditEventId,
+                ipEvidence: {
+                  state: ipScreening.result.verdict === 'BLOCK' ? 'BLOCKED' : 'CLEARED',
+                  subjectId: String(row.id),
+                  listingVersion: targetVersion,
+                  checkerVersion: 'server-ip-guard-v1',
+                  checkedAt: new Date().toISOString()
+                }
+              });
+              let claimError = null;
+              try {
+                evaluateListingGuard({ listing, productTruthCard: card, context: { productId: row.id, listingVersion: targetVersion } });
+              } catch (error) {
+                if (error.code !== 'UNVERIFIED_OUTPUT_CLAIM') {
+                  return rollback(503, { success: false, error: 'LISTING_GUARD_UNAVAILABLE' });
+                }
+                claimError = error;
+              }
+              const status = ipScreening.result.verdict === 'BLOCK'
+                ? 'IP_RISK_BLOCKED'
+                : claimError ? 'CLAIM_RISK_BLOCKED' : 'NEEDS_QA';
+              const cardHash = productTruthAuthorityHash(card);
+              const finalMetadata = {
+                ...initialMetadata,
+                cardHash,
+                status,
+                claimBlocking: claimError?.details?.blocking || []
+              };
+              db.run(
+                `UPDATE listings SET listing_version = ?, product_truth_card = ?, product_truth_notes = ?, status = ?,
+                    approved_version = NULL, approved_hash = NULL, approved_context_hash = NULL,
+                    approved_by = NULL, approved_at = NULL
+                 WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?
+                   AND listing_version = ? AND payload = ?`,
+                [targetVersion, JSON.stringify(card), truthNotes || null, status, row.id, req.user.tenantId,
+                  req.user.workspaceId, req.user.marketplace, expectedVersion, row.payload],
+                function onTruthUpdate(updateError) {
+                  if (updateError) return rollback(500, { success: false, error: 'PRODUCT_TRUTH_SAVE_FAILED' });
+                  if (this.changes !== 1) return rollback(412, { success: false, error: 'STALE_LISTING_VERSION' });
+                  db.run(
+                    `UPDATE audit_events SET outcome = 'SUCCESS', content_hash = ?, metadata = ?
+                     WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ? AND outcome = 'PENDING'`,
+                    [cardHash, JSON.stringify(finalMetadata), auditEventId, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+                    function onAuditFinalize(auditError) {
+                      if (auditError || this.changes !== 1) return rollback(500, { success: false, error: 'AUDIT_FINALIZE_FAILED' });
+                      db.run('COMMIT', commitError => {
+                        if (commitError) return rollback(500, { success: false, error: 'PRODUCT_TRUTH_COMMIT_FAILED' });
+                        res.json({
+                          success: true,
+                          listingVersion: targetVersion,
+                          status,
+                          productTruthCard: card,
+                          assertedFacts: Object.keys(snapshot.asserted),
+                          unknownFacts: snapshot.unknown,
+                          claimBlocking: finalMetadata.claimBlocking
+                        });
+                      });
+                    }
+                  );
+                }
+              );
+            }
+          );
+        }
+      );
+    });
+  });
 });
 
 // Approve a listing using Canonical Publish Gate (Fail-Closed Gate Authority - Protected)
 app.patch('/api/listings/:id/approve', requireAuth(db), requireRole(['OWNER', 'MANAGER']), (req, res) => {
   const { id } = req.params;
 
-  const { expectedVersion, productTruthCard, productTruthNotes } = req.body || {};
+  const { expectedVersion, productTruthNotes } = req.body || {};
+  if (Object.prototype.hasOwnProperty.call(req.body || {}, 'productTruthCard')) {
+    return res.status(409).json({ success: false, error: 'PRODUCT_TRUTH_CLIENT_AUTHORITY_FORBIDDEN' });
+  }
+  try { assertNoClientPolicyOverrides(req.body || {}); } catch (error) { return rejectListingGuard(res, error); }
   if (!Number.isInteger(expectedVersion) || expectedVersion < 1) {
     return res.status(400).json({ success: false, error: 'EXPECTED_VERSION_REQUIRED' });
   }
@@ -1773,72 +2082,81 @@ app.patch('/api/listings/:id/approve', requireAuth(db), requireRole(['OWNER', 'M
       return res.status(503).json({ success: false, error: 'IP_GUARD_UNAVAILABLE' });
     }
 
-    // IP clearance is server-derived. Client-supplied ipEvidence is replaced,
-    // never trusted as authority.
-    const canonicalTruthCard = productTruthCard && typeof productTruthCard === 'object'
-      ? {
-          ...productTruthCard,
-          ipEvidence: {
-            state: ipScreening.result.verdict === 'BLOCK' ? 'BLOCKED' : 'CLEARED',
-            subjectId: String(row.id),
-            listingVersion: row.listing_version,
-            checkerVersion: 'server-ip-guard-v1',
-            checkedAt: new Date().toISOString()
-          }
-        }
-      : productTruthCard;
-    const truthContext = { productId: row.id, listingVersion: row.listing_version };
-    parsedPayload.status = 'MANAGER_APPROVED';
-    parsedPayload.productTruthCard = canonicalTruthCard;
-    parsedPayload.productId = row.id;
-    parsedPayload.listingVersion = row.listing_version;
-    parsedPayload.marketplace = row.marketplace;
-
-    // Preserve the canonical IP denial response even when IP clearance also
-    // makes the Product Truth Card invalid. This keeps the strongest blocking
-    // reason visible and prevents a structured-card error from masking it.
-    if (ipScreening.result.verdict === 'BLOCK') {
-      const blockedGate = publishGate.evaluatePublishGate(parsedPayload);
-      return res.status(400).json({
-        error: `APPROVAL_DENIED: Cannot publish listing with status "${blockedGate.final_status}".`,
-        reasons: blockedGate.reasons,
-        publishGate: blockedGate
-      });
-    }
-
-    const truthValidation = validateProductTruthCard(canonicalTruthCard, truthContext);
-    if (!truthValidation.valid) {
-      return res.status(400).json({ success: false, error: 'PRODUCT_TRUTH_CARD_INVALID', reasons: truthValidation.errors });
-    }
-
-    // C5B Fix: Evaluate via Canonical Publish Gate (Fail-Closed)
-    parsedPayload.productTruthNotes = truthNotes;
-    const gateRes = publishGate.evaluatePublishGate(parsedPayload);
-
-    // Strictly reject any status other than PUBLISH_READY
-    if (gateRes.final_status !== 'PUBLISH_READY' || !gateRes.canExport) {
-      return res.status(400).json({
-        error: `APPROVAL_DENIED: Cannot publish listing with status "${gateRes.final_status}".`,
-        reasons: gateRes.reasons,
-        publishGate: gateRes
-      });
-    }
-
-    const approvedHash = payloadHash;
-    const contextHash = approvalContextHash(row, canonicalTruthCard, req.user.userId);
-    db.run(
-      `UPDATE listings SET status = 'PUBLISH_READY', approved_version = listing_version,
-         approved_hash = ?, approved_context_hash = ?, approved_by = ?, approved_at = CURRENT_TIMESTAMP,
-         product_truth_notes = ?, product_truth_card = ?
-       WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?
-         AND listing_version = ? AND payload = ?`,
-      [approvedHash, contextHash, req.user.userId, truthNotes || null, JSON.stringify(canonicalTruthCard), id, req.user.tenantId, req.user.workspaceId, req.user.marketplace, expectedVersion, row.payload],
-      function(updateErr) {
-      if (updateErr) return res.status(500).json({ error: updateErr.message });
-      if (this.changes !== 1) return res.status(412).json({ success: false, error: 'STALE_LISTING_VERSION' });
-      res.json({ success: true, status: 'PUBLISH_READY', approvedVersion: row.listing_version, approvedHash, publishGate: gateRes });
+    resolvePersistedProductTruth(row, (truthError, persistedTruthCard) => {
+      if (truthError) {
+        return res.status(truthError.code === 'PRODUCT_TRUTH_REQUIRED' ? 409 : 422).json({
+          success: false,
+          error: truthError.code,
+          reasons: truthError.reasons
+        });
       }
-    );
+      // IP clearance is re-derived at decision time. Product fact provenance
+      // remains bound to the exact successful staff-attestation event.
+      const canonicalTruthCard = {
+        ...persistedTruthCard,
+        ipEvidence: {
+          state: ipScreening.result.verdict === 'BLOCK' ? 'BLOCKED' : 'CLEARED',
+          subjectId: String(row.id),
+          listingVersion: row.listing_version,
+          checkerVersion: 'server-ip-guard-v1',
+          checkedAt: new Date().toISOString()
+        }
+      };
+      const truthContext = { productId: row.id, listingVersion: row.listing_version };
+      parsedPayload.status = 'MANAGER_APPROVED';
+      parsedPayload.productTruthCard = canonicalTruthCard;
+      parsedPayload.productId = row.id;
+      parsedPayload.listingVersion = row.listing_version;
+      parsedPayload.marketplace = row.marketplace;
+
+      if (ipScreening.result.verdict === 'BLOCK') {
+        const blockedGate = publishGate.evaluatePublishGate(parsedPayload);
+        return res.status(400).json({
+          error: `APPROVAL_DENIED: Cannot publish listing with status "${blockedGate.final_status}".`,
+          reasons: blockedGate.reasons,
+          publishGate: blockedGate
+        });
+      }
+
+      const truthValidation = validateProductTruthCard(canonicalTruthCard, truthContext);
+      if (!truthValidation.valid) {
+        return res.status(400).json({ success: false, error: 'PRODUCT_TRUTH_CARD_INVALID', reasons: truthValidation.errors });
+      }
+      try {
+        evaluateListingGuard({ listing: persistedPayload, productTruthCard: canonicalTruthCard, context: truthContext });
+      } catch (guardError) {
+        return rejectListingGuard(res, guardError);
+      }
+
+      // Legacy Publish Gate remains an additional gate until C1 receives an
+      // Owner-confirmed account/category contract. It cannot override C2.
+      parsedPayload.productTruthNotes = truthNotes;
+      const gateRes = publishGate.evaluatePublishGate(parsedPayload);
+      if (gateRes.final_status !== 'PUBLISH_READY' || !gateRes.canExport) {
+        return res.status(400).json({
+          error: `APPROVAL_DENIED: Cannot publish listing with status "${gateRes.final_status}".`,
+          reasons: gateRes.reasons,
+          publishGate: gateRes
+        });
+      }
+
+      const approvedHash = payloadHash;
+      const contextHash = approvalContextHash(row, canonicalTruthCard, req.user.userId);
+      db.run(
+        `UPDATE listings SET status = 'PUBLISH_READY', approved_version = listing_version,
+           approved_hash = ?, approved_context_hash = ?, approved_by = ?, approved_at = CURRENT_TIMESTAMP,
+           product_truth_notes = ?, product_truth_card = ?
+         WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?
+           AND listing_version = ? AND payload = ?`,
+        [approvedHash, contextHash, req.user.userId, truthNotes || null, JSON.stringify(canonicalTruthCard), id,
+          req.user.tenantId, req.user.workspaceId, req.user.marketplace, expectedVersion, row.payload],
+        function(updateErr) {
+          if (updateErr) return res.status(500).json({ error: updateErr.message });
+          if (this.changes !== 1) return res.status(412).json({ success: false, error: 'STALE_LISTING_VERSION' });
+          res.json({ success: true, status: 'PUBLISH_READY', approvedVersion: row.listing_version, approvedHash, publishGate: gateRes });
+        }
+      );
+    });
     }
   );
 });
@@ -1855,20 +2173,33 @@ app.get('/api/listings/:id/export', requireAuth(db), requireRole(['OWNER', 'MANA
     [id, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
     (err, row) => {
     if (err || !row) return res.status(404).json({ error: 'Listing not found.' });
+    resolvePersistedProductTruth(row, (truthError, productTruthCard) => {
+      if (truthError) return res.status(403).json({ success: false, error: truthError.code, reasons: truthError.reasons });
+      let storedPayload;
+      try { storedPayload = JSON.parse(row.payload); } catch (_) {
+        return res.status(409).json({ success: false, error: 'MALFORMED_LISTING_PAYLOAD' });
+      }
+      try {
+        evaluateListingGuard({
+          listing: storedPayload,
+          productTruthCard,
+          context: { productId: row.id, listingVersion: row.listing_version }
+        });
+      } catch (guardError) {
+        return rejectListingGuard(res, guardError);
+      }
 
-    const decision = currentPublishDecision(row, screenListingIpOrFail);
-    if (!decision.allowed) {
-      if (decision.gate) return res.status(403).json({ error: `EXPORT_DENIED: Listing status "${decision.gate.final_status}" cannot be exported until PUBLISH_READY`, reasons: decision.gate.reasons });
-      return res.status(decision.status).json({ success: false, error: decision.error });
-    }
-    const parsedPayload = decision.payload;
-    const gateRes = decision.gate;
-
-    res.json({
-      success: true,
-      status: row.status,
-      publishGate: gateRes,
-      listing: parsedPayload
+      const decision = currentPublishDecision(row, screenListingIpOrFail);
+      if (!decision.allowed) {
+        if (decision.gate) return res.status(403).json({ error: `EXPORT_DENIED: Listing status "${decision.gate.final_status}" cannot be exported until PUBLISH_READY`, reasons: decision.gate.reasons });
+        return res.status(decision.status).json({ success: false, error: decision.error });
+      }
+      res.json({
+        success: true,
+        status: row.status,
+        publishGate: decision.gate,
+        listing: decision.payload
+      });
     });
     }
   );
@@ -2394,16 +2725,15 @@ function resolveServerAiAuthority(req, input = {}) {
         if (err) return reject({ status: 500, error: 'DATABASE_ERROR' });
         if (!row) return reject({ status: 404, error: 'LISTING_NOT_FOUND' });
         if (row.listing_version !== expectedVersion) return reject({ status: 409, error: 'STALE_LISTING_VERSION' });
-        if (!hasCurrentApprovalBinding(row)) {
-          return reject({ status: 409, error: 'PRODUCT_TRUTH_REQUIRED' });
-        }
-        const productTruthCard = safeJsonParse(row.product_truth_card, null);
-        const projection = projectVerifiedAiInput({
-          productTruthCard,
-          context: { productId: row.id, listingVersion: row.listing_version }
+        resolvePersistedProductTruth(row, (truthError, productTruthCard) => {
+          if (truthError) return reject({ status: 409, error: truthError.code || 'PRODUCT_TRUTH_REQUIRED' });
+          const projection = projectVerifiedAiInput({
+            productTruthCard,
+            context: { productId: row.id, listingVersion: row.listing_version }
+          });
+          if (!projection.eligible) return reject({ status: 409, error: 'PRODUCT_TRUTH_REQUIRED' });
+          resolve({ row, projection, productTruthCard });
         });
-        if (!projection.eligible) return reject({ status: 409, error: 'PRODUCT_TRUTH_REQUIRED' });
-        resolve({ row, projection });
       }
     );
   });
@@ -2632,24 +2962,20 @@ app.post('/api/etsy/batch-learn', requireAuth(db), requireRole(['OWNER', 'MANAGE
         modelProvenance: 'ETSY_SELLER_EVIDENCE_MODEL'
       };
 
-      db.run(
-        `INSERT INTO listings
-          (tenant_id, workspace_id, marketplace, amazonTitle, etsyTitle, categoryName, status, authorId, payload)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [req.user.tenantId, req.user.workspaceId, req.user.marketplace, payload.amazonTitle, payload.etsyTitle, payload.categoryName, 'NEEDS_QA', req.user.userId, JSON.stringify(payload)],
-        function(insertErr) {
-          if (insertErr) return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
-          res.json({
-            success: true,
-            listingId: this.lastID,
-            synthesized: result.synthesizedListing,
-            insights: result.synthesizedListing.learnedInsights,
-            sellersLearned: result.sellerCount,
-            evidenceSummary: result.evidenceSummary,
-            truthWarnings: result.synthesizedListing.truthWarnings
-          });
-        }
-      );
+      // Research and Product Truth are separate authority domains. This route
+      // returns a zero-authority SEO recommendation and never creates a
+      // canonical listing. Staff apply it later to an existing, attested row.
+      res.json({
+        success: true,
+        listingId: null,
+        persistedListing: false,
+        authority: 'NONE',
+        synthesized: result.synthesizedListing,
+        insights: result.synthesizedListing.learnedInsights,
+        sellersLearned: result.sellerCount,
+        evidenceSummary: result.evidenceSummary,
+        truthWarnings: result.synthesizedListing.truthWarnings
+      });
     } catch (err) {
       console.error('Etsy evidence learn error:', err);
       const evidenceError = err.code === 'UNVERIFIED_SELLER_EVIDENCE' || err.code === 'INSUFFICIENT_EVIDENCE';
@@ -2988,6 +3314,7 @@ app.post('/api/amazon/quick-draft', requireAuth(db), requireRole(['OWNER', 'MANA
     return res.status(403).json({ success: false, error: 'MARKETPLACE_MISMATCH' });
   }
   const { projectId, seedPhrase, category, asins = [] } = req.body || {};
+  try { assertNoClientPolicyOverrides(req.body || {}); } catch (error) { return rejectListingGuard(res, error); }
 
   if (!seedPhrase || !String(seedPhrase).trim() || !category || !String(category).trim()) {
     return res.status(400).json({ success: false, error: 'INSUFFICIENT_EVIDENCE', message: 'seedPhrase and category are required' });
@@ -3016,6 +3343,9 @@ app.post('/api/amazon/quick-draft', requireAuth(db), requireRole(['OWNER', 'MANA
     // canonical output-claim validator.
     resolveActiveProjectId(db, req.user, req.body.projectId, (pErr, targetProjectId) => {
       if (pErr) return res.status(pErr.status || 400).json({ success: false, error: pErr.error, message: pErr.message });
+      if (aiAuthority.row.project_id != null && Number(aiAuthority.row.project_id) !== Number(targetProjectId)) {
+        return res.status(409).json({ success: false, error: 'PROJECT_CONTEXT_MISMATCH' });
+      }
       readWorkspaceLlmSettings(req.user, async (sErr, keys) => {
           if (sErr) return res.status(503).json({ success: false, error: 'SECRET_DECRYPTION_FAILED' });
 
@@ -3052,7 +3382,7 @@ Allowed values: WARM, MINIMAL, CELEBRATORY.`;
               throw contractError;
             }
 
-            const payload = {
+            let payload = {
               ...canonicalListing,
               // No auto-generated SKU: the Staff viewer presents this as
               // paste-ready "Raw Data ... for Seller Central", so a fake
@@ -3075,29 +3405,40 @@ Allowed values: WARM, MINIMAL, CELEBRATORY.`;
             };
 
             validateServerAiOutput(payload, aiAuthority.projection);
+            const quickGuard = evaluateListingGuard({
+              listing: payload,
+              productTruthCard: aiAuthority.productTruthCard,
+              context: { productId: aiAuthority.row.id, listingVersion: aiAuthority.row.listing_version }
+            });
+            payload = {
+              ...quickGuard.listing,
+              claimGuard: { version: 'c2-r1', backendExcluded: quickGuard.backendExcluded, ppcFlagged: quickGuard.ppcFlagged }
+            };
 
 
-            db.run(
-              "INSERT INTO market_trends (category, trending_keywords, marketplace, tenant_id, workspace_id, project_id) VALUES (?, ?, ?, ?, ?, ?)",
-              [verifiedCategory, `${cleanSeed} (Amazon A10 Quick Batch)`, 'AMAZON', req.user.tenantId, req.user.workspaceId, targetProjectId],
-              function onTrendInsert(trendErr) {
-                if (trendErr) return res.status(500).json({ error: trendErr.message });
-                db.run(
-                  `INSERT INTO listings
-                    (tenant_id, workspace_id, marketplace, project_id, amazonTitle, etsyTitle, categoryName, status, authorId, payload)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                  [req.user.tenantId, req.user.workspaceId, req.user.marketplace, targetProjectId, payload.amazonTitle, payload.etsyTitle, payload.categoryName, 'NEEDS_QA', req.user.userId, JSON.stringify(payload)],
-                  function onListingInsert(insertErr) {
-                    if (insertErr) return res.status(500).json({ error: insertErr.message });
-                    res.json({
-                      success: true,
-                      listingId: this.lastID,
-                      listing: { ...payload, dbId: this.lastID }
-                    });
-                  }
-                );
+            const screened = screenListingIpOrFail(payload);
+            persistListingEdit({
+              row: aiAuthority.row,
+              user: req.user,
+              payload: screened.listing,
+              status: screened.result.verdict === 'BLOCK' ? 'IP_RISK_BLOCKED' : 'NEEDS_QA',
+              truthCard: aiAuthority.productTruthCard,
+              ipScreening: screened,
+              ipAddress: req.ip,
+              projectId: targetProjectId
+            }, (persistError, persisted) => {
+              if (persistError) {
+                const status = persistError.code === 'STALE_LISTING_VERSION' ? 412 : 500;
+                return res.status(status).json({ success: false, error: persistError.code || 'LISTING_UPDATE_FAILED' });
               }
-            );
+              res.json({
+                success: true,
+                listingId: aiAuthority.row.id,
+                listingVersion: persisted.listingVersion,
+                productTruthCard: persisted.productTruthCard,
+                listing: { ...screened.listing, dbId: aiAuthority.row.id, listingVersion: persisted.listingVersion }
+              });
+            });
           } catch (llmErr) {
             console.error('Quick draft LLM error:', llmErr);
             if (llmErr.code === 'UNVERIFIED_OUTPUT_CLAIM') {
@@ -3707,6 +4048,7 @@ app.get('/api/trends', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER
 app.post('/api/trends/:id/draft', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
   const { id } = req.params;
   const { projectId } = req.body || {};
+  try { assertNoClientPolicyOverrides(req.body || {}); } catch (error) { return rejectListingGuard(res, error); }
   if (projectId !== undefined && projectId !== null && !/^\d+$/.test(String(projectId))) {
     return res.status(400).json({ success: false, error: 'PROJECT_CONTEXT_REQUIRED' });
   }
@@ -3725,6 +4067,10 @@ app.post('/api/trends/:id/draft', requireAuth(db), requireRole(['OWNER', 'MANAGE
       aiAuthority = await resolveServerAiAuthority(req, req.body);
     } catch (authorityError) {
       return rejectAiAuthority(res, authorityError);
+    }
+    if (aiAuthority.row.project_id != null && trend.project_id != null
+      && Number(aiAuthority.row.project_id) !== Number(trend.project_id)) {
+      return res.status(409).json({ success: false, error: 'PROJECT_CONTEXT_MISMATCH' });
     }
     const trendIp = ipGuard.screenText(`${trend.category || ''} ${trend.trending_keywords || ''}`);
     if (trendIp.verdict !== 'OK') {
@@ -3797,7 +4143,7 @@ Allowed values: WARM, MINIMAL, CELEBRATORY.`;
             throw contractError;
           }
 
-        const payload = {
+        let payload = {
           ...canonicalListing,
           // No auto-generated SKU (same reasoning as Quick Draft: the Staff
           // viewer presents this as paste-ready Seller Central data) and no
@@ -3816,26 +4162,41 @@ Allowed values: WARM, MINIMAL, CELEBRATORY.`;
         };
 
         validateServerAiOutput(payload, aiAuthority.projection);
-
-        db.run(
-          `INSERT INTO listings
-            (tenant_id, workspace_id, marketplace, project_id, amazonTitle, etsyTitle, categoryName, status, authorId, payload)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [req.user.tenantId, req.user.workspaceId, req.user.marketplace, trend.project_id || null, payload.amazonTitle, payload.etsyTitle, payload.categoryName, 'NEEDS_QA', req.user.userId, JSON.stringify(payload)],
-          function(insertErr) {
-            if (insertErr) return res.status(500).json({ error: insertErr.message });
-            
-            // Mark trend as processed
-            db.run("UPDATE market_trends SET processed = 1 WHERE id = ?", [trend.id]);
-            logAgentAction(db, { agentId: 2, tenantId: req.user.tenantId, workspaceId: req.user.workspaceId, message: `Manually triggered draft generated for ${trend.category} (Listing ID: ${this.lastID})` });
-
-            res.json({
-              success: true,
-              listingId: this.lastID,
-              listing: { ...payload, dbId: this.lastID }
-            });
+        const guardResult = evaluateListingGuard({
+          listing: payload,
+          productTruthCard: aiAuthority.productTruthCard,
+          context: { productId: aiAuthority.row.id, listingVersion: aiAuthority.row.listing_version }
+        });
+        payload = {
+          ...guardResult.listing,
+          claimGuard: { version: 'c2-r1', backendExcluded: guardResult.backendExcluded, ppcFlagged: guardResult.ppcFlagged }
+        };
+        const screened = screenListingIpOrFail(payload);
+        persistListingEdit({
+          row: aiAuthority.row,
+          user: req.user,
+          payload: screened.listing,
+          status: screened.result.verdict === 'BLOCK' ? 'IP_RISK_BLOCKED' : 'NEEDS_QA',
+          truthCard: aiAuthority.productTruthCard,
+          ipScreening: screened,
+          ipAddress: req.ip,
+          projectId: trend.project_id ?? aiAuthority.row.project_id
+        }, (persistError, persisted) => {
+          if (persistError) {
+            const status = persistError.code === 'STALE_LISTING_VERSION' ? 412 : 500;
+            return res.status(status).json({ success: false, error: persistError.code || 'LISTING_UPDATE_FAILED' });
           }
-        );
+          db.run("UPDATE market_trends SET processed = 1 WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?",
+            [trend.id, req.user.tenantId, req.user.workspaceId, req.user.marketplace]);
+          logAgentAction(db, { agentId: 2, tenantId: req.user.tenantId, workspaceId: req.user.workspaceId, message: `Manually triggered draft updated canonical listing ${aiAuthority.row.id} for ${trend.category}` });
+          res.json({
+            success: true,
+            listingId: aiAuthority.row.id,
+            listingVersion: persisted.listingVersion,
+            productTruthCard: persisted.productTruthCard,
+            listing: { ...screened.listing, dbId: aiAuthority.row.id, listingVersion: persisted.listingVersion }
+          });
+        });
       } catch (genErr) {
         console.error('Manual draft error:', genErr);
         if (genErr.code === 'UNVERIFIED_OUTPUT_CLAIM') {
@@ -3855,6 +4216,7 @@ app.post('/api/settings/apikey', requireAuth(db), requireRole(['OWNER']), (req, 
 // API: Chat Co-Pilot
 app.post('/api/chat', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
   const { messages, mode = 'RESEARCH' } = req.body || {};
+  try { assertNoClientPolicyOverrides(req.body || {}); } catch (error) { return rejectListingGuard(res, error); }
   if (!messages || !Array.isArray(messages)) return res.status(400).json({ error: 'Messages required' });
   const commerceMode = mode === 'COMMERCE_DRAFT';
   let aiAuthority = null;
@@ -3950,6 +4312,19 @@ If the user asks a general question (not about drafting/writing), respond conver
           }
           extractedListing = { ...rendered, generatedAt: new Date().toISOString(), status: 'NEEDS_QA' };
           validateServerAiOutput(extractedListing, aiAuthority.projection);
+          const guardResult = evaluateListingGuard({
+            listing: extractedListing,
+            productTruthCard: aiAuthority.productTruthCard,
+            context: { productId: aiAuthority.row.id, listingVersion: aiAuthority.row.listing_version }
+          });
+          extractedListing = {
+            ...guardResult.listing,
+            claimGuard: {
+              version: 'c2-r1',
+              backendExcluded: guardResult.backendExcluded,
+              ppcFlagged: guardResult.ppcFlagged
+            }
+          };
         } catch (parseErr) {
           if (parseErr.code === 'UNVERIFIED_OUTPUT_CLAIM') throw parseErr;
           extractedListing = null;
@@ -3970,7 +4345,7 @@ If the user asks a general question (not about drafting/writing), respond conver
     } catch (apiError) {
       console.error('Chat API Error:', apiError);
       if (apiError.code === 'UNVERIFIED_OUTPUT_CLAIM') {
-        return res.status(422).json({ success: false, error: apiError.code, claims: apiError.claims });
+        return res.status(422).json({ success: false, error: apiError.code, claims: apiError.claims, blocking: apiError.details?.blocking });
       }
       res.status(500).json({ error: apiError.message });
     }

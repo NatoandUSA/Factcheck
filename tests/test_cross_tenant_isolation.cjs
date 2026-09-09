@@ -144,13 +144,13 @@ async function runCrossTenantIsolationSuite() {
       method: 'POST',
       headers: { Cookie: alphaCookie, 'Content-Type': 'application/json', Origin: `http://127.0.0.1:${port}` },
       body: JSON.stringify({
-        amazonTitle: 'Tenant Alpha Exclusive Listing',
-        etsyTitle: 'Tenant Alpha Exclusive Listing',
-        categoryName: 'Jewelry',
+        amazonTitle: 'Tenant Alpha Listing',
+        etsyTitle: 'Tenant Alpha Listing',
+        categoryName: 'Test Product',
         payload: {
-          amazonTitle: 'Tenant Alpha Exclusive Listing',
+          amazonTitle: 'Tenant Alpha Listing',
           amazonBullets: ['[HOOK] Bullet 1', '[HOOK] Bullet 2', '[HOOK] Bullet 3', '[HOOK] Bullet 4', '[HOOK] Bullet 5'],
-          amazonSearchTerms: 'alpha secret jewelry',
+          amazonSearchTerms: 'alpha listing',
           amazonDescription: 'Alpha description',
           netProfit: 9.50,
           netMargin: 40.0,

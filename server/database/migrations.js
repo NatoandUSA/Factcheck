@@ -6,6 +6,7 @@ const WORKSPACE_OWNERSHIP_MIGRATION = '006_market_trends_and_templates_ownership
 const PRODUCT_TRUTH_ATTESTATION_MIGRATION = '007_listing_product_truth_attestation';
 const PRODUCT_TRUTH_CARD_MIGRATION = '008_listing_product_truth_card';
 const IMMUTABLE_REVISIONS_MIGRATION = '009_immutable_listing_creative_revisions';
+const PRODUCT_TRUTH_AUTHORITY_MIGRATION = '010_product_truth_authority_scope';
 const crypto = require('node:crypto');
 
 function run(db, sql, params = []) {
@@ -250,6 +251,18 @@ async function migrateImmutableRevisions(db) {
   }
 }
 
+async function migrateProductTruthAuthorityScope(db) {
+  const tables = await all(db, "SELECT name FROM sqlite_master WHERE type='table' AND name='audit_events'");
+  // Some migration-contract tests intentionally model a legacy subset with no
+  // audit table. Do not manufacture a parallel/partial authority table there;
+  // fresh canonical databases create the complete table in server.js.
+  if (tables.length === 0) return;
+  const columns = new Set((await all(db, 'PRAGMA table_info(audit_events)')).map(column => column.name));
+  await addColumnIfMissing(db, columns, 'workspace_id', 'INTEGER NULL REFERENCES workspaces(id)', 'audit_events');
+  await addColumnIfMissing(db, columns, 'marketplace', 'TEXT NULL', 'audit_events');
+  await addColumnIfMissing(db, columns, 'content_hash', 'TEXT NULL', 'audit_events');
+}
+
 async function runMigrations(db) {
   await run(db, `
     CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -334,6 +347,19 @@ async function runMigrations(db) {
   if (truthCardApplied.length === 0) {
     await migrateProductTruthCard(db);
     await run(db, 'INSERT INTO schema_migrations (id) VALUES (?)', [PRODUCT_TRUTH_CARD_MIGRATION]);
+  }
+
+  const truthAuthorityApplied = await all(db, 'SELECT id FROM schema_migrations WHERE id = ?', [PRODUCT_TRUTH_AUTHORITY_MIGRATION]);
+  if (truthAuthorityApplied.length === 0) {
+    await run(db, 'BEGIN IMMEDIATE');
+    try {
+      await migrateProductTruthAuthorityScope(db);
+      await run(db, 'INSERT INTO schema_migrations (id) VALUES (?)', [PRODUCT_TRUTH_AUTHORITY_MIGRATION]);
+      await run(db, 'COMMIT');
+    } catch (error) {
+      try { await run(db, 'ROLLBACK'); } catch (_) {}
+      throw error;
+    }
   }
 
   const agentScopeApplied = await all(db, 'SELECT id FROM schema_migrations WHERE id = ?', [AGENT_WORKSPACE_SCOPE_MIGRATION]);
@@ -489,6 +515,7 @@ module.exports = {
   PRODUCT_TRUTH_ATTESTATION_MIGRATION,
   PRODUCT_TRUTH_CARD_MIGRATION,
   IMMUTABLE_REVISIONS_MIGRATION,
+  PRODUCT_TRUTH_AUTHORITY_MIGRATION,
   AGENT_WORKSPACE_SCOPE_MIGRATION,
   PROJECT_SCOPED_EVIDENCE_MIGRATION,
   CANONICAL_DAG_MIGRATION,

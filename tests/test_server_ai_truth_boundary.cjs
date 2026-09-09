@@ -5,7 +5,6 @@ process.env.OMNI_MASTER_KEY = Buffer.alloc(32, 19).toString('base64');
 process.env.GEMINI_API_KEY = 'server-ai-boundary-test-key';
 
 const assert = require('assert');
-const { makeProductTruthCard } = require('./helpers/productTruth.cjs');
 
 const safeListing = {
   amazonTitle: 'Sweatshirt Gift for Family Everyday Style',
@@ -85,6 +84,14 @@ async function post(port, cookie, route, body) {
   return { response, payload: await response.json().catch(() => ({})) };
 }
 
+async function put(port, cookie, route, body) {
+  const response = await fetch(`http://127.0.0.1:${port}${route}`, {
+    method: 'PUT', headers: { Cookie: cookie, Origin: `http://127.0.0.1:${port}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  return { response, payload: await response.json().catch(() => ({})) };
+}
+
 async function main() {
   await databaseReady;
   const owner = await waitForAmazonOwner();
@@ -94,18 +101,6 @@ async function main() {
     [owner.tenant_id, owner.workspace_id, 'Verified Sweatshirt', 'Verified Sweatshirt', 'SWEATSHIRT', owner.user_id, JSON.stringify(safeListing)]
   );
   const sourceId = sourceInsert.lastID;
-  const evidence = { state: 'VERIFIED', subjectId: String(sourceId), listingVersion: 1, source: { kind: 'SUPPLIER_SPEC', id: 'server-route-spec' } };
-  const card = makeProductTruthCard(sourceId, 1, {
-    facts: { productType: { value: 'SWEATSHIRT', evidence }, materials: { value: ['cotton'], evidence } }
-  });
-  await dbRun('UPDATE listings SET product_truth_card = ?, approved_version = 1 WHERE id = ?', [JSON.stringify(card), sourceId]);
-  // Synthetic approved fixture must carry the same integrity binding as the
-  // real approval route, rather than acquiring authority from status alone.
-  const [sourceRow] = await dbAll('SELECT * FROM listings WHERE id=?', [sourceId]);
-  const { approvalContextHash } = require('../server/currentPublishDecision');
-  const { approvalHash } = require('../server/security/approval');
-  await dbRun('UPDATE listings SET approved_hash=?,approved_context_hash=?,approved_by=?,approved_at=CURRENT_TIMESTAMP WHERE id=?',
-    [approvalHash(JSON.parse(sourceRow.payload)), approvalContextHash(sourceRow, card, owner.user_id), owner.user_id, sourceId]);
   const trendInsert = await dbRun(
     `INSERT INTO market_trends (category, trending_keywords, marketplace, tenant_id, workspace_id)
      VALUES ('Apparel', 'family sweatshirt gift', 'AMAZON', ?, ?)`,
@@ -116,6 +111,24 @@ async function main() {
   const port = server.address().port;
   process.env.ALLOWED_ORIGINS = `http://127.0.0.1:${port}`;
   const cookie = await login(port, owner.workspace_id);
+  const truthSave = await put(port, cookie, `/api/listings/${sourceId}/product-truth`, {
+    expectedVersion: 1,
+    facts: {
+      productType: { disposition: 'ASSERTED', value: 'SWEATSHIRT', basis: 'PHYSICAL_INSPECTION' },
+      materials: { disposition: 'ASSERTED', value: ['cotton'], basis: 'SUPPLIER_SPEC' }
+    }
+  });
+  assert.strictEqual(truthSave.response.status, 200, JSON.stringify(truthSave.payload));
+  const card = truthSave.payload.productTruthCard;
+  // This suite deliberately seeds an approved row to exercise downstream AI
+  // boundaries. Its Product Truth is nevertheless server-issued and audit-bound.
+  const [sourceRow] = await dbAll('SELECT * FROM listings WHERE id=?', [sourceId]);
+  const { approvalContextHash } = require('../server/currentPublishDecision');
+  const { approvalHash } = require('../server/security/approval');
+  await dbRun(`UPDATE listings SET status='PUBLISH_READY', approved_version=?, approved_hash=?,
+    approved_context_hash=?, approved_by=?, approved_at=CURRENT_TIMESTAMP WHERE id=?`,
+    [sourceRow.listing_version, approvalHash(JSON.parse(sourceRow.payload)),
+      approvalContextHash(sourceRow, card, owner.user_id), owner.user_id, sourceId]);
   const listingCount = async () => Number((await dbAll('SELECT COUNT(*) count FROM listings WHERE workspace_id = ?', [owner.workspace_id]))[0].count);
   const trendCount = async () => Number((await dbAll('SELECT COUNT(*) count FROM market_trends WHERE workspace_id = ?', [owner.workspace_id]))[0].count);
 
@@ -127,23 +140,23 @@ async function main() {
     assert.strictEqual(llmCalls, 0);
     assert.strictEqual(await listingCount(), before);
 
-    result = await post(port, cookie, `/api/trends/${trendInsert.lastID}/draft`, { listingId: sourceId, expectedVersion: 2 });
+    result = await post(port, cookie, `/api/trends/${trendInsert.lastID}/draft`, { listingId: sourceId, expectedVersion: 3 });
     assert.strictEqual(result.response.status, 409);
     assert.strictEqual(result.payload.error, 'STALE_LISTING_VERSION');
     assert.strictEqual(llmCalls, 0);
 
-    const staleCard = { ...card, listingVersion: 2 };
+    const staleCard = { ...card, listingVersion: card.listingVersion + 1 };
     await dbRun('UPDATE listings SET product_truth_card = ? WHERE id = ?', [JSON.stringify(staleCard), sourceId]);
     result = await post(port, cookie, '/api/amazon/quick-draft', {
-      listingId: sourceId, expectedVersion: 1, seedPhrase: 'family sweatshirt gift', category: 'Apparel'
+      listingId: sourceId, expectedVersion: sourceRow.listing_version, seedPhrase: 'family sweatshirt gift', category: 'Apparel'
     });
     assert.strictEqual(result.response.status, 409);
-    assert.strictEqual(result.payload.error, 'PRODUCT_TRUTH_REQUIRED');
+    assert.strictEqual(result.payload.error, 'PRODUCT_TRUTH_AUTHORITY_INVALID');
     assert.strictEqual(llmCalls, 0);
     await dbRun('UPDATE listings SET product_truth_card = ? WHERE id = ?', [JSON.stringify(card), sourceId]);
 
     result = await post(port, cookie, '/api/amazon/quick-draft', {
-      listingId: sourceId, expectedVersion: 1, seedPhrase: 'Official Disney sweatshirt', category: 'Apparel'
+      listingId: sourceId, expectedVersion: sourceRow.listing_version, seedPhrase: 'Official Disney sweatshirt', category: 'Apparel'
     });
     assert.strictEqual(result.response.status, 409);
     assert.strictEqual(result.payload.error, 'IP_CLEARANCE_REQUIRED');
@@ -156,7 +169,7 @@ async function main() {
     activeOutput = poisonedListing;
     const trendsBeforePoisonedOutput = await trendCount();
     result = await post(port, cookie, '/api/amazon/quick-draft', {
-      listingId: sourceId, expectedVersion: 1, seedPhrase: 'family sweatshirt gift', category: 'Apparel'
+      listingId: sourceId, expectedVersion: sourceRow.listing_version, seedPhrase: 'family sweatshirt gift', category: 'Apparel'
     });
     assert.strictEqual(result.response.status, 422);
     assert.strictEqual(result.payload.error, 'UNVERIFIED_OUTPUT_CLAIM');
@@ -173,7 +186,7 @@ async function main() {
       const callsBeforeBypass = llmCalls;
       activeOutput = { ...safeListing, etsyDescription: bypassClaim };
       result = await post(port, cookie, '/api/amazon/quick-draft', {
-        listingId: sourceId, expectedVersion: 1, seedPhrase: 'family sweatshirt gift', category: 'Apparel'
+        listingId: sourceId, expectedVersion: sourceRow.listing_version, seedPhrase: 'family sweatshirt gift', category: 'Apparel'
       });
       assert.strictEqual(result.response.status, 422, bypassClaim);
       assert.strictEqual(result.payload.error, 'UNVERIFIED_OUTPUT_CLAIM');
@@ -193,7 +206,7 @@ async function main() {
       const listingsBeforeInvalidPlan = await listingCount();
       const trendsBeforeInvalidPlan = await trendCount();
       result = await post(port, cookie, '/api/amazon/quick-draft', {
-        listingId: sourceId, expectedVersion: 1, seedPhrase: 'family sweatshirt gift', category: 'Apparel'
+        listingId: sourceId, expectedVersion: sourceRow.listing_version, seedPhrase: 'family sweatshirt gift', category: 'Apparel'
       });
       assert.strictEqual(result.response.status, 422, invalidPlan);
       assert.strictEqual(result.payload.error, 'UNVERIFIED_OUTPUT_CLAIM', invalidPlan);
@@ -201,7 +214,7 @@ async function main() {
       assert.strictEqual(await trendCount(), trendsBeforeInvalidPlan, invalidPlan);
 
       result = await post(port, cookie, `/api/trends/${trendInsert.lastID}/draft`, {
-        listingId: sourceId, expectedVersion: 1
+        listingId: sourceId, expectedVersion: sourceRow.listing_version
       });
       assert.strictEqual(result.response.status, 422, invalidPlan);
       assert.strictEqual(result.payload.error, 'UNVERIFIED_OUTPUT_CLAIM', invalidPlan);
@@ -211,15 +224,27 @@ async function main() {
 
     activeOutput = { creativeProfile: 'WARM' };
     result = await post(port, cookie, '/api/amazon/quick-draft', {
-      listingId: sourceId, expectedVersion: 1, seedPhrase: 'family sweatshirt gift', category: 'Apparel'
+      listingId: sourceId, expectedVersion: sourceRow.listing_version, seedPhrase: 'family sweatshirt gift', category: 'Apparel'
     });
     assert.strictEqual(result.response.status, 200, JSON.stringify(result.payload));
-    assert.strictEqual(await listingCount(), before + 1);
+    assert.strictEqual(await listingCount(), before, 'Quick Draft must update the Product Truth-bound canonical row, not create an orphan listing');
+    assert.strictEqual(result.payload.listingId, sourceId);
+    let currentVersion = result.payload.listingVersion;
     assert.deepStrictEqual(result.payload.listing.etsyMaterials, ['cotton']);
+
+    activeOutput = { creativeProfile: 'MINIMAL' };
+    result = await post(port, cookie, `/api/trends/${trendInsert.lastID}/draft`, {
+      listingId: sourceId, expectedVersion: currentVersion
+    });
+    assert.strictEqual(result.response.status, 200, JSON.stringify(result.payload));
+    assert.strictEqual(result.payload.listingId, sourceId, 'Trend Draft must update the same canonical listing');
+    assert.strictEqual(await listingCount(), before, 'Trend Draft must not create an orphan listing');
+    assert.ok(result.payload.listingVersion > currentVersion);
+    currentVersion = result.payload.listingVersion;
 
     activeOutput = poisonedListing;
     result = await post(port, cookie, '/api/chat', {
-      mode: 'COMMERCE_DRAFT', listingId: sourceId, expectedVersion: 1,
+      mode: 'COMMERCE_DRAFT', listingId: sourceId, expectedVersion: currentVersion,
       messages: [{ role: 'user', content: 'Draft generic family gift copy' }]
     });
     assert.strictEqual(result.response.status, 422);
@@ -227,7 +252,7 @@ async function main() {
 
     activeOutput = { creativeProfile: 'WARM' };
     result = await post(port, cookie, '/api/chat', {
-      mode: 'COMMERCE_DRAFT', listingId: sourceId, expectedVersion: 1,
+      mode: 'COMMERCE_DRAFT', listingId: sourceId, expectedVersion: currentVersion,
       messages: [{ role: 'user', content: 'Draft generic family gift copy' }]
     });
     assert.strictEqual(result.response.status, 200, JSON.stringify(result.payload));
@@ -252,7 +277,7 @@ async function main() {
     for (const invalidPlan of invalidCommercePlans) {
       activeOutput = invalidPlan;
       result = await post(port, cookie, '/api/chat', {
-        mode: 'COMMERCE_DRAFT', listingId: sourceId, expectedVersion: 1,
+        mode: 'COMMERCE_DRAFT', listingId: sourceId, expectedVersion: currentVersion,
         messages: [{ role: 'user', content: 'Draft generic family gift copy' }]
       });
       assert.strictEqual(result.response.status, 422, invalidPlan);

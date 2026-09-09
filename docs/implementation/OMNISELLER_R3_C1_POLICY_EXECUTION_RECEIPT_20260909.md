@@ -10,7 +10,7 @@ Branch: `codex/omniseller-r3-c1-policy`
 
 Worktree: `D:\Claude\Factcheck\scratch\omniseller-r3-c1-policy`
 
-Reviewed implementation commit: `969bcaf3725729e83d26bb71197cce15128e2a82`
+Reviewed implementation commit: `f2e025f95f69bd03b7c186f63ecea99e70d9b925`
 
 ## 1. Outcome
 
@@ -24,19 +24,21 @@ No VPS deployment, publish action, production database write, primary dirty-work
 
 Two read-only reviewers reproduced the original C1 fail-open behavior at commit `f2bc59fe4772e3479e46b75d667ba10995bde22c`. The findings were accepted, not waived.
 
-| Finding | Severity | Disposition in `969bcaf37` |
+| Finding | Severity | Disposition in C1 implementation |
 | --- | --- | --- |
 | Empty/malformed surfaces returned `canApprove=true` and `canExport=true` | P1 | Removed overall authority booleans; required/wrong-type surfaces fail policy validation |
-| Caller could forge a resolution, contract and artifact hash | P1 | Registry resolutions now carry a private server-only brand; enforcement rejects unbranded objects |
+| Caller could forge a resolution, contract and artifact hash | P1 | Registry-issued context/resolution identity is held in module-private `WeakSet` instances; reflected symbols and inherited objects cannot forge membership |
 | A DRAFT resolution could imply approval/export | P1 | Eligibility is purpose-specific; DRAFT cannot become approval/export eligible |
 | Client policy envelopes and canonical scalar names bypassed the denylist | P1 | NFKC/decoded normalized keys, policy-container rejection, non-plain prototype rejection, iterative depth/node limits |
 | `REVOKED`/`SUPERSEDED` events were ignored | P1 | Authoritative lifecycle snapshot is mandatory; exact source hash, event schema, chronology, scope and cohort are enforced |
-| Tenant/workspace context did not affect matching | P1 | Approval-eligible artifacts require server authority scope; all purposes enforce tenant/workspace match and bind a scope hash |
+| Tenant/workspace context did not affect matching | P1 | Approval-eligible artifacts require server authority scope; their use in every purpose enforces tenant/workspace match and binds a scope hash. Public DRAFT-only baselines are intentionally global and carry no approval authority |
 | `rules.bullets.maxChars` was not enforced | P1 | Every supplied Amazon bullet is checked when the contract declares a limit |
 | Etsy malformed/duplicate surfaces passed | P1 | Required title/tag types and normalized duplicate rejection added; safe tag shortage remains a quality gap |
 | Impossible dates passed the custom regex | P1 | RFC3339 shape plus calendar/time validation is shared by contracts, events and server context |
 | Recursive override traversal could overflow | P1 | Traversal is iterative and capped at depth 64 / 10,000 object nodes |
 | AJV was not declared by the server workspace | P2 | AJV 8 is now a direct runtime dependency of `server/package.json` |
+| Invalid UTF-8 and duplicate JSON keys produced ambiguous artifacts | P1 | Fatal UTF-8 decoding, BOM rejection and duplicate-key-safe structural parsing now precede schema validation |
+| Future evidence or pre-existing lifecycle events could create temporal authority | P1 | Source capture must precede contract check; check must precede resolution time; lifecycle events must follow the relevant checked/effective times |
 
 ## 3. Authority boundary
 
@@ -81,7 +83,7 @@ Approval-eligible artifacts additionally receive a server-owned tenant/workspace
 
 ### 4.2 Immutable artifact and lifecycle behavior
 
-- Policy contract identity is SHA-256 of exact stored UTF-8 bytes.
+- Policy contract identity is SHA-256 of exact stored UTF-8 bytes; invalid UTF-8, BOM and duplicate JSON object keys are rejected.
 - Semantic JSON reserialization does not reproduce the same binding unless bytes are identical.
 - A lifecycle snapshot must state `completeThrough` and contain schema-valid append-only events.
 - Approval/export fails closed when the snapshot does not cover the effective time.
@@ -95,8 +97,9 @@ Amazon policy checks:
 
 - non-empty title and item highlights;
 - title/highlight character counting according to the resolved contract;
-- bullets must be an array of non-empty strings;
+- bullets must be a non-empty array of non-empty strings;
 - per-bullet maximum when declared;
+- fewer than the target five bullets is a quality gap, not invented marketplace policy; the final listing-output gate must require a complete five-bullet draft before staff submission;
 - generic keyword total UTF-8 byte limit and comma rule.
 
 Etsy policy checks:

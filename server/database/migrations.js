@@ -8,6 +8,7 @@ const PRODUCT_TRUTH_CARD_MIGRATION = '008_listing_product_truth_card';
 const IMMUTABLE_REVISIONS_MIGRATION = '009_immutable_listing_creative_revisions';
 const PRODUCT_TRUTH_AUTHORITY_MIGRATION = '010_product_truth_authority_scope';
 const PROJECT_PRODUCT_TRUTH_REVISIONS_MIGRATION = '011_project_product_truth_revisions';
+const LISTING_REVISION_VALIDATION_ACCOUNTING_MIGRATION = '012_listing_revision_validation_accounting';
 const crypto = require('node:crypto');
 
 function run(db, sql, params = []) {
@@ -280,12 +281,6 @@ async function migrateProjectProductTruthRevisions(db) {
   await addColumnIfMissing(db, columns, 'product_family_version', 'TEXT NULL', 'research_projects');
   await addColumnIfMissing(db, columns, 'head_product_truth_revision_id',
     'INTEGER NULL REFERENCES product_truth_revisions(id)', 'research_projects');
-  const listingRevisionTables = await all(db, "SELECT name FROM sqlite_master WHERE type='table' AND name='listing_revisions'");
-  if (listingRevisionTables.length) {
-    const revisionColumns = new Set((await all(db, 'PRAGMA table_info(listing_revisions)')).map(column => column.name));
-    await addColumnIfMissing(db, revisionColumns, 'validation_accounting_json', 'TEXT NULL', 'listing_revisions');
-    await addColumnIfMissing(db, revisionColumns, 'validation_accounting_hash', 'TEXT NULL', 'listing_revisions');
-  }
   await run(db, `CREATE TABLE IF NOT EXISTS product_truth_revisions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     tenant_id TEXT NOT NULL,
@@ -336,6 +331,15 @@ async function migrateProjectProductTruthRevisions(db) {
     await run(db, `CREATE TRIGGER IF NOT EXISTS ${table}_immutable_delete
       BEFORE DELETE ON ${table} BEGIN SELECT RAISE(ABORT, 'IMMUTABLE_PRODUCT_TRUTH'); END`);
   }
+}
+
+async function migrateListingRevisionValidationAccounting(db) {
+  const tables = await all(db, "SELECT name FROM sqlite_master WHERE type='table' AND name='listing_revisions'");
+  if (!tables.length) return;
+  const columns = new Set((await all(db, 'PRAGMA table_info(listing_revisions)')).map(column => column.name));
+  await addColumnIfMissing(db, columns, 'validation_accounting_json', 'TEXT NULL', 'listing_revisions');
+  columns.add('validation_accounting_json');
+  await addColumnIfMissing(db, columns, 'validation_accounting_hash', 'TEXT NULL', 'listing_revisions');
 }
 
 async function runMigrations(db) {
@@ -514,6 +518,19 @@ async function runMigrations(db) {
       throw error;
     }
   }
+  const validationAccountingApplied = await all(db, 'SELECT id FROM schema_migrations WHERE id = ?',
+    [LISTING_REVISION_VALIDATION_ACCOUNTING_MIGRATION]);
+  if (validationAccountingApplied.length === 0) {
+    await run(db, 'BEGIN IMMEDIATE');
+    try {
+      await migrateListingRevisionValidationAccounting(db);
+      await run(db, 'INSERT INTO schema_migrations (id) VALUES (?)', [LISTING_REVISION_VALIDATION_ACCOUNTING_MIGRATION]);
+      await run(db, 'COMMIT');
+    } catch (error) {
+      try { await run(db, 'ROLLBACK'); } catch (_) {}
+      throw error;
+    }
+  }
 }
 
 async function migrateAgentWorkspaceScope(db) {
@@ -604,6 +621,7 @@ module.exports = {
   IMMUTABLE_REVISIONS_MIGRATION,
   PRODUCT_TRUTH_AUTHORITY_MIGRATION,
   PROJECT_PRODUCT_TRUTH_REVISIONS_MIGRATION,
+  LISTING_REVISION_VALIDATION_ACCOUNTING_MIGRATION,
   AGENT_WORKSPACE_SCOPE_MIGRATION,
   PROJECT_SCOPED_EVIDENCE_MIGRATION,
   CANONICAL_DAG_MIGRATION,

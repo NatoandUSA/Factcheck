@@ -156,6 +156,20 @@ async function main() {
   try {
     await createSchema(db);
 
+    // Simulate an upgrade from a DB that already recorded G3 migration 011
+    // before immutable validation accounting was introduced.
+    assert.equal((await get(db, "SELECT COUNT(*) AS n FROM schema_migrations WHERE id='011_project_product_truth_revisions'")).n, 1);
+    await run(db, "DELETE FROM schema_migrations WHERE id='012_listing_revision_validation_accounting'");
+    await run(db, 'ALTER TABLE listing_revisions DROP COLUMN validation_accounting_hash');
+    await run(db, 'ALTER TABLE listing_revisions DROP COLUMN validation_accounting_json');
+    assert.deepEqual((await all(db, 'PRAGMA table_info(listing_revisions)')).filter(column => column.name.startsWith('validation_accounting_')), []);
+    await runMigrations(db);
+    assert.deepEqual((await all(db, 'PRAGMA table_info(listing_revisions)')).filter(column => column.name.startsWith('validation_accounting_'))
+      .map(column => column.name), ['validation_accounting_json', 'validation_accounting_hash']);
+    assert.equal((await get(db, "SELECT COUNT(*) AS n FROM schema_migrations WHERE id='012_listing_revision_validation_accounting'")).n, 1);
+    await runMigrations(db);
+    assert.equal((await get(db, "SELECT COUNT(*) AS n FROM schema_migrations WHERE id='012_listing_revision_validation_accounting'")).n, 1);
+
     await expectCode(createListingWithRevisionStore(db, scope, {
       projectId: 1, idempotencyKey: id(12), changeReason: 'NO_AUTHORITY_RESOLVER',
       content: { amazonTitle: 'Rejected' }, dependencies
@@ -376,7 +390,7 @@ async function main() {
       projectId: 1, idempotencyKey: id(1), changeReason: 'INITIAL_DRAFT', content: v1Content, dependencies
     }), created);
 
-    console.log('G2 immutable revisions: 40/40 PASS');
+    console.log('G2 immutable revisions: 45/45 PASS');
   } finally {
     if (db) await close(db).catch(() => {});
     fs.rmSync(dir, { recursive: true, force: true });

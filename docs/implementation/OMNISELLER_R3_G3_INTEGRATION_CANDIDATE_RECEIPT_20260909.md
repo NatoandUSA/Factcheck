@@ -67,7 +67,7 @@ Each mutation has an exact top-level allowlist. The server derives tenant, works
 ## Exact Windows Node 22 evidence before candidate commit
 
 ```text
-G2 immutable revisions                         40/40 PASS
+G2 immutable revisions                         45/45 PASS
 G3 project Product Truth revisions             18/18 PASS
 G3 canonical HTTP bootstrap                     40/40 PASS
 C1 policy contract registry                     10 groups PASS
@@ -97,6 +97,8 @@ Independent review of local SHA `38834d6dc789e0f7e277f652e4cd2b731dbffe1a` retur
 Permanent regression probes cover cross-actor Product Truth/listing/creative replay, replay after Product Truth head advancement, zero extra writes on replay, and rejection of a new stale-head write.
 
 Independent review round 2 confirmed those original flaws closed and identified two remediation regressions. The successor keeps the predecessor request-envelope hashes compatible while enforcing actor ownership through immutable receipt `created_by`, so same-actor retries survive an upgrade and cross-actor retries remain blocked. It also persists C2 validation accounting and its SHA-256 hash on every canonical listing revision. Save, edit, history and reopen therefore retain backend-keyword exclusions and flagged PPC claims instead of losing their only warning signal.
+
+Independent review round 3 found that adding the accounting columns inside already-recorded migration `011` would break databases that had run an earlier candidate. The columns now have their own transactional migration `012_listing_revision_validation_accounting`. A permanent upgrade ratchet simulates a database with marker `011` and no accounting columns, runs current migrations twice, and verifies both columns plus exactly one `012` marker.
 
 ## Explicitly not certified in G3
 

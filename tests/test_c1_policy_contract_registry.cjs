@@ -259,6 +259,17 @@ assert.throws(
     { lifecycleSnapshot: { events: [], completeThrough: '2026-12-31T23:59:59Z' } }),
   error => error.code === 'DUPLICATE_POLICY_CONTRACT_JSON_KEY'
 );
+const escapedDuplicateKeyBytes = Buffer.from(amazon75Bytes.toString('utf8').replace('{', '{"policyContract\\u0049d":"evil-first",'), 'utf8');
+assert.throws(
+  () => new PolicyContractRegistry([{ bytes: escapedDuplicateKeyBytes, authorityScope: { tenantId: 'tenant-1', workspaceId: 'workspace-1' } }],
+    { lifecycleSnapshot: { events: [], completeThrough: '2026-12-31T23:59:59Z' } }),
+  error => error.code === 'DUPLICATE_POLICY_CONTRACT_JSON_KEY'
+);
+assert.throws(
+  () => new PolicyContractRegistry([{ bytes: Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), amazon75Bytes]), authorityScope: { tenantId: 'tenant-1', workspaceId: 'workspace-1' } }],
+    { lifecycleSnapshot: { events: [], completeThrough: '2026-12-31T23:59:59Z' } }),
+  error => error.code === 'POLICY_CONTRACT_UTF8_BOM_FORBIDDEN'
+);
 
 // Unbranded caller objects cannot invoke the resolver as if they were server-derived context.
 assert.throws(
@@ -352,5 +363,15 @@ const supersedeEvent = {
 const supersededResolution = registryWithLifecycle([amazon200, amazonNext], [supersedeEvent])
   .resolve(context(), { purpose: 'APPROVAL' });
 assert.equal(supersededResolution.policyContractId, amazonNext.policyContractId);
+const prematureSupersede = { ...supersedeEvent, eventId: 'premature-supersede', occurredAt: '2026-09-08T23:59:59Z' };
+assert.throws(
+  () => registryWithLifecycle([amazon200, amazonNext], [prematureSupersede]).resolve(context(), { purpose: 'APPROVAL' }),
+  error => error.code === 'INVALID_POLICY_SUPERSESSION'
+);
+const prematureRevoke = { ...revokeEvent, eventId: 'premature-revoke', occurredAt: '2026-09-08T23:59:59Z' };
+assert.throws(
+  () => registryWithLifecycle([amazon200], [prematureRevoke]).resolve(context(), { purpose: 'APPROVAL' }),
+  error => error.code === 'INVALID_POLICY_REVOCATION_CHRONOLOGY'
+);
 
 console.log('C1_POLICY_REGISTRY PASS groups=10');

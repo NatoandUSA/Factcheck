@@ -10,7 +10,7 @@ Branch: `codex/omniseller-r3-c1-policy`
 
 Worktree: `D:\Claude\Factcheck\scratch\omniseller-r3-c1-policy`
 
-Reviewed implementation commit: `f2e025f95f69bd03b7c186f63ecea99e70d9b925`
+C1 implementation commit before this receipt: `f2e025f95f69bd03b7c186f63ecea99e70d9b925`
 
 ## 1. Outcome
 

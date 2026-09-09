@@ -64,6 +64,7 @@ function parseStrictJson(bytes, source) {
     throw new PolicyContractError('INVALID_POLICY_CONTRACT_UTF8', { source });
   }
   let index = 0;
+  let nodes = 0;
   const whitespace = () => { while (/\s/.test(value[index] || '')) index += 1; };
   const parseString = () => {
     const start = index++;
@@ -77,7 +78,10 @@ function parseStrictJson(bytes, source) {
     }
     throw new Error('unterminated string');
   };
-  const parseValue = () => {
+  const parseValue = (depth = 0) => {
+    if (depth > 64) throw new PolicyContractError('POLICY_CONTRACT_JSON_TOO_DEEP', { source });
+    nodes += 1;
+    if (nodes > 10000) throw new PolicyContractError('POLICY_CONTRACT_JSON_TOO_LARGE', { source });
     whitespace();
     if (value[index] === '{') {
       index += 1;
@@ -92,7 +96,7 @@ function parseStrictJson(bytes, source) {
         keys.add(key);
         whitespace();
         if (value[index++] !== ':') throw new Error('colon required');
-        parseValue();
+        parseValue(depth + 1);
         whitespace();
         const separator = value[index++];
         if (separator === '}') return;
@@ -105,7 +109,7 @@ function parseStrictJson(bytes, source) {
       whitespace();
       if (value[index] === ']') { index += 1; return; }
       while (index < value.length) {
-        parseValue();
+        parseValue(depth + 1);
         whitespace();
         const separator = value[index++];
         if (separator === ']') return;

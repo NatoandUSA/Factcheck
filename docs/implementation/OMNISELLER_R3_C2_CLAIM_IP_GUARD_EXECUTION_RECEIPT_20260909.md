@@ -4,7 +4,7 @@ Date: 2026-09-09 (Asia/Bangkok)
 
 Parent C1 accepted SHA: `84afc3ba8386fb67efd62016dcd4b1aac48a5037`
 
-C2 implementation SHA before this receipt: `b4c5e26ed53cb881badf05ea9d97c9f3ef87c3b2`
+C2 implementation SHA before this receipt: `da12006afe607c2b9b4d541adab810efd34d7421`
 
 Branch: `codex/omniseller-r3-c2-claims`
 
@@ -17,6 +17,16 @@ Status: **C2 CLAIM/IP CORE IMPLEMENTED — FOCUSED NODE 22 TESTS PASS — LIVE R
 This commit adds one canonical server claim guard and one caller-injected IP screening module. It does not connect them to compose, edit, approval, export, database, UI or marketplace routes. It cannot authorize approval, submission or publication.
 
 No primary-worktree overwrite, push, merge, VPS write, production database write or marketplace action occurred.
+
+## 1.1 Independent review findings resolved
+
+The first exact-SHA authority review returned CHANGES REQUESTED. The findings were fixed, not waived:
+
+| Finding | Severity | Disposition |
+| --- | --- | --- |
+| A caller could mutate or forge the corroboration `Set` and authorize `silver`/`925` | P1 | Corroboration is now an opaque module-issued handle backed by private `WeakSet`/`WeakMap` state; duck-typed or caller-created sets are never trusted |
+| `productName: Laser engraved necklace` could prove its own process claim | P1 | All Product Identity paths were removed from corroboration; dedicated Product Truth fields are required |
+| Claim audit returned the broad name `publishable` even for backend/PPC-only outcomes | Authority naming | Replaced by `claimSurfaceBlockingFree`; the module exports no publish, approval or export authority boolean |
 
 ## 2. Donor inheritance
 
@@ -33,7 +43,7 @@ The donor composer, keyword engine, global product library, server, persistence,
 
 - The repo-ratified 14 stable claim IDs remain the only canonical claim families.
 - Legacy C1–C8 labels map at token/pattern granularity. A whole legacy class cannot promote into several stable claim families.
-- Product identity may corroborate an explicitly named capability, but cannot prove material, purity, dimensions, included items, packaging, origin or fulfillment.
+- Product identity is routing/classification input only and cannot corroborate any customer-facing attribute, including personalization or production process.
 - A filled personalization field permits the personalization family but does not prove laser, engraving, embossing or another process.
 - Unverified visible copy and image prompts are blocked.
 - Unverified backend search terms are excluded by default.
@@ -43,6 +53,8 @@ The donor composer, keyword engine, global product library, server, persistence,
 - Exact IP library matches enforce the injected disposition. Fuzzy variants remain shadow-only review signals.
 - The IP library is injected by the server caller; this module contains no global brand/product library and never claims legal clearance.
 - Claim definitions, field rules and their nested arrays are immutable at runtime.
+- Product Truth corroboration is an opaque server-issued handle backed by private state; caller-created or caller-mutated sets cannot authorize a claim.
+- Claim audit returns narrow surface facts and no `publishable`, approval or export authority boolean.
 
 ## 4. Focused test evidence
 
@@ -50,7 +62,7 @@ Runtime: WSL Ubuntu 24.04, Node `v22.23.2`.
 
 ```text
 node tests/test_c2_claim_guard.cjs
-claim guard: 16 passed / 0 failed / 0 unexecuted
+claim guard: 18 passed / 0 failed / 0 unexecuted
 IP matcher: 12 passed / 0 failed / 0 unexecuted
 
 node scripts/c0_validate_contracts.cjs

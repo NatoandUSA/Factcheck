@@ -360,6 +360,16 @@ const revokeEvent = {
 const revokingRegistry = registryWithLifecycle([amazon200], [revokeEvent]);
 const preRevocationContext = context({ effectiveAt: '2026-09-09T00:15:00Z' });
 const retainedPreRevocationResolution = revokingRegistry.resolve(preRevocationContext, { purpose: 'APPROVAL' });
+const originalLifecycleSnapshot = revokingRegistry.lifecycleSnapshot;
+const originalLifecycleSnapshotDigest = revokingRegistry.lifecycleSnapshotDigest;
+const originalArtifacts = revokingRegistry.artifacts;
+assert.equal(Object.isFrozen(revokingRegistry), true);
+assert.throws(() => { revokingRegistry.lifecycleSnapshot = { events: [], completeThrough: '2026-12-31T23:59:59.000Z' }; }, TypeError);
+assert.throws(() => { revokingRegistry.lifecycleSnapshotDigest = '0'.repeat(64); }, TypeError);
+assert.throws(() => { revokingRegistry.artifacts = []; }, TypeError);
+assert.equal(revokingRegistry.lifecycleSnapshot, originalLifecycleSnapshot);
+assert.equal(revokingRegistry.lifecycleSnapshotDigest, originalLifecycleSnapshotDigest);
+assert.equal(revokingRegistry.artifacts, originalArtifacts);
 assert.throws(
   () => validatePolicySurfaces(amazonSurfaces(), retainedPreRevocationResolution, context({ effectiveAt: '2026-09-09T00:31:00Z' })),
   error => error.code === 'POLICY_CONTRACT_NOT_FOUND'

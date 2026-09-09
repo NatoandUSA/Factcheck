@@ -311,6 +311,7 @@ class PolicyContractRegistry {
     });
     this.lifecycleSnapshotDigest = exactByteSha256(Buffer.from(JSON.stringify(this.lifecycleSnapshot), 'utf8'));
     Object.freeze(this.artifacts);
+    Object.freeze(this);
   }
 
   static fromDirectory(directory, options) {
@@ -398,6 +399,10 @@ class PolicyContractRegistry {
   }
 }
 
+// Capture the audited implementation before the class is exported. Decision-time
+// enforcement must not use a replaceable instance/prototype dispatch path.
+const resolveFromTrustedRegistry = PolicyContractRegistry.prototype.resolve;
+
 function assertPolicyResolutionUse(resolution, useContext, expectedPurpose = resolution?.purpose) {
   if (!resolution || !VALID_SERVER_RESOLUTIONS.has(resolution)) {
     throw new PolicyContractError('RESOLVED_POLICY_CONTRACT_REQUIRED');
@@ -419,7 +424,7 @@ function assertPolicyResolutionUse(resolution, useContext, expectedPurpose = res
   }
   const issuer = RESOLUTION_ISSUERS.get(resolution);
   if (!issuer) throw new PolicyContractError('POLICY_RESOLUTION_ISSUER_REQUIRED');
-  const current = issuer.resolve(useContext, { purpose });
+  const current = resolveFromTrustedRegistry.call(issuer, useContext, { purpose });
   if (current.policyContractId !== resolution.policyContractId
     || current.policyContractArtifactHash !== resolution.policyContractArtifactHash
     || current.authorityScope?.authorityScopeHash !== resolution.authorityScope?.authorityScopeHash) {

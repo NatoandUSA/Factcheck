@@ -17,6 +17,7 @@
   "tests/test_amazon_truth_boundary_remediation.cjs",
   "tests/test_audit_fixes_014a1f4.cjs",
   "tests/test_backup_restore_and_migrations.cjs",
+  "tests/test_c1_policy_contract_registry.cjs",
   "tests/test_cross_tenant_isolation.cjs",
   "tests/test_database_fixture_isolation.cjs",
   "tests/test_etsy_csv_richness.cjs",

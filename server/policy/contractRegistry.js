@@ -8,6 +8,7 @@ const { isRfc3339DateTime, validatePolicyContract, validatePolicyLifecycleEvent 
 
 const VALID_SERVER_CONTEXTS = new WeakSet();
 const VALID_SERVER_RESOLUTIONS = new WeakSet();
+const RESOLUTION_ISSUERS = new WeakMap();
 const PURPOSES = new Set(['DRAFT', 'APPROVAL', 'EXPORT']);
 const FORBIDDEN_CLIENT_KEYS = new Set([
   'policy',
@@ -308,6 +309,7 @@ class PolicyContractRegistry {
         return deepFreeze(structuredClone(event));
       })
     });
+    this.lifecycleSnapshotDigest = exactByteSha256(Buffer.from(JSON.stringify(this.lifecycleSnapshot), 'utf8'));
     Object.freeze(this.artifacts);
   }
 
@@ -386,11 +388,47 @@ class PolicyContractRegistry {
       policyContractArtifactHash: winner.policyContractArtifactHash,
       purpose,
       resolutionContext: context,
-      authorityScope: winner.authorityScope
+      authorityScope: winner.authorityScope,
+      lifecycleSnapshotCompleteThrough: this.lifecycleSnapshot.completeThrough,
+      lifecycleSnapshotDigest: this.lifecycleSnapshotDigest
     };
     VALID_SERVER_RESOLUTIONS.add(resolution);
+    RESOLUTION_ISSUERS.set(resolution, this);
     return deepFreeze(resolution);
   }
+}
+
+function assertPolicyResolutionUse(resolution, useContext, expectedPurpose = resolution?.purpose) {
+  if (!resolution || !VALID_SERVER_RESOLUTIONS.has(resolution)) {
+    throw new PolicyContractError('RESOLVED_POLICY_CONTRACT_REQUIRED');
+  }
+  if (!useContext || !VALID_SERVER_CONTEXTS.has(useContext)) {
+    throw new PolicyContractError('SERVER_POLICY_USE_CONTEXT_REQUIRED');
+  }
+  const purpose = String(expectedPurpose || '').toUpperCase();
+  if (!PURPOSES.has(purpose) || purpose !== resolution.purpose) {
+    throw new PolicyContractError('POLICY_RESOLUTION_PURPOSE_MISMATCH', { expectedPurpose: purpose, resolutionPurpose: resolution.purpose });
+  }
+  if (Date.parse(useContext.effectiveAt) < Date.parse(resolution.resolutionContext.effectiveAt)) {
+    throw new PolicyContractError('POLICY_RESOLUTION_TIME_REWIND_FORBIDDEN');
+  }
+  const scopeFields = ['tenantId', 'workspaceId', 'sellerAccountId', 'marketplace', 'site', 'locale', 'mediaClass', 'productTypeId', 'categoryId'];
+  const mismatched = scopeFields.filter(field => useContext[field] !== resolution.resolutionContext[field]);
+  if (mismatched.length) {
+    throw new PolicyContractError('POLICY_RESOLUTION_SCOPE_MISMATCH', { fields: mismatched });
+  }
+  const issuer = RESOLUTION_ISSUERS.get(resolution);
+  if (!issuer) throw new PolicyContractError('POLICY_RESOLUTION_ISSUER_REQUIRED');
+  const current = issuer.resolve(useContext, { purpose });
+  if (current.policyContractId !== resolution.policyContractId
+    || current.policyContractArtifactHash !== resolution.policyContractArtifactHash
+    || current.authorityScope?.authorityScopeHash !== resolution.authorityScope?.authorityScopeHash) {
+    throw new PolicyContractError('STALE_POLICY_RESOLUTION', {
+      previousPolicyContractId: resolution.policyContractId,
+      currentPolicyContractId: current.policyContractId
+    });
+  }
+  return current;
 }
 
 module.exports = {
@@ -399,5 +437,6 @@ module.exports = {
   assertNoClientPolicyOverrides,
   createServerPolicyContext,
   exactByteSha256,
+  assertPolicyResolutionUse,
   isServerPolicyResolution: value => Boolean(value && VALID_SERVER_RESOLUTIONS.has(value))
 };

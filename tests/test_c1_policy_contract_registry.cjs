@@ -9,7 +9,7 @@ const {
   assertNoClientPolicyOverrides,
   createServerPolicyContext
 } = require('../server/policy/contractRegistry');
-const { composeTextSurface, validatePolicySurfaces } = require('../server/policy/enforce');
+const { composeTextSurface: composeTextSurfaceAt, validatePolicySurfaces: validatePolicySurfacesAt } = require('../server/policy/enforce');
 
 const root = path.resolve(__dirname, '..');
 const fixture = name => JSON.parse(fs.readFileSync(path.join(
@@ -70,6 +70,14 @@ function context(overrides = {}) {
     effectiveAt: '2026-09-09T01:00:00Z',
     ...overrides
   });
+}
+
+function composeTextSurface(candidate, surface, resolution, useContext = resolution?.resolutionContext) {
+  return composeTextSurfaceAt(candidate, surface, resolution, useContext);
+}
+
+function validatePolicySurfaces(surfaces, resolution, useContext = resolution?.resolutionContext) {
+  return validatePolicySurfacesAt(surfaces, resolution, useContext);
 }
 
 const amazonPublic = fixture('amazon-us-nonmedia-2026-07-27-v1.json');
@@ -140,6 +148,14 @@ assert.equal(validatedParity.policyContractApprovalEligible, true);
 assert.equal(validatedParity.requiresAdditionalApprovalGates, true);
 assert.equal('canApprove' in validatedParity, false);
 assert.equal('canExport' in validatedParity, false);
+assert.equal(validatedParity.policyBinding.mediaClass, 'NON_MEDIA');
+assert.equal(validatedParity.policyBinding.effectiveAt, resolution75.resolutionContext.effectiveAt);
+assert.match(validatedParity.policyBinding.lifecycleSnapshotDigest, /^[a-f0-9]{64}$/);
+assert.equal(validatedParity.policyBinding.lifecycleSnapshotCompleteThrough, '2026-12-31T23:59:59.000Z');
+assert.throws(
+  () => validatePolicySurfacesAt(amazonSurfaces(), resolution75),
+  error => error.code === 'POLICY_DECISION_CONTEXT_REQUIRED'
+);
 
 // A caller cannot forge a resolved contract/hash or promote DRAFT resolution into approval.
 assert.throws(
@@ -341,6 +357,22 @@ const revokeEvent = {
   reasonCode: 'OWNER_REVOKED',
   supersedingPolicyContractId: null
 };
+const revokingRegistry = registryWithLifecycle([amazon200], [revokeEvent]);
+const preRevocationContext = context({ effectiveAt: '2026-09-09T00:15:00Z' });
+const retainedPreRevocationResolution = revokingRegistry.resolve(preRevocationContext, { purpose: 'APPROVAL' });
+assert.throws(
+  () => validatePolicySurfaces(amazonSurfaces(), retainedPreRevocationResolution, context({ effectiveAt: '2026-09-09T00:31:00Z' })),
+  error => error.code === 'POLICY_CONTRACT_NOT_FOUND'
+);
+assert.throws(
+  () => validatePolicySurfaces(amazonSurfaces(), retainedPreRevocationResolution, context({ effectiveAt: '2026-09-09T00:14:59Z' })),
+  error => error.code === 'POLICY_RESOLUTION_TIME_REWIND_FORBIDDEN'
+);
+assert.throws(
+  () => validatePolicySurfaces(amazonSurfaces(), retainedPreRevocationResolution,
+    context({ effectiveAt: '2026-09-09T00:15:00Z', workspaceId: 'workspace-2' })),
+  error => error.code === 'POLICY_RESOLUTION_SCOPE_MISMATCH'
+);
 assert.throws(
   () => registryWithLifecycle([amazon200], [revokeEvent]).resolve(context(), { purpose: 'APPROVAL' }),
   error => error.code === 'POLICY_CONTRACT_NOT_FOUND'

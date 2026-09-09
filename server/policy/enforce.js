@@ -1,24 +1,35 @@
 'use strict';
 
-const { PolicyContractError, isServerPolicyResolution } = require('./contractRegistry');
+const { PolicyContractError, assertPolicyResolutionUse, isServerPolicyResolution } = require('./contractRegistry');
 
-function bindingOf(resolution) {
+function decisionContextFor(resolution, useContext) {
+  if (useContext) return useContext;
+  if (resolution?.purpose === 'DRAFT') return resolution.resolutionContext;
+  throw new PolicyContractError('POLICY_DECISION_CONTEXT_REQUIRED', { purpose: resolution?.purpose });
+}
+
+function bindingOf(resolution, useContext) {
   if (!isServerPolicyResolution(resolution) || !resolution?.contract || !resolution.policyContractId || !resolution.policyContractArtifactHash) {
     throw new PolicyContractError('RESOLVED_POLICY_CONTRACT_REQUIRED');
   }
+  const current = assertPolicyResolutionUse(resolution, decisionContextFor(resolution, useContext), resolution.purpose);
   return Object.freeze({
-    policyContractId: resolution.policyContractId,
-    policyContractArtifactHash: resolution.policyContractArtifactHash,
-    purpose: resolution.purpose,
-    tenantId: resolution.resolutionContext.tenantId,
-    workspaceId: resolution.resolutionContext.workspaceId,
-    sellerAccountId: resolution.resolutionContext.sellerAccountId,
-    marketplace: resolution.resolutionContext.marketplace,
-    site: resolution.resolutionContext.site,
-    locale: resolution.resolutionContext.locale,
-    productTypeId: resolution.resolutionContext.productTypeId,
-    categoryId: resolution.resolutionContext.categoryId,
-    authorityScopeHash: resolution.authorityScope?.authorityScopeHash || null
+    policyContractId: current.policyContractId,
+    policyContractArtifactHash: current.policyContractArtifactHash,
+    purpose: current.purpose,
+    tenantId: current.resolutionContext.tenantId,
+    workspaceId: current.resolutionContext.workspaceId,
+    sellerAccountId: current.resolutionContext.sellerAccountId,
+    marketplace: current.resolutionContext.marketplace,
+    site: current.resolutionContext.site,
+    locale: current.resolutionContext.locale,
+    mediaClass: current.resolutionContext.mediaClass,
+    productTypeId: current.resolutionContext.productTypeId,
+    categoryId: current.resolutionContext.categoryId,
+    effectiveAt: current.resolutionContext.effectiveAt,
+    authorityScopeHash: current.authorityScope?.authorityScopeHash || null,
+    lifecycleSnapshotCompleteThrough: current.lifecycleSnapshotCompleteThrough,
+    lifecycleSnapshotDigest: current.lifecycleSnapshotDigest
   });
 }
 
@@ -39,8 +50,8 @@ function ruleForSurface(contract, surface) {
   throw new PolicyContractError('UNSUPPORTED_POLICY_TEXT_SURFACE', { surface });
 }
 
-function composeTextSurface(candidate, surface, resolution) {
-  const binding = bindingOf(resolution);
+function composeTextSurface(candidate, surface, resolution, useContext) {
+  const binding = bindingOf(resolution, useContext);
   const rule = ruleForSurface(resolution.contract, surface);
   if (!rule) throw new PolicyContractError('POLICY_RULE_NOT_AVAILABLE', { surface });
   const text = clipCharacters(candidate, rule.maxChars, rule.counting);
@@ -54,8 +65,8 @@ function composeTextSurface(candidate, surface, resolution) {
   });
 }
 
-function validatePolicySurfaces(surfaces = {}, resolution) {
-  const binding = bindingOf(resolution);
+function validatePolicySurfaces(surfaces = {}, resolution, useContext) {
+  const binding = bindingOf(resolution, useContext);
   const contract = resolution.contract;
   const policyViolations = [];
   const qualityGaps = [];

@@ -3,10 +3,11 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const { TextDecoder } = require('node:util');
 const { isRfc3339DateTime, validatePolicyContract, validatePolicyLifecycleEvent } = require('./contractSchemaValidator');
 
-const SERVER_CONTEXT = Symbol('omniseller.serverPolicyContext');
-const SERVER_RESOLUTION = Symbol('omniseller.serverPolicyResolution');
+const VALID_SERVER_CONTEXTS = new WeakSet();
+const VALID_SERVER_RESOLUTIONS = new WeakSet();
 const PURPOSES = new Set(['DRAFT', 'APPROVAL', 'EXPORT']);
 const FORBIDDEN_CLIENT_KEYS = new Set([
   'policy',
@@ -52,6 +53,82 @@ function exactByteSha256(bytes) {
   return crypto.createHash('sha256').update(bytes).digest('hex');
 }
 
+function parseStrictJson(bytes, source) {
+  if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) {
+    throw new PolicyContractError('POLICY_CONTRACT_UTF8_BOM_FORBIDDEN', { source });
+  }
+  let value;
+  try {
+    value = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch (_) {
+    throw new PolicyContractError('INVALID_POLICY_CONTRACT_UTF8', { source });
+  }
+  let index = 0;
+  const whitespace = () => { while (/\s/.test(value[index] || '')) index += 1; };
+  const parseString = () => {
+    const start = index++;
+    while (index < value.length) {
+      if (value[index] === '\\') { index += 2; continue; }
+      if (value[index] === '"') {
+        index += 1;
+        return JSON.parse(value.slice(start, index));
+      }
+      index += 1;
+    }
+    throw new Error('unterminated string');
+  };
+  const parseValue = () => {
+    whitespace();
+    if (value[index] === '{') {
+      index += 1;
+      whitespace();
+      const keys = new Set();
+      if (value[index] === '}') { index += 1; return; }
+      while (index < value.length) {
+        whitespace();
+        if (value[index] !== '"') throw new Error('object key required');
+        const key = parseString();
+        if (keys.has(key)) throw new PolicyContractError('DUPLICATE_POLICY_CONTRACT_JSON_KEY', { source, key });
+        keys.add(key);
+        whitespace();
+        if (value[index++] !== ':') throw new Error('colon required');
+        parseValue();
+        whitespace();
+        const separator = value[index++];
+        if (separator === '}') return;
+        if (separator !== ',') throw new Error('object separator required');
+      }
+      throw new Error('unterminated object');
+    }
+    if (value[index] === '[') {
+      index += 1;
+      whitespace();
+      if (value[index] === ']') { index += 1; return; }
+      while (index < value.length) {
+        parseValue();
+        whitespace();
+        const separator = value[index++];
+        if (separator === ']') return;
+        if (separator !== ',') throw new Error('array separator required');
+      }
+      throw new Error('unterminated array');
+    }
+    if (value[index] === '"') { parseString(); return; }
+    const start = index;
+    while (index < value.length && !/[\s,}\]]/.test(value[index])) index += 1;
+    JSON.parse(value.slice(start, index));
+  };
+  try {
+    parseValue();
+    whitespace();
+    if (index !== value.length) throw new Error('trailing content');
+    return JSON.parse(value);
+  } catch (error) {
+    if (error instanceof PolicyContractError) throw error;
+    throw new PolicyContractError('INVALID_POLICY_CONTRACT_JSON', { source });
+  }
+}
+
 function deepFreeze(value) {
   if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
   Object.freeze(value);
@@ -83,7 +160,7 @@ function createServerPolicyContext(input = {}) {
     categoryId: assertNonEmptyString(input.categoryId, 'categoryId'),
     effectiveAt: new Date(effectiveAt).toISOString()
   };
-  Object.defineProperty(context, SERVER_CONTEXT, { value: true, enumerable: false });
+  VALID_SERVER_CONTEXTS.add(context);
   return Object.freeze(context);
 }
 
@@ -91,7 +168,15 @@ function assertNoClientPolicyOverrides(payload) {
   const seen = new WeakSet();
   const normalizedKey = key => {
     let decoded = String(key);
-    try { decoded = decodeURIComponent(decoded); } catch (_) { /* reject through normalized raw key */ }
+    for (let round = 0; round < 5; round += 1) {
+      let next;
+      try { next = decodeURIComponent(decoded); } catch (_) { break; }
+      if (next === decoded) break;
+      decoded = next;
+    }
+    if (/%[0-9a-f]{2}/i.test(decoded)) {
+      throw new PolicyContractError('CLIENT_KEY_ENCODING_TOO_DEEP', { key });
+    }
     return decoded.normalize('NFKC').replace(/[^a-z0-9]/gi, '').toLowerCase();
   };
   const queue = [{ value: payload, pointer: '', depth: 0 }];
@@ -139,6 +224,7 @@ function matchesContext(contract, context) {
     && contract.site === context.site
     && contract.locales.includes(context.locale)
     && Date.parse(contract.effectiveFrom) <= Date.parse(context.effectiveAt)
+    && Date.parse(contract.checkedAt) <= Date.parse(context.effectiveAt)
     && (contract.cohort.mediaClass === 'ALL' || contract.cohort.mediaClass === context.mediaClass)
     && listMatches(contract.cohort.productTypeIds, context.productTypeId)
     && listMatches(contract.cohort.categoryIds, context.categoryId)
@@ -184,12 +270,7 @@ class PolicyContractRegistry {
     const ids = new Set();
     this.artifacts = artifacts.map((artifact, index) => {
       const bytes = Buffer.isBuffer(artifact.bytes) ? Buffer.from(artifact.bytes) : Buffer.from(String(artifact.bytes), 'utf8');
-      let contract;
-      try {
-        contract = JSON.parse(bytes.toString('utf8'));
-      } catch (error) {
-        throw new PolicyContractError('INVALID_POLICY_CONTRACT_JSON', { source: artifact.source || index });
-      }
+      const contract = parseStrictJson(bytes, artifact.source || index);
       requireContractShape(contract);
       if (ids.has(contract.policyContractId)) {
         throw new PolicyContractError('DUPLICATE_POLICY_CONTRACT_ID', { policyContractId: contract.policyContractId });
@@ -238,7 +319,7 @@ class PolicyContractRegistry {
   }
 
   resolve(context, options = {}) {
-    if (!context || context[SERVER_CONTEXT] !== true) {
+    if (!context || !VALID_SERVER_CONTEXTS.has(context)) {
       throw new PolicyContractError('SERVER_POLICY_CONTEXT_REQUIRED');
     }
     const purpose = String(options.purpose || 'DRAFT').toUpperCase();
@@ -266,10 +347,13 @@ class PolicyContractRegistry {
       if (event.eventType === 'SUPERSEDED') {
         const target = this.artifacts.find(item => item.contract.policyContractId === event.supersedingPolicyContractId);
         if (!target || Date.parse(target.contract.effectiveFrom) <= Date.parse(source.contract.effectiveFrom)
+          || Date.parse(event.occurredAt) < Math.max(Date.parse(source.contract.checkedAt), Date.parse(target.contract.checkedAt), Date.parse(target.contract.effectiveFrom))
           || !sameAuthorityScope(source.authorityScope, target.authorityScope)
           || !sameContractCohort(source.contract, target.contract)) {
           throw new PolicyContractError('INVALID_POLICY_SUPERSESSION', { eventId: event.eventId });
         }
+      } else if (Date.parse(event.occurredAt) < Math.max(Date.parse(source.contract.checkedAt), Date.parse(source.contract.effectiveFrom))) {
+        throw new PolicyContractError('INVALID_POLICY_REVOCATION_CHRONOLOGY', { eventId: event.eventId });
       }
       inactiveHashes.add(event.policyContractArtifactHash);
     }
@@ -300,7 +384,7 @@ class PolicyContractRegistry {
       resolutionContext: context,
       authorityScope: winner.authorityScope
     };
-    Object.defineProperty(resolution, SERVER_RESOLUTION, { value: true, enumerable: false });
+    VALID_SERVER_RESOLUTIONS.add(resolution);
     return deepFreeze(resolution);
   }
 }
@@ -311,5 +395,5 @@ module.exports = {
   assertNoClientPolicyOverrides,
   createServerPolicyContext,
   exactByteSha256,
-  isServerPolicyResolution: value => Boolean(value?.[SERVER_RESOLUTION])
+  isServerPolicyResolution: value => Boolean(value && VALID_SERVER_RESOLUTIONS.has(value))
 };

@@ -98,6 +98,7 @@ const ownerConfirmed = clone(amazon.value);
 ownerConfirmed.policyContractId = 'amazon-us-account-category-confirmed-v1';
 ownerConfirmed.verificationStatus = 'OWNER_CONFIRMED_ACCOUNT_CATEGORY';
 ownerConfirmed.approvalEligibility = 'APPROVAL_ELIGIBLE';
+ownerConfirmed.checkedAt = '2026-09-09T00:00:00Z';
 ownerConfirmed.cohort.categoryIds = ['JEWELRY_NECKLACE'];
 ownerConfirmed.cohort.sellerAccountIds = ['ACCOUNT_ALIAS_MAIN'];
 ownerConfirmed.sourceRefs.push({

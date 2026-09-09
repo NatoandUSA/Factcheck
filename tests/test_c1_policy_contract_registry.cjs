@@ -23,6 +23,7 @@ function ownerContract(base, overrides = {}) {
   contract.policyContractId = overrides.policyContractId || `${base.marketplace.toLowerCase()}-owner-confirmed-v1`;
   contract.verificationStatus = 'OWNER_CONFIRMED_ACCOUNT_CATEGORY';
   contract.approvalEligibility = 'APPROVAL_ELIGIBLE';
+  contract.checkedAt = '2026-09-09T00:00:00Z';
   contract.cohort.categoryIds = [overrides.categoryId || 'JEWELRY_NECKLACE'];
   contract.cohort.sellerAccountIds = [overrides.sellerAccountId || 'ACCOUNT_MAIN'];
   contract.sourceRefs.push({
@@ -117,7 +118,8 @@ for (const attack of [
   { policy: { rules: { title: { max_chars: 9999 } } } },
   { contract: { genericKeywords: { maxUtf8Bytes: 9999 } } },
   { settings: { counting: 'UTF16_CODE_UNITS' } },
-  { '%6d%61%78%43%68%61%72%73': 9999 }
+  { '%6d%61%78%43%68%61%72%73': 9999 },
+  { '%256d%2561%2578%2543%2568%2561%2572%2573': 9999 }
 ]) {
   assert.throws(() => assertNoClientPolicyOverrides(attack), error => error.code === 'CLIENT_POLICY_OVERRIDE_FORBIDDEN');
 }
@@ -126,6 +128,9 @@ inheritedOverride.content = 'safe';
 assert.throws(() => assertNoClientPolicyOverrides(inheritedOverride), error => error.code === 'CLIENT_PAYLOAD_PROTOTYPE_FORBIDDEN');
 const harmlessPayload = { anchors: ['gift for daughter'], facts: { materials: ['steel'] } };
 assert.equal(assertNoClientPolicyOverrides(harmlessPayload), harmlessPayload);
+let deepPayload = {};
+for (let depth = 0; depth < 66; depth += 1) deepPayload = { child: deepPayload };
+assert.throws(() => assertNoClientPolicyOverrides(deepPayload), error => error.code === 'CLIENT_PAYLOAD_TOO_DEEP');
 
 // POLICY_COMPOSER_VALIDATOR_PARITY: both surfaces bind the identical ID + artifact hash.
 const composedParity = composeTextSurface(longTitle, 'title', resolution75);
@@ -147,6 +152,13 @@ assert.throws(
   }),
   error => error.code === 'RESOLVED_POLICY_CONTRACT_REQUIRED'
 );
+assert.throws(
+  () => validatePolicySurfaces(amazonSurfaces(), Object.create(resolution200)),
+  error => error.code === 'RESOLVED_POLICY_CONTRACT_REQUIRED'
+);
+const reflectedForgery = { contract: amazon200, policyContractId: 'attacker', policyContractArtifactHash: '0'.repeat(64), purpose: 'APPROVAL', resolutionContext: context() };
+for (const symbol of Object.getOwnPropertySymbols(resolution200)) reflectedForgery[symbol] = true;
+assert.throws(() => validatePolicySurfaces(amazonSurfaces(), reflectedForgery), error => error.code === 'RESOLVED_POLICY_CONTRACT_REQUIRED');
 const ownerDraftResolution = registryOf(amazon200).resolve(context(), { purpose: 'DRAFT' });
 const ownerDraftValidation = validatePolicySurfaces(amazonSurfaces(), ownerDraftResolution);
 assert.equal(ownerDraftValidation.policyContractApprovalEligible, false);
@@ -180,6 +192,10 @@ assert.throws(
 assert.throws(
   () => registryOf(amazon75).resolve(context({ workspaceId: 'workspace-2' }), { purpose: 'EXPORT' }),
   error => error.code === 'POLICY_CONTRACT_NOT_FOUND'
+);
+assert.throws(
+  () => registryOf(amazon75).resolve(Object.create(context()), { purpose: 'APPROVAL' }),
+  error => error.code === 'SERVER_POLICY_CONTEXT_REQUIRED'
 );
 const competing75 = ownerContract(amazonPublic, { policyContractId: 'amazon-owner-75-competing-v1', titleMaxChars: 75 });
 assert.throws(
@@ -217,6 +233,32 @@ assert.throws(
 const impossibleDate = ownerContract(amazonPublic, { policyContractId: 'owner-impossible-date-v1' });
 impossibleDate.checkedAt = '2026-99-99T00:00:00Z';
 assert.throws(() => registryOf(impossibleDate), error => error.code === 'INVALID_POLICY_CONTRACT');
+const futureChecked = ownerContract(amazonPublic, { policyContractId: 'owner-future-checked-v1' });
+futureChecked.checkedAt = '2099-01-01T00:00:00Z';
+futureChecked.sourceRefs.at(-1).capturedAt = '2099-01-01T00:00:00Z';
+assert.throws(
+  () => registryOf(futureChecked).resolve(context(), { purpose: 'APPROVAL' }),
+  error => error.code === 'POLICY_CONTRACT_NOT_FOUND'
+);
+const sourceAfterCheck = ownerContract(amazonPublic, { policyContractId: 'owner-source-after-check-v1' });
+sourceAfterCheck.sourceRefs.at(-1).capturedAt = '2026-09-10T00:00:00Z';
+assert.throws(() => registryOf(sourceAfterCheck), error => error.code === 'INVALID_POLICY_CONTRACT'
+  && error.details.invariantErrors.some(item => item.code === 'POLICY_SOURCE_CAPTURED_AFTER_CHECK'));
+
+// Approval-critical artifact decoding is fatal UTF-8 and duplicate-key safe.
+const invalidUtf8Bytes = Buffer.from(amazon75Bytes);
+invalidUtf8Bytes[invalidUtf8Bytes.indexOf(Buffer.from('amazon-owner-75-v1'))] = 0xff;
+assert.throws(
+  () => new PolicyContractRegistry([{ bytes: invalidUtf8Bytes, authorityScope: { tenantId: 'tenant-1', workspaceId: 'workspace-1' } }],
+    { lifecycleSnapshot: { events: [], completeThrough: '2026-12-31T23:59:59Z' } }),
+  error => error.code === 'INVALID_POLICY_CONTRACT_UTF8'
+);
+const duplicateKeyBytes = Buffer.from(amazon75Bytes.toString('utf8').replace('{', '{"policyContractId":"evil-first",'), 'utf8');
+assert.throws(
+  () => new PolicyContractRegistry([{ bytes: duplicateKeyBytes, authorityScope: { tenantId: 'tenant-1', workspaceId: 'workspace-1' } }],
+    { lifecycleSnapshot: { events: [], completeThrough: '2026-12-31T23:59:59Z' } }),
+  error => error.code === 'DUPLICATE_POLICY_CONTRACT_JSON_KEY'
+);
 
 // Unbranded caller objects cannot invoke the resolver as if they were server-derived context.
 assert.throws(
@@ -256,6 +298,10 @@ assert.ok(longTag.policyViolations.some(item => item.code === 'ETSY_TAG_CHAR_LIM
 const emptyAmazon = validatePolicySurfaces({}, resolution200);
 assert.equal(emptyAmazon.policyContractApprovalEligible, false);
 assert.deepEqual(new Set(emptyAmazon.policyViolations.map(item => item.surface)), new Set(['title', 'itemHighlights', 'genericKeywords', 'bullets']));
+assert.equal(validatePolicySurfaces(amazonSurfaces({ bullets: [] }), resolution200).policyContractApprovalEligible, false);
+const oneBullet = validatePolicySurfaces(amazonSurfaces({ bullets: ['Safe single bullet'] }), resolution200);
+assert.equal(oneBullet.policyContractApprovalEligible, true);
+assert.ok(oneBullet.qualityGaps.some(item => item.code === 'AMAZON_BULLET_TARGET_SHORTAGE'));
 const limitedBullets = ownerContract(amazonPublic, { policyContractId: 'amazon-owner-bullet-limit-v1', titleMaxChars: 200 });
 limitedBullets.rules.bullets.maxChars = 10;
 const limitedResolution = registryOf(limitedBullets).resolve(context(), { purpose: 'APPROVAL' });
@@ -299,6 +345,7 @@ const supersedeEvent = {
   ...revokeEvent,
   eventId: 'supersede-amazon-owner-200-v1',
   eventType: 'SUPERSEDED',
+  occurredAt: '2026-09-09T00:50:00Z',
   reasonCode: 'OWNER_REPLACED',
   supersedingPolicyContractId: amazonNext.policyContractId
 };

@@ -11,6 +11,16 @@ function validatePolicyContractInvariants(contract) {
       maxCount: tags.maxCount
     });
   }
+  for (const [index, sourceRef] of (contract?.sourceRefs || []).entries()) {
+    if (Date.parse(sourceRef.capturedAt) > Date.parse(contract.checkedAt)) {
+      violations.push({
+        code: 'POLICY_SOURCE_CAPTURED_AFTER_CHECK',
+        path: `/sourceRefs/${index}/capturedAt`,
+        capturedAt: sourceRef.capturedAt,
+        checkedAt: contract.checkedAt
+      });
+    }
+  }
   return { valid: violations.length === 0, violations };
 }
 

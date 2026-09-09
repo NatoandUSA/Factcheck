@@ -90,7 +90,8 @@ function validatePolicySurfaces(surfaces = {}, resolution) {
         policyViolations.push({ code: 'POLICY_COMMA_FORBIDDEN', surface: 'genericKeywords' });
       }
     }
-    if (requireSurface('bullets', value => Array.isArray(value) && value.every(item => typeof item === 'string' && item.trim().length > 0))) {
+    if (requireSurface('bullets', value => Array.isArray(value) && value.length > 0
+      && value.every(item => typeof item === 'string' && item.trim().length > 0))) {
       const bullets = surfaces.bullets;
       if (bullets.length < contract.rules.bullets.targetCount) {
         qualityGaps.push({ code: 'AMAZON_BULLET_TARGET_SHORTAGE', actual: bullets.length, target: contract.rules.bullets.targetCount });

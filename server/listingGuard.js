@@ -113,7 +113,7 @@ function ppcAuditOf(listing, truth) {
   return auditOutput(ppc, truth, { surface: SURFACES.PPC });
 }
 
-function evaluateListingGuard({ listing, productTruthCard = null, context = null, clientPayload = null } = {}) {
+function evaluateListingGuard({ listing, productTruthCard = null, context = null, clientPayload = null, verifiedFacts = null } = {}) {
   if (!isRecord(listing)) throw new ListingGuardError('INVALID_LISTING_PAYLOAD');
   try {
     if (clientPayload != null) assertNoClientPolicyOverrides(clientPayload);
@@ -121,7 +121,7 @@ function evaluateListingGuard({ listing, productTruthCard = null, context = null
     throw new ListingGuardError(error.code || 'CLIENT_POLICY_OVERRIDE_FORBIDDEN', error.details || {});
   }
 
-  const truth = verifiedTruth(productTruthCard, context);
+  const truth = isRecord(verifiedFacts) ? Object.freeze({ ...verifiedFacts }) : verifiedTruth(productTruthCard, context);
   const visibleAudit = auditOutput(visibleCopyOf(listing), truth, { surface: SURFACES.VISIBLE_COPY });
   const imageAudit = auditOutput(imagePromptsOf(listing), truth, { surface: SURFACES.IMAGE_PROMPT });
   const backend = sanitizeBackendKeywords(listing, truth);

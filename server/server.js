@@ -49,6 +49,9 @@ const { approvalContextHash, hasCurrentApprovalBinding, currentPublishDecision }
 const { evaluateListingGuard } = require('./listingGuard');
 const { buildStaffAttestedCard, normalizeSnapshot, productTruthAuthorityHash, validateStaffAttestedCard } = require('./productTruthAttestation');
 const { assertNoClientPolicyOverrides } = require('./policy/contractRegistry');
+const { appendProductTruthRevision, confirmProductTruthRevision, listProductTruthRevisions } = require('./productTruthStore');
+const { createListingWithRevision, appendListingRevision, canonicalJson, getListingRevision, hashBytes, listListingRevisions } = require('./revisionStore');
+const { composeTruthOnlyDraft, validateCanonicalDraft } = require('./canonicalDraftService');
 
 function rejectListingGuard(res, error) {
   const code = error?.code || 'LISTING_GUARD_UNAVAILABLE';
@@ -59,6 +62,29 @@ function rejectListingGuard(res, error) {
     error: code,
     ...(error?.details && typeof error.details === 'object' ? error.details : {})
   });
+}
+
+function requireExactDto(body, allowed) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    throw Object.assign(new Error('INVALID_REQUEST_BODY'), { code: 'INVALID_REQUEST_BODY', status: 400 });
+  }
+  const unexpected = Object.keys(body).find(key => !allowed.has(key));
+  if (unexpected) throw Object.assign(new Error('UNEXPECTED_REQUEST_FIELD'), {
+    code: 'UNEXPECTED_REQUEST_FIELD', status: 400, field: unexpected
+  });
+  return body;
+}
+
+function revisionScope(user) {
+  return Object.freeze({ tenantId: user.tenantId, workspaceId: user.workspaceId,
+    marketplace: user.marketplace, actorId: user.userId, role: user.role });
+}
+
+function rejectRevisionStore(res, error) {
+  const status = Number.isInteger(error?.status) ? error.status : 500;
+  return res.status(status).json({ success: false, error: error?.code || 'REVISION_STORE_UNAVAILABLE',
+    ...(error?.details && typeof error.details === 'object' ? error.details : {}),
+    ...(error?.field ? { field: error.field } : {}) });
 }
 
 function resolvePersistedProductTruth(row, callback) {
@@ -107,6 +133,11 @@ function snapshotFromProductTruthCard(card) {
 }
 
 function persistListingEdit({ row, user, payload, status, truthCard, ipScreening, ipAddress, projectId = row.project_id }, callback) {
+  if (row.head_revision_id != null) {
+    return callback(Object.assign(new Error('CANONICAL_REVISION_ROUTE_REQUIRED'), {
+      code: 'CANONICAL_REVISION_ROUTE_REQUIRED', status: 409
+    }));
+  }
   const targetVersion = row.listing_version + 1;
   const updateParams = reboundCard => [
     payload.amazonTitle, payload.etsyTitle, payload.categoryName, JSON.stringify(payload), status,
@@ -1302,16 +1333,33 @@ app.get('/api/projects', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELL
 
 // POST /api/projects - Create new research project
 app.post('/api/projects', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
-  const { name, seedPhrase, referenceAsin } = req.body || {};
+  let body;
+  try {
+    body = requireExactDto(req.body, new Set(['name', 'seedPhrase', 'referenceAsin', 'locale',
+      'mediaClass', 'productTypeId', 'categoryId', 'productFamilyVersion']));
+    assertNoClientPolicyOverrides(body);
+  } catch (error) {
+    return rejectRevisionStore(res, error);
+  }
+  const { name, seedPhrase, referenceAsin, locale, mediaClass, productTypeId, categoryId, productFamilyVersion } = body;
   const projectName = typeof name === 'string' ? name.trim() : '';
   const normalizedSeedPhrase = typeof seedPhrase === 'string' ? seedPhrase.trim() : '';
   if (!projectName || !normalizedSeedPhrase) {
     return res.status(400).json({ success: false, error: 'MISSING_FIELDS', message: 'Project name and seedPhrase are required.' });
   }
+  const policyValues = [locale, mediaClass, productTypeId, categoryId, productFamilyVersion];
+  const hasPolicyContext = policyValues.some(value => value !== undefined && value !== null && String(value).trim());
+  if (hasPolicyContext && policyValues.some(value => typeof value !== 'string' || !value.trim() || value.trim().length > 128)) {
+    return res.status(400).json({ success: false, error: 'INCOMPLETE_PROJECT_POLICY_CONTEXT' });
+  }
+  if (hasPolicyContext && !['en-US', 'es-US'].includes(locale.trim())) {
+    return res.status(400).json({ success: false, error: 'UNSUPPORTED_LISTING_LOCALE' });
+  }
 
-  db.run(
-    `INSERT INTO research_projects (tenant_id, workspace_id, marketplace, name, seed_phrase, state, reference_asin, actor_id)
-     VALUES (?, ?, ?, ?, ?, 'EVIDENCE_INTAKE', ?, ?)`,
+  const insertProject = () => db.run(
+    `INSERT INTO research_projects (tenant_id, workspace_id, marketplace, name, seed_phrase, state, reference_asin, actor_id,
+       locale,media_class,product_type_id,category_id,product_family_version)
+     VALUES (?, ?, ?, ?, ?, 'EVIDENCE_INTAKE', ?, ?, ?, ?, ?, ?, ?)`,
     [
       req.user.tenantId,
       req.user.workspaceId,
@@ -1319,7 +1367,12 @@ app.post('/api/projects', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SEL
       projectName,
       normalizedSeedPhrase,
       referenceAsin ? String(referenceAsin).trim() : null,
-      req.user.userId
+      req.user.userId,
+      hasPolicyContext ? locale.trim() : null,
+      hasPolicyContext ? mediaClass.trim().toUpperCase() : null,
+      hasPolicyContext ? productTypeId.trim() : null,
+      hasPolicyContext ? categoryId.trim() : null,
+      hasPolicyContext ? productFamilyVersion.trim() : null
     ],
     function(err) {
       if (err) return res.status(500).json({ success: false, error: err.message });
@@ -1327,10 +1380,143 @@ app.post('/api/projects', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SEL
         success: true,
         projectId: this.lastID,
         state: 'EVIDENCE_INTAKE',
-        marketplace: req.user.marketplace
+        marketplace: req.user.marketplace,
+        policyContextState: hasPolicyContext ? 'COMPLETE' : 'INCOMPLETE'
       });
     }
   );
+  // Policy target identity is server-owned. Existing workspaces are backfilled
+  // by migration; workspaces created after migration receive the same explicit
+  // internal account label here before a classified project can use it.
+  db.run(`UPDATE workspaces SET seller_account_label=COALESCE(seller_account_label,'workspace:' || id),
+      site=COALESCE(site,'US') WHERE id=? AND tenant_id=? AND marketplace=?`,
+  [req.user.workspaceId, req.user.tenantId, req.user.marketplace], function onPolicyTarget(error) {
+    if (error) return res.status(500).json({ success: false, error: 'WORKSPACE_POLICY_CONTEXT_FAILED' });
+    if (this.changes !== 1) return res.status(404).json({ success: false, error: 'WORKSPACE_NOT_FOUND' });
+    insertProject();
+  });
+});
+
+// Canonical project-scoped Product Truth. This axis is intentionally
+// independent of the research DAG and exists before any Listing root.
+app.post('/api/projects/:id/product-truth/revisions', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    const body = requireExactDto(req.body, new Set(['expectedHeadRevisionId', 'idempotencyKey', 'changeReason', 'facts', 'notes']));
+    assertNoClientPolicyOverrides(body);
+    const result = await appendProductTruthRevision(db, revisionScope(req.user), req.params.id, body);
+    res.status(result.revisionNumber === 1 ? 201 : 200).json({ success: true, ...result });
+  } catch (error) {
+    rejectRevisionStore(res, error);
+  }
+});
+
+app.get('/api/projects/:id/product-truth/revisions', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    const revisions = await listProductTruthRevisions(db, revisionScope(req.user), req.params.id);
+    res.json({ success: true, projectId: Number(req.params.id), count: revisions.length, revisions });
+  } catch (error) {
+    rejectRevisionStore(res, error);
+  }
+});
+
+app.post('/api/projects/:id/product-truth/revisions/:revisionId/confirm', requireAuth(db), requireRole(['OWNER', 'MANAGER']), async (req, res) => {
+  try {
+    const body = requireExactDto(req.body, new Set(['idempotencyKey', 'reason']));
+    const result = await confirmProductTruthRevision(db, revisionScope(req.user), req.params.id, req.params.revisionId, body);
+    res.status(201).json({ success: true, ...result });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+app.post('/api/projects/:id/listings/compose-preview', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    const body = requireExactDto(req.body, new Set(['productTruthRevisionId']));
+    assertNoClientPolicyOverrides(body);
+    const preview = await composeTruthOnlyDraft(db, revisionScope(req.user), Number(req.params.id), body.productTruthRevisionId);
+    res.json({ success: true, zeroWrite: true, content: preview.content, contentHash: hashBytes(canonicalJson(preview.content)),
+      productTruthRevisionId: preview.truth.id, dependencies: preview.dependencies,
+      guardAccounting: preview.guardAccounting, degraded: preview.degraded, provider: preview.provider });
+  } catch (error) {
+    rejectRevisionStore(res, error);
+  }
+});
+
+app.post('/api/projects/:id/listings', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    const body = requireExactDto(req.body, new Set(['idempotencyKey', 'changeReason', 'productTruthRevisionId', 'content']));
+    assertNoClientPolicyOverrides(body);
+    const scope = revisionScope(req.user);
+    const projectId = Number(req.params.id);
+    const validated = await validateCanonicalDraft(db, scope, projectId, body.productTruthRevisionId, body.content);
+    const result = await createListingWithRevision(db, scope, {
+      projectId, idempotencyKey: body.idempotencyKey, changeReason: body.changeReason,
+      content: validated.content, dependencies: {}
+    }, { resolveDependencies: async () => (await validateCanonicalDraft(db, scope, projectId,
+      body.productTruthRevisionId, validated.content)).dependencies });
+    res.status(result.revisionNumber === 1 ? 201 : 200).json({ success: true, ...result,
+      status: 'NEEDS_QA', content: validated.content, guardAccounting: validated.guardAccounting });
+  } catch (error) {
+    rejectRevisionStore(res, error);
+  }
+});
+
+app.get('/api/projects/:id/listings', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
+  db.all(`SELECT id,project_id,status,listing_version,head_revision_id,head_creative_revision_id,amazonTitle,etsyTitle,categoryName,generatedAt
+    FROM listings WHERE tenant_id=? AND workspace_id=? AND marketplace=? AND project_id=? AND head_revision_id IS NOT NULL
+    ORDER BY generatedAt DESC`, [req.user.tenantId, req.user.workspaceId, req.user.marketplace, Number(req.params.id)],
+  (error, rows) => error ? res.status(500).json({ success: false, error: 'DATABASE_ERROR' })
+    : res.json({ success: true, projectId: Number(req.params.id), listings: rows }));
+});
+
+app.post('/api/listings/:id/revisions', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    const body = requireExactDto(req.body, new Set(['parentRevisionId', 'expectedHeadRevisionId', 'idempotencyKey',
+      'changeReason', 'productTruthRevisionId', 'content']));
+    assertNoClientPolicyOverrides(body);
+    const scope = revisionScope(req.user);
+    const listingId = Number(req.params.id);
+    const root = await new Promise((resolve, reject) => db.get(`SELECT id,project_id FROM listings
+      WHERE id=? AND tenant_id=? AND workspace_id=? AND marketplace=? AND head_revision_id IS NOT NULL`,
+    [listingId, scope.tenantId, scope.workspaceId, scope.marketplace],
+    (error, row) => error ? reject(error) : resolve(row || null)));
+    if (!root) throw Object.assign(new Error('LISTING_NOT_FOUND'), { code: 'LISTING_NOT_FOUND', status: 404 });
+    const validated = await validateCanonicalDraft(db, scope, root.project_id, body.productTruthRevisionId, body.content);
+    const result = await appendListingRevision(db, scope, listingId, {
+      projectId: root.project_id, parentRevisionId: body.parentRevisionId,
+      expectedHeadRevisionId: body.expectedHeadRevisionId, idempotencyKey: body.idempotencyKey,
+      changeReason: body.changeReason, content: validated.content, dependencies: {}
+    }, { resolveDependencies: async () => (await validateCanonicalDraft(db, scope, root.project_id,
+      body.productTruthRevisionId, validated.content)).dependencies });
+    res.json({ success: true, ...result, status: 'NEEDS_QA', content: validated.content,
+      guardAccounting: validated.guardAccounting });
+  } catch (error) {
+    rejectRevisionStore(res, error);
+  }
+});
+
+app.get('/api/listings/:id/revisions', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    const scope = revisionScope(req.user);
+    const root = await new Promise((resolve, reject) => db.get(`SELECT project_id FROM listings
+      WHERE id=? AND tenant_id=? AND workspace_id=? AND marketplace=? AND head_revision_id IS NOT NULL`,
+    [Number(req.params.id), scope.tenantId, scope.workspaceId, scope.marketplace],
+    (error, row) => error ? reject(error) : resolve(row || null)));
+    if (!root) throw Object.assign(new Error('LISTING_NOT_FOUND'), { code: 'LISTING_NOT_FOUND', status: 404 });
+    const revisions = await listListingRevisions(db, scope, req.params.id, root.project_id);
+    res.json({ success: true, listingId: Number(req.params.id), count: revisions.length, revisions });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+app.get('/api/listings/:id/revisions/:revisionId', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    const scope = revisionScope(req.user);
+    const root = await new Promise((resolve, reject) => db.get(`SELECT project_id FROM listings
+      WHERE id=? AND tenant_id=? AND workspace_id=? AND marketplace=? AND head_revision_id IS NOT NULL`,
+    [Number(req.params.id), scope.tenantId, scope.workspaceId, scope.marketplace],
+    (error, row) => error ? reject(error) : resolve(row || null)));
+    if (!root) throw Object.assign(new Error('LISTING_NOT_FOUND'), { code: 'LISTING_NOT_FOUND', status: 404 });
+    const revision = await getListingRevision(db, scope, req.params.id, req.params.revisionId, root.project_id);
+    res.json({ success: true, revision });
+  } catch (error) { rejectRevisionStore(res, error); }
 });
 
 // ALLOWED_PROJECT_TRANSITIONS Adjacency Map (Canonical Sequence)
@@ -1836,6 +2022,9 @@ app.patch('/api/listings/:id', requireAuth(db), requireRole(['OWNER', 'MANAGER',
     (lookupErr, row) => {
       if (lookupErr) return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
       if (!row) return res.status(404).json({ success: false, error: 'LISTING_NOT_FOUND' });
+      if (row.head_revision_id != null) {
+        return res.status(409).json({ success: false, error: 'CANONICAL_REVISION_ROUTE_REQUIRED' });
+      }
       if (row.listing_version !== expectedVersion) {
         return res.status(412).json({ success: false, error: 'STALE_LISTING_VERSION' });
       }
@@ -1877,7 +2066,7 @@ app.patch('/api/listings/:id', requireAuth(db), requireRole(['OWNER', 'MANAGER',
         ipScreening: screened,
         ipAddress: req.ip
       }, (err, result) => {
-          if (err) return res.status(err.code === 'STALE_LISTING_VERSION' ? 412 : 500).json({ success: false, error: err.code || 'LISTING_UPDATE_FAILED' });
+          if (err) return res.status(err.status || (err.code === 'STALE_LISTING_VERSION' ? 412 : 500)).json({ success: false, error: err.code || 'LISTING_UPDATE_FAILED' });
           if (result.changes !== 1) return res.status(412).json({ success: false, error: 'STALE_LISTING_VERSION' });
           res.json({
             success: true,
@@ -1931,6 +2120,9 @@ app.put('/api/listings/:id/product-truth', requireAuth(db), requireRole(['OWNER'
         (readError, row) => {
           if (readError) return rollback(500, { success: false, error: 'DATABASE_ERROR' });
           if (!row) return rollback(404, { success: false, error: 'LISTING_NOT_FOUND' });
+          if (row.head_revision_id != null) {
+            return rollback(409, { success: false, error: 'CANONICAL_PRODUCT_TRUTH_ROUTE_REQUIRED' });
+          }
           if (row.listing_version !== expectedVersion) {
             return rollback(412, { success: false, error: 'STALE_LISTING_VERSION' });
           }
@@ -2055,6 +2247,13 @@ app.patch('/api/listings/:id/approve', requireAuth(db), requireRole(['OWNER', 'M
     [id, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
     (err, row) => {
     if (err || !row) return res.status(404).json({ error: 'Listing not found.' });
+    if (row.head_revision_id != null) {
+      return res.status(409).json({
+        success: false,
+        error: 'CANONICAL_APPROVAL_ROUTE_REQUIRED',
+        message: 'Canonical listing revisions cannot be approved through the legacy listing endpoint.'
+      });
+    }
     if (row.listing_version !== expectedVersion) {
       return res.status(412).json({ success: false, error: 'STALE_LISTING_VERSION' });
     }
@@ -2173,6 +2372,13 @@ app.get('/api/listings/:id/export', requireAuth(db), requireRole(['OWNER', 'MANA
     [id, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
     (err, row) => {
     if (err || !row) return res.status(404).json({ error: 'Listing not found.' });
+    if (row.head_revision_id != null) {
+      return res.status(409).json({
+        success: false,
+        error: 'CANONICAL_EXPORT_PACKAGE_ROUTE_REQUIRED',
+        message: 'Canonical listing revisions cannot be exported through the legacy listing endpoint.'
+      });
+    }
     resolvePersistedProductTruth(row, (truthError, productTruthCard) => {
       if (truthError) return res.status(403).json({ success: false, error: truthError.code, reasons: truthError.reasons });
       let storedPayload;

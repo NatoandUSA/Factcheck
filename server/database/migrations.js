@@ -7,6 +7,7 @@ const PRODUCT_TRUTH_ATTESTATION_MIGRATION = '007_listing_product_truth_attestati
 const PRODUCT_TRUTH_CARD_MIGRATION = '008_listing_product_truth_card';
 const IMMUTABLE_REVISIONS_MIGRATION = '009_immutable_listing_creative_revisions';
 const PRODUCT_TRUTH_AUTHORITY_MIGRATION = '010_product_truth_authority_scope';
+const PROJECT_PRODUCT_TRUTH_REVISIONS_MIGRATION = '011_project_product_truth_revisions';
 const crypto = require('node:crypto');
 
 function run(db, sql, params = []) {
@@ -263,6 +264,74 @@ async function migrateProductTruthAuthorityScope(db) {
   await addColumnIfMissing(db, columns, 'content_hash', 'TEXT NULL', 'audit_events');
 }
 
+async function migrateProjectProductTruthRevisions(db) {
+  const projects = await all(db, "SELECT name FROM sqlite_master WHERE type='table' AND name='research_projects'");
+  if (!projects.length) return;
+  const columns = new Set((await all(db, 'PRAGMA table_info(research_projects)')).map(column => column.name));
+  const workspaceColumns = new Set((await all(db, 'PRAGMA table_info(workspaces)')).map(column => column.name));
+  await addColumnIfMissing(db, workspaceColumns, 'seller_account_label', 'TEXT NULL', 'workspaces');
+  await addColumnIfMissing(db, workspaceColumns, 'site', 'TEXT NULL', 'workspaces');
+  await run(db, `UPDATE workspaces SET seller_account_label='workspace:' || id WHERE seller_account_label IS NULL`);
+  await run(db, `UPDATE workspaces SET site='US' WHERE site IS NULL AND marketplace IN ('AMAZON','ETSY')`);
+  await addColumnIfMissing(db, columns, 'locale', 'TEXT NULL', 'research_projects');
+  await addColumnIfMissing(db, columns, 'media_class', 'TEXT NULL', 'research_projects');
+  await addColumnIfMissing(db, columns, 'product_type_id', 'TEXT NULL', 'research_projects');
+  await addColumnIfMissing(db, columns, 'category_id', 'TEXT NULL', 'research_projects');
+  await addColumnIfMissing(db, columns, 'product_family_version', 'TEXT NULL', 'research_projects');
+  await addColumnIfMissing(db, columns, 'head_product_truth_revision_id',
+    'INTEGER NULL REFERENCES product_truth_revisions(id)', 'research_projects');
+  await run(db, `CREATE TABLE IF NOT EXISTS product_truth_revisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id TEXT NOT NULL,
+    workspace_id INTEGER NOT NULL,
+    marketplace TEXT NOT NULL CHECK(marketplace IN ('AMAZON','ETSY')),
+    project_id INTEGER NOT NULL REFERENCES research_projects(id),
+    revision_number INTEGER NOT NULL CHECK(revision_number >= 1),
+    parent_revision_id INTEGER NULL REFERENCES product_truth_revisions(id),
+    snapshot_json TEXT NOT NULL,
+    content_hash TEXT NOT NULL CHECK(length(content_hash) = 64),
+    change_reason TEXT NOT NULL,
+    created_by INTEGER NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(project_id, revision_number)
+  )`);
+  await run(db, `CREATE INDEX IF NOT EXISTS idx_product_truth_revisions_scope
+    ON product_truth_revisions(tenant_id,workspace_id,marketplace,project_id,revision_number)`);
+  await run(db, `CREATE TABLE IF NOT EXISTS product_truth_confirmations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id TEXT NOT NULL,
+    workspace_id INTEGER NOT NULL,
+    marketplace TEXT NOT NULL CHECK(marketplace IN ('AMAZON','ETSY')),
+    project_id INTEGER NOT NULL REFERENCES research_projects(id),
+    product_truth_revision_id INTEGER NOT NULL REFERENCES product_truth_revisions(id),
+    product_truth_hash TEXT NOT NULL CHECK(length(product_truth_hash) = 64),
+    confirmed_by INTEGER NOT NULL,
+    reason TEXT NOT NULL,
+    confirmed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(product_truth_revision_id)
+  )`);
+  await run(db, `CREATE TABLE IF NOT EXISTS product_truth_write_receipts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id TEXT NOT NULL,
+    workspace_id INTEGER NOT NULL,
+    marketplace TEXT NOT NULL CHECK(marketplace IN ('AMAZON','ETSY')),
+    project_id INTEGER NOT NULL REFERENCES research_projects(id),
+    operation TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    request_hash TEXT NOT NULL CHECK(length(request_hash) = 64),
+    response_json TEXT NOT NULL,
+    created_by INTEGER NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id,workspace_id,marketplace,operation,idempotency_key)
+  )`);
+  for (const table of ['product_truth_revisions', 'product_truth_confirmations', 'product_truth_write_receipts']) {
+    await run(db, `CREATE TRIGGER IF NOT EXISTS ${table}_immutable_update
+      BEFORE UPDATE ON ${table} BEGIN SELECT RAISE(ABORT, 'IMMUTABLE_PRODUCT_TRUTH'); END`);
+    await run(db, `CREATE TRIGGER IF NOT EXISTS ${table}_immutable_delete
+      BEFORE DELETE ON ${table} BEGIN SELECT RAISE(ABORT, 'IMMUTABLE_PRODUCT_TRUTH'); END`);
+  }
+}
+
 async function runMigrations(db) {
   await run(db, `
     CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -427,6 +496,18 @@ async function runMigrations(db) {
       throw error;
     }
   }
+  const projectTruthApplied = await all(db, 'SELECT id FROM schema_migrations WHERE id = ?', [PROJECT_PRODUCT_TRUTH_REVISIONS_MIGRATION]);
+  if (projectTruthApplied.length === 0) {
+    await run(db, 'BEGIN IMMEDIATE');
+    try {
+      await migrateProjectProductTruthRevisions(db);
+      await run(db, 'INSERT INTO schema_migrations (id) VALUES (?)', [PROJECT_PRODUCT_TRUTH_REVISIONS_MIGRATION]);
+      await run(db, 'COMMIT');
+    } catch (error) {
+      try { await run(db, 'ROLLBACK'); } catch (_) {}
+      throw error;
+    }
+  }
 }
 
 async function migrateAgentWorkspaceScope(db) {
@@ -516,6 +597,7 @@ module.exports = {
   PRODUCT_TRUTH_CARD_MIGRATION,
   IMMUTABLE_REVISIONS_MIGRATION,
   PRODUCT_TRUTH_AUTHORITY_MIGRATION,
+  PROJECT_PRODUCT_TRUTH_REVISIONS_MIGRATION,
   AGENT_WORKSPACE_SCOPE_MIGRATION,
   PROJECT_SCOPED_EVIDENCE_MIGRATION,
   CANONICAL_DAG_MIGRATION,

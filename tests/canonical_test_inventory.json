@@ -36,6 +36,8 @@
   "tests/test_jsx_static_contract_ratchet.cjs",
   "tests/test_full_cerebro_mkl_flow.cjs",
   "tests/test_g2_immutable_revisions.cjs",
+  "tests/test_g3_product_truth_revisions.cjs",
+  "tests/test_g3_canonical_bootstrap_http.cjs",
   "tests/test_legacy_migration_integrity.test.cjs",
   "tests/test_listing_ip_rescreen.cjs",
   "tests/test_listing_truth_boundary.cjs",

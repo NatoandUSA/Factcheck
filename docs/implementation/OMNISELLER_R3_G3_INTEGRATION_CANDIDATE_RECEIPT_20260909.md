@@ -1,69 +1,107 @@
-# OmniSeller R3 — G3 Integration Candidate Receipt
+# OmniSeller R3 — G3 Canonical Vertical Slice Candidate Receipt
 
-Date: 2026-09-09 (Asia/Bangkok)  
-Branch: `codex/omniseller-r3-c3-integration`  
-Base: `675e8cc324671b669c7bd051c8b52874ba090407`  
-Status: **CHECKPOINT ONLY — CHANGES REQUESTED — DO NOT MERGE OR DEPLOY**
+Date: 2026-09-09 (Asia/Bangkok)
 
-## Implemented in this candidate
+Branch: `codex/omniseller-r3-g3-final`
 
-- Server-owned Product Truth attestation on the existing canonical `listings` row.
-- Exact tenant/workspace/marketplace/listing/version binding to a successful audit event and content hash.
-- Seller may assert facts or explicitly mark fields UNKNOWN; the server creates evidence identity and authority metadata.
-- Product fact authority survives an IP-blocked revision so staff can remove the protected content; approval/export still re-screen IP.
-- C2 claim guard runs on visible copy, backend terms, PPC accounting and nested image prompts.
-- Canonical C2 IP matcher is the only matcher behind the legacy-compatible `ipGuard` API.
-- Client policy/clearance/approval-shaped fields are rejected or ignored as authority.
-- Quick Draft and Trend Draft update and rebind the same canonical Product Truth listing instead of creating orphan rows.
-- Etsy Batch Learn returns zero-authority research output and no longer inserts a canonical listing.
-- Browser batch CSV download obtains every row through the gated server export endpoint.
-- Browser modules are genuine ESM and no longer execute CommonJS `require()` in Vite.
+Accepted base: G2 `e79777684bd2b3d14c54d7a591a952b6c5191366`
 
-## Proved green on the current Windows host
+Status: **REVIEW CANDIDATE — DO NOT MERGE, PUSH, DEPLOY OR SUBMIT**
 
-- Production build: PASS, 2,425 modules transformed.
-- Route registry: PASS, 60 discovered / 56 authenticated non-public routes.
-- C2 claims: 18/18 PASS.
-- C2 IP matcher: 12/12 PASS.
-- C3 HTTP/SQLite integration: 6/6 PASS.
-- C3 Product Truth normalization/hash: 4/4 PASS.
-- Security/workspace suite: 18/18 PASS.
-- Publish integrity: 46/46 PASS.
-- Real Cerebro fixture: 27,018 parsed rows / 25,049 canonical persisted rows; PASS.
-- Xray persistence: 47/47 PASS.
-- Production build and all separately rerun post-Vite suites: PASS except the Windows process-tree case below.
+## Outcome
 
-## Honest aggregate from the 69-file inventory
-
-The canonical runner was interrupted after its Windows Vite child-process cleanup hung. Combining the runner output through file 60 with explicit execution of files 61–69 gives:
+G3 now exposes one provider-independent, project-first canonical path:
 
 ```text
-total inventory: 69
-proved passing: 64
-known environment/harness failures: 5
-unexecuted after separate rerun: 0
+authenticated workspace + persisted project classification
+  -> append-only Product Truth STAFF_DRAFT
+  -> immutable Manager/Owner confirmation
+  -> zero-write deterministic preview
+  -> canonical listing root + immutable revision v1
+  -> immutable edit revision v2
+  -> scoped history/reopen
 ```
 
-Known failures:
+This is a usable bootstrap slice, not the finished Amazon/Etsy production workflow. It deliberately stops before canonical approval/export because the checked-in public policy contracts are `DRAFT_ONLY` and the saved draft has no persisted research/intelligence snapshot yet.
 
-1. `test_adversarial_staff_ui_flow.cjs`: live YTrends/Etsy MCP provider unavailable; server correctly returns 503 without fallback fabrication.
-2. `test_multi_project_attribution.cjs`: same unavailable provider expectation mismatch.
-3. `test_runner_accounting.cjs`: Windows descendant-process isolation limitation.
-4. `test_vite_dev_runtime_smoke.test.cjs`: Vite serves/builds, but Windows test cleanup hangs on the process tree.
-5. `test_vite_process_shutdown.cjs`: Windows `taskkill` process-tree cleanup returns failure after the leader exits.
+## Canonical storage added
 
-These are not counted as product-flow PASS. The staff browser journey is also not certified: the browser-control service rejected local browser startup because the account tool quota was exhausted. No workaround was used.
+- Workspace policy target: server-owned `seller_account_label` and `site`.
+- Project classification: `locale`, `media_class`, `product_type_id`, `category_id`, `product_family_version`.
+- Project head pointer: `head_product_truth_revision_id`.
+- Append-only `product_truth_revisions` with hash, parent and revision number.
+- Append-only `product_truth_confirmations` bound to the exact revision hash.
+- Idempotent `product_truth_write_receipts`.
+- G2 `listing_revisions` and write receipts remain the only canonical listing-history writer.
 
-## Mandatory remaining work before G3 acceptance
+Legacy listing-bound Product Truth remains legacy-readable. It is not promoted into the new project authority and no historical authority is invented.
 
-- Implement and certify G2 append-only `listing_revisions`, `creative_revisions` and idempotent write receipts before treating version increments as immutable history.
-- Install a server-derived C1 runtime policy registry with Owner-confirmed seller-account/category contracts and decision-time lifecycle snapshots. Public/draft fixtures cannot authorize approval/export.
-- Remove duplicate numerical authority from the legacy publish gate after the canonical policy cutover.
-- Complete Node 22 clean Linux install/build/migration/rollback certification.
-- Complete a continuous normal-browser Seller → Product Truth → draft → save/reload/edit → Manager approve → exact export receipt.
-- Run Hija and Esposa real cohorts; prove 925/18k contamination is absent from copy and every image prompt.
-- Obtain independent exact-SHA review before any merge, push, VPS action or deployment.
+## Canonical HTTP surface
 
-## Authority boundary
+- `POST /api/projects`
+- `POST /api/projects/:id/product-truth/revisions`
+- `GET /api/projects/:id/product-truth/revisions`
+- `POST /api/projects/:id/product-truth/revisions/:revisionId/confirm`
+- `POST /api/projects/:id/listings/compose-preview`
+- `POST /api/projects/:id/listings`
+- `GET /api/projects/:id/listings`
+- `POST /api/listings/:id/revisions`
+- `GET /api/listings/:id/revisions`
+- `GET /api/listings/:id/revisions/:revisionId`
 
-This checkpoint grants no production readiness, marketplace acceptance, legal clearance, approval authority or deployment authorization. No remote push, merge, VPS mutation or marketplace submission was performed.
+Each mutation has an exact top-level allowlist. The server derives tenant, workspace, marketplace, seller-account identity, policy binding, claim/IP binding, validator binding, state and authority. Client-supplied dependency or authority fields are rejected.
+
+## Safety and authority decisions
+
+- Product Truth is current only through the project head pointer; newest-row inference is not authority.
+- Manager/Owner confirmation verifies the current scoped revision and its exact content hash.
+- Preview contains only asserted Product Truth and writes no canonical or receipt rows.
+- Save and edit re-run claim, IP and C1 draft-policy validation server-side.
+- Missing research/intelligence is explicit in the dependency manifest as `INCOMPLETE`; safe internal save is allowed.
+- A newly saved canonical root starts at `NEEDS_QA`.
+- Canonical roots cannot be edited, approved or exported through legacy routes.
+- Legacy approval returns `CANONICAL_APPROVAL_ROUTE_REQUIRED`.
+- Legacy export returns `CANONICAL_EXPORT_PACKAGE_ROUTE_REQUIRED`.
+- No public draft policy is allowed to become approval or export authority.
+
+## Exact Windows Node 22 evidence before candidate commit
+
+```text
+G2 immutable revisions                         38/38 PASS
+G3 project Product Truth revisions             16/16 PASS
+G3 canonical HTTP bootstrap                     26/26 PASS
+C1 policy contract registry                     10 groups PASS
+C2 claim guard                                  18/18 PASS
+C2 IP matcher                                   12/12 PASS
+C3 claim/policy integration                      6/6 PASS
+Route registry                       69 discovered; 65 authenticated non-public PASS
+P0 route security                                  PASS
+Workspace switching/auth security                 PASS
+Backup/restore and migrations                      PASS
+Legacy migration idempotency/isolation             PASS
+H0 state migration                              42/42 PASS
+H0 publish integrity                            46/46 PASS
+Production build: 2,425 modules transformed          PASS
+git diff --check                                    PASS
+```
+
+The HTTP bootstrap specifically proves project creation, staff Product Truth, Owner confirmation, zero-write preview, immutable v1/v2, reload of both versions, forged dependency rejection, and no-write blocking of legacy edit/approval/export against the canonical root.
+
+## Explicitly not certified in G3
+
+- Owner-scoped `APPROVAL_ELIGIBLE` Amazon/Etsy policy contracts.
+- Canonical approval records or exact export packages.
+- Persisted Xray/Cerebro/Etsy research and intelligence snapshot bindings.
+- Full Hija/Esposa commerce composition and keyword allocation.
+- Full image-prompt set, A+ creative revisions or external AI image generation.
+- Browser UAT; the browser-control service was unavailable because the account tool quota was exhausted, and no workaround was used.
+- Linux exact-SHA certification and independent exact-SHA acceptance; these occur only after the candidate commit.
+
+## Next bounded gate
+
+1. Commit this candidate locally and bind all evidence to its exact SHA.
+2. Obtain independent review of scope isolation, idempotency, immutable authority, DTO rejection, policy binding and legacy bypasses.
+3. Run exact-SHA Node 22 Linux tests/build if the independent review finds no P0/P1.
+4. Only then mark G3 accepted and begin G4 real-data Amazon/Etsy composition and creative outputs.
+
+No remote push, merge, VPS mutation, deployment or marketplace submission was performed.

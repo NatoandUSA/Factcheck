@@ -245,7 +245,7 @@ async function createListingWithRevisionUnlocked(db, rawScope, input, hooks = {}
       (tenant_id,workspace_id,marketplace,project_id,amazonTitle,etsyTitle,categoryName,status,authorId,listing_version,payload)
       VALUES (?,?,?,?,?,?,?,?,?,1,?)`, [scope.tenantId, scope.workspaceId, scope.marketplace, projectId,
       String(content.amazonTitle || ''), String(content.etsyTitle || ''), String(content.categoryName || ''),
-      'INTERNAL_DRAFT', scope.actorId, contentJson]);
+      'NEEDS_QA', scope.actorId, contentJson]);
     if (hooks.afterRoot) await hooks.afterRoot(root.lastID);
     const revision = await run(db, `INSERT INTO listing_revisions
       (listing_id,tenant_id,workspace_id,marketplace,project_id,revision_number,parent_revision_id,
@@ -449,6 +449,28 @@ async function getCreativeRevision(db, rawScope, listingIdInput, revisionIdInput
   }
 }
 
+async function listListingRevisions(db, rawScope, listingIdInput, projectIdInput) {
+  const scope = requiredScope(rawScope);
+  const listingId = Number(listingIdInput);
+  const projectId = requiredProjectId(projectIdInput);
+  const rows = await new Promise((resolve, reject) => db.all(`SELECT * FROM listing_revisions
+    WHERE listing_id=? AND tenant_id=? AND workspace_id=? AND marketplace=? AND project_id=?
+    ORDER BY revision_number DESC`, [listingId, scope.tenantId, scope.workspaceId, scope.marketplace, projectId],
+  (error, values) => error ? reject(error) : resolve(values)));
+  return rows.map(row => {
+    assertStoredRevisionIntegrity(row);
+    let content;
+    try { content = JSON.parse(row.content_json); }
+    catch (_) {
+      if (!row.migrated_from_legacy) throw new RevisionStoreError('REVISION_INTEGRITY_FAILURE', 500);
+      content = null;
+    }
+    return Object.freeze({ ...row, content, contentRaw: row.content_json,
+      contentParseState: content === null && row.content_json !== 'null' ? 'MALFORMED_LEGACY_JSON' : 'PARSED',
+      dependencies: JSON.parse(row.dependency_manifest_json) });
+  });
+}
+
 function createListingWithRevision(db, scope, input, hooks = {}) {
   return withWriteLock(db, () => createListingWithRevisionUnlocked(db, scope, input, hooks));
 }
@@ -470,5 +492,6 @@ module.exports = Object.freeze({
   dependencyManifest,
   getCreativeRevision,
   getListingRevision,
+  listListingRevisions,
   hashBytes
 });

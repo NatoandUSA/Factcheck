@@ -70,6 +70,8 @@ async function main() {
     const v1 = await appendProductTruthRevision(db, scope, 1, v1Input);
     assert.equal(v1.confirmationState, 'STAFF_DRAFT');
     assert.deepEqual(await appendProductTruthRevision(db, scope, 1, v1Input), v1);
+    await expectCode(appendProductTruthRevision(db, { ...scope, actorId: 2 }, 1, v1Input),
+      'IDEMPOTENCY_KEY_ACTOR_MISMATCH');
     assert.deepEqual(await counts(db), { revisions: 1, receipts: 1 });
     await expectCode(appendProductTruthRevision(db, scope, 1, { ...v1Input, facts: facts('silver'), idempotencyKey: key(1) }), 'IDEMPOTENCY_KEY_REUSE');
 
@@ -94,6 +96,9 @@ async function main() {
     assert.deepEqual(await confirmProductTruthRevision(db, managerScope, 1, v2.productTruthRevisionId, {
       idempotencyKey: key(6), reason: 'Reviewed against supplier specification'
     }), confirmed);
+    await expectCode(confirmProductTruthRevision(db, { ...managerScope, actorId: 2 }, 1, v2.productTruthRevisionId, {
+      idempotencyKey: key(6), reason: 'Reviewed against supplier specification'
+    }), 'IDEMPOTENCY_KEY_ACTOR_MISMATCH');
     assert.equal((await currentProductTruthRevision(db, scope, 1)).confirmationState, 'MANAGER_CONFIRMED');
 
     const beforeFailure = await counts(db);
@@ -113,7 +118,7 @@ async function main() {
     const before = await listProductTruthRevisions(db, scope, 1);
     await close(db); db = open(dbPath); await exec(db, 'PRAGMA foreign_keys=ON');
     assert.deepEqual(await listProductTruthRevisions(db, scope, 1), before);
-    console.log('G3 project Product Truth revisions: 16/16 PASS');
+    console.log('G3 project Product Truth revisions: 18/18 PASS');
   } finally {
     if (db) await close(db).catch(() => {});
     fs.rmSync(dir, { recursive: true, force: true });

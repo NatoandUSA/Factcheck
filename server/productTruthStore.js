@@ -67,10 +67,11 @@ async function rollback(db, error) {
 }
 
 async function replay(db, scope, operation, key, requestHash) {
-  const receipt = await get(db, `SELECT request_hash,response_json FROM product_truth_write_receipts
+  const receipt = await get(db, `SELECT request_hash,response_json,created_by FROM product_truth_write_receipts
     WHERE tenant_id=? AND workspace_id=? AND marketplace=? AND operation=? AND idempotency_key=?`,
   [scope.tenantId, scope.workspaceId, scope.marketplace, operation, key]);
   if (!receipt) return null;
+  if (receipt.created_by !== scope.actorId) throw new ProductTruthStoreError('IDEMPOTENCY_KEY_ACTOR_MISMATCH', 409);
   if (receipt.request_hash !== requestHash) throw new ProductTruthStoreError('IDEMPOTENCY_KEY_REUSE', 409);
   return JSON.parse(receipt.response_json);
 }
@@ -102,7 +103,7 @@ async function appendUnlocked(db, rawScope, projectIdInput, input = {}, hooks = 
     throw new ProductTruthStoreError('INVALID_REVISION_PARENT', 400);
   }
   const requestHash = hashBytes(canonicalJson({ operation: 'APPEND_PRODUCT_TRUTH',
-    scope: { tenantId: scope.tenantId, workspaceId: scope.workspaceId, marketplace: scope.marketplace },
+    scope: { tenantId: scope.tenantId, workspaceId: scope.workspaceId, marketplace: scope.marketplace, actorId: scope.actorId },
     projectId, idempotencyKey, changeReason, expectedHeadRevisionId, snapshot }));
   const preflight = await replay(db, scope, 'APPEND_PRODUCT_TRUTH', idempotencyKey, requestHash);
   if (preflight) return preflight;
@@ -158,7 +159,7 @@ async function confirmUnlocked(db, rawScope, projectIdInput, revisionIdInput, in
   const idempotencyKey = keyOf(input.idempotencyKey);
   const reason = reasonOf(input.reason);
   const requestHash = hashBytes(canonicalJson({ operation: 'CONFIRM_PRODUCT_TRUTH',
-    scope: { tenantId: scope.tenantId, workspaceId: scope.workspaceId, marketplace: scope.marketplace },
+    scope: { tenantId: scope.tenantId, workspaceId: scope.workspaceId, marketplace: scope.marketplace, actorId: scope.actorId },
     projectId, revisionId, idempotencyKey, reason }));
   const preflight = await replay(db, scope, 'CONFIRM_PRODUCT_TRUTH', idempotencyKey, requestHash);
   if (preflight) return preflight;

@@ -157,4 +157,25 @@ async function composeTruthOnlyDraft(db, scope, projectId, selectedTruthRevision
   return Object.freeze({ ...validated, degraded: true, provider: 'DETERMINISTIC_TRUTH_ONLY' });
 }
 
-module.exports = Object.freeze({ CanonicalDraftError, composeTruthOnlyDraft, validateCanonicalDraft });
+async function assertCanonicalDependenciesCurrent(db, scope, projectId, dependencies) {
+  const selectedId = Number(dependencies?.productTruthRevisionId);
+  const selectedHash = String(dependencies?.productTruthHash || '');
+  const row = await get(db, `SELECT r.id,r.content_hash,r.snapshot_json FROM research_projects p
+    JOIN product_truth_revisions r ON r.id=p.head_product_truth_revision_id AND r.project_id=p.id
+    WHERE p.id=? AND p.tenant_id=? AND p.workspace_id=? AND p.marketplace=?
+      AND r.tenant_id=p.tenant_id AND r.workspace_id=p.workspace_id AND r.marketplace=p.marketplace`,
+  [projectId, scope.tenantId, scope.workspaceId, scope.marketplace]);
+  if (!row || row.id !== selectedId || row.content_hash !== selectedHash) {
+    throw new CanonicalDraftError('STALE_PRODUCT_TRUTH_REVISION', 409);
+  }
+  if (hashBytes(row.snapshot_json) !== row.content_hash) {
+    throw new CanonicalDraftError('REVISION_INTEGRITY_FAILURE', 500);
+  }
+}
+
+module.exports = Object.freeze({
+  CanonicalDraftError,
+  assertCanonicalDependenciesCurrent,
+  composeTruthOnlyDraft,
+  validateCanonicalDraft
+});

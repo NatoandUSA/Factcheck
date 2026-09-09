@@ -181,6 +181,9 @@ async function main() {
     assert.deepEqual(await createListingWithRevisionStore(db, scope, {
       projectId: 1, idempotencyKey: id(1), changeReason: 'INITIAL_DRAFT', content: v1Content, dependencies
     }, { resolveDependencies: () => { throw new Error('MUTATED_AUTHORITY_MUST_NOT_RUN_ON_REPLAY'); } }), created);
+    await expectCode(createListingWithRevision(db, { ...scope, actorId: 2 }, {
+      projectId: 1, idempotencyKey: id(1), changeReason: 'INITIAL_DRAFT', content: v1Content, dependencies
+    }), 'IDEMPOTENCY_KEY_ACTOR_MISMATCH');
     assert.deepEqual(await counts(db, created.listingId), { roots: 1, listingRevisions: 1, creativeRevisions: 0, receipts: 1 });
 
     await expectCode(createListingWithRevision(db, scope, {
@@ -303,6 +306,13 @@ async function main() {
       content: { prompts: [{ type: 'MAIN', prompt: 'Verified necklace centered on pure white background' }] },
       dependencies: { productTruthRevisionId: 7, productTruthHash: dependencies.productTruthHash }
     }, { resolveDependencies: () => { throw new Error('MUTATED_AUTHORITY_MUST_NOT_RUN_ON_REPLAY'); } }), c2);
+    await expectCode(appendCreativeRevision(db, { ...scope, actorId: 2 }, created.listingId, {
+      projectId: 1, listingRevisionId: v2.revisionId,
+      parentRevisionId: c1.creativeRevisionId, expectedHeadRevisionId: c1.creativeRevisionId,
+      idempotencyKey: id(7), changeReason: 'IMAGE_PROMPTS_V2',
+      content: { prompts: [{ type: 'MAIN', prompt: 'Verified necklace centered on pure white background' }] },
+      dependencies: { productTruthRevisionId: 7, productTruthHash: dependencies.productTruthHash }
+    }), 'IDEMPOTENCY_KEY_ACTOR_MISMATCH');
     await expectCode(appendCreativeRevision(db, scope, created.listingId, {
       projectId: 1, listingRevisionId: v2.revisionId,
       parentRevisionId: c1.creativeRevisionId, expectedHeadRevisionId: c1.creativeRevisionId,
@@ -366,7 +376,7 @@ async function main() {
       projectId: 1, idempotencyKey: id(1), changeReason: 'INITIAL_DRAFT', content: v1Content, dependencies
     }), created);
 
-    console.log('G2 immutable revisions: 38/38 PASS');
+    console.log('G2 immutable revisions: 40/40 PASS');
   } finally {
     if (db) await close(db).catch(() => {});
     fs.rmSync(dir, { recursive: true, force: true });

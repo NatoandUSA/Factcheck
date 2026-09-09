@@ -79,10 +79,11 @@ async function main() {
     receipts: (await get('SELECT COUNT(*) AS n FROM listing_write_receipts')).n
   }, beforePreview);
 
-  const created = await request(`/api/projects/${project.body.projectId}/listings`, 'POST', {
+  const createInput = {
     idempotencyKey: key(2), changeReason: 'SAVE_SAFE_PREVIEW',
     productTruthRevisionId: truth.body.productTruthRevisionId, content: preview.body.content
-  });
+  };
+  const created = await request(`/api/projects/${project.body.projectId}/listings`, 'POST', createInput);
   assert.equal(created.status, 201, JSON.stringify(created.body));
   assert.equal(created.body.status, 'NEEDS_QA');
   const savedDependency = await get('SELECT dependency_manifest_json FROM listing_revisions WHERE id=?', [created.body.revisionId]);
@@ -108,6 +109,38 @@ async function main() {
   assert.equal(reopenedV1.status, 200, JSON.stringify(reopenedV1.body));
   assert.deepEqual(reopenedV1.body.revision.content, preview.body.content);
 
+  const truthV2 = await request(`/api/projects/${project.body.projectId}/product-truth/revisions`, 'POST', {
+    expectedHeadRevisionId: truth.body.productTruthRevisionId, idempotencyKey: key(6),
+    changeReason: 'ADD_PACKAGING_TRUTH', facts: {
+      productType: { disposition: 'ASSERTED', value: 'Custom Necklace', basis: 'SUPPLIER_SPEC' },
+      materials: { disposition: 'ASSERTED', value: 'stainless steel', basis: 'SUPPLIER_SPEC' },
+      personalization: { disposition: 'ASSERTED', value: 'Custom name personalization', basis: 'PRODUCTION_WORKFLOW' },
+      recipient: { disposition: 'ASSERTED', value: 'daughter', basis: 'OTHER' },
+      occasion: { disposition: 'ASSERTED', value: 'Birthday', basis: 'OTHER' },
+      packaging: { disposition: 'ASSERTED', value: 'gift box', basis: 'SUPPLIER_SPEC' }
+    }
+  });
+  assert.equal(truthV2.status, 200, JSON.stringify(truthV2.body));
+  const beforeReplay = {
+    listings: (await get('SELECT COUNT(*) AS n FROM listings')).n,
+    revisions: (await get('SELECT COUNT(*) AS n FROM listing_revisions')).n,
+    receipts: (await get('SELECT COUNT(*) AS n FROM listing_write_receipts')).n
+  };
+  const replayAfterTruthAdvance = await request(`/api/projects/${project.body.projectId}/listings`, 'POST', createInput);
+  assert.equal(replayAfterTruthAdvance.status, 201, JSON.stringify(replayAfterTruthAdvance.body));
+  assert.equal(replayAfterTruthAdvance.body.listingId, created.body.listingId);
+  assert.equal(replayAfterTruthAdvance.body.revisionId, created.body.revisionId);
+  assert.deepEqual({
+    listings: (await get('SELECT COUNT(*) AS n FROM listings')).n,
+    revisions: (await get('SELECT COUNT(*) AS n FROM listing_revisions')).n,
+    receipts: (await get('SELECT COUNT(*) AS n FROM listing_write_receipts')).n
+  }, beforeReplay);
+  const staleNewWrite = await request(`/api/projects/${project.body.projectId}/listings`, 'POST', {
+    ...createInput, idempotencyKey: key(7)
+  });
+  assert.equal(staleNewWrite.status, 409, JSON.stringify(staleNewWrite.body));
+  assert.equal(staleNewWrite.body.error, 'STALE_PRODUCT_TRUTH_REVISION');
+
   const beforeLegacy = await get('SELECT head_revision_id,listing_version,payload FROM listings WHERE id=?', [created.body.listingId]);
   const legacyEdit = await request(`/api/listings/${created.body.listingId}`, 'PATCH', {
     expectedVersion: 2, amazonTitle: 'Legacy bypass', etsyTitle: '', categoryName: '', payload: editedContent
@@ -132,7 +165,7 @@ async function main() {
   });
   assert.equal(forbidden.status, 400);
   assert.equal(forbidden.body.error, 'UNEXPECTED_REQUEST_FIELD');
-  console.log('G3 canonical HTTP bootstrap: 26/26 PASS');
+  console.log('G3 canonical HTTP bootstrap: 33/33 PASS');
 }
 
 main().catch(error => { console.error(error); process.exitCode = 1; }).finally(async () => {

@@ -194,10 +194,11 @@ async function rollback(db, error) {
 }
 
 async function receiptReplay(db, scope, operation, idempotencyKey, requestHash) {
-  const receipt = await get(db, `SELECT request_hash,response_json FROM listing_write_receipts
+  const receipt = await get(db, `SELECT request_hash,response_json,created_by FROM listing_write_receipts
     WHERE tenant_id=? AND workspace_id=? AND marketplace=? AND operation=? AND idempotency_key=?`,
   [scope.tenantId, scope.workspaceId, scope.marketplace, operation, idempotencyKey]);
   if (!receipt) return null;
+  if (receipt.created_by !== scope.actorId) throw new RevisionStoreError('IDEMPOTENCY_KEY_ACTOR_MISMATCH', 409);
   if (receipt.request_hash !== requestHash) throw new RevisionStoreError('IDEMPOTENCY_KEY_REUSE', 409);
   return JSON.parse(receipt.response_json);
 }
@@ -221,15 +222,18 @@ async function createListingWithRevisionUnlocked(db, rawScope, input, hooks = {}
   const projectId = requiredProjectId(input?.projectId);
   const idempotencyKey = requiredIdempotencyKey(input?.idempotencyKey);
   const changeReason = requiredReason(input?.changeReason);
-  const contentJson = canonicalJson(input?.content);
-  const contentHash = hashBytes(contentJson);
+  const requestedContent = strictClone(input?.content);
+  const requestedContentJson = canonicalJson(requestedContent);
   const requestHash = hashBytes(requestEnvelope('CREATE_LISTING_V1', {
-    scope: { tenantId: scope.tenantId, workspaceId: scope.workspaceId, marketplace: scope.marketplace },
-    projectId, idempotencyKey, changeReason, content: JSON.parse(contentJson),
+    scope: { tenantId: scope.tenantId, workspaceId: scope.workspaceId, marketplace: scope.marketplace, actorId: scope.actorId },
+    projectId, idempotencyKey, changeReason, content: JSON.parse(requestedContentJson),
     proposedDependencies: input?.dependencies || {}
   }));
   const preflightReplay = await receiptReplay(db, scope, 'CREATE_LISTING_V1', idempotencyKey, requestHash);
   if (preflightReplay) return preflightReplay;
+  const preparedContent = await prepareContent(hooks, { operation: 'CREATE_LISTING_V1', scope, projectId }, requestedContent);
+  const contentJson = canonicalJson(preparedContent);
+  const contentHash = hashBytes(contentJson);
   const dependencies = finalizeDependencies(await resolveDependencies(hooks, {
     operation: 'CREATE_LISTING_V1', scope, projectId
   }, input?.dependencies), 'LISTING');
@@ -240,6 +244,7 @@ async function createListingWithRevisionUnlocked(db, rawScope, input, hooks = {}
     const replay = await receiptReplay(db, scope, 'CREATE_LISTING_V1', idempotencyKey, requestHash);
     if (replay) { await run(db, 'COMMIT'); return replay; }
     await assertProject(db, scope, projectId);
+    await assertDependenciesCurrent(hooks, { operation: 'CREATE_LISTING_V1', scope, projectId }, dependencies);
     const content = JSON.parse(contentJson);
     const root = await run(db, `INSERT INTO listings
       (tenant_id,workspace_id,marketplace,project_id,amazonTitle,etsyTitle,categoryName,status,authorId,listing_version,payload)
@@ -275,14 +280,17 @@ async function appendListingRevisionUnlocked(db, rawScope, listingIdInput, input
     || expectedHeadRevisionId !== parentRevisionId) throw new RevisionStoreError('INVALID_REVISION_PARENT', 400);
   const idempotencyKey = requiredIdempotencyKey(input?.idempotencyKey);
   const changeReason = requiredReason(input?.changeReason);
-  const contentJson = canonicalJson(input?.content);
+  const requestedContent = strictClone(input?.content);
+  const requestedContentJson = canonicalJson(requestedContent);
   const requestHash = hashBytes(requestEnvelope('APPEND_LISTING_REVISION', {
-    scope: { tenantId: scope.tenantId, workspaceId: scope.workspaceId, marketplace: scope.marketplace },
+    scope: { tenantId: scope.tenantId, workspaceId: scope.workspaceId, marketplace: scope.marketplace, actorId: scope.actorId },
     listingId, projectId, parentRevisionId, expectedHeadRevisionId, idempotencyKey,
-    changeReason, content: JSON.parse(contentJson), proposedDependencies: input?.dependencies || {}
+    changeReason, content: JSON.parse(requestedContentJson), proposedDependencies: input?.dependencies || {}
   }));
   const preflightReplay = await receiptReplay(db, scope, 'APPEND_LISTING_REVISION', idempotencyKey, requestHash);
   if (preflightReplay) return preflightReplay;
+  const preparedContent = await prepareContent(hooks, { operation: 'APPEND_LISTING_REVISION', scope, listingId, projectId }, requestedContent);
+  const contentJson = canonicalJson(preparedContent);
   const dependencies = finalizeDependencies(await resolveDependencies(hooks, {
     operation: 'APPEND_LISTING_REVISION', scope, projectId, listingId
   }, input?.dependencies), 'LISTING');
@@ -294,6 +302,7 @@ async function appendListingRevisionUnlocked(db, rawScope, listingIdInput, input
     const root = await get(db, `SELECT * FROM listings WHERE id=? AND tenant_id=? AND workspace_id=? AND marketplace=? AND project_id=?`,
       [listingId, scope.tenantId, scope.workspaceId, scope.marketplace, projectId]);
     if (!root) throw new RevisionStoreError('LISTING_NOT_FOUND', 404);
+    await assertDependenciesCurrent(hooks, { operation: 'APPEND_LISTING_REVISION', scope, listingId, projectId }, dependencies);
     if (root.head_revision_id !== expectedHeadRevisionId) throw new RevisionStoreError('REVISION_CONFLICT', 409);
     const parent = await get(db, `SELECT id,revision_number,content_json,content_hash,
       dependency_manifest_json,dependency_manifest_hash FROM listing_revisions
@@ -343,7 +352,7 @@ async function appendCreativeRevisionUnlocked(db, rawScope, listingIdInput, inpu
   const changeReason = requiredReason(input?.changeReason);
   const contentJson = canonicalJson(input?.content);
   const requestHash = hashBytes(requestEnvelope('APPEND_CREATIVE_REVISION', {
-    scope: { tenantId: scope.tenantId, workspaceId: scope.workspaceId, marketplace: scope.marketplace },
+    scope: { tenantId: scope.tenantId, workspaceId: scope.workspaceId, marketplace: scope.marketplace, actorId: scope.actorId },
     listingId, projectId, listingRevisionId, parentRevisionId, expectedHeadRevisionId,
     idempotencyKey, changeReason, content: JSON.parse(contentJson),
     proposedDependencies: input?.dependencies || {}
@@ -447,6 +456,16 @@ async function getCreativeRevision(db, rawScope, listingIdInput, revisionIdInput
   } catch (_) {
     throw new RevisionStoreError('REVISION_INTEGRITY_FAILURE', 500);
   }
+}
+
+async function prepareContent(hooks, context, content) {
+  if (typeof hooks.prepareContent !== 'function') return strictClone(content);
+  return strictClone(await hooks.prepareContent(Object.freeze({ ...context, content: strictClone(content) })));
+}
+
+async function assertDependenciesCurrent(hooks, context, dependencies) {
+  if (typeof hooks.assertDependenciesCurrent !== 'function') return;
+  await hooks.assertDependenciesCurrent(Object.freeze({ ...context, dependencies: strictClone(dependencies) }));
 }
 
 async function listListingRevisions(db, rawScope, listingIdInput, projectIdInput) {

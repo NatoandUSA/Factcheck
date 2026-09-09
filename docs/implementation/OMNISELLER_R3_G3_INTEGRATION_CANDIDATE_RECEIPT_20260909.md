@@ -67,9 +67,9 @@ Each mutation has an exact top-level allowlist. The server derives tenant, works
 ## Exact Windows Node 22 evidence before candidate commit
 
 ```text
-G2 immutable revisions                         38/38 PASS
-G3 project Product Truth revisions             16/16 PASS
-G3 canonical HTTP bootstrap                     26/26 PASS
+G2 immutable revisions                         40/40 PASS
+G3 project Product Truth revisions             18/18 PASS
+G3 canonical HTTP bootstrap                     33/33 PASS
 C1 policy contract registry                     10 groups PASS
 C2 claim guard                                  18/18 PASS
 C2 IP matcher                                   12/12 PASS
@@ -85,7 +85,16 @@ Production build: 2,425 modules transformed          PASS
 git diff --check                                    PASS
 ```
 
-The HTTP bootstrap specifically proves project creation, staff Product Truth, Owner confirmation, zero-write preview, immutable v1/v2, reload of both versions, forged dependency rejection, and no-write blocking of legacy edit/approval/export against the canonical root.
+The HTTP bootstrap specifically proves project creation, staff Product Truth, Owner confirmation, zero-write preview, immutable v1/v2, reload of both versions, forged dependency rejection, and no-write blocking of legacy edit/approval/export against the canonical root. It also proves a committed T1 write replays after the Product Truth head advances to T2, while a new write against stale T1 is rejected.
+
+## Independent review round 1 remediation
+
+Independent review of local SHA `38834d6dc789e0f7e277f652e4cd2b731dbffe1a` returned no P0 and two P1 findings. Both were reproduced and remediated before this successor candidate:
+
+1. Product Truth, listing and creative receipt replay is now actor-bound. A different actor reusing the same scope/operation/key receives `IDEMPOTENCY_KEY_ACTOR_MISMATCH`; it cannot obtain a success response attributed to the original actor.
+2. Canonical listing writes now place selected Product Truth identity in the server-derived request envelope, replay a committed receipt before mutable validation, and assert the exact Product Truth head ID/hash inside the same `BEGIN IMMEDIATE` transaction that commits the listing revision.
+
+Permanent regression probes cover cross-actor Product Truth/listing/creative replay, replay after Product Truth head advancement, zero extra writes on replay, and rejection of a new stale-head write.
 
 ## Explicitly not certified in G3
 

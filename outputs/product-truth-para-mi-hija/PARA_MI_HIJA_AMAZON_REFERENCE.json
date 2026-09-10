@@ -1,0 +1,29 @@
+{
+  "schemaVersion": "omniseller.product-truth-staff.v1",
+  "metadata": {
+    "projectId": null,
+    "productCode": "HIJA_NECKLACE_001",
+    "staffName": "",
+    "capturedAt": "2026-09-10T00:00:00.000Z"
+  },
+  "expectedHeadRevisionId": null,
+  "changeReason": "STAFF_PRODUCT_TRUTH_ENTRY",
+  "notes": "Bản điền mẫu từ Amazon B0D5XS64LH. Staff phải đối chiếu đúng biến thể supplier trước khi lưu, đặc biệt materials, purity, colors và packaging.",
+  "facts": {
+    "productName": { "disposition": "ASSERTED", "value": "Collar Para Mi Hija en Español, Necklace From Dad or Mom With Message Card", "basis": "REFERENCE_LISTING_SAME_SOURCE", "basisNote": "Amazon B0D5XS64LH; HTML SHA-256 cdae7cfc271aef5215eae50bc92d197e74e7b7949028fe0cea5cb2c47c08f3f7" },
+    "productType": { "disposition": "ASSERTED", "value": "Necklace", "basis": "REFERENCE_LISTING_SAME_SOURCE", "basisNote": "Amazon B0D5XS64LH; Item Type Name" },
+    "materials": { "disposition": "ASSERTED", "value": "Stainless Steel", "basis": "REFERENCE_LISTING_SAME_SOURCE", "basisNote": "Amazon B0D5XS64LH; Material" },
+    "colors": { "disposition": "ASSERTED", "value": "Silver, Yellow", "basis": "REFERENCE_LISTING_SAME_SOURCE", "basisNote": "Amazon B0D5XS64LH; Color" },
+    "sizes": { "disposition": "ASSERTED", "value": "18 inches", "basis": "REFERENCE_LISTING_SAME_SOURCE", "basisNote": "Amazon B0D5XS64LH; Size" },
+    "weight": { "disposition": "ASSERTED", "value": "5.3 ounces", "basis": "REFERENCE_LISTING_SAME_SOURCE", "basisNote": "Amazon B0D5XS64LH; Item Weight" },
+    "quantity": { "disposition": "ASSERTED", "value": "1 Count", "basis": "REFERENCE_LISTING_SAME_SOURCE", "basisNote": "Amazon B0D5XS64LH; Unit Count" },
+    "finish": { "disposition": "ASSERTED", "value": "Polished", "basis": "REFERENCE_LISTING_SAME_SOURCE", "basisNote": "Amazon B0D5XS64LH; Finish Type" },
+    "purity": { "disposition": "ASSERTED", "value": "18k, 14k", "basis": "REFERENCE_LISTING_SAME_SOURCE", "basisNote": "Amazon B0D5XS64LH; Metal Stamp — staff phải xác nhận lớp mạ/biến thể thực tế" },
+    "gemstones": { "disposition": "ASSERTED", "value": "Cubic Zirconia", "basis": "REFERENCE_LISTING_SAME_SOURCE", "basisNote": "Amazon B0D5XS64LH; Gem Type" },
+    "ageCompliance": { "disposition": "ASSERTED", "value": "Adult", "basis": "REFERENCE_LISTING_SAME_SOURCE", "basisNote": "Amazon B0D5XS64LH; Age Range Description" },
+    "includedItems": { "disposition": "ASSERTED", "value": "Message card", "basis": "REFERENCE_LISTING_SAME_SOURCE", "basisNote": "Amazon B0D5XS64LH; title và bullets" },
+    "packaging": { "disposition": "ASSERTED", "value": "Gift box / ready-to-gift", "basis": "REFERENCE_LISTING_SAME_SOURCE", "basisNote": "Amazon B0D5XS64LH; title và bullets" },
+    "recipient": { "disposition": "ASSERTED", "value": "Daughter / Hija", "basis": "REFERENCE_LISTING_SAME_SOURCE", "basisNote": "Amazon B0D5XS64LH; title" },
+    "occasion": { "disposition": "ASSERTED", "value": "Graduation", "basis": "REFERENCE_LISTING_SAME_SOURCE", "basisNote": "Amazon B0D5XS64LH; title" }
+  }
+}

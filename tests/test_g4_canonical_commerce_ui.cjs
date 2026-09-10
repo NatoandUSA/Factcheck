@@ -23,6 +23,16 @@ const assert = require('assert');
       productTruthRevisionId: null, researchSnapshotId: null, intelligenceSnapshotId: null
     }, imports: [], researchSnapshots: [], intelligenceSnapshots: [] });
     if (String(url).endsWith('/product-truth/revisions')) return response({ success: true, revisions: [] });
+    if (String(url).endsWith('/product-truth-listing/preview')) return response({ success: true, zeroWrite: true,
+      sourceReference: 'https://www.amazon.com/dp/B0D5XS64LH', rawHash: 'b'.repeat(64),
+      facts: {
+        productName: { disposition: 'ASSERTED', value: 'Para Mi Hija Necklace' },
+        productType: { disposition: 'ASSERTED', value: 'Necklace' },
+        materials: { disposition: 'ASSERTED', value: 'Stainless Steel' }
+      },
+      observations: { title: 'Para Mi Hija Necklace', bullets: ['Message card in gift box'] },
+      accounting: { extractedFactCount: 3, observedBulletCount: 1 }
+    });
     if (String(url).endsWith('/listings')) return response({ success: true, listings: [] });
     if (String(url).endsWith('/research-imports/preview')) return response({ success: true, zeroWrite: true,
       fileName: 'Cerebro.xlsx', rawHash: 'a'.repeat(64), accounting: { sourceRowCount: 1099, unconsumedRowCount: 0 } });
@@ -47,6 +57,8 @@ const assert = require('assert');
   check(document.body.textContent.includes('Cerebro keywords') && document.body.textContent.includes('Xray competitors'), 'Amazon must accept both research kinds');
   check(document.body.textContent.includes('Preview zero-write'), 'research and intelligence previews must be visible');
   check(document.body.textContent.includes('Product Truth do Seller nhập và kiểm'), 'Seller Product Truth stage must be visible');
+  check(document.body.textContent.includes('Dùng ngay tài khoản, workspace và project đang mở'),
+    'listing-assisted Product Truth must be integrated into the authenticated workflow');
   check(document.body.textContent.includes('Theo keyword đầu vào'), 'AUTO listing language must be visible');
   check(document.body.textContent.includes('Luồng dừng ở NEEDS_QA'), 'workflow must stop at NEEDS_QA');
 
@@ -64,6 +76,19 @@ const assert = require('assert');
   await act(async () => { confirm.click(); });
   check(calls.some(call => call.url.endsWith('/research-imports') && !call.url.endsWith('/preview')),
     'explicit confirm must call immutable import route separately');
+
+  const sameSource = [...document.querySelectorAll('input[type="checkbox"]')].find(item => item.parentElement.textContent.includes('cùng supplier'));
+  await act(async () => { sameSource.click(); });
+  const listingHtmlInput = document.querySelector('input[aria-label="Upload HTML listing"]');
+  const listingHtml = new dom.window.File(['<span id="productTitle">Para Mi Hija Necklace</span>'], 'amz.html', { type: 'text/html' });
+  Object.defineProperty(listingHtmlInput, 'files', { value: [listingHtml], configurable: true });
+  await act(async () => { listingHtmlInput.dispatchEvent(new dom.window.Event('change', { bubbles: true })); });
+  await act(async () => { buttons().find(button => button.textContent.includes('Upload HTML và điền')).click(); });
+  check(calls.some(call => call.url.endsWith('/product-truth-listing/preview')),
+    'integrated Product Truth scan must reuse the authenticated project-scoped route');
+  check([...document.querySelectorAll('input')].some(item => item.value === 'Stainless Steel')
+    && document.body.textContent.includes('3 trường · 1 bullet'),
+  'reference listing preview must populate editable Product Truth fields and show accounting');
   check(!calls.some(call => call.url.includes('/submit') || call.url.includes('/export')), 'workflow must not submit or export');
 
   await act(async () => root.unmount());

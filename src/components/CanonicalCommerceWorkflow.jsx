@@ -69,6 +69,10 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
   const [truthNotes, setTruthNotes] = useState('');
   const [truthBasis, setTruthBasis] = useState('OTHER');
   const [truthBasisNote, setTruthBasisNote] = useState('Nhân viên nhập từ supplier hoặc hồ sơ listing nội bộ');
+  const [listingSource, setListingSource] = useState('');
+  const [listingHtmlFile, setListingHtmlFile] = useState(null);
+  const [sameSourceConfirmed, setSameSourceConfirmed] = useState(false);
+  const [listingFactPreview, setListingFactPreview] = useState(null);
   const [file, setFile] = useState(null);
   const [kind, setKind] = useState(marketplace === 'AMAZON' ? 'AMAZON_CEREBRO' : 'ETSY_SEARCH');
   const [filePreview, setFilePreview] = useState(null);
@@ -126,6 +130,7 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
 
   useEffect(() => {
     setFile(null); setFilePreview(null); setIntelligencePreview(null); setDraft(null); setError('');
+    setListingSource(''); setListingHtmlFile(null); setSameSourceConfirmed(false); setListingFactPreview(null);
     setKind(marketplace === 'AMAZON' ? 'AMAZON_CEREBRO' : 'ETSY_SEARCH');
     if (projectId) refresh().catch(reportError); else { setState(null); setTruthRevisions([]); setListingQueue([]); }
   }, [projectId, marketplace]);
@@ -156,6 +161,35 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
       idempotencyKey: uuid(), changeReason: 'STAFF_SELECTED_RESEARCH_INPUTS'
     }));
     notify(`Đã khóa Research Snapshot #${result.researchSnapshotId}.`); await refresh();
+  });
+
+  const previewReferenceListing = htmlFile => run('listing-preview', async () => {
+    if (!sameSourceConfirmed) throw new Error('Hãy xác nhận listing cùng supplier/cùng nguồn hàng.');
+    if (!htmlFile && !listingSource.trim()) throw new Error('Nhập ASIN, Etsy listing ID, URL hoặc chọn file HTML.');
+    const form = new FormData();
+    form.append('confirmSameSource', 'true');
+    if (listingSource.trim()) form.append('source', listingSource.trim());
+    if (htmlFile) form.append('file', htmlFile);
+    let result;
+    try {
+      result = await api(`/api/projects/${projectId}/product-truth-listing/preview`, { method: 'POST', body: form });
+    } catch (caught) {
+      if (['LISTING_FETCH_FAILED_USE_HTML', 'LISTING_CONTENT_NOT_EXTRACTED'].includes(caught.code)) {
+        throw new Error('Amazon/Etsy chặn quét link. Hãy Save Page as HTML rồi upload ngay tại đây.');
+      }
+      throw caught;
+    }
+    setFacts(previous => {
+      const merged = { ...previous };
+      for (const [key, fact] of Object.entries(result.facts || {})) {
+        if (key in merged && fact?.disposition === 'ASSERTED') merged[key] = text(fact.value);
+      }
+      return merged;
+    });
+    setTruthBasis('REFERENCE_LISTING_SAME_SOURCE');
+    setTruthBasisNote(`Listing cùng nguồn: ${result.sourceReference || listingSource.trim() || htmlFile?.name}`);
+    setListingFactPreview(result);
+    notify(`Đã điền ${result.accounting?.extractedFactCount || 0} trường từ listing; hãy sửa khác biệt của biến thể trước khi lưu.`);
   });
 
   const saveTruth = () => run('truth', async () => {
@@ -293,16 +327,32 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
     </Step>
 
     <Step number="2" title="Product Truth do Seller nhập và kiểm" accent={accent} done={Boolean(head(state, 'productTruthRevisionId'))}>
+      <div style={{ border: '1px solid #bfdbfe', borderRadius: 10, padding: 12, background: '#eff6ff', marginBottom: 12 }}>
+        <b>Điền nhanh từ một listing cùng supplier / nguồn hàng</b>
+        <p style={{ margin: '5px 0 9px', fontSize: '.78rem', color: '#475569' }}>Dùng ngay tài khoản, workspace và project đang mở. Preview chỉ điền biểu mẫu; chưa ghi database.</p>
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(240px,1fr) auto', gap: 8, alignItems: 'end' }}>
+          <label style={{ display: 'grid', gap: 3, fontSize: '.75rem', fontWeight: 800 }}>ASIN, Etsy listing ID hoặc URL
+            <input aria-label="ASIN, Etsy listing ID hoặc URL" value={listingSource} onChange={event => setListingSource(event.target.value)} placeholder={marketplace === 'AMAZON' ? 'B0D5XS64LH hoặc URL Amazon' : '4533292901 hoặc URL Etsy'} />
+          </label>
+          <ActionButton accent={accent} disabled={!sameSourceConfirmed || !listingSource.trim() || busy} onClick={() => previewReferenceListing(null)}>Quét link và điền</ActionButton>
+        </div>
+        <div style={{ display: 'flex', gap: 9, flexWrap: 'wrap', alignItems: 'center', marginTop: 9 }}>
+          <input aria-label="Upload HTML listing" type="file" accept=".html,.htm,text/html" onChange={event => { setListingHtmlFile(event.target.files?.[0] || null); setListingFactPreview(null); }} />
+          <ActionButton accent="#475569" disabled={!sameSourceConfirmed || !listingHtmlFile || busy} onClick={() => previewReferenceListing(listingHtmlFile)}>Upload HTML và điền</ActionButton>
+        </div>
+        <label style={{ display: 'block', marginTop: 9, fontSize: '.78rem', fontWeight: 700 }}><input type="checkbox" checked={sameSourceConfirmed} onChange={event => setSameSourceConfirmed(event.target.checked)} /> Tôi xác nhận đây là sản phẩm cùng supplier/cùng nguồn hàng và sẽ sửa mọi khác biệt của biến thể.</label>
+        {listingFactPreview && <div style={{ marginTop: 10, padding: 9, borderRadius: 8, background: '#fff', border: '1px solid #bfdbfe' }}>
+          <div><b>{listingFactPreview.observations?.title}</b></div>
+          <div style={{ fontSize: '.75rem', color: '#475569', marginTop: 4 }}>{listingFactPreview.accounting?.extractedFactCount} trường · {listingFactPreview.accounting?.observedBulletCount || 0} bullet · SHA-256 {listingFactPreview.rawHash?.slice(0, 12)}…</div>
+          {(listingFactPreview.observations?.bullets || []).length > 0 && <details style={{ marginTop: 5 }}><summary>Thông tin listing đã đọc</summary><pre style={{ whiteSpace: 'pre-wrap', fontSize: '.72rem' }}>{listingFactPreview.observations.bullets.join('\n')}</pre></details>}
+        </div>}
+      </div>
       <div style={{ display: 'flex', gap: 9, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
-        <a href="/product-truth-staff.html" target="_blank" rel="noreferrer" style={{
-          display: 'inline-block', padding: '9px 14px', borderRadius: 8, background: '#155eef', color: '#fff',
-          fontWeight: 800, textDecoration: 'none'
-        }}>Quét listing / nhập Product Truth</a>
         <a href="/templates/OMNISELLER_PRODUCT_TRUTH_STAFF_TEMPLATE_VI.xlsx" download style={{
           display: 'inline-block', padding: '9px 14px', borderRadius: 8, background: '#e8eef7', color: '#22314d',
           fontWeight: 800, textDecoration: 'none'
         }}>Tải mẫu Excel Product Truth</a>
-        <span style={{ fontSize: '.78rem', color: '#475569' }}>Khuyên dùng: quét 1 ASIN/Etsy listing hoặc upload HTML, kiểm vài trường chính rồi lưu STAFF_DRAFT.</span>
+        <span style={{ fontSize: '.78rem', color: '#475569' }}>Hoặc nhập tay các trường chính bên dưới; thiếu gì ghi chú để bổ sung ở revision sau.</span>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))', gap: 9 }}>
         {CORE_FACT_FIELDS.map(([key, label, required]) => <label key={key} style={{ display: 'grid', gap: 3, fontSize: '.75rem', fontWeight: 800 }}>

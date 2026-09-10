@@ -188,13 +188,45 @@ async function tick(window) {
   measured += 1;
 
   const etsyPreview = parseListingHtml(`<!doctype html><html><head><meta property="og:title" content="Printable murder mystery game"></head><body>
-    <script type="application/ld+json">{"@type":"Product","name":"Who Killed Arthur Blackwood?","material":["Digital PDF"],"description":"Printable game for 1-6 players"}</script>
+    <script type="application/ld+json">{"@type":"Product","name":"Who Killed Arthur Blackwood?","category":"Jewelry > Necklaces > Pendant Necklaces","material":["Digital PDF"],"description":"Printable game for 1-6 players"}</script>
     <div data-id="description-text">Printable game for 1-6 players, age 14+</div></body></html>`,
   { marketplace: 'ETSY', sourceReference: 'https://www.etsy.com/listing/123456789' });
   check(etsyPreview.facts.productName.value === 'Who Killed Arthur Blackwood?'
-    && etsyPreview.facts.materials.value === 'Digital PDF', 'Etsy saved HTML/JSON-LD must populate editable facts');
+    && etsyPreview.facts.materials.value === 'Digital PDF'
+    && etsyPreview.facts.productType.value === 'Pendant Necklaces', 'Etsy saved HTML/JSON-LD must populate editable facts');
   check(etsyPreview.zeroWrite === true && etsyPreview.dna.descriptionLength > 0,
     'listing extraction must return zero-write facts and observed DNA metadata together');
+
+  const amazonPreview = parseListingHtml(`<!doctype html><html><body>
+    <span id="productTitle">Para Mi Hija Necklace</span>
+    <div id="productFactsDesktopExpander"><ul><li>Spanish message card included in a gift box for graduation</li></ul></div>
+    <table><tr><th>Material</th><td>Stainless Steel</td></tr><tr><th>Metal Stamp</th><td>14k</td></tr>
+      <tr><th>Item Type Name</th><td>Necklace</td></tr><tr><th>Size</th><td>18 inches</td></tr></table>
+  </body></html>`, { marketplace: 'AMAZON', sourceReference: 'B0D5XS64LH' });
+  check(amazonPreview.observations.bullets.length === 1
+    && amazonPreview.facts.productType.value === 'Necklace'
+    && amazonPreview.facts.materials.value === 'Stainless Steel'
+    && amazonPreview.facts.purity.value === '14k'
+    && amazonPreview.facts.packaging.value.includes('Gift box'),
+  'Amazon saved HTML must extract product facts, bullet DNA and packaging signals');
+
+  project.value = '';
+  document.getElementById('sameSource').checked = true;
+  const offlineInput = document.getElementById('htmlFile');
+  Object.defineProperty(offlineInput, 'files', { configurable: true, value: [{
+    name: 'amazon-offline.html', text: async () => '<span id="productTitle">Offline Hija Necklace</span><div id="productFactsDesktopExpander"><li>Message card in gift box</li></div><table><tr><th>Material</th><td>Stainless Steel</td></tr><tr><th>Item Type Name</th><td>Necklace</td></tr></table>'
+  }] });
+  offlineInput.dispatchEvent(new Event('change', { bubbles: true }));
+  await tick(dom.window);
+  await tick(dom.window);
+  check(document.querySelector('[data-key="productName"] [data-role="value"]').value === 'Offline Hija Necklace',
+    'HTML upload must preview locally when no authenticated project is available');
+  check(document.querySelector('[data-key="materials"] [data-role="value"]').value === 'Stainless Steel'
+    && document.querySelector('[data-key="productType"] [data-role="value"]').value === 'Necklace'
+    && document.querySelector('[data-key="packaging"] [data-role="value"]').value.includes('Gift box'),
+  'offline HTML preview must extract editable Amazon details rather than title only');
+  check(!calls.some(call => call.url === '/api/projects//product-truth-listing/preview'),
+    'offline HTML preview must not call a malformed project route');
 
   dom.window.close();
   console.log(`Product Truth staff form: ${measured}/${measured} PASS`);

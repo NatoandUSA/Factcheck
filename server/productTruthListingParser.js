@@ -61,6 +61,7 @@ const FIELD_LABELS = Object.freeze({
   includedItems: [/included components/, /what.*included/, /contenido/, /incluye/],
   care: [/care instructions?/, /cuidado/],
   finish: [/finish type/, /acabado/],
+  purity: [/metal stamp/, /purity/, /plating/, /chapado/],
   gemstones: [/gem type/, /stone/, /piedra/],
   origin: [/country of origin/, /made in/, /pa[ií]s de origen/],
   ageCompliance: [/age range/, /recommended age/, /edad/],
@@ -86,7 +87,7 @@ function parseListingHtml(html, { marketplace, sourceReference = '' } = {}) {
     || product.name || $('meta[property="og:title"]').attr('content') || $('h1').first().text()
   );
   const bulletNodes = marketplace === 'AMAZON'
-    ? $('#feature-bullets li span.a-list-item')
+    ? $('#feature-bullets li span.a-list-item, #productFactsDesktopExpander li')
     : $('[data-id="description-text"] li, [data-product-details] li');
   const bullets = unique(bulletNodes.map((_, element) => $(element).text()).get())
     .filter(item => item.length > 3).slice(0, 12);
@@ -106,11 +107,24 @@ function parseListingHtml(html, { marketplace, sourceReference = '' } = {}) {
     if (value) extracted[fact] = value;
   }
   if (breadcrumb) extracted.category = breadcrumb;
+  if (!extracted.category && clean(product.category)) extracted.category = clean(product.category);
+  const productType = findAttribute(attributes, [/^item type name$/, /^product type$/, /^tipo de producto$/]);
+  if (productType) extracted.productType = productType;
+  else if (clean(product.category)) extracted.productType = clean(product.category).split(/\s*[<>]\s*/).filter(Boolean).pop();
 
   const searchable = `${title}\n${bullets.join('\n')}\n${description}`;
   if (/\b(personali[sz]ed|customi[sz]able|custom made|personalizado|personalizada|personalizable)\b/i.test(searchable)) {
     extracted.personalization = 'Có — theo thông tin trên listing tham chiếu';
   }
+  if (/\b(message card|tarjeta (de )?mensaje)\b/i.test(searchable)) extracted.includedItems = 'Message card — theo listing tham chiếu';
+  if (/\b(gift box|caja de regalo|ready.to.gift)\b/i.test(searchable)) extracted.packaging = 'Gift box / ready-to-gift — theo listing tham chiếu';
+  if (/\b(para mi hija|to my daughter|daughter gift|gift for daughter)\b/i.test(searchable)) extracted.recipient = 'Daughter / Hija';
+  const occasions = [];
+  if (/\b(graduation|graduaci[oó]n)\b/i.test(searchable)) occasions.push('Graduation');
+  if (/\b(birthday|cumplea[nñ]os)\b/i.test(searchable)) occasions.push('Birthday');
+  if (/\b(christmas|navidad)\b/i.test(searchable)) occasions.push('Christmas');
+  if (/\bquincea[nñ]era\b/i.test(searchable)) occasions.push('Quinceañera');
+  if (occasions.length) extracted.occasion = unique(occasions).join(', ');
   const facts = {};
   const rawHash = crypto.createHash('sha256').update(html).digest('hex');
   const basisNote = `Trích từ listing cùng supplier/nguồn hàng do staff xác nhận; nguồn: ${sourceReference || 'HTML upload'}; SHA-256: ${rawHash}`;

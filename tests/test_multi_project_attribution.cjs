@@ -12,8 +12,15 @@ const assert = require("assert");
 const path = require("path");
 process.env.NODE_ENV = "test";
 
-const { app, db, databaseReady } = require("../server/server");
+const { app, db, databaseReady, ytrendsMcp } = require("../server/server");
 const { createSessionRecord } = require("../server/security/session");
+
+// Attribution must be deterministic in CI. Provider outage behavior is tested
+// separately; no synthetic fallback is added to the production route.
+ytrendsMcp.exploreNiche = async seed => ({ data: {
+  adjacent_tags: [seed.length <= 20 ? seed : 'observed keyword'],
+  related_keywords: [], top_listings: []
+} });
 
 const dbAll = (s, p = []) => new Promise((r, j) => db.all(s, p, (e, x) => e ? j(e) : r(x)));
 const dbGet = (s, p = []) => new Promise((r, j) => db.get(s, p, (e, x) => e ? j(e) : r(x)));

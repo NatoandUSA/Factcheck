@@ -4,8 +4,15 @@
 const assert = require("assert");
 process.env.NODE_ENV = "test";
 
-const { app, db, databaseReady } = require("../server/server");
+const { app, db, databaseReady, ytrendsMcp } = require("../server/server");
 const { createSessionRecord } = require("../server/security/session");
+
+// This suite verifies staff-path reachability and project attribution, not the
+// availability of an external provider. Production still fails closed on an
+// MCP outage; the contract test supplies deterministic observed provider data.
+ytrendsMcp.exploreNiche = async seed => ({ data: {
+  adjacent_tags: [seed, 'daughter gift'], related_keywords: [], top_listings: []
+} });
 
 const dbAll = (s, p = []) => new Promise((r, j) => db.all(s, p, (e, x) => e ? j(e) : r(x)));
 const mkSess = (u, w, t) => new Promise((r, j) => createSessionRecord(db, u, w, t, (e, s) => e ? j(e) : r(s)));

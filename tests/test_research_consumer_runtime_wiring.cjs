@@ -178,8 +178,10 @@ process.env.NODE_ENV = 'test';
       for (let index = 0; index < 4; index += 1) await flush();
       const draftButton = [...document.querySelectorAll('button')]
         .find(button => button.textContent.includes('TẠO ETSY LISTING'));
-      check(Boolean(draftButton) && draftButton.disabled === false,
-        'Etsy must consume summary trends without requiring keywords_detailed');
+      check(Boolean(draftButton) && draftButton.disabled === true,
+        'legacy Etsy draft generator stays visibly disabled after canonical workflow cutover');
+      check(Boolean(document.querySelector('[data-testid="canonical-commerce-etsy"]')),
+        'Etsy canonical workflow is mounted as the active draft path');
     }
     check(urls.some(url => url.startsWith(
       `/api/master-keywords?projectId=${projectId}`

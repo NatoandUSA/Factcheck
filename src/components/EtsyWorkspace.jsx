@@ -11,6 +11,7 @@ import MarketBenchmarkWidget from './MarketBenchmarkWidget';
 import SmartPullAnalyticsBar from './SmartPullAnalyticsBar';
 import ProjectSetupCard from './ProjectSetupCard';
 import ProjectEvidenceGate from './ProjectEvidenceGate';
+import CanonicalCommerceWorkflow from './CanonicalCommerceWorkflow';
 import { parseJsonResponse } from '../utils/apiResponse';
 import { createProjectBoundLoader } from '../utils/projectBoundLoader.js';
 
@@ -569,6 +570,13 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
 
       <ProjectEvidenceGate activeProject={activeProject} onTransition={handleTransition} onShowToast={onShowToast} accent="#ea580c" />
 
+      <CanonicalCommerceWorkflow
+        activeProject={activeProject}
+        marketplace="ETSY"
+        onSelectListing={onSelectListing}
+        onShowToast={onShowToast}
+      />
+
       {/* 0. Market Benchmark & Go/No-Go Decision Gate (Pre-Listing Validation) */}
       <MarketBenchmarkWidget 
         seedPhrase={seedPhrase} 
@@ -813,7 +821,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
                 }
                 handleManualDraft(trends[0].id);
               }}
-              disabled={draftingTrendId !== null || !trends[0]?.id}
+              disabled
               className="btn btn-primary"
               title={!trends[0]?.id ? 'Auto-Pull 13 Tags hoặc nạp file trước khi tạo listing' : undefined}
               style={{
@@ -829,7 +837,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
               }}
             >
               <Zap size={16} className={draftingTrendId !== null ? 'spinner' : ''} />
-              <span>{draftingTrendId !== null ? 'Đang tạo Etsy Listing...' : '🚀 TẠO ETSY LISTING (13 TAGS + BUYER FRIENDLY TITLE)'}</span>
+              <span>🔒 TẠO ETSY LISTING LEGACY ĐÃ KHÓA — DÙNG CANONICAL</span>
             </button>
           </div>
 

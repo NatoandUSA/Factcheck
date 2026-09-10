@@ -3,7 +3,8 @@
 const { approvalHash } = require('./security/approval');
 
 const FACT_KEYS = Object.freeze(new Set([
-  'productName', 'productType', 'category', 'materials', 'composition', 'purity',
+  'productName', 'productType', 'category', 'colors', 'finish', 'design', 'style', 'theme', 'pattern',
+  'materials', 'composition', 'purity',
   'components', 'gemstones', 'includedItems', 'sizes', 'dimensions', 'weight',
   'quantity', 'capacity', 'capabilities', 'personalization', 'process', 'origin',
   'shipFrom', 'facility', 'productionPartner', 'fulfillment', 'processingTime',

@@ -11,6 +11,7 @@ import MarketBenchmarkWidget from './MarketBenchmarkWidget';
 import SmartPullAnalyticsBar from './SmartPullAnalyticsBar';
 import ProjectSetupCard from './ProjectSetupCard';
 import ProjectEvidenceGate from './ProjectEvidenceGate';
+import CanonicalCommerceWorkflow from './CanonicalCommerceWorkflow';
 import { createProjectBoundLoader } from '../utils/projectBoundLoader.js';
 
 export default function AmazonWorkspace({ onSelectListing, onApproveListing, onShowToast }) {
@@ -302,6 +303,13 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
 
       <ProjectEvidenceGate activeProject={activeProject} onTransition={handleTransition} onShowToast={onShowToast} />
 
+      <CanonicalCommerceWorkflow
+        activeProject={activeProject}
+        marketplace="AMAZON"
+        onSelectListing={onSelectListing}
+        onShowToast={onShowToast}
+      />
+
       {/* 0. Market Benchmark & Go/No-Go Decision Gate (Pre-Listing Validation) */}
       <MarketBenchmarkWidget 
         seedPhrase={seedPhrase} 
@@ -364,6 +372,7 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
           }}
           onGenerateListingDirect={handleGenerateListing}
           isDrafting={drafting}
+          legacyDraftDisabled
         />
       </div>
 
@@ -396,12 +405,12 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
             <div style={{ display: 'flex', gap: '10px' }}>
               <button
                 onClick={handleGenerateListing}
-                disabled={drafting || !['MKL_FROZEN', 'DRAFT_GENERATED', 'PRODUCT_TRUTH_VERIFIED', 'PRODUCT_TRUTH_CONFIRMED', 'VALIDATED', 'MANAGER_APPROVED', 'PUBLISH_READY'].includes(activeProject?.state)}
+                disabled
                 className="btn btn-primary"
                 style={{ background: '#16a34a', fontWeight: 800, padding: '10px 20px', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}
               >
                 {drafting ? <RefreshCw size={16} className="spinner" /> : <Zap size={16} />}
-                <span>{drafting ? 'Đang tạo listing...' : '⚡ Sinh Listing Ngay'}</span>
+                <span>🔒 Sinh Listing legacy đã khóa — dùng Canonical</span>
               </button>
 
               <button
@@ -439,7 +448,7 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
             {/* HIGH-IMPACT PROMINENT GENERATION CTA */}
             <button
               onClick={handleGenerateListing}
-              disabled={drafting}
+              disabled
               className="btn btn-primary"
               style={{
                 background: 'linear-gradient(135deg, #7e22ce 0%, #0284c7 100%)',
@@ -456,7 +465,7 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
               }}
             >
               {drafting ? <RefreshCw size={18} className="spinner" /> : <Zap size={18} />}
-              <span>{drafting ? 'Đang sinh Amazon A10 Listing...' : '⚡ Sinh Bộ Amazon A10 Listing & Family Draft'}</span>
+              <span>🔒 Sinh Listing legacy đã khóa — dùng Canonical</span>
             </button>
           </div>
 

@@ -8,7 +8,8 @@ const DEPENDENCY_KEYS = Object.freeze([
   'productTruthRevisionId', 'productTruthHash',
   'researchSnapshotId', 'researchSnapshotHash',
   'intelligenceSnapshotId', 'intelligenceSnapshotHash',
-  'policyBindingHash', 'claimIpBindingHash', 'validatorHash',
+  'policyBindingHash', 'policyContractId', 'policyContractArtifactHash', 'policyContextHash',
+  'policyLifecycleSnapshotDigest', 'claimIpBindingHash', 'validatorHash',
   'listingRevisionId', 'listingRevisionHash',
   'locale', 'productFamilyVersion',
   'bindingState', 'missingBindings'
@@ -151,10 +152,13 @@ function dependencyManifest(input = {}, overrides = {}) {
       throw new RevisionStoreError('INCOMPLETE_DEPENDENCY_BINDING', 400, { idKey, hashKey });
     }
   }
-  for (const key of ['locale', 'productFamilyVersion']) {
+  for (const key of ['locale', 'productFamilyVersion', 'policyContractId']) {
     if (manifest[key] !== null && (typeof manifest[key] !== 'string' || !manifest[key].trim() || manifest[key].length > 128)) {
       throw new RevisionStoreError('INVALID_DEPENDENCY_VALUE', 400, { key });
     }
+  }
+  if (manifest.policyLifecycleSnapshotDigest !== null && !HASH.test(String(manifest.policyLifecycleSnapshotDigest))) {
+    throw new RevisionStoreError('INVALID_DEPENDENCY_HASH', 400, { key: 'policyLifecycleSnapshotDigest' });
   }
   return Object.freeze(manifest);
 }
@@ -314,6 +318,7 @@ async function appendListingRevisionUnlocked(db, rawScope, listingIdInput, input
     const root = await get(db, `SELECT * FROM listings WHERE id=? AND tenant_id=? AND workspace_id=? AND marketplace=? AND project_id=?`,
       [listingId, scope.tenantId, scope.workspaceId, scope.marketplace, projectId]);
     if (!root) throw new RevisionStoreError('LISTING_NOT_FOUND', 404);
+    if (root.status === 'SUBMITTED') throw new RevisionStoreError('SUBMITTED_LISTING_TERMINAL', 409);
     await assertDependenciesCurrent(hooks, { operation: 'APPEND_LISTING_REVISION', scope, listingId, projectId }, dependencies);
     if (root.head_revision_id !== expectedHeadRevisionId) throw new RevisionStoreError('REVISION_CONFLICT', 409);
     const parent = await get(db, `SELECT id,revision_number,content_json,content_hash,
@@ -337,7 +342,8 @@ async function appendListingRevisionUnlocked(db, rawScope, listingIdInput, input
     const update = await run(db, `UPDATE listings SET head_revision_id=?,listing_version=?,payload=?,
       amazonTitle=?,etsyTitle=?,categoryName=?,status='NEEDS_QA',approved_version=NULL,approved_hash=NULL,
       approved_by=NULL,approved_at=NULL
-      WHERE id=? AND tenant_id=? AND workspace_id=? AND marketplace=? AND project_id=? AND head_revision_id=?`,
+      WHERE id=? AND tenant_id=? AND workspace_id=? AND marketplace=? AND project_id=? AND head_revision_id=?
+        AND status<>'SUBMITTED'`,
     [inserted.lastID, revisionNumber, contentJson, String(content.amazonTitle || ''), String(content.etsyTitle || ''),
       String(content.categoryName || ''), listingId, scope.tenantId, scope.workspaceId, scope.marketplace, projectId, expectedHeadRevisionId]);
     if (update.changes !== 1) throw new RevisionStoreError('REVISION_CONFLICT', 409);

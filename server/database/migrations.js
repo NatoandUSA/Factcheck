@@ -9,6 +9,9 @@ const IMMUTABLE_REVISIONS_MIGRATION = '009_immutable_listing_creative_revisions'
 const PRODUCT_TRUTH_AUTHORITY_MIGRATION = '010_product_truth_authority_scope';
 const PROJECT_PRODUCT_TRUTH_REVISIONS_MIGRATION = '011_project_product_truth_revisions';
 const LISTING_REVISION_VALIDATION_ACCOUNTING_MIGRATION = '012_listing_revision_validation_accounting';
+const COMMERCE_SNAPSHOT_MIGRATION = '013_commerce_research_intelligence_snapshots';
+const CANONICAL_REVIEW_HANDOFF_MIGRATION = '014_canonical_review_submission_handoff';
+const OWNER_SUBMISSION_AUTHORIZATION_MIGRATION = '015_owner_submission_authorization';
 const crypto = require('node:crypto');
 
 function run(db, sql, params = []) {
@@ -342,6 +345,176 @@ async function migrateListingRevisionValidationAccounting(db) {
   await addColumnIfMissing(db, columns, 'validation_accounting_hash', 'TEXT NULL', 'listing_revisions');
 }
 
+async function migrateCommerceSnapshots(db) {
+  const projects = await all(db, "SELECT name FROM sqlite_master WHERE type='table' AND name='research_projects'");
+  if (!projects.length) return;
+  const projectColumns = new Set((await all(db, 'PRAGMA table_info(research_projects)')).map(column => column.name));
+  await addColumnIfMissing(db, projectColumns, 'head_research_snapshot_id',
+    'INTEGER NULL REFERENCES research_snapshots(id)', 'research_projects');
+  await addColumnIfMissing(db, projectColumns, 'head_intelligence_snapshot_id',
+    'INTEGER NULL REFERENCES intelligence_snapshots(id)', 'research_projects');
+  await run(db, `CREATE TABLE IF NOT EXISTS research_imports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id TEXT NOT NULL, workspace_id INTEGER NOT NULL,
+    marketplace TEXT NOT NULL CHECK(marketplace IN ('AMAZON','ETSY')),
+    project_id INTEGER NOT NULL REFERENCES research_projects(id),
+    kind TEXT NOT NULL CHECK(kind IN ('AMAZON_XRAY','AMAZON_CEREBRO','AMAZON_REFERENCE','ETSY_SEARCH')),
+    file_name TEXT NOT NULL, media_type TEXT NOT NULL, raw_bytes BLOB NOT NULL,
+    raw_hash TEXT NOT NULL CHECK(length(raw_hash)=64), selected_sheet TEXT,
+    header_signature_json TEXT NOT NULL, parser_id TEXT NOT NULL, parser_hash TEXT NOT NULL CHECK(length(parser_hash)=64),
+    imported_by INTEGER NOT NULL, imported_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id,workspace_id,marketplace,project_id,kind,raw_hash)
+  )`);
+  await run(db, `CREATE INDEX IF NOT EXISTS idx_research_imports_scope
+    ON research_imports(tenant_id,workspace_id,marketplace,project_id,id)`);
+  await run(db, `CREATE TABLE IF NOT EXISTS research_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id TEXT NOT NULL, workspace_id INTEGER NOT NULL,
+    marketplace TEXT NOT NULL CHECK(marketplace IN ('AMAZON','ETSY')),
+    project_id INTEGER NOT NULL REFERENCES research_projects(id), revision_number INTEGER NOT NULL,
+    parent_revision_id INTEGER REFERENCES research_snapshots(id),
+    import_manifest_json TEXT NOT NULL, import_manifest_hash TEXT NOT NULL CHECK(length(import_manifest_hash)=64),
+    observations_json TEXT NOT NULL, observations_hash TEXT NOT NULL CHECK(length(observations_hash)=64),
+    accounting_json TEXT NOT NULL, accounting_hash TEXT NOT NULL CHECK(length(accounting_hash)=64),
+    adapter_binding_hash TEXT NOT NULL CHECK(length(adapter_binding_hash)=64),
+    snapshot_hash TEXT NOT NULL CHECK(length(snapshot_hash)=64),
+    change_reason TEXT NOT NULL, created_by INTEGER NOT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(project_id,revision_number)
+  )`);
+  await run(db, `CREATE INDEX IF NOT EXISTS idx_research_snapshots_scope
+    ON research_snapshots(tenant_id,workspace_id,marketplace,project_id,revision_number)`);
+  await run(db, `CREATE TABLE IF NOT EXISTS intelligence_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id TEXT NOT NULL, workspace_id INTEGER NOT NULL,
+    marketplace TEXT NOT NULL CHECK(marketplace IN ('AMAZON','ETSY')),
+    project_id INTEGER NOT NULL REFERENCES research_projects(id), revision_number INTEGER NOT NULL,
+    parent_revision_id INTEGER REFERENCES intelligence_snapshots(id),
+    research_snapshot_id INTEGER NOT NULL REFERENCES research_snapshots(id), research_snapshot_hash TEXT NOT NULL CHECK(length(research_snapshot_hash)=64),
+    product_truth_revision_id INTEGER NOT NULL REFERENCES product_truth_revisions(id), product_truth_hash TEXT NOT NULL CHECK(length(product_truth_hash)=64),
+    configuration_json TEXT NOT NULL, configuration_hash TEXT NOT NULL CHECK(length(configuration_hash)=64),
+    output_json TEXT NOT NULL, output_hash TEXT NOT NULL CHECK(length(output_hash)=64),
+    accounting_json TEXT NOT NULL, accounting_hash TEXT NOT NULL CHECK(length(accounting_hash)=64),
+    engine_binding_hash TEXT NOT NULL CHECK(length(engine_binding_hash)=64),
+    snapshot_hash TEXT NOT NULL CHECK(length(snapshot_hash)=64),
+    change_reason TEXT NOT NULL, created_by INTEGER NOT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(project_id,revision_number)
+  )`);
+  await run(db, `CREATE INDEX IF NOT EXISTS idx_intelligence_snapshots_scope
+    ON intelligence_snapshots(tenant_id,workspace_id,marketplace,project_id,revision_number)`);
+  await run(db, `CREATE TABLE IF NOT EXISTS commerce_write_receipts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id TEXT NOT NULL, workspace_id INTEGER NOT NULL,
+    marketplace TEXT NOT NULL CHECK(marketplace IN ('AMAZON','ETSY')),
+    project_id INTEGER NOT NULL REFERENCES research_projects(id), operation TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL, request_hash TEXT NOT NULL CHECK(length(request_hash)=64),
+    response_json TEXT NOT NULL, created_by INTEGER NOT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id,workspace_id,marketplace,operation,idempotency_key)
+  )`);
+  for (const table of ['research_imports','research_snapshots','intelligence_snapshots','commerce_write_receipts']) {
+    await run(db, `CREATE TRIGGER IF NOT EXISTS ${table}_immutable_update
+      BEFORE UPDATE ON ${table} BEGIN SELECT RAISE(ABORT,'IMMUTABLE_COMMERCE_SNAPSHOT'); END`);
+    await run(db, `CREATE TRIGGER IF NOT EXISTS ${table}_immutable_delete
+      BEFORE DELETE ON ${table} BEGIN SELECT RAISE(ABORT,'IMMUTABLE_COMMERCE_SNAPSHOT'); END`);
+  }
+}
+
+async function migrateCanonicalReviewHandoff(db) {
+  await run(db, `CREATE TABLE IF NOT EXISTS canonical_listing_reviews (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id TEXT NOT NULL, workspace_id INTEGER NOT NULL,
+    marketplace TEXT NOT NULL CHECK(marketplace IN ('AMAZON','ETSY')),
+    project_id INTEGER NOT NULL REFERENCES research_projects(id),
+    listing_id INTEGER NOT NULL REFERENCES listings(id),
+    listing_revision_id INTEGER NOT NULL REFERENCES listing_revisions(id),
+    decision TEXT NOT NULL CHECK(decision IN ('APPROVED','CHANGES_REQUESTED')),
+    reason TEXT NOT NULL, content_hash TEXT NOT NULL CHECK(length(content_hash)=64),
+    dependency_manifest_hash TEXT NOT NULL CHECK(length(dependency_manifest_hash)=64),
+    product_truth_revision_id INTEGER NOT NULL REFERENCES product_truth_revisions(id),
+    product_truth_confirmation_id INTEGER REFERENCES product_truth_confirmations(id),
+    reviewed_by INTEGER NOT NULL, reviewed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+  )`);
+  await run(db, `CREATE INDEX IF NOT EXISTS idx_canonical_listing_reviews_scope
+    ON canonical_listing_reviews(tenant_id,workspace_id,marketplace,project_id,listing_id,id)`);
+  await run(db, `CREATE TABLE IF NOT EXISTS canonical_submission_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id TEXT NOT NULL, workspace_id INTEGER NOT NULL,
+    marketplace TEXT NOT NULL CHECK(marketplace IN ('AMAZON','ETSY')),
+    project_id INTEGER NOT NULL REFERENCES research_projects(id),
+    listing_id INTEGER NOT NULL REFERENCES listings(id),
+    listing_revision_id INTEGER NOT NULL REFERENCES listing_revisions(id),
+    review_id INTEGER NOT NULL REFERENCES canonical_listing_reviews(id),
+    package_hash TEXT NOT NULL CHECK(length(package_hash)=64),
+    notes TEXT NOT NULL, requested_by INTEGER NOT NULL,
+    requested_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(listing_revision_id)
+  )`);
+  await run(db, `CREATE INDEX IF NOT EXISTS idx_canonical_submission_requests_scope
+    ON canonical_submission_requests(tenant_id,workspace_id,marketplace,project_id,listing_id,id)`);
+  await run(db, `CREATE TABLE IF NOT EXISTS canonical_submission_handoffs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id TEXT NOT NULL, workspace_id INTEGER NOT NULL,
+    marketplace TEXT NOT NULL CHECK(marketplace IN ('AMAZON','ETSY')),
+    project_id INTEGER NOT NULL REFERENCES research_projects(id),
+    listing_id INTEGER NOT NULL REFERENCES listings(id),
+    listing_revision_id INTEGER NOT NULL REFERENCES listing_revisions(id),
+    review_id INTEGER NOT NULL REFERENCES canonical_listing_reviews(id),
+    submission_request_id INTEGER NOT NULL REFERENCES canonical_submission_requests(id),
+    external_reference TEXT, notes TEXT NOT NULL,
+    submitted_by INTEGER NOT NULL, submitted_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(listing_revision_id)
+  )`);
+  await run(db, `CREATE INDEX IF NOT EXISTS idx_canonical_submission_handoffs_scope
+    ON canonical_submission_handoffs(tenant_id,workspace_id,marketplace,project_id,listing_id,id)`);
+  await run(db, `CREATE TRIGGER IF NOT EXISTS canonical_submission_handoffs_request_required_insert
+    BEFORE INSERT ON canonical_submission_handoffs WHEN NEW.submission_request_id IS NULL
+    BEGIN SELECT RAISE(ABORT,'SUBMISSION_REQUEST_REQUIRED'); END`);
+  await run(db, `CREATE TABLE IF NOT EXISTS canonical_handoff_write_receipts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id TEXT NOT NULL, workspace_id INTEGER NOT NULL,
+    marketplace TEXT NOT NULL CHECK(marketplace IN ('AMAZON','ETSY')),
+    project_id INTEGER NOT NULL REFERENCES research_projects(id),
+    listing_id INTEGER NOT NULL REFERENCES listings(id),
+    operation TEXT NOT NULL, idempotency_key TEXT NOT NULL,
+    request_hash TEXT NOT NULL CHECK(length(request_hash)=64), response_json TEXT NOT NULL,
+    created_by INTEGER NOT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id,workspace_id,marketplace,operation,idempotency_key)
+  )`);
+  for (const table of ['canonical_listing_reviews','canonical_submission_requests','canonical_submission_handoffs','canonical_handoff_write_receipts']) {
+    await run(db, `CREATE TRIGGER IF NOT EXISTS ${table}_immutable_update
+      BEFORE UPDATE ON ${table} BEGIN SELECT RAISE(ABORT,'IMMUTABLE_CANONICAL_HANDOFF'); END`);
+    await run(db, `CREATE TRIGGER IF NOT EXISTS ${table}_immutable_delete
+      BEFORE DELETE ON ${table} BEGIN SELECT RAISE(ABORT,'IMMUTABLE_CANONICAL_HANDOFF'); END`);
+  }
+}
+
+async function migrateOwnerSubmissionAuthorization(db) {
+  await run(db, `CREATE TABLE IF NOT EXISTS canonical_submission_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id TEXT NOT NULL, workspace_id INTEGER NOT NULL,
+    marketplace TEXT NOT NULL CHECK(marketplace IN ('AMAZON','ETSY')),
+    project_id INTEGER NOT NULL REFERENCES research_projects(id),
+    listing_id INTEGER NOT NULL REFERENCES listings(id),
+    listing_revision_id INTEGER NOT NULL REFERENCES listing_revisions(id),
+    review_id INTEGER NOT NULL REFERENCES canonical_listing_reviews(id),
+    package_hash TEXT NOT NULL CHECK(length(package_hash)=64), notes TEXT NOT NULL,
+    requested_by INTEGER NOT NULL, requested_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(listing_revision_id)
+  )`);
+  await run(db, `CREATE INDEX IF NOT EXISTS idx_canonical_submission_requests_scope
+    ON canonical_submission_requests(tenant_id,workspace_id,marketplace,project_id,listing_id,id)`);
+  const columns = await all(db, 'PRAGMA table_info(canonical_submission_handoffs)');
+  if (!columns.some(column => column.name === 'submission_request_id')) {
+    await run(db, 'ALTER TABLE canonical_submission_handoffs ADD COLUMN submission_request_id INTEGER REFERENCES canonical_submission_requests(id)');
+  }
+  await run(db, `CREATE TRIGGER IF NOT EXISTS canonical_submission_handoffs_request_required_insert
+    BEFORE INSERT ON canonical_submission_handoffs WHEN NEW.submission_request_id IS NULL
+    BEGIN SELECT RAISE(ABORT,'SUBMISSION_REQUEST_REQUIRED'); END`);
+  await run(db, `CREATE TRIGGER IF NOT EXISTS canonical_submission_requests_immutable_update
+    BEFORE UPDATE ON canonical_submission_requests BEGIN SELECT RAISE(ABORT,'IMMUTABLE_CANONICAL_HANDOFF'); END`);
+  await run(db, `CREATE TRIGGER IF NOT EXISTS canonical_submission_requests_immutable_delete
+    BEFORE DELETE ON canonical_submission_requests BEGIN SELECT RAISE(ABORT,'IMMUTABLE_CANONICAL_HANDOFF'); END`);
+}
+
 async function runMigrations(db) {
   await run(db, `
     CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -531,6 +704,42 @@ async function runMigrations(db) {
       throw error;
     }
   }
+  const commerceSnapshotApplied = await all(db, 'SELECT id FROM schema_migrations WHERE id=?', [COMMERCE_SNAPSHOT_MIGRATION]);
+  if (commerceSnapshotApplied.length === 0) {
+    await run(db, 'BEGIN IMMEDIATE');
+    try {
+      await migrateCommerceSnapshots(db);
+      await run(db, 'INSERT INTO schema_migrations(id) VALUES (?)', [COMMERCE_SNAPSHOT_MIGRATION]);
+      await run(db, 'COMMIT');
+    } catch (error) {
+      try { await run(db, 'ROLLBACK'); } catch (_) {}
+      throw error;
+    }
+  }
+  const canonicalHandoffApplied = await all(db, 'SELECT id FROM schema_migrations WHERE id=?', [CANONICAL_REVIEW_HANDOFF_MIGRATION]);
+  if (canonicalHandoffApplied.length === 0) {
+    await run(db, 'BEGIN IMMEDIATE');
+    try {
+      await migrateCanonicalReviewHandoff(db);
+      await run(db, 'INSERT INTO schema_migrations(id) VALUES (?)', [CANONICAL_REVIEW_HANDOFF_MIGRATION]);
+      await run(db, 'COMMIT');
+    } catch (error) {
+      try { await run(db, 'ROLLBACK'); } catch (_) {}
+      throw error;
+    }
+  }
+  const ownerSubmissionApplied = await all(db, 'SELECT id FROM schema_migrations WHERE id=?', [OWNER_SUBMISSION_AUTHORIZATION_MIGRATION]);
+  if (ownerSubmissionApplied.length === 0) {
+    await run(db, 'BEGIN IMMEDIATE');
+    try {
+      await migrateOwnerSubmissionAuthorization(db);
+      await run(db, 'INSERT INTO schema_migrations(id) VALUES (?)', [OWNER_SUBMISSION_AUTHORIZATION_MIGRATION]);
+      await run(db, 'COMMIT');
+    } catch (error) {
+      try { await run(db, 'ROLLBACK'); } catch (_) {}
+      throw error;
+    }
+  }
 }
 
 async function migrateAgentWorkspaceScope(db) {
@@ -622,6 +831,10 @@ module.exports = {
   PRODUCT_TRUTH_AUTHORITY_MIGRATION,
   PROJECT_PRODUCT_TRUTH_REVISIONS_MIGRATION,
   LISTING_REVISION_VALIDATION_ACCOUNTING_MIGRATION,
+  COMMERCE_SNAPSHOT_MIGRATION,
+  CANONICAL_REVIEW_HANDOFF_MIGRATION,
+  OWNER_SUBMISSION_AUTHORIZATION_MIGRATION,
+  migrateOwnerSubmissionAuthorization,
   AGENT_WORKSPACE_SCOPE_MIGRATION,
   PROJECT_SCOPED_EVIDENCE_MIGRATION,
   CANONICAL_DAG_MIGRATION,

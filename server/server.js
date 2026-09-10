@@ -51,7 +51,15 @@ const { buildStaffAttestedCard, normalizeSnapshot, productTruthAuthorityHash, va
 const { assertNoClientPolicyOverrides } = require('./policy/contractRegistry');
 const { appendProductTruthRevision, confirmProductTruthRevision, listProductTruthRevisions } = require('./productTruthStore');
 const { createListingWithRevision, appendListingRevision, canonicalJson, getListingRevision, hashBytes, listListingRevisions } = require('./revisionStore');
-const { assertCanonicalDependenciesCurrent, composeTruthOnlyDraft, validateCanonicalDraft } = require('./canonicalDraftService');
+const { assertCanonicalDependenciesCurrent, composeCommerceDraft, composeTruthOnlyDraft,
+  validateCanonicalDraft } = require('./canonicalDraftService');
+const { appendIntelligenceSnapshot, appendResearchImport, appendResearchSnapshot,
+  getCommerceState, getIntelligenceSnapshot, previewIntelligence } = require('./commerceSnapshotStore');
+const { recordCanonicalSubmission, requestCanonicalSubmission, reviewCanonicalListing } = require('./canonicalReviewHandoffStore');
+const amazonResearchAdapter = require('./commerceIntelligence/amazonResearchAdapter');
+const amazonIntelligenceAdapter = require('./commerceIntelligence/amazonIntelligenceAdapter');
+const etsyResearchAdapter = require('./commerceIntelligence/etsyResearchAdapter');
+const etsyIntelligenceAdapter = require('./commerceIntelligence/etsyIntelligenceAdapter');
 
 function rejectListingGuard(res, error) {
   const code = error?.code || 'LISTING_GUARD_UNAVAILABLE';
@@ -272,6 +280,17 @@ const etsySearchUpload = multer({
   fileFilter(req, file, cb) {
     const allowed = /\.(csv|html?|txt)$/i.test(file.originalname || '');
     cb(allowed ? null : new Error('UNSUPPORTED_ETSY_SEARCH_FILE'), allowed);
+  }
+});
+
+// Canonical research imports remain in memory until the immutable store has
+// validated and committed their exact bytes. No preview leaves a temp file.
+const commerceResearchUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 20 * 1024 * 1024, files: 1, fields: 8 },
+  fileFilter(req, file, cb) {
+    const allowed = /\.(xlsx|csv)$/i.test(file.originalname || '');
+    cb(allowed ? null : new Error('UNSUPPORTED_RESEARCH_FILE'), allowed);
   }
 });
 
@@ -1427,6 +1446,148 @@ app.post('/api/projects/:id/product-truth/revisions/:revisionId/confirm', requir
   } catch (error) { rejectRevisionStore(res, error); }
 });
 
+async function requireCommerceProject(req) {
+  const projectId = Number(req.params.id);
+  if (!Number.isInteger(projectId) || projectId < 1) throw Object.assign(new Error('PROJECT_CONTEXT_REQUIRED'), {
+    code: 'PROJECT_CONTEXT_REQUIRED', status: 400
+  });
+  const project = await new Promise((resolve, reject) => db.get(`SELECT id,marketplace,seed_phrase FROM research_projects
+    WHERE id=? AND tenant_id=? AND workspace_id=? AND marketplace=?`,
+  [projectId, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+  (error, row) => error ? reject(error) : resolve(row || null)));
+  if (!project) throw Object.assign(new Error('PROJECT_NOT_FOUND'), { code: 'PROJECT_NOT_FOUND', status: 404 });
+  return project;
+}
+
+function researchAdapterFor(project) {
+  return project.marketplace === 'AMAZON' ? amazonResearchAdapter : etsyResearchAdapter;
+}
+
+function canonicalResearchFile(req, allowedFields, marketplace) {
+  const body = requireExactDto(req.body || {}, allowedFields);
+  assertNoClientPolicyOverrides(body);
+  if (!req.file?.buffer?.length) throw Object.assign(new Error('RESEARCH_FILE_REQUIRED'), {
+    code: 'RESEARCH_FILE_REQUIRED', status: 400
+  });
+  const kind = String(body.kind || '').trim().toUpperCase();
+  const allowedKinds = marketplace === 'AMAZON' ? ['AMAZON_CEREBRO','AMAZON_XRAY'] : ['ETSY_SEARCH'];
+  if (!allowedKinds.includes(kind)) throw Object.assign(new Error('MARKETPLACE_IMPORT_KIND_REQUIRED'), {
+    code: 'MARKETPLACE_IMPORT_KIND_REQUIRED', status: 400, details: { marketplace, allowedKinds }
+  });
+  const extension = path.extname(req.file.originalname || '').toLowerCase();
+  const mediaType = extension === '.csv' ? 'text/csv' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  return { body, kind, mediaType, rawBytes: req.file.buffer, fileName: path.basename(req.file.originalname) };
+}
+
+async function inspectCanonicalResearchFile(file, adapter) {
+  const rawHash = crypto.createHash('sha256').update(file.rawBytes).digest('hex');
+  const parserHash = adapter.parserBindingHash();
+  const built = await adapter.buildSnapshot([{
+    id: 0, kind: file.kind, file_name: file.fileName, media_type: file.mediaType,
+    raw_bytes: file.rawBytes, raw_hash: rawHash, selected_sheet: null,
+    parser_id: adapter.PARSER_ID, parser_hash: parserHash
+  }]);
+  const source = built.observations.sources[0];
+  const headerSignature = source.consumedSheets
+    ? [...new Set(source.consumedSheets.flatMap(sheet => sheet.headers))]
+    : (source.headerDiagnostics?.recognizedColumns || []).map(item => item.sourceColumn);
+  return { rawHash, parserHash, built, source, headerSignature };
+}
+
+app.get('/api/projects/:id/commerce-state', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    await requireCommerceProject(req);
+    const state = await getCommerceState(db, revisionScope(req.user), req.params.id);
+    res.json({ success: true, ...state });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+app.post('/api/projects/:id/research-imports/preview', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']),
+  commerceResearchUpload.single('researchFile'), async (req, res) => {
+    try {
+      const project = await requireCommerceProject(req); const projectId = project.id;
+      const adapter = researchAdapterFor(project);
+      const file = canonicalResearchFile(req, new Set(['kind']), project.marketplace);
+      const inspected = await inspectCanonicalResearchFile(file, adapter);
+      res.json({ success: true, zeroWrite: true, projectId, kind: file.kind, fileName: file.fileName,
+        rawHash: inspected.rawHash, byteLength: file.rawBytes.length, parserId: adapter.PARSER_ID,
+        parserHash: inspected.parserHash, accounting: inspected.built.accounting,
+        sourceCoverage: inspected.source, headerSignature: inspected.headerSignature });
+    } catch (error) { rejectRevisionStore(res, error); }
+  });
+
+app.post('/api/projects/:id/research-imports', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']),
+  commerceResearchUpload.single('researchFile'), async (req, res) => {
+    try {
+      const project = await requireCommerceProject(req); const projectId = project.id;
+      const adapter = researchAdapterFor(project);
+      const file = canonicalResearchFile(req, new Set(['kind', 'idempotencyKey']), project.marketplace);
+      const inspected = await inspectCanonicalResearchFile(file, adapter);
+      const result = await appendResearchImport(db, revisionScope(req.user), projectId, {
+        idempotencyKey: file.body.idempotencyKey, kind: file.kind, fileName: file.fileName,
+        mediaType: file.mediaType, rawBytes: file.rawBytes, selectedSheet: null,
+        headerSignature: inspected.headerSignature, parserId: adapter.PARSER_ID,
+        parserHash: inspected.parserHash
+      });
+      res.status(result.duplicate ? 200 : 201).json({ success: true, ...result,
+        accounting: inspected.built.accounting, sourceCoverage: inspected.source });
+    } catch (error) { rejectRevisionStore(res, error); }
+  });
+
+app.post('/api/projects/:id/research-snapshots', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    const project = await requireCommerceProject(req); const projectId = project.id;
+    const body = requireExactDto(req.body, new Set(['expectedHeadResearchSnapshotId', 'importIds', 'idempotencyKey', 'changeReason']));
+    assertNoClientPolicyOverrides(body);
+    const result = await appendResearchSnapshot(db, revisionScope(req.user), projectId, body, researchAdapterFor(project));
+    res.status(result.revisionNumber === 1 ? 201 : 200).json({ success: true, ...result });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+function intelligenceConfiguration(project, body) {
+  const requested = String(body.listingLanguage || 'AUTO').trim().toUpperCase();
+  if (!['AUTO','EN','ES'].includes(requested)) throw Object.assign(new Error('LISTING_LANGUAGE_UNSUPPORTED'), {
+    code: 'LISTING_LANGUAGE_UNSUPPORTED', status: 400
+  });
+  return Object.freeze({ seedPhrase: String(project.seed_phrase || '').trim(),
+    ...(requested === 'AUTO' ? {} : { listingLanguage: requested }) });
+}
+
+function intelligenceAdapterFor(project) {
+  return project.marketplace === 'AMAZON' ? amazonIntelligenceAdapter : etsyIntelligenceAdapter;
+}
+
+app.post('/api/projects/:id/intelligence-snapshots/preview', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    const project = await requireCommerceProject(req);
+    const body = requireExactDto(req.body, new Set(['researchSnapshotId', 'productTruthRevisionId', 'listingLanguage']));
+    assertNoClientPolicyOverrides(body);
+    const result = await previewIntelligence(db, revisionScope(req.user), project.id, {
+      researchSnapshotId: body.researchSnapshotId, productTruthRevisionId: body.productTruthRevisionId,
+      configuration: intelligenceConfiguration(project, body)
+    }, intelligenceAdapterFor(project));
+    res.json({ success: true, ...result });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+app.post('/api/projects/:id/intelligence-snapshots', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    const project = await requireCommerceProject(req);
+    const body = requireExactDto(req.body, new Set(['expectedHeadIntelligenceSnapshotId', 'researchSnapshotId',
+      'productTruthRevisionId', 'listingLanguage', 'idempotencyKey', 'changeReason']));
+    assertNoClientPolicyOverrides(body);
+    const result = await appendIntelligenceSnapshot(db, revisionScope(req.user), project.id, {
+      expectedHeadIntelligenceSnapshotId: body.expectedHeadIntelligenceSnapshotId,
+      researchSnapshotId: body.researchSnapshotId, productTruthRevisionId: body.productTruthRevisionId,
+      idempotencyKey: body.idempotencyKey, changeReason: body.changeReason,
+      configuration: intelligenceConfiguration(project, body)
+    }, intelligenceAdapterFor(project));
+    const persisted = await getIntelligenceSnapshot(db, revisionScope(req.user), project.id, result.intelligenceSnapshotId);
+    res.status(result.revisionNumber === 1 ? 201 : 200).json({ success: true, ...result,
+      output: persisted.output, accounting: persisted.accounting, configuration: persisted.configuration });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
 app.post('/api/projects/:id/listings/compose-preview', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
   try {
     const body = requireExactDto(req.body, new Set(['productTruthRevisionId']));
@@ -1440,22 +1601,37 @@ app.post('/api/projects/:id/listings/compose-preview', requireAuth(db), requireR
   }
 });
 
+app.post('/api/projects/:id/listings/commerce-preview', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    const body = requireExactDto(req.body, new Set(['intelligenceSnapshotId']));
+    assertNoClientPolicyOverrides(body);
+    const preview = await composeCommerceDraft(db, revisionScope(req.user), Number(req.params.id), body.intelligenceSnapshotId);
+    res.json({ success: true, zeroWrite: true, content: preview.content,
+      contentHash: hashBytes(canonicalJson(preview.content)), productTruthRevisionId: preview.truth.id,
+      intelligenceSnapshotId: preview.intelligence.id, dependencies: preview.dependencies,
+      guardAccounting: preview.guardAccounting, degraded: preview.degraded, provider: preview.provider });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
 app.post('/api/projects/:id/listings', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
   try {
-    const body = requireExactDto(req.body, new Set(['idempotencyKey', 'changeReason', 'productTruthRevisionId', 'content']));
+    const body = requireExactDto(req.body, new Set(['idempotencyKey', 'changeReason', 'productTruthRevisionId',
+      'intelligenceSnapshotId', 'content']));
     assertNoClientPolicyOverrides(body);
     const scope = revisionScope(req.user);
     const projectId = Number(req.params.id);
     const result = await createListingWithRevision(db, scope, {
       projectId, idempotencyKey: body.idempotencyKey, changeReason: body.changeReason,
-      content: body.content, dependencies: { productTruthRevisionId: Number(body.productTruthRevisionId) }
+      content: body.content, dependencies: { productTruthRevisionId: Number(body.productTruthRevisionId),
+        intelligenceSnapshotId: body.intelligenceSnapshotId == null ? null : Number(body.intelligenceSnapshotId) }
     }, {
       prepareContent: async ({ content }) => {
-        const validated = await validateCanonicalDraft(db, scope, projectId, body.productTruthRevisionId, content);
+        const validated = await validateCanonicalDraft(db, scope, projectId, body.productTruthRevisionId, content,
+          body.intelligenceSnapshotId);
         return { content: validated.content, validationAccounting: validated.guardAccounting };
       },
       resolveDependencies: async () => (await validateCanonicalDraft(db, scope, projectId,
-        body.productTruthRevisionId, body.content)).dependencies,
+        body.productTruthRevisionId, body.content, body.intelligenceSnapshotId)).dependencies,
       assertDependenciesCurrent: async ({ dependencies }) => assertCanonicalDependenciesCurrent(
         db, scope, projectId, dependencies)
     });
@@ -1468,37 +1644,142 @@ app.post('/api/projects/:id/listings', requireAuth(db), requireRole(['OWNER', 'M
 });
 
 app.get('/api/projects/:id/listings', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
-  db.all(`SELECT id,project_id,status,listing_version,head_revision_id,head_creative_revision_id,amazonTitle,etsyTitle,categoryName,generatedAt
-    FROM listings WHERE tenant_id=? AND workspace_id=? AND marketplace=? AND project_id=? AND head_revision_id IS NOT NULL
+  db.all(`SELECT l.id,l.project_id,l.status,l.listing_version,l.head_revision_id,l.head_creative_revision_id,
+      l.amazonTitle,l.etsyTitle,l.categoryName,l.generatedAt,
+      (SELECT r.decision FROM canonical_listing_reviews r WHERE r.listing_id=l.id AND r.listing_revision_id=l.head_revision_id
+        AND r.tenant_id=l.tenant_id AND r.workspace_id=l.workspace_id AND r.marketplace=l.marketplace ORDER BY r.id DESC LIMIT 1) AS latestReviewDecision,
+      (SELECT r.reason FROM canonical_listing_reviews r WHERE r.listing_id=l.id AND r.listing_revision_id=l.head_revision_id
+        AND r.tenant_id=l.tenant_id AND r.workspace_id=l.workspace_id AND r.marketplace=l.marketplace ORDER BY r.id DESC LIMIT 1) AS latestReviewReason,
+      (SELECT q.id FROM canonical_submission_requests q WHERE q.listing_id=l.id AND q.listing_revision_id=l.head_revision_id
+        AND q.tenant_id=l.tenant_id AND q.workspace_id=l.workspace_id AND q.marketplace=l.marketplace ORDER BY q.id DESC LIMIT 1) AS submissionRequestId,
+      (SELECT q.package_hash FROM canonical_submission_requests q WHERE q.listing_id=l.id AND q.listing_revision_id=l.head_revision_id
+        AND q.tenant_id=l.tenant_id AND q.workspace_id=l.workspace_id AND q.marketplace=l.marketplace ORDER BY q.id DESC LIMIT 1) AS submissionPackageHash,
+      (SELECT q.notes FROM canonical_submission_requests q WHERE q.listing_id=l.id AND q.listing_revision_id=l.head_revision_id
+        AND q.tenant_id=l.tenant_id AND q.workspace_id=l.workspace_id AND q.marketplace=l.marketplace ORDER BY q.id DESC LIMIT 1) AS submissionRequestNotes,
+      (SELECT h.submitted_at FROM canonical_submission_handoffs h WHERE h.listing_id=l.id AND h.listing_revision_id=l.head_revision_id
+        AND h.tenant_id=l.tenant_id AND h.workspace_id=l.workspace_id AND h.marketplace=l.marketplace LIMIT 1) AS submittedAt,
+      (SELECT h.external_reference FROM canonical_submission_handoffs h WHERE h.listing_id=l.id AND h.listing_revision_id=l.head_revision_id
+        AND h.tenant_id=l.tenant_id AND h.workspace_id=l.workspace_id AND h.marketplace=l.marketplace LIMIT 1) AS externalReference
+    FROM listings l WHERE l.tenant_id=? AND l.workspace_id=? AND l.marketplace=? AND l.project_id=? AND l.head_revision_id IS NOT NULL
     ORDER BY generatedAt DESC`, [req.user.tenantId, req.user.workspaceId, req.user.marketplace, Number(req.params.id)],
   (error, rows) => error ? res.status(500).json({ success: false, error: 'DATABASE_ERROR' })
     : res.json({ success: true, projectId: Number(req.params.id), listings: rows }));
 });
 
+app.get('/api/listings/:id/review-package', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    const scope = revisionScope(req.user);
+    const root = await new Promise((resolve, reject) => db.get(`SELECT id,project_id,head_revision_id,status FROM listings
+      WHERE id=? AND tenant_id=? AND workspace_id=? AND marketplace=? AND head_revision_id IS NOT NULL`,
+    [Number(req.params.id), scope.tenantId, scope.workspaceId, scope.marketplace],
+    (error, row) => error ? reject(error) : resolve(row || null)));
+    if (!root) throw Object.assign(new Error('LISTING_NOT_FOUND'), { code: 'LISTING_NOT_FOUND', status: 404 });
+    const revision = await getListingRevision(db, scope, root.id, root.head_revision_id, root.project_id);
+    await assertCanonicalDependenciesCurrent(db, scope, root.project_id, revision.dependencies);
+    let approvalReadiness = { ready: true, blockers: [] };
+    try {
+      await validateCanonicalDraft(db, scope, root.project_id, revision.dependencies.productTruthRevisionId,
+        revision.content, revision.dependencies.intelligenceSnapshotId, 'APPROVAL');
+    } catch (error) {
+      approvalReadiness = { ready: false, error: error.code || error.message || 'APPROVAL_VALIDATION_FAILED',
+        blockers: error.details?.blockers || error.details || [] };
+    }
+    res.json({ success: true, listingId: root.id, projectId: root.project_id, status: root.status,
+      listingRevisionId: revision.id, revisionNumber: revision.revision_number, content: revision.content,
+      contentHash: revision.content_hash, dependencies: revision.dependencies,
+      dependencyHash: revision.dependency_manifest_hash, validationAccounting: revision.validationAccounting,
+      approvalReadiness });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+app.post('/api/listings/:id/canonical-review', requireAuth(db), requireRole(['OWNER', 'MANAGER']), async (req, res) => {
+  try {
+    const body = requireExactDto(req.body, new Set(['decision', 'reason', 'expectedListingRevisionId',
+      'expectedContentHash', 'expectedDependencyHash', 'idempotencyKey']));
+    assertNoClientPolicyOverrides(body);
+    const scope = revisionScope(req.user);
+    const result = await reviewCanonicalListing(db, scope, req.params.id, body, {
+      assertDependenciesCurrent: listing => assertCanonicalDependenciesCurrent(db, scope, listing.project_id, listing.dependencies),
+      validateRevision: async listing => {
+        const purpose = body.decision === 'APPROVED' ? 'APPROVAL' : 'DRAFT';
+        const validated = await validateCanonicalDraft(db, scope, listing.project_id,
+          listing.dependencies.productTruthRevisionId, listing.content, listing.dependencies.intelligenceSnapshotId, purpose);
+        if (hashBytes(canonicalJson(validated.content)) !== listing.content_hash) {
+          throw Object.assign(new Error('REVISION_VALIDATION_DRIFT'), { code: 'REVISION_VALIDATION_DRIFT', status: 409 });
+        }
+      }
+    });
+    res.status(201).json({ success: true, ...result });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+app.post('/api/listings/:id/submission-requests', requireAuth(db), requireRole(['SELLER']), async (req, res) => {
+  try {
+    const body = requireExactDto(req.body, new Set(['notes', 'idempotencyKey']));
+    assertNoClientPolicyOverrides(body);
+    const scope = revisionScope(req.user);
+    const result = await requestCanonicalSubmission(db, scope, req.params.id, body, {
+      assertDependenciesCurrent: listing => assertCanonicalDependenciesCurrent(db, scope, listing.project_id, listing.dependencies),
+      assertApprovalEligible: async listing => {
+        const validated = await validateCanonicalDraft(db, scope, listing.project_id,
+          listing.dependencies.productTruthRevisionId, listing.content, listing.dependencies.intelligenceSnapshotId, 'APPROVAL');
+        if (hashBytes(canonicalJson(validated.content)) !== listing.content_hash) {
+          throw Object.assign(new Error('REVISION_VALIDATION_DRIFT'), { code: 'REVISION_VALIDATION_DRIFT', status: 409 });
+        }
+      }
+    });
+    res.status(201).json({ success: true, ...result });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+app.post('/api/listings/:id/submission-handoffs', requireAuth(db), requireRole(['OWNER']), async (req, res) => {
+  try {
+    const body = requireExactDto(req.body, new Set(['submissionRequestId', 'confirmedExternalSubmission', 'externalReference', 'notes', 'idempotencyKey']));
+    assertNoClientPolicyOverrides(body);
+    const scope = revisionScope(req.user);
+    const result = await recordCanonicalSubmission(db, scope, req.params.id, body, {
+      assertDependenciesCurrent: listing => assertCanonicalDependenciesCurrent(db, scope, listing.project_id, listing.dependencies),
+      assertApprovalEligible: async listing => {
+        const validated = await validateCanonicalDraft(db, scope, listing.project_id,
+          listing.dependencies.productTruthRevisionId, listing.content, listing.dependencies.intelligenceSnapshotId, 'APPROVAL');
+        if (hashBytes(canonicalJson(validated.content)) !== listing.content_hash) {
+          throw Object.assign(new Error('REVISION_VALIDATION_DRIFT'), { code: 'REVISION_VALIDATION_DRIFT', status: 409 });
+        }
+      }
+    });
+    res.status(201).json({ success: true, ...result });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
 app.post('/api/listings/:id/revisions', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
   try {
     const body = requireExactDto(req.body, new Set(['parentRevisionId', 'expectedHeadRevisionId', 'idempotencyKey',
-      'changeReason', 'productTruthRevisionId', 'content']));
+      'changeReason', 'productTruthRevisionId', 'intelligenceSnapshotId', 'content']));
     assertNoClientPolicyOverrides(body);
     const scope = revisionScope(req.user);
     const listingId = Number(req.params.id);
-    const root = await new Promise((resolve, reject) => db.get(`SELECT id,project_id FROM listings
+    const root = await new Promise((resolve, reject) => db.get(`SELECT id,project_id,status FROM listings
       WHERE id=? AND tenant_id=? AND workspace_id=? AND marketplace=? AND head_revision_id IS NOT NULL`,
     [listingId, scope.tenantId, scope.workspaceId, scope.marketplace],
     (error, row) => error ? reject(error) : resolve(row || null)));
     if (!root) throw Object.assign(new Error('LISTING_NOT_FOUND'), { code: 'LISTING_NOT_FOUND', status: 404 });
+    if (root.status === 'SUBMITTED') throw Object.assign(new Error('SUBMITTED_LISTING_TERMINAL'), {
+      code: 'SUBMITTED_LISTING_TERMINAL', status: 409
+    });
     const result = await appendListingRevision(db, scope, listingId, {
       projectId: root.project_id, parentRevisionId: body.parentRevisionId,
       expectedHeadRevisionId: body.expectedHeadRevisionId, idempotencyKey: body.idempotencyKey,
       changeReason: body.changeReason, content: body.content,
-      dependencies: { productTruthRevisionId: Number(body.productTruthRevisionId) }
+      dependencies: { productTruthRevisionId: Number(body.productTruthRevisionId),
+        intelligenceSnapshotId: body.intelligenceSnapshotId == null ? null : Number(body.intelligenceSnapshotId) }
     }, {
       prepareContent: async ({ content }) => {
-        const validated = await validateCanonicalDraft(db, scope, root.project_id, body.productTruthRevisionId, content);
+        const validated = await validateCanonicalDraft(db, scope, root.project_id, body.productTruthRevisionId, content,
+          body.intelligenceSnapshotId);
         return { content: validated.content, validationAccounting: validated.guardAccounting };
       },
       resolveDependencies: async () => (await validateCanonicalDraft(db, scope, root.project_id,
-        body.productTruthRevisionId, body.content)).dependencies,
+        body.productTruthRevisionId, body.content, body.intelligenceSnapshotId)).dependencies,
       assertDependenciesCurrent: async ({ dependencies }) => assertCanonicalDependenciesCurrent(
         db, scope, root.project_id, dependencies)
     });
@@ -4766,8 +5047,15 @@ if (fs.existsSync(distDir)) {
 // an async route handler (auto-forwarded by Express 5), lands here instead of
 // Express's default HTML error page — so the frontend always gets JSON back.
 app.use((err, req, res, next) => {
-  console.error('Unhandled request error:', err);
   if (res.headersSent) return next(err);
+  if (err instanceof multer.MulterError) {
+    const status = err.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
+    return res.status(status).json({ success: false, error: err.code });
+  }
+  if (['UNSUPPORTED_RESEARCH_FILE','UNSUPPORTED_ETSY_SEARCH_FILE','UNSUPPORTED_UPLOAD_TYPE'].includes(err?.message)) {
+    return res.status(415).json({ success: false, error: err.message });
+  }
+  console.error('Unhandled request error:', err);
   res.status(500).json({ success: false, error: 'INTERNAL_SERVER_ERROR', message: err.message });
 });
 

@@ -8,6 +8,7 @@ const { canonicalJson, hashBytes } = require('./revisionStore');
 const { currentProductTruthRevision } = require('./productTruthStore');
 const { evaluateListingGuard } = require('./listingGuard');
 const ipGuard = require('./ipGuard');
+const { getIntelligenceSnapshot } = require('./commerceSnapshotStore');
 
 const fixtureDir = path.resolve(__dirname, '../contracts/omniseller-r3/v1/policy-fixtures');
 const draftPolicyRegistry = PolicyContractRegistry.fromDirectory(fixtureDir, {
@@ -15,8 +16,20 @@ const draftPolicyRegistry = PolicyContractRegistry.fromDirectory(fixtureDir, {
 });
 const validatorFiles = [
   path.resolve(__dirname, 'listingGuard.js'),
+  path.resolve(__dirname, 'ipGuard.js'),
   path.resolve(__dirname, 'claimGuard/index.js'),
+  path.resolve(__dirname, 'claimGuard/lexicalScanner.js'),
+  path.resolve(__dirname, 'claimGuard/corroboration.js'),
+  path.resolve(__dirname, 'claimGuard/surfacePolicy.js'),
+  path.resolve(__dirname, 'claimGuard/outputAudit.js'),
+  path.resolve(__dirname, 'claimGuard/taxonomyAdapter.js'),
   path.resolve(__dirname, 'claimGuard/ipMatcher.js'),
+  path.resolve(__dirname, 'policy/enforce.js'),
+  path.resolve(__dirname, 'policy/contractRegistry.js'),
+  path.resolve(__dirname, 'policy/contractSchemaValidator.js'),
+  path.resolve(__dirname, '../shared/policyContractInvariants.cjs'),
+  path.resolve(__dirname, '../contracts/omniseller-r3/v1/policy-contract.schema.json'),
+  path.resolve(__dirname, '../contracts/omniseller-r3/v1/policy-lifecycle-event.schema.json'),
   path.resolve(__dirname, '../contracts/omniseller-r3/v1/claim-taxonomy.v1.json')
 ];
 const validatorHash = hashBytes(validatorFiles.map(file => fs.readFileSync(file)).map(bytes => bytes.toString('base64')).join('.'));
@@ -99,10 +112,41 @@ function policySurfaces(listing, marketplace) {
   } : { title: listing.etsyTitle, tags: listing.etsyTags };
 }
 
-async function validateCanonicalDraft(db, scope, projectId, selectedTruthRevisionId, rawContent) {
+async function resolveIntelligenceBinding(db, scope, projectId, selectedIntelligenceSnapshotId, truth) {
+  if (selectedIntelligenceSnapshotId == null) return null;
+  const intelligence = await getIntelligenceSnapshot(db, scope, projectId, selectedIntelligenceSnapshotId);
+  const project = await get(db, `SELECT head_research_snapshot_id,head_product_truth_revision_id,head_intelligence_snapshot_id
+    FROM research_projects WHERE id=? AND tenant_id=? AND workspace_id=? AND marketplace=?`,
+  [projectId, scope.tenantId, scope.workspaceId, scope.marketplace]);
+  if (!project || project.head_intelligence_snapshot_id !== intelligence.id
+    || project.head_research_snapshot_id !== intelligence.research_snapshot_id
+    || project.head_product_truth_revision_id !== intelligence.product_truth_revision_id
+    || intelligence.product_truth_revision_id !== truth.id || intelligence.product_truth_hash !== truth.content_hash) {
+    throw new CanonicalDraftError('STALE_INTELLIGENCE_SNAPSHOT', 409);
+  }
+  if (!intelligence.output?.listingDraft || typeof intelligence.output.listingDraft !== 'object') {
+    throw new CanonicalDraftError('INTELLIGENCE_DRAFT_UNAVAILABLE', 409);
+  }
+  return intelligence;
+}
+
+function stablePolicyContext(project, scope) {
+  return Object.freeze({ tenantId: scope.tenantId, workspaceId: String(scope.workspaceId),
+    sellerAccountId: project.seller_account_label, marketplace: scope.marketplace, site: project.site,
+    locale: project.locale, mediaClass: project.media_class, productTypeId: project.product_type_id,
+    categoryId: project.category_id, productFamilyVersion: project.product_family_version });
+}
+
+function serverPolicyContext(project, scope) {
+  return createServerPolicyContext({ ...stablePolicyContext(project, scope), effectiveAt: new Date().toISOString() });
+}
+
+async function validateCanonicalDraft(db, scope, projectId, selectedTruthRevisionId, rawContent,
+  selectedIntelligenceSnapshotId = null, purpose = 'DRAFT') {
   const project = await projectPolicyContext(db, scope, projectId);
   const truth = await currentProductTruthRevision(db, scope, projectId);
   if (Number(selectedTruthRevisionId) !== truth.id) throw new CanonicalDraftError('STALE_PRODUCT_TRUTH_REVISION', 409);
+  const intelligence = await resolveIntelligenceBinding(db, scope, projectId, selectedIntelligenceSnapshotId, truth);
   const listing = exactContent(rawContent, scope.marketplace);
   let guarded;
   try { guarded = evaluateListingGuard({ listing, verifiedFacts: factsFromSnapshot(truth.snapshot) }); }
@@ -111,21 +155,21 @@ async function validateCanonicalDraft(db, scope, projectId, selectedTruthRevisio
   try { ip = ipGuard.screenListing(guarded.listing); }
   catch (_) { throw new CanonicalDraftError('IP_GUARD_UNAVAILABLE', 503); }
   if (ip.verdict === 'BLOCK') throw new CanonicalDraftError('IP_CLEARANCE_REQUIRED', 409, { ipHits: ip.hits });
-  const policyContext = createServerPolicyContext({
-    tenantId: scope.tenantId, workspaceId: String(scope.workspaceId), sellerAccountId: project.seller_account_label,
-    marketplace: scope.marketplace, site: project.site, locale: project.locale, mediaClass: project.media_class,
-    productTypeId: project.product_type_id, categoryId: project.category_id, effectiveAt: new Date().toISOString()
-  });
+  const policyContext = serverPolicyContext(project, scope);
   let resolution;
   let policy;
   try {
-    resolution = draftPolicyRegistry.resolve(policyContext, { purpose: 'DRAFT' });
-    policy = validatePolicySurfaces(policySurfaces(guarded.listing, scope.marketplace), resolution);
+    resolution = draftPolicyRegistry.resolve(policyContext, { purpose });
+    policy = validatePolicySurfaces(policySurfaces(guarded.listing, scope.marketplace), resolution, policyContext);
   } catch (error) {
     throw new CanonicalDraftError(error.code || 'POLICY_CONTRACT_UNAVAILABLE', 409, error.details);
   }
   if (!policy.policyCompliant) throw new CanonicalDraftError('POLICY_VALIDATION_FAILED', 422, { violations: policy.policyViolations });
-  const policyBinding = bindingOf(resolution);
+  if (purpose === 'APPROVAL' && !policy.policyContractApprovalEligible) {
+    throw new CanonicalDraftError('POLICY_APPROVAL_BLOCKED', 409, { blockers: policy.policyApprovalBlockers });
+  }
+  const policyBinding = bindingOf(resolution, policyContext);
+  const policyContextHash = hashBytes(canonicalJson(stablePolicyContext(project, scope)));
   return Object.freeze({
     content: guarded.listing,
     truth,
@@ -133,11 +177,15 @@ async function validateCanonicalDraft(db, scope, projectId, selectedTruthRevisio
     dependencies: Object.freeze({
       productTruthRevisionId: truth.id,
       productTruthHash: truth.content_hash,
-      researchSnapshotId: null,
-      researchSnapshotHash: null,
-      intelligenceSnapshotId: null,
-      intelligenceSnapshotHash: null,
+      researchSnapshotId: intelligence?.research_snapshot_id ?? null,
+      researchSnapshotHash: intelligence?.research_snapshot_hash ?? null,
+      intelligenceSnapshotId: intelligence?.id ?? null,
+      intelligenceSnapshotHash: intelligence?.snapshot_hash ?? null,
       policyBindingHash: hashBytes(canonicalJson(policyBinding)),
+      policyContractId: resolution.policyContractId,
+      policyContractArtifactHash: resolution.policyContractArtifactHash,
+      policyContextHash,
+      policyLifecycleSnapshotDigest: resolution.lifecycleSnapshotDigest,
       claimIpBindingHash,
       validatorHash,
       locale: project.locale,
@@ -157,10 +205,18 @@ async function composeTruthOnlyDraft(db, scope, projectId, selectedTruthRevision
   return Object.freeze({ ...validated, degraded: true, provider: 'DETERMINISTIC_TRUTH_ONLY' });
 }
 
+async function composeCommerceDraft(db, scope, projectId, selectedIntelligenceSnapshotId) {
+  const intelligence = await getIntelligenceSnapshot(db, scope, projectId, selectedIntelligenceSnapshotId);
+  const validated = await validateCanonicalDraft(db, scope, projectId, intelligence.product_truth_revision_id,
+    intelligence.output?.listingDraft, intelligence.id);
+  return Object.freeze({ ...validated, intelligence, degraded: false, provider: 'PERSISTED_COMMERCE_INTELLIGENCE' });
+}
+
 async function assertCanonicalDependenciesCurrent(db, scope, projectId, dependencies) {
   const selectedId = Number(dependencies?.productTruthRevisionId);
   const selectedHash = String(dependencies?.productTruthHash || '');
-  const row = await get(db, `SELECT r.id,r.content_hash,r.snapshot_json FROM research_projects p
+  const row = await get(db, `SELECT r.id,r.content_hash,r.snapshot_json,p.head_research_snapshot_id,p.head_intelligence_snapshot_id
+    FROM research_projects p
     JOIN product_truth_revisions r ON r.id=p.head_product_truth_revision_id AND r.project_id=p.id
     WHERE p.id=? AND p.tenant_id=? AND p.workspace_id=? AND p.marketplace=?
       AND r.tenant_id=p.tenant_id AND r.workspace_id=p.workspace_id AND r.marketplace=p.marketplace`,
@@ -171,11 +227,41 @@ async function assertCanonicalDependenciesCurrent(db, scope, projectId, dependen
   if (hashBytes(row.snapshot_json) !== row.content_hash) {
     throw new CanonicalDraftError('REVISION_INTEGRITY_FAILURE', 500);
   }
+  if (dependencies?.intelligenceSnapshotId != null || dependencies?.researchSnapshotId != null) {
+    if (Number(dependencies.researchSnapshotId) !== row.head_research_snapshot_id
+      || Number(dependencies.intelligenceSnapshotId) !== row.head_intelligence_snapshot_id) {
+      throw new CanonicalDraftError('STALE_INTELLIGENCE_SNAPSHOT', 409);
+    }
+    const intelligence = await getIntelligenceSnapshot(db, scope, projectId, dependencies.intelligenceSnapshotId);
+    if (intelligence.snapshot_hash !== dependencies.intelligenceSnapshotHash
+      || intelligence.research_snapshot_id !== Number(dependencies.researchSnapshotId)
+      || intelligence.research_snapshot_hash !== dependencies.researchSnapshotHash
+      || intelligence.product_truth_revision_id !== selectedId
+      || intelligence.product_truth_hash !== selectedHash) {
+      throw new CanonicalDraftError('STALE_INTELLIGENCE_SNAPSHOT', 409);
+    }
+  }
+  const project = await projectPolicyContext(db, scope, projectId);
+  const policyContext = serverPolicyContext(project, scope);
+  let currentResolution;
+  try { currentResolution = draftPolicyRegistry.resolve(policyContext, { purpose: 'DRAFT' }); }
+  catch (error) { throw new CanonicalDraftError(error.code || 'POLICY_CONTRACT_UNAVAILABLE', 409, error.details); }
+  const currentContextHash = hashBytes(canonicalJson(stablePolicyContext(project, scope)));
+  if (!dependencies?.policyContractId || !dependencies?.policyContractArtifactHash || !dependencies?.policyContextHash
+    || dependencies.policyContractId !== currentResolution.policyContractId
+    || dependencies.policyContractArtifactHash !== currentResolution.policyContractArtifactHash
+    || dependencies.policyContextHash !== currentContextHash
+    || dependencies.policyLifecycleSnapshotDigest !== currentResolution.lifecycleSnapshotDigest
+    || dependencies.claimIpBindingHash !== claimIpBindingHash || dependencies.validatorHash !== validatorHash
+    || dependencies.locale !== project.locale || dependencies.productFamilyVersion !== project.product_family_version) {
+    throw new CanonicalDraftError('STALE_POLICY_OR_VALIDATOR_BINDING', 409);
+  }
 }
 
 module.exports = Object.freeze({
   CanonicalDraftError,
   assertCanonicalDependenciesCurrent,
+  composeCommerceDraft,
   composeTruthOnlyDraft,
   validateCanonicalDraft
 });

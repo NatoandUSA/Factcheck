@@ -116,7 +116,9 @@ async function seedFixtures(db) {
     await requireMembership(db, ownerId, alphaAmazonId, 'OWNER');
     await requireMembership(db, ownerId, alphaEtsyId, 'OWNER');
     await requireMembership(db, managerId, alphaAmazonId, 'MANAGER');
+    await requireMembership(db, managerId, alphaEtsyId, 'MANAGER');
     await requireMembership(db, sellerId, alphaAmazonId, 'SELLER');
+    await requireMembership(db, sellerId, alphaEtsyId, 'SELLER');
     await requireMembership(db, betaOwnerId, betaAmazonId, 'OWNER');
 
     // Agents share the same transaction/readiness barrier as every other

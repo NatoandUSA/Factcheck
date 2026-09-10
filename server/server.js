@@ -39,13 +39,183 @@ const { approvalHash } = require('./security/approval');
 const { validateProductTruthCard } = require('../shared/productTruth.cjs');
 const { projectVerifiedAiInput, renderVerifiedCommerceListing, validateModelClaims } = require('../shared/aiTruthBoundary.cjs');
 const { readFirstWorksheet } = require('./services/spreadsheetReader');
-const { UrlGuardError } = require('./security/urlGuard');
+const { safeFetch, UrlGuardError } = require('./security/urlGuard');
 const { resolveRuntimePaths } = require('./config/paths');
 const { parseEtsySearchInput } = require('./etsyPastedSearchParser');
 const { buildEvidenceHealth } = require('./evidenceHealth');
 const evidenceAuthority = require('./evidenceAuthority');
 const projectStates = require('./projectStateRegistry');
 const { approvalContextHash, hasCurrentApprovalBinding, currentPublishDecision } = require('./currentPublishDecision');
+const { evaluateListingGuard } = require('./listingGuard');
+const { buildStaffAttestedCard, normalizeSnapshot, productTruthAuthorityHash, validateStaffAttestedCard } = require('./productTruthAttestation');
+const { assertNoClientPolicyOverrides } = require('./policy/contractRegistry');
+const { appendProductTruthRevision, confirmProductTruthRevision, listProductTruthRevisions } = require('./productTruthStore');
+const { parseProductTruthWorkbook } = require('./productTruthWorkbookParser');
+const { parseListingHtml } = require('./productTruthListingParser');
+const { createListingWithRevision, appendListingRevision, canonicalJson, getListingRevision, hashBytes, listListingRevisions } = require('./revisionStore');
+const { assertCanonicalDependenciesCurrent, composeCommerceDraft, composeTruthOnlyDraft,
+  validateCanonicalDraft } = require('./canonicalDraftService');
+const { appendIntelligenceSnapshot, appendResearchImport, appendResearchSnapshot,
+  getCommerceState, getIntelligenceSnapshot, previewIntelligence } = require('./commerceSnapshotStore');
+const { recordCanonicalSubmission, requestCanonicalSubmission, reviewCanonicalListing } = require('./canonicalReviewHandoffStore');
+const amazonResearchAdapter = require('./commerceIntelligence/amazonResearchAdapter');
+const amazonIntelligenceAdapter = require('./commerceIntelligence/amazonIntelligenceAdapter');
+const etsyResearchAdapter = require('./commerceIntelligence/etsyResearchAdapter');
+const etsyIntelligenceAdapter = require('./commerceIntelligence/etsyIntelligenceAdapter');
+
+function rejectListingGuard(res, error) {
+  const code = error?.code || 'LISTING_GUARD_UNAVAILABLE';
+  const clientContractFailure = code.startsWith('CLIENT_');
+  const claimFailure = code === 'UNVERIFIED_OUTPUT_CLAIM';
+  return res.status(clientContractFailure ? 409 : claimFailure ? 422 : 503).json({
+    success: false,
+    error: code,
+    ...(error?.details && typeof error.details === 'object' ? error.details : {})
+  });
+}
+
+function requireExactDto(body, allowed) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    throw Object.assign(new Error('INVALID_REQUEST_BODY'), { code: 'INVALID_REQUEST_BODY', status: 400 });
+  }
+  const unexpected = Object.keys(body).find(key => !allowed.has(key));
+  if (unexpected) throw Object.assign(new Error('UNEXPECTED_REQUEST_FIELD'), {
+    code: 'UNEXPECTED_REQUEST_FIELD', status: 400, field: unexpected
+  });
+  return body;
+}
+
+function revisionScope(user) {
+  return Object.freeze({ tenantId: user.tenantId, workspaceId: user.workspaceId,
+    marketplace: user.marketplace, actorId: user.userId, role: user.role });
+}
+
+function rejectRevisionStore(res, error) {
+  const status = Number.isInteger(error?.status) ? error.status : 500;
+  return res.status(status).json({ success: false, error: error?.code || 'REVISION_STORE_UNAVAILABLE',
+    ...(error?.details && typeof error.details === 'object' ? error.details : {}),
+    ...(error?.field ? { field: error.field } : {}) });
+}
+
+function resolvePersistedProductTruth(row, callback) {
+  if (typeof row?.product_truth_card !== 'string' || !row.product_truth_card.trim()) {
+    return callback(Object.assign(new Error('PRODUCT_TRUTH_REQUIRED'), { code: 'PRODUCT_TRUTH_REQUIRED' }));
+  }
+  let card;
+  try { card = JSON.parse(row.product_truth_card); } catch (_) {
+    return callback(Object.assign(new Error('PRODUCT_TRUTH_REQUIRED'), { code: 'PRODUCT_TRUTH_REQUIRED' }));
+  }
+  if (!card || typeof card !== 'object' || Array.isArray(card)) {
+    return callback(Object.assign(new Error('PRODUCT_TRUTH_REQUIRED'), { code: 'PRODUCT_TRUTH_REQUIRED' }));
+  }
+  const source = card?.attestation;
+  if (source?.kind !== 'STAFF_ATTESTATION_V1' || !/^\d+$/.test(String(source.id || ''))) {
+    return callback(Object.assign(new Error('PRODUCT_TRUTH_AUTHORITY_INVALID'), { code: 'PRODUCT_TRUTH_AUTHORITY_INVALID' }));
+  }
+  db.get(
+    `SELECT * FROM audit_events WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?
+       AND actor_id = ? AND action IN ('product_truth:attest', 'product_truth:rebind') AND resource_type = 'listing'
+       AND resource_id = ? AND outcome = 'SUCCESS'`,
+    [source.id, row.tenant_id, row.workspace_id, row.marketplace, source.actorId, String(row.id)],
+    (error, event) => {
+      if (error) return callback(Object.assign(error, { code: 'PRODUCT_TRUTH_AUTHORITY_UNAVAILABLE' }));
+      if (!event || event.content_hash !== productTruthAuthorityHash(card)) {
+        return callback(Object.assign(new Error('PRODUCT_TRUTH_AUTHORITY_INVALID'), { code: 'PRODUCT_TRUTH_AUTHORITY_INVALID' }));
+      }
+      const validation = validateStaffAttestedCard(card, { productId: row.id, listingVersion: row.listing_version });
+      if (!validation.valid) {
+        return callback(Object.assign(new Error('PRODUCT_TRUTH_CARD_INVALID'), { code: 'PRODUCT_TRUTH_CARD_INVALID', reasons: validation.errors }));
+      }
+      callback(null, card, event);
+    }
+  );
+}
+
+function snapshotFromProductTruthCard(card) {
+  return Object.freeze({
+    asserted: Object.freeze(Object.fromEntries(Object.entries(card?.facts || {}).map(([fact, entry]) => [fact, Object.freeze({
+      value: entry.value,
+      basis: entry.basis || 'OTHER',
+      basisNote: entry.basisNote || null
+    })]))),
+    unknown: Object.freeze(card?.unknownFacts && typeof card.unknownFacts === 'object' ? card.unknownFacts : {})
+  });
+}
+
+function persistListingEdit({ row, user, payload, status, truthCard, ipScreening, ipAddress, projectId = row.project_id }, callback) {
+  if (row.head_revision_id != null) {
+    return callback(Object.assign(new Error('CANONICAL_REVISION_ROUTE_REQUIRED'), {
+      code: 'CANONICAL_REVISION_ROUTE_REQUIRED', status: 409
+    }));
+  }
+  const targetVersion = row.listing_version + 1;
+  const updateParams = reboundCard => [
+    payload.amazonTitle, payload.etsyTitle, payload.categoryName, JSON.stringify(payload), status,
+    reboundCard ? JSON.stringify(reboundCard) : null, projectId ?? null, row.id, user.tenantId, user.workspaceId,
+    user.marketplace, row.listing_version, row.payload
+  ];
+  const updateSql = `UPDATE listings
+    SET amazonTitle = ?, etsyTitle = ?, categoryName = ?, payload = ?, status = ?,
+        listing_version = listing_version + 1, approved_version = NULL,
+        approved_hash = NULL, approved_context_hash = NULL, approved_by = NULL, approved_at = NULL,
+        product_truth_notes = NULL, product_truth_card = ?, project_id = ?
+    WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?
+      AND listing_version = ? AND payload = ?`;
+
+  if (!truthCard) {
+    return db.run(updateSql, updateParams(null), function onUpdate(error) {
+      callback(error, { changes: this?.changes || 0, listingVersion: targetVersion, productTruthCard: null });
+    });
+  }
+
+  const snapshot = snapshotFromProductTruthCard(truthCard);
+  const rollback = error => db.run('ROLLBACK', () => callback(error));
+  db.serialize(() => {
+    db.run('BEGIN IMMEDIATE', beginError => {
+      if (beginError) return callback(beginError);
+      const metadata = {
+        schemaVersion: 'product-truth-rebind.v1', listingId: String(row.id),
+        previousVersion: row.listing_version, targetVersion,
+        previousAttestationId: truthCard.attestation?.id || null,
+        actorRole: user.role, snapshot
+      };
+      db.run(
+        `INSERT INTO audit_events
+          (tenant_id, workspace_id, marketplace, actor_id, action, resource_type, resource_id, outcome, ip_address, metadata)
+         VALUES (?, ?, ?, ?, 'product_truth:rebind', 'listing', ?, 'PENDING', ?, ?)`,
+        [user.tenantId, user.workspaceId, user.marketplace, user.userId, String(row.id), ipAddress, JSON.stringify(metadata)],
+        function onEvent(eventError) {
+          if (eventError) return rollback(eventError);
+          const eventId = this.lastID;
+          const reboundCard = buildStaffAttestedCard({
+            productId: row.id, listingVersion: targetVersion, snapshot,
+            actorId: user.userId, auditEventId: eventId,
+            ipEvidence: {
+              state: ipScreening.result.verdict === 'BLOCK' ? 'BLOCKED' : 'CLEARED',
+              subjectId: String(row.id), listingVersion: targetVersion,
+              checkerVersion: 'server-ip-guard-v1', checkedAt: new Date().toISOString()
+            }
+          });
+          const contentHash = productTruthAuthorityHash(reboundCard);
+          db.run(updateSql, updateParams(reboundCard), function onUpdate(updateError) {
+            if (updateError || this.changes !== 1) return rollback(updateError || Object.assign(new Error('STALE_LISTING_VERSION'), { code: 'STALE_LISTING_VERSION' }));
+            db.run(
+              `UPDATE audit_events SET outcome='SUCCESS', content_hash=?, metadata=?
+               WHERE id=? AND tenant_id=? AND workspace_id=? AND marketplace=? AND outcome='PENDING'`,
+              [contentHash, JSON.stringify({ ...metadata, contentHash }), eventId, user.tenantId, user.workspaceId, user.marketplace],
+              function onFinalize(auditError) {
+                if (auditError || this.changes !== 1) return rollback(auditError || new Error('AUDIT_FINALIZE_FAILED'));
+                db.run('COMMIT', commitError => commitError
+                  ? rollback(commitError)
+                  : callback(null, { changes: 1, listingVersion: targetVersion, productTruthCard: reboundCard }));
+              }
+            );
+          });
+        }
+      );
+    });
+  });
+}
 
 // Make crashes visible instead of dying silently with no trace (systemd will
 // still restart the process via Restart=always; this just ensures the cause
@@ -115,6 +285,39 @@ const etsySearchUpload = multer({
   }
 });
 
+// Canonical research imports remain in memory until the immutable store has
+// validated and committed their exact bytes. No preview leaves a temp file.
+const commerceResearchUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 20 * 1024 * 1024, files: 1, fields: 8 },
+  fileFilter(req, file, cb) {
+    const allowed = /\.(xlsx|csv)$/i.test(file.originalname || '');
+    cb(allowed ? null : new Error('UNSUPPORTED_RESEARCH_FILE'), allowed);
+  }
+});
+
+// Product Truth workbooks are previewed in memory and never persisted. The
+// staff member must inspect the populated HTML form before creating a revision.
+const productTruthWorkbookUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024, files: 1, fields: 2 },
+  fileFilter(req, file, cb) {
+    const allowed = /\.xlsx$/i.test(file.originalname || '');
+    cb(allowed ? null : new Error('UNSUPPORTED_PRODUCT_TRUTH_WORKBOOK'), allowed);
+  }
+});
+
+// A saved marketplace page is parsed in memory only. The extracted facts are
+// shown to staff as a zero-write preview before a Product Truth revision exists.
+const productTruthListingUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024, files: 1, fields: 4 },
+  fileFilter(req, file, cb) {
+    const allowed = /\.html?$/i.test(file.originalname || '');
+    cb(allowed ? null : new Error('UNSUPPORTED_LISTING_HTML'), allowed);
+  }
+});
+
 const db = new sqlite3.Database(dbPath);
 
 
@@ -173,12 +376,15 @@ db.serialize(() => {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       tenant_id TEXT,
       actor_id INTEGER,
+      workspace_id INTEGER,
+      marketplace TEXT,
       action TEXT NOT NULL,
       resource_type TEXT NOT NULL,
       resource_id TEXT,
       outcome TEXT NOT NULL,
       ip_address TEXT,
       timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+      content_hash TEXT,
       metadata TEXT
     )
   `);
@@ -1170,16 +1376,33 @@ app.get('/api/projects', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELL
 
 // POST /api/projects - Create new research project
 app.post('/api/projects', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
-  const { name, seedPhrase, referenceAsin } = req.body || {};
+  let body;
+  try {
+    body = requireExactDto(req.body, new Set(['name', 'seedPhrase', 'referenceAsin', 'locale',
+      'mediaClass', 'productTypeId', 'categoryId', 'productFamilyVersion']));
+    assertNoClientPolicyOverrides(body);
+  } catch (error) {
+    return rejectRevisionStore(res, error);
+  }
+  const { name, seedPhrase, referenceAsin, locale, mediaClass, productTypeId, categoryId, productFamilyVersion } = body;
   const projectName = typeof name === 'string' ? name.trim() : '';
   const normalizedSeedPhrase = typeof seedPhrase === 'string' ? seedPhrase.trim() : '';
   if (!projectName || !normalizedSeedPhrase) {
     return res.status(400).json({ success: false, error: 'MISSING_FIELDS', message: 'Project name and seedPhrase are required.' });
   }
+  const policyValues = [locale, mediaClass, productTypeId, categoryId, productFamilyVersion];
+  const hasPolicyContext = policyValues.some(value => value !== undefined && value !== null && String(value).trim());
+  if (hasPolicyContext && policyValues.some(value => typeof value !== 'string' || !value.trim() || value.trim().length > 128)) {
+    return res.status(400).json({ success: false, error: 'INCOMPLETE_PROJECT_POLICY_CONTEXT' });
+  }
+  if (hasPolicyContext && !['en-US', 'es-US'].includes(locale.trim())) {
+    return res.status(400).json({ success: false, error: 'UNSUPPORTED_LISTING_LOCALE' });
+  }
 
-  db.run(
-    `INSERT INTO research_projects (tenant_id, workspace_id, marketplace, name, seed_phrase, state, reference_asin, actor_id)
-     VALUES (?, ?, ?, ?, ?, 'EVIDENCE_INTAKE', ?, ?)`,
+  const insertProject = () => db.run(
+    `INSERT INTO research_projects (tenant_id, workspace_id, marketplace, name, seed_phrase, state, reference_asin, actor_id,
+       locale,media_class,product_type_id,category_id,product_family_version)
+     VALUES (?, ?, ?, ?, ?, 'EVIDENCE_INTAKE', ?, ?, ?, ?, ?, ?, ?)`,
     [
       req.user.tenantId,
       req.user.workspaceId,
@@ -1187,7 +1410,12 @@ app.post('/api/projects', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SEL
       projectName,
       normalizedSeedPhrase,
       referenceAsin ? String(referenceAsin).trim() : null,
-      req.user.userId
+      req.user.userId,
+      hasPolicyContext ? locale.trim() : null,
+      hasPolicyContext ? mediaClass.trim().toUpperCase() : null,
+      hasPolicyContext ? productTypeId.trim() : null,
+      hasPolicyContext ? categoryId.trim() : null,
+      hasPolicyContext ? productFamilyVersion.trim() : null
     ],
     function(err) {
       if (err) return res.status(500).json({ success: false, error: err.message });
@@ -1195,10 +1423,472 @@ app.post('/api/projects', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SEL
         success: true,
         projectId: this.lastID,
         state: 'EVIDENCE_INTAKE',
-        marketplace: req.user.marketplace
+        marketplace: req.user.marketplace,
+        policyContextState: hasPolicyContext ? 'COMPLETE' : 'INCOMPLETE'
       });
     }
   );
+  // Policy target identity is server-owned. Existing workspaces are backfilled
+  // by migration; workspaces created after migration receive the same explicit
+  // internal account label here before a classified project can use it.
+  db.run(`UPDATE workspaces SET seller_account_label=COALESCE(seller_account_label,'workspace:' || id),
+      site=COALESCE(site,'US') WHERE id=? AND tenant_id=? AND marketplace=?`,
+  [req.user.workspaceId, req.user.tenantId, req.user.marketplace], function onPolicyTarget(error) {
+    if (error) return res.status(500).json({ success: false, error: 'WORKSPACE_POLICY_CONTEXT_FAILED' });
+    if (this.changes !== 1) return res.status(404).json({ success: false, error: 'WORKSPACE_NOT_FOUND' });
+    insertProject();
+  });
+});
+
+// Canonical project-scoped Product Truth. This axis is intentionally
+// independent of the research DAG and exists before any Listing root.
+app.post('/api/projects/:id/product-truth-imports/preview', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']),
+  productTruthWorkbookUpload.single('file'), async (req, res) => {
+    try {
+      await requireCommerceProject(req);
+      if (!req.file?.buffer) throw Object.assign(new Error('PRODUCT_TRUTH_WORKBOOK_REQUIRED'), {
+        code: 'PRODUCT_TRUTH_WORKBOOK_REQUIRED', status: 400
+      });
+      const preview = await parseProductTruthWorkbook(req.file.buffer, { productCode: req.body?.productCode });
+      res.json({ success: true, fileName: req.file.originalname, byteLength: req.file.size, ...preview });
+    } catch (error) { rejectRevisionStore(res, error); }
+  });
+
+app.post('/api/projects/:id/product-truth-listing/preview', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']),
+  productTruthListingUpload.single('file'), async (req, res) => {
+    try {
+      const project = await requireCommerceProject(req);
+      if (String(req.body?.confirmSameSource || '').toLowerCase() !== 'true') {
+        throw Object.assign(new Error('SAME_SOURCE_CONFIRMATION_REQUIRED'), {
+          code: 'SAME_SOURCE_CONFIRMATION_REQUIRED', status: 400
+        });
+      }
+      let sourceReference = String(req.body?.source || '').trim();
+      if (sourceReference.length > 2000) throw Object.assign(new Error('LISTING_REFERENCE_TOO_LARGE'), {
+        code: 'LISTING_REFERENCE_TOO_LARGE', status: 400
+      });
+      let html = req.file?.buffer?.toString('utf8') || '';
+      if (!html) {
+        if (project.marketplace === 'AMAZON' && /^[A-Z0-9]{10}$/i.test(sourceReference)) {
+          sourceReference = `https://www.amazon.com/dp/${sourceReference.toUpperCase()}`;
+        } else if (project.marketplace === 'ETSY' && /^\d{6,15}$/.test(sourceReference)) {
+          sourceReference = `https://www.etsy.com/listing/${sourceReference}`;
+        }
+        if (!/^https:\/\//i.test(sourceReference)) {
+          throw Object.assign(new Error('LISTING_REFERENCE_REQUIRED'), { code: 'LISTING_REFERENCE_REQUIRED', status: 400 });
+        }
+        try { html = await safeFetch(sourceReference, project.marketplace); }
+        catch (error) {
+          if (error instanceof UrlGuardError) throw error;
+          throw Object.assign(new Error('LISTING_FETCH_FAILED_USE_HTML'), {
+            code: 'LISTING_FETCH_FAILED_USE_HTML', status: 422
+          });
+        }
+      } else if (!sourceReference) {
+        sourceReference = req.file.originalname;
+      }
+      const preview = parseListingHtml(html, { marketplace: project.marketplace, sourceReference });
+      res.json({ success: true, fileName: req.file?.originalname || null, byteLength: Buffer.byteLength(html), ...preview });
+    } catch (error) { rejectRevisionStore(res, error); }
+  });
+
+app.post('/api/projects/:id/product-truth/revisions', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    const body = requireExactDto(req.body, new Set(['expectedHeadRevisionId', 'idempotencyKey', 'changeReason', 'facts', 'notes']));
+    assertNoClientPolicyOverrides(body);
+    const result = await appendProductTruthRevision(db, revisionScope(req.user), req.params.id, body);
+    res.status(result.revisionNumber === 1 ? 201 : 200).json({ success: true, ...result });
+  } catch (error) {
+    rejectRevisionStore(res, error);
+  }
+});
+
+app.get('/api/projects/:id/product-truth/revisions', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    const revisions = await listProductTruthRevisions(db, revisionScope(req.user), req.params.id);
+    res.json({ success: true, projectId: Number(req.params.id), count: revisions.length, revisions });
+  } catch (error) {
+    rejectRevisionStore(res, error);
+  }
+});
+
+app.post('/api/projects/:id/product-truth/revisions/:revisionId/confirm', requireAuth(db), requireRole(['OWNER', 'MANAGER']), async (req, res) => {
+  try {
+    const body = requireExactDto(req.body, new Set(['idempotencyKey', 'reason']));
+    const result = await confirmProductTruthRevision(db, revisionScope(req.user), req.params.id, req.params.revisionId, body);
+    res.status(201).json({ success: true, ...result });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+async function requireCommerceProject(req) {
+  const projectId = Number(req.params.id);
+  if (!Number.isInteger(projectId) || projectId < 1) throw Object.assign(new Error('PROJECT_CONTEXT_REQUIRED'), {
+    code: 'PROJECT_CONTEXT_REQUIRED', status: 400
+  });
+  const project = await new Promise((resolve, reject) => db.get(`SELECT id,marketplace,seed_phrase FROM research_projects
+    WHERE id=? AND tenant_id=? AND workspace_id=? AND marketplace=?`,
+  [projectId, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+  (error, row) => error ? reject(error) : resolve(row || null)));
+  if (!project) throw Object.assign(new Error('PROJECT_NOT_FOUND'), { code: 'PROJECT_NOT_FOUND', status: 404 });
+  return project;
+}
+
+function researchAdapterFor(project) {
+  return project.marketplace === 'AMAZON' ? amazonResearchAdapter : etsyResearchAdapter;
+}
+
+function canonicalResearchFile(req, allowedFields, marketplace) {
+  const body = requireExactDto(req.body || {}, allowedFields);
+  assertNoClientPolicyOverrides(body);
+  if (!req.file?.buffer?.length) throw Object.assign(new Error('RESEARCH_FILE_REQUIRED'), {
+    code: 'RESEARCH_FILE_REQUIRED', status: 400
+  });
+  const kind = String(body.kind || '').trim().toUpperCase();
+  const allowedKinds = marketplace === 'AMAZON' ? ['AMAZON_CEREBRO','AMAZON_XRAY'] : ['ETSY_SEARCH'];
+  if (!allowedKinds.includes(kind)) throw Object.assign(new Error('MARKETPLACE_IMPORT_KIND_REQUIRED'), {
+    code: 'MARKETPLACE_IMPORT_KIND_REQUIRED', status: 400, details: { marketplace, allowedKinds }
+  });
+  const extension = path.extname(req.file.originalname || '').toLowerCase();
+  const mediaType = extension === '.csv' ? 'text/csv' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  return { body, kind, mediaType, rawBytes: req.file.buffer, fileName: path.basename(req.file.originalname) };
+}
+
+async function inspectCanonicalResearchFile(file, adapter) {
+  const rawHash = crypto.createHash('sha256').update(file.rawBytes).digest('hex');
+  const parserHash = adapter.parserBindingHash();
+  const built = await adapter.buildSnapshot([{
+    id: 0, kind: file.kind, file_name: file.fileName, media_type: file.mediaType,
+    raw_bytes: file.rawBytes, raw_hash: rawHash, selected_sheet: null,
+    parser_id: adapter.PARSER_ID, parser_hash: parserHash
+  }]);
+  const source = built.observations.sources[0];
+  const headerSignature = source.consumedSheets
+    ? [...new Set(source.consumedSheets.flatMap(sheet => sheet.headers))]
+    : (source.headerDiagnostics?.recognizedColumns || []).map(item => item.sourceColumn);
+  return { rawHash, parserHash, built, source, headerSignature };
+}
+
+app.get('/api/projects/:id/commerce-state', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    await requireCommerceProject(req);
+    const state = await getCommerceState(db, revisionScope(req.user), req.params.id);
+    res.json({ success: true, ...state });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+app.post('/api/projects/:id/research-imports/preview', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']),
+  commerceResearchUpload.single('researchFile'), async (req, res) => {
+    try {
+      const project = await requireCommerceProject(req); const projectId = project.id;
+      const adapter = researchAdapterFor(project);
+      const file = canonicalResearchFile(req, new Set(['kind']), project.marketplace);
+      const inspected = await inspectCanonicalResearchFile(file, adapter);
+      res.json({ success: true, zeroWrite: true, projectId, kind: file.kind, fileName: file.fileName,
+        rawHash: inspected.rawHash, byteLength: file.rawBytes.length, parserId: adapter.PARSER_ID,
+        parserHash: inspected.parserHash, accounting: inspected.built.accounting,
+        sourceCoverage: inspected.source, headerSignature: inspected.headerSignature });
+    } catch (error) { rejectRevisionStore(res, error); }
+  });
+
+app.post('/api/projects/:id/research-imports', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']),
+  commerceResearchUpload.single('researchFile'), async (req, res) => {
+    try {
+      const project = await requireCommerceProject(req); const projectId = project.id;
+      const adapter = researchAdapterFor(project);
+      const file = canonicalResearchFile(req, new Set(['kind', 'idempotencyKey']), project.marketplace);
+      const inspected = await inspectCanonicalResearchFile(file, adapter);
+      const result = await appendResearchImport(db, revisionScope(req.user), projectId, {
+        idempotencyKey: file.body.idempotencyKey, kind: file.kind, fileName: file.fileName,
+        mediaType: file.mediaType, rawBytes: file.rawBytes, selectedSheet: null,
+        headerSignature: inspected.headerSignature, parserId: adapter.PARSER_ID,
+        parserHash: inspected.parserHash
+      });
+      res.status(result.duplicate ? 200 : 201).json({ success: true, ...result,
+        accounting: inspected.built.accounting, sourceCoverage: inspected.source });
+    } catch (error) { rejectRevisionStore(res, error); }
+  });
+
+app.post('/api/projects/:id/research-snapshots', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    const project = await requireCommerceProject(req); const projectId = project.id;
+    const body = requireExactDto(req.body, new Set(['expectedHeadResearchSnapshotId', 'importIds', 'idempotencyKey', 'changeReason']));
+    assertNoClientPolicyOverrides(body);
+    const result = await appendResearchSnapshot(db, revisionScope(req.user), projectId, body, researchAdapterFor(project));
+    res.status(result.revisionNumber === 1 ? 201 : 200).json({ success: true, ...result });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+function intelligenceConfiguration(project, body) {
+  const requested = String(body.listingLanguage || 'AUTO').trim().toUpperCase();
+  if (!['AUTO','EN','ES'].includes(requested)) throw Object.assign(new Error('LISTING_LANGUAGE_UNSUPPORTED'), {
+    code: 'LISTING_LANGUAGE_UNSUPPORTED', status: 400
+  });
+  return Object.freeze({ seedPhrase: String(project.seed_phrase || '').trim(),
+    ...(requested === 'AUTO' ? {} : { listingLanguage: requested }) });
+}
+
+function intelligenceAdapterFor(project) {
+  return project.marketplace === 'AMAZON' ? amazonIntelligenceAdapter : etsyIntelligenceAdapter;
+}
+
+app.post('/api/projects/:id/intelligence-snapshots/preview', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    const project = await requireCommerceProject(req);
+    const body = requireExactDto(req.body, new Set(['researchSnapshotId', 'productTruthRevisionId', 'listingLanguage']));
+    assertNoClientPolicyOverrides(body);
+    const result = await previewIntelligence(db, revisionScope(req.user), project.id, {
+      researchSnapshotId: body.researchSnapshotId, productTruthRevisionId: body.productTruthRevisionId,
+      configuration: intelligenceConfiguration(project, body)
+    }, intelligenceAdapterFor(project));
+    res.json({ success: true, ...result });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+app.post('/api/projects/:id/intelligence-snapshots', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    const project = await requireCommerceProject(req);
+    const body = requireExactDto(req.body, new Set(['expectedHeadIntelligenceSnapshotId', 'researchSnapshotId',
+      'productTruthRevisionId', 'listingLanguage', 'idempotencyKey', 'changeReason']));
+    assertNoClientPolicyOverrides(body);
+    const result = await appendIntelligenceSnapshot(db, revisionScope(req.user), project.id, {
+      expectedHeadIntelligenceSnapshotId: body.expectedHeadIntelligenceSnapshotId,
+      researchSnapshotId: body.researchSnapshotId, productTruthRevisionId: body.productTruthRevisionId,
+      idempotencyKey: body.idempotencyKey, changeReason: body.changeReason,
+      configuration: intelligenceConfiguration(project, body)
+    }, intelligenceAdapterFor(project));
+    const persisted = await getIntelligenceSnapshot(db, revisionScope(req.user), project.id, result.intelligenceSnapshotId);
+    res.status(result.revisionNumber === 1 ? 201 : 200).json({ success: true, ...result,
+      output: persisted.output, accounting: persisted.accounting, configuration: persisted.configuration });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+app.post('/api/projects/:id/listings/compose-preview', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    const body = requireExactDto(req.body, new Set(['productTruthRevisionId']));
+    assertNoClientPolicyOverrides(body);
+    const preview = await composeTruthOnlyDraft(db, revisionScope(req.user), Number(req.params.id), body.productTruthRevisionId);
+    res.json({ success: true, zeroWrite: true, content: preview.content, contentHash: hashBytes(canonicalJson(preview.content)),
+      productTruthRevisionId: preview.truth.id, dependencies: preview.dependencies,
+      guardAccounting: preview.guardAccounting, degraded: preview.degraded, provider: preview.provider });
+  } catch (error) {
+    rejectRevisionStore(res, error);
+  }
+});
+
+app.post('/api/projects/:id/listings/commerce-preview', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    const body = requireExactDto(req.body, new Set(['intelligenceSnapshotId']));
+    assertNoClientPolicyOverrides(body);
+    const preview = await composeCommerceDraft(db, revisionScope(req.user), Number(req.params.id), body.intelligenceSnapshotId);
+    res.json({ success: true, zeroWrite: true, content: preview.content,
+      contentHash: hashBytes(canonicalJson(preview.content)), productTruthRevisionId: preview.truth.id,
+      intelligenceSnapshotId: preview.intelligence.id, dependencies: preview.dependencies,
+      guardAccounting: preview.guardAccounting, degraded: preview.degraded, provider: preview.provider });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+app.post('/api/projects/:id/listings', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    const body = requireExactDto(req.body, new Set(['idempotencyKey', 'changeReason', 'productTruthRevisionId',
+      'intelligenceSnapshotId', 'content']));
+    assertNoClientPolicyOverrides(body);
+    const scope = revisionScope(req.user);
+    const projectId = Number(req.params.id);
+    const result = await createListingWithRevision(db, scope, {
+      projectId, idempotencyKey: body.idempotencyKey, changeReason: body.changeReason,
+      content: body.content, dependencies: { productTruthRevisionId: Number(body.productTruthRevisionId),
+        intelligenceSnapshotId: body.intelligenceSnapshotId == null ? null : Number(body.intelligenceSnapshotId) }
+    }, {
+      prepareContent: async ({ content }) => {
+        const validated = await validateCanonicalDraft(db, scope, projectId, body.productTruthRevisionId, content,
+          body.intelligenceSnapshotId);
+        return { content: validated.content, validationAccounting: validated.guardAccounting };
+      },
+      resolveDependencies: async () => (await validateCanonicalDraft(db, scope, projectId,
+        body.productTruthRevisionId, body.content, body.intelligenceSnapshotId)).dependencies,
+      assertDependenciesCurrent: async ({ dependencies }) => assertCanonicalDependenciesCurrent(
+        db, scope, projectId, dependencies)
+    });
+    const persisted = await getListingRevision(db, scope, result.listingId, result.revisionId, projectId);
+    res.status(result.revisionNumber === 1 ? 201 : 200).json({ success: true, ...result,
+      status: 'NEEDS_QA', content: persisted.content, guardAccounting: persisted.validationAccounting });
+  } catch (error) {
+    rejectRevisionStore(res, error);
+  }
+});
+
+app.get('/api/projects/:id/listings', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
+  db.all(`SELECT l.id,l.project_id,l.status,l.listing_version,l.head_revision_id,l.head_creative_revision_id,
+      l.amazonTitle,l.etsyTitle,l.categoryName,l.generatedAt,
+      (SELECT r.decision FROM canonical_listing_reviews r WHERE r.listing_id=l.id AND r.listing_revision_id=l.head_revision_id
+        AND r.tenant_id=l.tenant_id AND r.workspace_id=l.workspace_id AND r.marketplace=l.marketplace ORDER BY r.id DESC LIMIT 1) AS latestReviewDecision,
+      (SELECT r.reason FROM canonical_listing_reviews r WHERE r.listing_id=l.id AND r.listing_revision_id=l.head_revision_id
+        AND r.tenant_id=l.tenant_id AND r.workspace_id=l.workspace_id AND r.marketplace=l.marketplace ORDER BY r.id DESC LIMIT 1) AS latestReviewReason,
+      (SELECT q.id FROM canonical_submission_requests q WHERE q.listing_id=l.id AND q.listing_revision_id=l.head_revision_id
+        AND q.tenant_id=l.tenant_id AND q.workspace_id=l.workspace_id AND q.marketplace=l.marketplace ORDER BY q.id DESC LIMIT 1) AS submissionRequestId,
+      (SELECT q.package_hash FROM canonical_submission_requests q WHERE q.listing_id=l.id AND q.listing_revision_id=l.head_revision_id
+        AND q.tenant_id=l.tenant_id AND q.workspace_id=l.workspace_id AND q.marketplace=l.marketplace ORDER BY q.id DESC LIMIT 1) AS submissionPackageHash,
+      (SELECT q.notes FROM canonical_submission_requests q WHERE q.listing_id=l.id AND q.listing_revision_id=l.head_revision_id
+        AND q.tenant_id=l.tenant_id AND q.workspace_id=l.workspace_id AND q.marketplace=l.marketplace ORDER BY q.id DESC LIMIT 1) AS submissionRequestNotes,
+      (SELECT h.submitted_at FROM canonical_submission_handoffs h WHERE h.listing_id=l.id AND h.listing_revision_id=l.head_revision_id
+        AND h.tenant_id=l.tenant_id AND h.workspace_id=l.workspace_id AND h.marketplace=l.marketplace LIMIT 1) AS submittedAt,
+      (SELECT h.external_reference FROM canonical_submission_handoffs h WHERE h.listing_id=l.id AND h.listing_revision_id=l.head_revision_id
+        AND h.tenant_id=l.tenant_id AND h.workspace_id=l.workspace_id AND h.marketplace=l.marketplace LIMIT 1) AS externalReference
+    FROM listings l WHERE l.tenant_id=? AND l.workspace_id=? AND l.marketplace=? AND l.project_id=? AND l.head_revision_id IS NOT NULL
+    ORDER BY generatedAt DESC`, [req.user.tenantId, req.user.workspaceId, req.user.marketplace, Number(req.params.id)],
+  (error, rows) => error ? res.status(500).json({ success: false, error: 'DATABASE_ERROR' })
+    : res.json({ success: true, projectId: Number(req.params.id), listings: rows }));
+});
+
+app.get('/api/listings/:id/review-package', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    const scope = revisionScope(req.user);
+    const root = await new Promise((resolve, reject) => db.get(`SELECT id,project_id,head_revision_id,status FROM listings
+      WHERE id=? AND tenant_id=? AND workspace_id=? AND marketplace=? AND head_revision_id IS NOT NULL`,
+    [Number(req.params.id), scope.tenantId, scope.workspaceId, scope.marketplace],
+    (error, row) => error ? reject(error) : resolve(row || null)));
+    if (!root) throw Object.assign(new Error('LISTING_NOT_FOUND'), { code: 'LISTING_NOT_FOUND', status: 404 });
+    const revision = await getListingRevision(db, scope, root.id, root.head_revision_id, root.project_id);
+    await assertCanonicalDependenciesCurrent(db, scope, root.project_id, revision.dependencies);
+    let approvalReadiness = { ready: true, blockers: [] };
+    try {
+      await validateCanonicalDraft(db, scope, root.project_id, revision.dependencies.productTruthRevisionId,
+        revision.content, revision.dependencies.intelligenceSnapshotId, 'APPROVAL');
+    } catch (error) {
+      approvalReadiness = { ready: false, error: error.code || error.message || 'APPROVAL_VALIDATION_FAILED',
+        blockers: error.details?.blockers || error.details || [] };
+    }
+    res.json({ success: true, listingId: root.id, projectId: root.project_id, status: root.status,
+      listingRevisionId: revision.id, revisionNumber: revision.revision_number, content: revision.content,
+      contentHash: revision.content_hash, dependencies: revision.dependencies,
+      dependencyHash: revision.dependency_manifest_hash, validationAccounting: revision.validationAccounting,
+      approvalReadiness });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+app.post('/api/listings/:id/canonical-review', requireAuth(db), requireRole(['OWNER', 'MANAGER']), async (req, res) => {
+  try {
+    const body = requireExactDto(req.body, new Set(['decision', 'reason', 'expectedListingRevisionId',
+      'expectedContentHash', 'expectedDependencyHash', 'idempotencyKey']));
+    assertNoClientPolicyOverrides(body);
+    const scope = revisionScope(req.user);
+    const result = await reviewCanonicalListing(db, scope, req.params.id, body, {
+      assertDependenciesCurrent: listing => assertCanonicalDependenciesCurrent(db, scope, listing.project_id, listing.dependencies),
+      validateRevision: async listing => {
+        const purpose = body.decision === 'APPROVED' ? 'APPROVAL' : 'DRAFT';
+        const validated = await validateCanonicalDraft(db, scope, listing.project_id,
+          listing.dependencies.productTruthRevisionId, listing.content, listing.dependencies.intelligenceSnapshotId, purpose);
+        if (hashBytes(canonicalJson(validated.content)) !== listing.content_hash) {
+          throw Object.assign(new Error('REVISION_VALIDATION_DRIFT'), { code: 'REVISION_VALIDATION_DRIFT', status: 409 });
+        }
+      }
+    });
+    res.status(201).json({ success: true, ...result });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+app.post('/api/listings/:id/submission-requests', requireAuth(db), requireRole(['SELLER']), async (req, res) => {
+  try {
+    const body = requireExactDto(req.body, new Set(['notes', 'idempotencyKey']));
+    assertNoClientPolicyOverrides(body);
+    const scope = revisionScope(req.user);
+    const result = await requestCanonicalSubmission(db, scope, req.params.id, body, {
+      assertDependenciesCurrent: listing => assertCanonicalDependenciesCurrent(db, scope, listing.project_id, listing.dependencies),
+      assertApprovalEligible: async listing => {
+        const validated = await validateCanonicalDraft(db, scope, listing.project_id,
+          listing.dependencies.productTruthRevisionId, listing.content, listing.dependencies.intelligenceSnapshotId, 'APPROVAL');
+        if (hashBytes(canonicalJson(validated.content)) !== listing.content_hash) {
+          throw Object.assign(new Error('REVISION_VALIDATION_DRIFT'), { code: 'REVISION_VALIDATION_DRIFT', status: 409 });
+        }
+      }
+    });
+    res.status(201).json({ success: true, ...result });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+app.post('/api/listings/:id/submission-handoffs', requireAuth(db), requireRole(['OWNER']), async (req, res) => {
+  try {
+    const body = requireExactDto(req.body, new Set(['submissionRequestId', 'confirmedExternalSubmission', 'externalReference', 'notes', 'idempotencyKey']));
+    assertNoClientPolicyOverrides(body);
+    const scope = revisionScope(req.user);
+    const result = await recordCanonicalSubmission(db, scope, req.params.id, body, {
+      assertDependenciesCurrent: listing => assertCanonicalDependenciesCurrent(db, scope, listing.project_id, listing.dependencies),
+      assertApprovalEligible: async listing => {
+        const validated = await validateCanonicalDraft(db, scope, listing.project_id,
+          listing.dependencies.productTruthRevisionId, listing.content, listing.dependencies.intelligenceSnapshotId, 'APPROVAL');
+        if (hashBytes(canonicalJson(validated.content)) !== listing.content_hash) {
+          throw Object.assign(new Error('REVISION_VALIDATION_DRIFT'), { code: 'REVISION_VALIDATION_DRIFT', status: 409 });
+        }
+      }
+    });
+    res.status(201).json({ success: true, ...result });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+app.post('/api/listings/:id/revisions', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    const body = requireExactDto(req.body, new Set(['parentRevisionId', 'expectedHeadRevisionId', 'idempotencyKey',
+      'changeReason', 'productTruthRevisionId', 'intelligenceSnapshotId', 'content']));
+    assertNoClientPolicyOverrides(body);
+    const scope = revisionScope(req.user);
+    const listingId = Number(req.params.id);
+    const root = await new Promise((resolve, reject) => db.get(`SELECT id,project_id,status FROM listings
+      WHERE id=? AND tenant_id=? AND workspace_id=? AND marketplace=? AND head_revision_id IS NOT NULL`,
+    [listingId, scope.tenantId, scope.workspaceId, scope.marketplace],
+    (error, row) => error ? reject(error) : resolve(row || null)));
+    if (!root) throw Object.assign(new Error('LISTING_NOT_FOUND'), { code: 'LISTING_NOT_FOUND', status: 404 });
+    if (root.status === 'SUBMITTED') throw Object.assign(new Error('SUBMITTED_LISTING_TERMINAL'), {
+      code: 'SUBMITTED_LISTING_TERMINAL', status: 409
+    });
+    const result = await appendListingRevision(db, scope, listingId, {
+      projectId: root.project_id, parentRevisionId: body.parentRevisionId,
+      expectedHeadRevisionId: body.expectedHeadRevisionId, idempotencyKey: body.idempotencyKey,
+      changeReason: body.changeReason, content: body.content,
+      dependencies: { productTruthRevisionId: Number(body.productTruthRevisionId),
+        intelligenceSnapshotId: body.intelligenceSnapshotId == null ? null : Number(body.intelligenceSnapshotId) }
+    }, {
+      prepareContent: async ({ content }) => {
+        const validated = await validateCanonicalDraft(db, scope, root.project_id, body.productTruthRevisionId, content,
+          body.intelligenceSnapshotId);
+        return { content: validated.content, validationAccounting: validated.guardAccounting };
+      },
+      resolveDependencies: async () => (await validateCanonicalDraft(db, scope, root.project_id,
+        body.productTruthRevisionId, body.content, body.intelligenceSnapshotId)).dependencies,
+      assertDependenciesCurrent: async ({ dependencies }) => assertCanonicalDependenciesCurrent(
+        db, scope, root.project_id, dependencies)
+    });
+    const persisted = await getListingRevision(db, scope, listingId, result.revisionId, root.project_id);
+    res.json({ success: true, ...result, status: 'NEEDS_QA', content: persisted.content,
+      guardAccounting: persisted.validationAccounting });
+  } catch (error) {
+    rejectRevisionStore(res, error);
+  }
+});
+
+app.get('/api/listings/:id/revisions', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    const scope = revisionScope(req.user);
+    const root = await new Promise((resolve, reject) => db.get(`SELECT project_id FROM listings
+      WHERE id=? AND tenant_id=? AND workspace_id=? AND marketplace=? AND head_revision_id IS NOT NULL`,
+    [Number(req.params.id), scope.tenantId, scope.workspaceId, scope.marketplace],
+    (error, row) => error ? reject(error) : resolve(row || null)));
+    if (!root) throw Object.assign(new Error('LISTING_NOT_FOUND'), { code: 'LISTING_NOT_FOUND', status: 404 });
+    const revisions = await listListingRevisions(db, scope, req.params.id, root.project_id);
+    res.json({ success: true, listingId: Number(req.params.id), count: revisions.length, revisions });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+app.get('/api/listings/:id/revisions/:revisionId', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    const scope = revisionScope(req.user);
+    const root = await new Promise((resolve, reject) => db.get(`SELECT project_id FROM listings
+      WHERE id=? AND tenant_id=? AND workspace_id=? AND marketplace=? AND head_revision_id IS NOT NULL`,
+    [Number(req.params.id), scope.tenantId, scope.workspaceId, scope.marketplace],
+    (error, row) => error ? reject(error) : resolve(row || null)));
+    if (!root) throw Object.assign(new Error('LISTING_NOT_FOUND'), { code: 'LISTING_NOT_FOUND', status: 404 });
+    const revision = await getListingRevision(db, scope, req.params.id, req.params.revisionId, root.project_id);
+    res.json({ success: true, revision });
+  } catch (error) { rejectRevisionStore(res, error); }
 });
 
 // ALLOWED_PROJECT_TRANSITIONS Adjacency Map (Canonical Sequence)
@@ -1564,16 +2254,14 @@ app.post('/api/listings', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SEL
   }
 
   const proceedWithCreation = () => {
-    const listingData = { amazonTitle, etsyTitle, categoryName, ...payload };
-    const ipResult = ipGuard.screenListing(listingData);
-    const oppResult = opportunityScorer.calculateOpportunityScore(listingData);
+    const listingData = { ...payload, amazonTitle, etsyTitle, categoryName };
 
     const rawKws = `${amazonTitle || ''} ${etsyTitle || ''}`.split(/\s+/);
     const searchTerms = payload.amazonSearchTerms || keywordRanker.buildAmazonSearchTerms(rawKws);
     const etsyTags = (payload.etsyTags && payload.etsyTags.length > 0) ? payload.etsyTags : keywordRanker.buildEtsyTags(rawKws, categoryName);
 
-    const updatedPayload = {
-      ...payload,
+    const candidatePayload = {
+      ...listingData,
       amazonTitle,
       etsyTitle,
       categoryName,
@@ -1583,12 +2271,30 @@ app.post('/api/listings', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SEL
       // the Publish Gate can catch it, rather than silently asserting unverified
       // material/quality claims that a manager could approve without noticing
       // they were never real (GPT/Manus P0.5 audit, listing truth boundary).
-      amazonDescription: payload.amazonDescription || '',
+      amazonDescription: payload.amazonDescription || ''
+    };
+
+    let guardResult;
+    try {
+      guardResult = evaluateListingGuard({ listing: candidatePayload, clientPayload: req.body });
+    } catch (error) {
+      return rejectListingGuard(res, error);
+    }
+
+    const ipResult = ipGuard.screenListing(guardResult.listing);
+    const oppResult = opportunityScorer.calculateOpportunityScore(guardResult.listing);
+    const updatedPayload = {
+      ...guardResult.listing,
       ipVerdict: ipResult.verdict,
       ipHits: ipResult.hits,
       opportunityScore: oppResult.overallScore,
       verdict: oppResult.verdict,
-      metrics: oppResult.metrics
+      metrics: oppResult.metrics,
+      claimGuard: {
+        version: 'c2-r1',
+        backendExcluded: guardResult.backendExcluded,
+        ppcFlagged: guardResult.ppcFlagged
+      }
     };
 
     const status = (ipResult.verdict === 'BLOCK') ? 'IP_RISK_BLOCKED' : 'NEEDS_QA';
@@ -1682,57 +2388,224 @@ app.patch('/api/listings/:id', requireAuth(db), requireRole(['OWNER', 'MANAGER',
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
     return res.status(400).json({ success: false, error: 'INVALID_LISTING_PAYLOAD' });
   }
-  let screened;
-  try {
-    // Client-provided ipVerdict/ipHits are never authoritative -- re-screen the
-    // exact post-edit content before persisting so an edit cannot bypass the
-    // IP gate after a previously benign draft was created (F-AL1: this route
-    // previously persisted the client's payload as-is with no re-screen at all).
-    screened = screenListingIpOrFail({ ...payload, amazonTitle, etsyTitle, categoryName });
-  } catch (error) {
-    console.error('IP Guard failed while updating listing:', error);
-    return res.status(503).json({ success: false, error: 'IP_GUARD_UNAVAILABLE' });
-  }
-  const newPayload = screened.listing;
-  const nextStatus = screened.result.verdict === 'BLOCK' ? 'IP_RISK_BLOCKED' : 'NEEDS_QA';
-  db.run(
-    `UPDATE listings
-     SET amazonTitle = ?, etsyTitle = ?, categoryName = ?, payload = ?, status = ?,
-         listing_version = listing_version + 1, approved_version = NULL,
-         approved_hash = NULL, approved_context_hash = NULL, approved_by = NULL, approved_at = NULL,
-         product_truth_notes = NULL, product_truth_card = NULL
-     WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?
-       AND listing_version = ?`,
-    [newPayload.amazonTitle, newPayload.etsyTitle, newPayload.categoryName, JSON.stringify(newPayload), nextStatus, req.params.id,
-      req.user.tenantId, req.user.workspaceId, req.user.marketplace, expectedVersion],
-    function onUpdate(err) {
-      if (err) return res.status(500).json({ success: false, error: 'LISTING_UPDATE_FAILED' });
-      if (this.changes !== 1) {
-        return db.get(
-          `SELECT id FROM listings WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
-          [req.params.id, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
-          (lookupErr, row) => {
-            if (lookupErr || !row) return res.status(404).json({ success: false, error: 'LISTING_NOT_FOUND' });
-            res.status(412).json({ success: false, error: 'STALE_LISTING_VERSION' });
-          }
-        );
+  db.get(
+    `SELECT * FROM listings WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
+    [req.params.id, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+    (lookupErr, row) => {
+      if (lookupErr) return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
+      if (!row) return res.status(404).json({ success: false, error: 'LISTING_NOT_FOUND' });
+      if (row.head_revision_id != null) {
+        return res.status(409).json({ success: false, error: 'CANONICAL_REVISION_ROUTE_REQUIRED' });
       }
-      res.json({
-        success: true,
-        listingVersion: expectedVersion + 1,
+      if (row.listing_version !== expectedVersion) {
+        return res.status(412).json({ success: false, error: 'STALE_LISTING_VERSION' });
+      }
+      const continueEdit = productTruthCard => {
+      let guardResult;
+      let screened;
+      try {
+        guardResult = evaluateListingGuard({
+          listing: { ...payload, amazonTitle, etsyTitle, categoryName },
+          productTruthCard,
+          context: { productId: row.id, listingVersion: row.listing_version },
+          clientPayload: req.body
+        });
+        // Client-provided ipVerdict/ipHits are never authoritative -- re-screen the
+        // exact post-edit content before persisting so an edit cannot bypass the IP gate.
+        screened = screenListingIpOrFail(guardResult.listing);
+      } catch (error) {
+        if (error?.code === 'UNVERIFIED_OUTPUT_CLAIM' || error?.code?.startsWith('CLIENT_')) {
+          return rejectListingGuard(res, error);
+        }
+        console.error('Listing guard failed while updating listing:', error);
+        return res.status(503).json({ success: false, error: 'LISTING_GUARD_UNAVAILABLE' });
+      }
+      const newPayload = {
+        ...screened.listing,
+        claimGuard: {
+          version: 'c2-r1',
+          backendExcluded: guardResult.backendExcluded,
+          ppcFlagged: guardResult.ppcFlagged
+        }
+      };
+      const nextStatus = screened.result.verdict === 'BLOCK' ? 'IP_RISK_BLOCKED' : 'NEEDS_QA';
+      persistListingEdit({
+        row,
+        user: req.user,
+        payload: newPayload,
         status: nextStatus,
-        ipVerdict: newPayload.ipVerdict,
-        ipHits: newPayload.ipHits
+        truthCard: productTruthCard,
+        ipScreening: screened,
+        ipAddress: req.ip
+      }, (err, result) => {
+          if (err) return res.status(err.status || (err.code === 'STALE_LISTING_VERSION' ? 412 : 500)).json({ success: false, error: err.code || 'LISTING_UPDATE_FAILED' });
+          if (result.changes !== 1) return res.status(412).json({ success: false, error: 'STALE_LISTING_VERSION' });
+          res.json({
+            success: true,
+            listingVersion: result.listingVersion,
+            status: nextStatus,
+            ipVerdict: newPayload.ipVerdict,
+            ipHits: newPayload.ipHits,
+            claimGuard: newPayload.claimGuard,
+            productTruthCard: result.productTruthCard
+          });
+      });
+      };
+      if (!row.product_truth_card) return continueEdit(null);
+      resolvePersistedProductTruth(row, (truthError, productTruthCard) => {
+        if (truthError) return res.status(422).json({ success: false, error: truthError.code, reasons: truthError.reasons });
+        continueEdit(productTruthCard);
       });
     }
   );
+});
+
+// Full Product Truth replacement. Staff supply assertions/unknowns; the
+// server owns evidence identity, listing binding, IP evidence, versioning,
+// approval invalidation and audit provenance.
+app.put('/api/listings/:id/product-truth', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
+  const { expectedVersion, facts, notes } = req.body || {};
+  const allowedKeys = new Set(['expectedVersion', 'facts', 'notes']);
+  const forbiddenKey = Object.keys(req.body || {}).find(key => !allowedKeys.has(key));
+  if (forbiddenKey) {
+    return res.status(409).json({ success: false, error: 'PRODUCT_TRUTH_CLIENT_AUTHORITY_FORBIDDEN', path: forbiddenKey });
+  }
+  if (!Number.isInteger(expectedVersion) || expectedVersion < 1) {
+    return res.status(400).json({ success: false, error: 'EXPECTED_VERSION_REQUIRED' });
+  }
+  let snapshot;
+  try {
+    snapshot = normalizeSnapshot(facts);
+  } catch (error) {
+    return res.status(400).json({ success: false, error: error.code || 'INVALID_PRODUCT_TRUTH', fact: error.fact, path: error.path });
+  }
+  const truthNotes = notes == null ? '' : String(notes).trim();
+  if (truthNotes.length > 4000) return res.status(400).json({ success: false, error: 'PRODUCT_TRUTH_NOTES_TOO_LARGE' });
+
+  const rollback = (status, body) => db.run('ROLLBACK', () => res.status(status).json(body));
+  db.serialize(() => {
+    db.run('BEGIN IMMEDIATE', beginError => {
+      if (beginError) return res.status(503).json({ success: false, error: 'PRODUCT_TRUTH_TRANSACTION_UNAVAILABLE' });
+      db.get(
+        `SELECT * FROM listings WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?`,
+        [req.params.id, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+        (readError, row) => {
+          if (readError) return rollback(500, { success: false, error: 'DATABASE_ERROR' });
+          if (!row) return rollback(404, { success: false, error: 'LISTING_NOT_FOUND' });
+          if (row.head_revision_id != null) {
+            return rollback(409, { success: false, error: 'CANONICAL_PRODUCT_TRUTH_ROUTE_REQUIRED' });
+          }
+          if (row.listing_version !== expectedVersion) {
+            return rollback(412, { success: false, error: 'STALE_LISTING_VERSION' });
+          }
+          let listing;
+          let ipScreening;
+          try {
+            listing = JSON.parse(row.payload);
+            ipScreening = screenListingIpOrFail(listing);
+          } catch (error) {
+            return rollback(503, { success: false, error: error instanceof SyntaxError ? 'MALFORMED_LISTING_PAYLOAD' : 'IP_GUARD_UNAVAILABLE' });
+          }
+          const targetVersion = expectedVersion + 1;
+          const initialMetadata = {
+            schemaVersion: 'product-truth-attestation.v1',
+            listingId: String(row.id),
+            previousVersion: expectedVersion,
+            targetVersion,
+            actorRole: req.user.role,
+            snapshot
+          };
+          db.run(
+            `INSERT INTO audit_events
+              (tenant_id, workspace_id, marketplace, actor_id, action, resource_type, resource_id, outcome, ip_address, metadata)
+             VALUES (?, ?, ?, ?, 'product_truth:attest', 'listing', ?, 'PENDING', ?, ?)`,
+            [req.user.tenantId, req.user.workspaceId, req.user.marketplace, req.user.userId, String(row.id), req.ip, JSON.stringify(initialMetadata)],
+            function onEvent(eventError) {
+              if (eventError) return rollback(500, { success: false, error: 'AUDIT_WRITE_FAILED' });
+              const auditEventId = this.lastID;
+              const card = buildStaffAttestedCard({
+                productId: row.id,
+                listingVersion: targetVersion,
+                snapshot,
+                actorId: req.user.userId,
+                auditEventId,
+                ipEvidence: {
+                  state: ipScreening.result.verdict === 'BLOCK' ? 'BLOCKED' : 'CLEARED',
+                  subjectId: String(row.id),
+                  listingVersion: targetVersion,
+                  checkerVersion: 'server-ip-guard-v1',
+                  checkedAt: new Date().toISOString()
+                }
+              });
+              let claimError = null;
+              try {
+                evaluateListingGuard({ listing, productTruthCard: card, context: { productId: row.id, listingVersion: targetVersion } });
+              } catch (error) {
+                if (error.code !== 'UNVERIFIED_OUTPUT_CLAIM') {
+                  return rollback(503, { success: false, error: 'LISTING_GUARD_UNAVAILABLE' });
+                }
+                claimError = error;
+              }
+              const status = ipScreening.result.verdict === 'BLOCK'
+                ? 'IP_RISK_BLOCKED'
+                : claimError ? 'CLAIM_RISK_BLOCKED' : 'NEEDS_QA';
+              const cardHash = productTruthAuthorityHash(card);
+              const finalMetadata = {
+                ...initialMetadata,
+                cardHash,
+                status,
+                claimBlocking: claimError?.details?.blocking || []
+              };
+              db.run(
+                `UPDATE listings SET listing_version = ?, product_truth_card = ?, product_truth_notes = ?, status = ?,
+                    approved_version = NULL, approved_hash = NULL, approved_context_hash = NULL,
+                    approved_by = NULL, approved_at = NULL
+                 WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?
+                   AND listing_version = ? AND payload = ?`,
+                [targetVersion, JSON.stringify(card), truthNotes || null, status, row.id, req.user.tenantId,
+                  req.user.workspaceId, req.user.marketplace, expectedVersion, row.payload],
+                function onTruthUpdate(updateError) {
+                  if (updateError) return rollback(500, { success: false, error: 'PRODUCT_TRUTH_SAVE_FAILED' });
+                  if (this.changes !== 1) return rollback(412, { success: false, error: 'STALE_LISTING_VERSION' });
+                  db.run(
+                    `UPDATE audit_events SET outcome = 'SUCCESS', content_hash = ?, metadata = ?
+                     WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ? AND outcome = 'PENDING'`,
+                    [cardHash, JSON.stringify(finalMetadata), auditEventId, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+                    function onAuditFinalize(auditError) {
+                      if (auditError || this.changes !== 1) return rollback(500, { success: false, error: 'AUDIT_FINALIZE_FAILED' });
+                      db.run('COMMIT', commitError => {
+                        if (commitError) return rollback(500, { success: false, error: 'PRODUCT_TRUTH_COMMIT_FAILED' });
+                        res.json({
+                          success: true,
+                          listingVersion: targetVersion,
+                          status,
+                          productTruthCard: card,
+                          assertedFacts: Object.keys(snapshot.asserted),
+                          unknownFacts: snapshot.unknown,
+                          claimBlocking: finalMetadata.claimBlocking
+                        });
+                      });
+                    }
+                  );
+                }
+              );
+            }
+          );
+        }
+      );
+    });
+  });
 });
 
 // Approve a listing using Canonical Publish Gate (Fail-Closed Gate Authority - Protected)
 app.patch('/api/listings/:id/approve', requireAuth(db), requireRole(['OWNER', 'MANAGER']), (req, res) => {
   const { id } = req.params;
 
-  const { expectedVersion, productTruthCard, productTruthNotes } = req.body || {};
+  const { expectedVersion, productTruthNotes } = req.body || {};
+  if (Object.prototype.hasOwnProperty.call(req.body || {}, 'productTruthCard')) {
+    return res.status(409).json({ success: false, error: 'PRODUCT_TRUTH_CLIENT_AUTHORITY_FORBIDDEN' });
+  }
+  try { assertNoClientPolicyOverrides(req.body || {}); } catch (error) { return rejectListingGuard(res, error); }
   if (!Number.isInteger(expectedVersion) || expectedVersion < 1) {
     return res.status(400).json({ success: false, error: 'EXPECTED_VERSION_REQUIRED' });
   }
@@ -1746,6 +2619,13 @@ app.patch('/api/listings/:id/approve', requireAuth(db), requireRole(['OWNER', 'M
     [id, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
     (err, row) => {
     if (err || !row) return res.status(404).json({ error: 'Listing not found.' });
+    if (row.head_revision_id != null) {
+      return res.status(409).json({
+        success: false,
+        error: 'CANONICAL_APPROVAL_ROUTE_REQUIRED',
+        message: 'Canonical listing revisions cannot be approved through the legacy listing endpoint.'
+      });
+    }
     if (row.listing_version !== expectedVersion) {
       return res.status(412).json({ success: false, error: 'STALE_LISTING_VERSION' });
     }
@@ -1773,72 +2653,81 @@ app.patch('/api/listings/:id/approve', requireAuth(db), requireRole(['OWNER', 'M
       return res.status(503).json({ success: false, error: 'IP_GUARD_UNAVAILABLE' });
     }
 
-    // IP clearance is server-derived. Client-supplied ipEvidence is replaced,
-    // never trusted as authority.
-    const canonicalTruthCard = productTruthCard && typeof productTruthCard === 'object'
-      ? {
-          ...productTruthCard,
-          ipEvidence: {
-            state: ipScreening.result.verdict === 'BLOCK' ? 'BLOCKED' : 'CLEARED',
-            subjectId: String(row.id),
-            listingVersion: row.listing_version,
-            checkerVersion: 'server-ip-guard-v1',
-            checkedAt: new Date().toISOString()
-          }
-        }
-      : productTruthCard;
-    const truthContext = { productId: row.id, listingVersion: row.listing_version };
-    parsedPayload.status = 'MANAGER_APPROVED';
-    parsedPayload.productTruthCard = canonicalTruthCard;
-    parsedPayload.productId = row.id;
-    parsedPayload.listingVersion = row.listing_version;
-    parsedPayload.marketplace = row.marketplace;
-
-    // Preserve the canonical IP denial response even when IP clearance also
-    // makes the Product Truth Card invalid. This keeps the strongest blocking
-    // reason visible and prevents a structured-card error from masking it.
-    if (ipScreening.result.verdict === 'BLOCK') {
-      const blockedGate = publishGate.evaluatePublishGate(parsedPayload);
-      return res.status(400).json({
-        error: `APPROVAL_DENIED: Cannot publish listing with status "${blockedGate.final_status}".`,
-        reasons: blockedGate.reasons,
-        publishGate: blockedGate
-      });
-    }
-
-    const truthValidation = validateProductTruthCard(canonicalTruthCard, truthContext);
-    if (!truthValidation.valid) {
-      return res.status(400).json({ success: false, error: 'PRODUCT_TRUTH_CARD_INVALID', reasons: truthValidation.errors });
-    }
-
-    // C5B Fix: Evaluate via Canonical Publish Gate (Fail-Closed)
-    parsedPayload.productTruthNotes = truthNotes;
-    const gateRes = publishGate.evaluatePublishGate(parsedPayload);
-
-    // Strictly reject any status other than PUBLISH_READY
-    if (gateRes.final_status !== 'PUBLISH_READY' || !gateRes.canExport) {
-      return res.status(400).json({
-        error: `APPROVAL_DENIED: Cannot publish listing with status "${gateRes.final_status}".`,
-        reasons: gateRes.reasons,
-        publishGate: gateRes
-      });
-    }
-
-    const approvedHash = payloadHash;
-    const contextHash = approvalContextHash(row, canonicalTruthCard, req.user.userId);
-    db.run(
-      `UPDATE listings SET status = 'PUBLISH_READY', approved_version = listing_version,
-         approved_hash = ?, approved_context_hash = ?, approved_by = ?, approved_at = CURRENT_TIMESTAMP,
-         product_truth_notes = ?, product_truth_card = ?
-       WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?
-         AND listing_version = ? AND payload = ?`,
-      [approvedHash, contextHash, req.user.userId, truthNotes || null, JSON.stringify(canonicalTruthCard), id, req.user.tenantId, req.user.workspaceId, req.user.marketplace, expectedVersion, row.payload],
-      function(updateErr) {
-      if (updateErr) return res.status(500).json({ error: updateErr.message });
-      if (this.changes !== 1) return res.status(412).json({ success: false, error: 'STALE_LISTING_VERSION' });
-      res.json({ success: true, status: 'PUBLISH_READY', approvedVersion: row.listing_version, approvedHash, publishGate: gateRes });
+    resolvePersistedProductTruth(row, (truthError, persistedTruthCard) => {
+      if (truthError) {
+        return res.status(truthError.code === 'PRODUCT_TRUTH_REQUIRED' ? 409 : 422).json({
+          success: false,
+          error: truthError.code,
+          reasons: truthError.reasons
+        });
       }
-    );
+      // IP clearance is re-derived at decision time. Product fact provenance
+      // remains bound to the exact successful staff-attestation event.
+      const canonicalTruthCard = {
+        ...persistedTruthCard,
+        ipEvidence: {
+          state: ipScreening.result.verdict === 'BLOCK' ? 'BLOCKED' : 'CLEARED',
+          subjectId: String(row.id),
+          listingVersion: row.listing_version,
+          checkerVersion: 'server-ip-guard-v1',
+          checkedAt: new Date().toISOString()
+        }
+      };
+      const truthContext = { productId: row.id, listingVersion: row.listing_version };
+      parsedPayload.status = 'MANAGER_APPROVED';
+      parsedPayload.productTruthCard = canonicalTruthCard;
+      parsedPayload.productId = row.id;
+      parsedPayload.listingVersion = row.listing_version;
+      parsedPayload.marketplace = row.marketplace;
+
+      if (ipScreening.result.verdict === 'BLOCK') {
+        const blockedGate = publishGate.evaluatePublishGate(parsedPayload);
+        return res.status(400).json({
+          error: `APPROVAL_DENIED: Cannot publish listing with status "${blockedGate.final_status}".`,
+          reasons: blockedGate.reasons,
+          publishGate: blockedGate
+        });
+      }
+
+      const truthValidation = validateProductTruthCard(canonicalTruthCard, truthContext);
+      if (!truthValidation.valid) {
+        return res.status(400).json({ success: false, error: 'PRODUCT_TRUTH_CARD_INVALID', reasons: truthValidation.errors });
+      }
+      try {
+        evaluateListingGuard({ listing: persistedPayload, productTruthCard: canonicalTruthCard, context: truthContext });
+      } catch (guardError) {
+        return rejectListingGuard(res, guardError);
+      }
+
+      // Legacy Publish Gate remains an additional gate until C1 receives an
+      // Owner-confirmed account/category contract. It cannot override C2.
+      parsedPayload.productTruthNotes = truthNotes;
+      const gateRes = publishGate.evaluatePublishGate(parsedPayload);
+      if (gateRes.final_status !== 'PUBLISH_READY' || !gateRes.canExport) {
+        return res.status(400).json({
+          error: `APPROVAL_DENIED: Cannot publish listing with status "${gateRes.final_status}".`,
+          reasons: gateRes.reasons,
+          publishGate: gateRes
+        });
+      }
+
+      const approvedHash = payloadHash;
+      const contextHash = approvalContextHash(row, canonicalTruthCard, req.user.userId);
+      db.run(
+        `UPDATE listings SET status = 'PUBLISH_READY', approved_version = listing_version,
+           approved_hash = ?, approved_context_hash = ?, approved_by = ?, approved_at = CURRENT_TIMESTAMP,
+           product_truth_notes = ?, product_truth_card = ?
+         WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?
+           AND listing_version = ? AND payload = ?`,
+        [approvedHash, contextHash, req.user.userId, truthNotes || null, JSON.stringify(canonicalTruthCard), id,
+          req.user.tenantId, req.user.workspaceId, req.user.marketplace, expectedVersion, row.payload],
+        function(updateErr) {
+          if (updateErr) return res.status(500).json({ error: updateErr.message });
+          if (this.changes !== 1) return res.status(412).json({ success: false, error: 'STALE_LISTING_VERSION' });
+          res.json({ success: true, status: 'PUBLISH_READY', approvedVersion: row.listing_version, approvedHash, publishGate: gateRes });
+        }
+      );
+    });
     }
   );
 });
@@ -1855,20 +2744,40 @@ app.get('/api/listings/:id/export', requireAuth(db), requireRole(['OWNER', 'MANA
     [id, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
     (err, row) => {
     if (err || !row) return res.status(404).json({ error: 'Listing not found.' });
-
-    const decision = currentPublishDecision(row, screenListingIpOrFail);
-    if (!decision.allowed) {
-      if (decision.gate) return res.status(403).json({ error: `EXPORT_DENIED: Listing status "${decision.gate.final_status}" cannot be exported until PUBLISH_READY`, reasons: decision.gate.reasons });
-      return res.status(decision.status).json({ success: false, error: decision.error });
+    if (row.head_revision_id != null) {
+      return res.status(409).json({
+        success: false,
+        error: 'CANONICAL_EXPORT_PACKAGE_ROUTE_REQUIRED',
+        message: 'Canonical listing revisions cannot be exported through the legacy listing endpoint.'
+      });
     }
-    const parsedPayload = decision.payload;
-    const gateRes = decision.gate;
+    resolvePersistedProductTruth(row, (truthError, productTruthCard) => {
+      if (truthError) return res.status(403).json({ success: false, error: truthError.code, reasons: truthError.reasons });
+      let storedPayload;
+      try { storedPayload = JSON.parse(row.payload); } catch (_) {
+        return res.status(409).json({ success: false, error: 'MALFORMED_LISTING_PAYLOAD' });
+      }
+      try {
+        evaluateListingGuard({
+          listing: storedPayload,
+          productTruthCard,
+          context: { productId: row.id, listingVersion: row.listing_version }
+        });
+      } catch (guardError) {
+        return rejectListingGuard(res, guardError);
+      }
 
-    res.json({
-      success: true,
-      status: row.status,
-      publishGate: gateRes,
-      listing: parsedPayload
+      const decision = currentPublishDecision(row, screenListingIpOrFail);
+      if (!decision.allowed) {
+        if (decision.gate) return res.status(403).json({ error: `EXPORT_DENIED: Listing status "${decision.gate.final_status}" cannot be exported until PUBLISH_READY`, reasons: decision.gate.reasons });
+        return res.status(decision.status).json({ success: false, error: decision.error });
+      }
+      res.json({
+        success: true,
+        status: row.status,
+        publishGate: decision.gate,
+        listing: decision.payload
+      });
     });
     }
   );
@@ -2394,16 +3303,15 @@ function resolveServerAiAuthority(req, input = {}) {
         if (err) return reject({ status: 500, error: 'DATABASE_ERROR' });
         if (!row) return reject({ status: 404, error: 'LISTING_NOT_FOUND' });
         if (row.listing_version !== expectedVersion) return reject({ status: 409, error: 'STALE_LISTING_VERSION' });
-        if (!hasCurrentApprovalBinding(row)) {
-          return reject({ status: 409, error: 'PRODUCT_TRUTH_REQUIRED' });
-        }
-        const productTruthCard = safeJsonParse(row.product_truth_card, null);
-        const projection = projectVerifiedAiInput({
-          productTruthCard,
-          context: { productId: row.id, listingVersion: row.listing_version }
+        resolvePersistedProductTruth(row, (truthError, productTruthCard) => {
+          if (truthError) return reject({ status: 409, error: truthError.code || 'PRODUCT_TRUTH_REQUIRED' });
+          const projection = projectVerifiedAiInput({
+            productTruthCard,
+            context: { productId: row.id, listingVersion: row.listing_version }
+          });
+          if (!projection.eligible) return reject({ status: 409, error: 'PRODUCT_TRUTH_REQUIRED' });
+          resolve({ row, projection, productTruthCard });
         });
-        if (!projection.eligible) return reject({ status: 409, error: 'PRODUCT_TRUTH_REQUIRED' });
-        resolve({ row, projection });
       }
     );
   });
@@ -2632,24 +3540,20 @@ app.post('/api/etsy/batch-learn', requireAuth(db), requireRole(['OWNER', 'MANAGE
         modelProvenance: 'ETSY_SELLER_EVIDENCE_MODEL'
       };
 
-      db.run(
-        `INSERT INTO listings
-          (tenant_id, workspace_id, marketplace, amazonTitle, etsyTitle, categoryName, status, authorId, payload)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [req.user.tenantId, req.user.workspaceId, req.user.marketplace, payload.amazonTitle, payload.etsyTitle, payload.categoryName, 'NEEDS_QA', req.user.userId, JSON.stringify(payload)],
-        function(insertErr) {
-          if (insertErr) return res.status(500).json({ success: false, error: 'DATABASE_ERROR' });
-          res.json({
-            success: true,
-            listingId: this.lastID,
-            synthesized: result.synthesizedListing,
-            insights: result.synthesizedListing.learnedInsights,
-            sellersLearned: result.sellerCount,
-            evidenceSummary: result.evidenceSummary,
-            truthWarnings: result.synthesizedListing.truthWarnings
-          });
-        }
-      );
+      // Research and Product Truth are separate authority domains. This route
+      // returns a zero-authority SEO recommendation and never creates a
+      // canonical listing. Staff apply it later to an existing, attested row.
+      res.json({
+        success: true,
+        listingId: null,
+        persistedListing: false,
+        authority: 'NONE',
+        synthesized: result.synthesizedListing,
+        insights: result.synthesizedListing.learnedInsights,
+        sellersLearned: result.sellerCount,
+        evidenceSummary: result.evidenceSummary,
+        truthWarnings: result.synthesizedListing.truthWarnings
+      });
     } catch (err) {
       console.error('Etsy evidence learn error:', err);
       const evidenceError = err.code === 'UNVERIFIED_SELLER_EVIDENCE' || err.code === 'INSUFFICIENT_EVIDENCE';
@@ -2988,6 +3892,7 @@ app.post('/api/amazon/quick-draft', requireAuth(db), requireRole(['OWNER', 'MANA
     return res.status(403).json({ success: false, error: 'MARKETPLACE_MISMATCH' });
   }
   const { projectId, seedPhrase, category, asins = [] } = req.body || {};
+  try { assertNoClientPolicyOverrides(req.body || {}); } catch (error) { return rejectListingGuard(res, error); }
 
   if (!seedPhrase || !String(seedPhrase).trim() || !category || !String(category).trim()) {
     return res.status(400).json({ success: false, error: 'INSUFFICIENT_EVIDENCE', message: 'seedPhrase and category are required' });
@@ -3016,6 +3921,9 @@ app.post('/api/amazon/quick-draft', requireAuth(db), requireRole(['OWNER', 'MANA
     // canonical output-claim validator.
     resolveActiveProjectId(db, req.user, req.body.projectId, (pErr, targetProjectId) => {
       if (pErr) return res.status(pErr.status || 400).json({ success: false, error: pErr.error, message: pErr.message });
+      if (aiAuthority.row.project_id != null && Number(aiAuthority.row.project_id) !== Number(targetProjectId)) {
+        return res.status(409).json({ success: false, error: 'PROJECT_CONTEXT_MISMATCH' });
+      }
       readWorkspaceLlmSettings(req.user, async (sErr, keys) => {
           if (sErr) return res.status(503).json({ success: false, error: 'SECRET_DECRYPTION_FAILED' });
 
@@ -3052,7 +3960,7 @@ Allowed values: WARM, MINIMAL, CELEBRATORY.`;
               throw contractError;
             }
 
-            const payload = {
+            let payload = {
               ...canonicalListing,
               // No auto-generated SKU: the Staff viewer presents this as
               // paste-ready "Raw Data ... for Seller Central", so a fake
@@ -3075,29 +3983,40 @@ Allowed values: WARM, MINIMAL, CELEBRATORY.`;
             };
 
             validateServerAiOutput(payload, aiAuthority.projection);
+            const quickGuard = evaluateListingGuard({
+              listing: payload,
+              productTruthCard: aiAuthority.productTruthCard,
+              context: { productId: aiAuthority.row.id, listingVersion: aiAuthority.row.listing_version }
+            });
+            payload = {
+              ...quickGuard.listing,
+              claimGuard: { version: 'c2-r1', backendExcluded: quickGuard.backendExcluded, ppcFlagged: quickGuard.ppcFlagged }
+            };
 
 
-            db.run(
-              "INSERT INTO market_trends (category, trending_keywords, marketplace, tenant_id, workspace_id, project_id) VALUES (?, ?, ?, ?, ?, ?)",
-              [verifiedCategory, `${cleanSeed} (Amazon A10 Quick Batch)`, 'AMAZON', req.user.tenantId, req.user.workspaceId, targetProjectId],
-              function onTrendInsert(trendErr) {
-                if (trendErr) return res.status(500).json({ error: trendErr.message });
-                db.run(
-                  `INSERT INTO listings
-                    (tenant_id, workspace_id, marketplace, project_id, amazonTitle, etsyTitle, categoryName, status, authorId, payload)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                  [req.user.tenantId, req.user.workspaceId, req.user.marketplace, targetProjectId, payload.amazonTitle, payload.etsyTitle, payload.categoryName, 'NEEDS_QA', req.user.userId, JSON.stringify(payload)],
-                  function onListingInsert(insertErr) {
-                    if (insertErr) return res.status(500).json({ error: insertErr.message });
-                    res.json({
-                      success: true,
-                      listingId: this.lastID,
-                      listing: { ...payload, dbId: this.lastID }
-                    });
-                  }
-                );
+            const screened = screenListingIpOrFail(payload);
+            persistListingEdit({
+              row: aiAuthority.row,
+              user: req.user,
+              payload: screened.listing,
+              status: screened.result.verdict === 'BLOCK' ? 'IP_RISK_BLOCKED' : 'NEEDS_QA',
+              truthCard: aiAuthority.productTruthCard,
+              ipScreening: screened,
+              ipAddress: req.ip,
+              projectId: targetProjectId
+            }, (persistError, persisted) => {
+              if (persistError) {
+                const status = persistError.code === 'STALE_LISTING_VERSION' ? 412 : 500;
+                return res.status(status).json({ success: false, error: persistError.code || 'LISTING_UPDATE_FAILED' });
               }
-            );
+              res.json({
+                success: true,
+                listingId: aiAuthority.row.id,
+                listingVersion: persisted.listingVersion,
+                productTruthCard: persisted.productTruthCard,
+                listing: { ...screened.listing, dbId: aiAuthority.row.id, listingVersion: persisted.listingVersion }
+              });
+            });
           } catch (llmErr) {
             console.error('Quick draft LLM error:', llmErr);
             if (llmErr.code === 'UNVERIFIED_OUTPUT_CLAIM') {
@@ -3707,6 +4626,7 @@ app.get('/api/trends', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER
 app.post('/api/trends/:id/draft', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
   const { id } = req.params;
   const { projectId } = req.body || {};
+  try { assertNoClientPolicyOverrides(req.body || {}); } catch (error) { return rejectListingGuard(res, error); }
   if (projectId !== undefined && projectId !== null && !/^\d+$/.test(String(projectId))) {
     return res.status(400).json({ success: false, error: 'PROJECT_CONTEXT_REQUIRED' });
   }
@@ -3725,6 +4645,10 @@ app.post('/api/trends/:id/draft', requireAuth(db), requireRole(['OWNER', 'MANAGE
       aiAuthority = await resolveServerAiAuthority(req, req.body);
     } catch (authorityError) {
       return rejectAiAuthority(res, authorityError);
+    }
+    if (aiAuthority.row.project_id != null && trend.project_id != null
+      && Number(aiAuthority.row.project_id) !== Number(trend.project_id)) {
+      return res.status(409).json({ success: false, error: 'PROJECT_CONTEXT_MISMATCH' });
     }
     const trendIp = ipGuard.screenText(`${trend.category || ''} ${trend.trending_keywords || ''}`);
     if (trendIp.verdict !== 'OK') {
@@ -3797,7 +4721,7 @@ Allowed values: WARM, MINIMAL, CELEBRATORY.`;
             throw contractError;
           }
 
-        const payload = {
+        let payload = {
           ...canonicalListing,
           // No auto-generated SKU (same reasoning as Quick Draft: the Staff
           // viewer presents this as paste-ready Seller Central data) and no
@@ -3816,26 +4740,41 @@ Allowed values: WARM, MINIMAL, CELEBRATORY.`;
         };
 
         validateServerAiOutput(payload, aiAuthority.projection);
-
-        db.run(
-          `INSERT INTO listings
-            (tenant_id, workspace_id, marketplace, project_id, amazonTitle, etsyTitle, categoryName, status, authorId, payload)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [req.user.tenantId, req.user.workspaceId, req.user.marketplace, trend.project_id || null, payload.amazonTitle, payload.etsyTitle, payload.categoryName, 'NEEDS_QA', req.user.userId, JSON.stringify(payload)],
-          function(insertErr) {
-            if (insertErr) return res.status(500).json({ error: insertErr.message });
-            
-            // Mark trend as processed
-            db.run("UPDATE market_trends SET processed = 1 WHERE id = ?", [trend.id]);
-            logAgentAction(db, { agentId: 2, tenantId: req.user.tenantId, workspaceId: req.user.workspaceId, message: `Manually triggered draft generated for ${trend.category} (Listing ID: ${this.lastID})` });
-
-            res.json({
-              success: true,
-              listingId: this.lastID,
-              listing: { ...payload, dbId: this.lastID }
-            });
+        const guardResult = evaluateListingGuard({
+          listing: payload,
+          productTruthCard: aiAuthority.productTruthCard,
+          context: { productId: aiAuthority.row.id, listingVersion: aiAuthority.row.listing_version }
+        });
+        payload = {
+          ...guardResult.listing,
+          claimGuard: { version: 'c2-r1', backendExcluded: guardResult.backendExcluded, ppcFlagged: guardResult.ppcFlagged }
+        };
+        const screened = screenListingIpOrFail(payload);
+        persistListingEdit({
+          row: aiAuthority.row,
+          user: req.user,
+          payload: screened.listing,
+          status: screened.result.verdict === 'BLOCK' ? 'IP_RISK_BLOCKED' : 'NEEDS_QA',
+          truthCard: aiAuthority.productTruthCard,
+          ipScreening: screened,
+          ipAddress: req.ip,
+          projectId: trend.project_id ?? aiAuthority.row.project_id
+        }, (persistError, persisted) => {
+          if (persistError) {
+            const status = persistError.code === 'STALE_LISTING_VERSION' ? 412 : 500;
+            return res.status(status).json({ success: false, error: persistError.code || 'LISTING_UPDATE_FAILED' });
           }
-        );
+          db.run("UPDATE market_trends SET processed = 1 WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?",
+            [trend.id, req.user.tenantId, req.user.workspaceId, req.user.marketplace]);
+          logAgentAction(db, { agentId: 2, tenantId: req.user.tenantId, workspaceId: req.user.workspaceId, message: `Manually triggered draft updated canonical listing ${aiAuthority.row.id} for ${trend.category}` });
+          res.json({
+            success: true,
+            listingId: aiAuthority.row.id,
+            listingVersion: persisted.listingVersion,
+            productTruthCard: persisted.productTruthCard,
+            listing: { ...screened.listing, dbId: aiAuthority.row.id, listingVersion: persisted.listingVersion }
+          });
+        });
       } catch (genErr) {
         console.error('Manual draft error:', genErr);
         if (genErr.code === 'UNVERIFIED_OUTPUT_CLAIM') {
@@ -3855,6 +4794,7 @@ app.post('/api/settings/apikey', requireAuth(db), requireRole(['OWNER']), (req, 
 // API: Chat Co-Pilot
 app.post('/api/chat', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
   const { messages, mode = 'RESEARCH' } = req.body || {};
+  try { assertNoClientPolicyOverrides(req.body || {}); } catch (error) { return rejectListingGuard(res, error); }
   if (!messages || !Array.isArray(messages)) return res.status(400).json({ error: 'Messages required' });
   const commerceMode = mode === 'COMMERCE_DRAFT';
   let aiAuthority = null;
@@ -3950,6 +4890,19 @@ If the user asks a general question (not about drafting/writing), respond conver
           }
           extractedListing = { ...rendered, generatedAt: new Date().toISOString(), status: 'NEEDS_QA' };
           validateServerAiOutput(extractedListing, aiAuthority.projection);
+          const guardResult = evaluateListingGuard({
+            listing: extractedListing,
+            productTruthCard: aiAuthority.productTruthCard,
+            context: { productId: aiAuthority.row.id, listingVersion: aiAuthority.row.listing_version }
+          });
+          extractedListing = {
+            ...guardResult.listing,
+            claimGuard: {
+              version: 'c2-r1',
+              backendExcluded: guardResult.backendExcluded,
+              ppcFlagged: guardResult.ppcFlagged
+            }
+          };
         } catch (parseErr) {
           if (parseErr.code === 'UNVERIFIED_OUTPUT_CLAIM') throw parseErr;
           extractedListing = null;
@@ -3970,7 +4923,7 @@ If the user asks a general question (not about drafting/writing), respond conver
     } catch (apiError) {
       console.error('Chat API Error:', apiError);
       if (apiError.code === 'UNVERIFIED_OUTPUT_CLAIM') {
-        return res.status(422).json({ success: false, error: apiError.code, claims: apiError.claims });
+        return res.status(422).json({ success: false, error: apiError.code, claims: apiError.claims, blocking: apiError.details?.blocking });
       }
       res.status(500).json({ error: apiError.message });
     }
@@ -4168,8 +5121,16 @@ if (fs.existsSync(distDir)) {
 // an async route handler (auto-forwarded by Express 5), lands here instead of
 // Express's default HTML error page — so the frontend always gets JSON back.
 app.use((err, req, res, next) => {
-  console.error('Unhandled request error:', err);
   if (res.headersSent) return next(err);
+  if (err instanceof multer.MulterError) {
+    const status = err.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
+    return res.status(status).json({ success: false, error: err.code });
+  }
+  if (['UNSUPPORTED_RESEARCH_FILE','UNSUPPORTED_ETSY_SEARCH_FILE','UNSUPPORTED_UPLOAD_TYPE',
+    'UNSUPPORTED_PRODUCT_TRUTH_WORKBOOK','UNSUPPORTED_LISTING_HTML'].includes(err?.message)) {
+    return res.status(415).json({ success: false, error: err.message });
+  }
+  console.error('Unhandled request error:', err);
   res.status(500).json({ success: false, error: 'INTERNAL_SERVER_ERROR', message: err.message });
 });
 

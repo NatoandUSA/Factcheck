@@ -20,7 +20,8 @@ async function waitForFixtures(timeoutMs = 15000) {
     const hasOwnerAmz = rows.some(f => f.role === "OWNER" && f.marketplace === "AMAZON");
     const hasOwnerEtsy = rows.some(f => f.role === "OWNER" && f.marketplace === "ETSY");
     const hasSellerAmz = rows.some(f => f.role === "SELLER" && f.marketplace === "AMAZON");
-    if (hasOwnerAmz && hasOwnerEtsy && hasSellerAmz) return rows;
+    const hasSellerEtsy = rows.some(f => f.role === "SELLER" && f.marketplace === "ETSY");
+    if (hasOwnerAmz && hasOwnerEtsy && hasSellerAmz && hasSellerEtsy) return rows;
     await new Promise(r => setTimeout(r, 50));
   }
   throw new Error("Timed out waiting for fixtures");
@@ -32,6 +33,7 @@ async function waitForFixtures(timeoutMs = 15000) {
   const ownerAmz = fx.find(f => f.role === "OWNER" && f.marketplace === "AMAZON");
   const ownerEtsy = fx.find(f => f.role === "OWNER" && f.marketplace === "ETSY");
   const sellerAmz = fx.find(f => f.role === "SELLER" && f.marketplace === "AMAZON");
+  const sellerEtsy = fx.find(f => f.role === "SELLER" && f.marketplace === "ETSY");
 
   const srv = app.listen(0);
   const port = srv.address().port;
@@ -87,8 +89,8 @@ async function waitForFixtures(timeoutMs = 15000) {
   assert.strictEqual(me3.user.marketplace, "AMAZON");
   console.log("  🟢 Workspace switched back to AMAZON -> /api/auth/me reports AMAZON.");
 
-  // Step 4: Authorization Gate: User without Etsy membership attempts switch to Etsy
-  console.log("\nStep 4: Testing Unauthorized Workspace Switch Gate...");
+  // Step 4: Daily operator can switch between both assigned storefronts.
+  console.log("\nStep 4: Testing Seller Workspace Switch...");
   const sellerLogin = await fetch(base + "/api/auth/login", {
     method: "POST",
     headers: { "Content-Type": "application/json", Origin: base },
@@ -97,16 +99,20 @@ async function waitForFixtures(timeoutMs = 15000) {
   assert.strictEqual(sellerLogin.status, 200);
   const sellerCookie = sellerLogin.headers.get("set-cookie").split(";")[0];
 
-  // Seller is only in Amazon workspace, attempting switch to Etsy
-  const unauthSwitch = await fetch(base + "/api/auth/switch-workspace", {
+  const sellerSwitch = await fetch(base + "/api/auth/switch-workspace", {
     method: "POST",
     headers: { "Content-Type": "application/json", Cookie: sellerCookie, Origin: base },
     body: JSON.stringify({ marketplace: "ETSY" })
   });
-  assert.strictEqual(unauthSwitch.status, 403);
-  const unauthBody = await unauthSwitch.json();
-  assert.strictEqual(unauthBody.error, "NO_WORKSPACE_ACCESS");
-  console.log("  🟢 Non-member switch attempt correctly BLOCKED with 403 NO_WORKSPACE_ACCESS.");
+  assert.strictEqual(sellerSwitch.status, 200);
+  const sellerSwitchCookie = sellerSwitch.headers.get("set-cookie")?.split(";")[0] || sellerCookie;
+  const sellerMe = await (await fetch(base + "/api/auth/me", {
+    headers: { Cookie: sellerSwitchCookie, Origin: base }
+  })).json();
+  assert.strictEqual(sellerMe.user.workspaceId, sellerEtsy.workspace_id);
+  assert.strictEqual(sellerMe.user.marketplace, "ETSY");
+  assert.strictEqual(sellerMe.user.role, "SELLER");
+  console.log("  🟢 Seller can switch to the assigned ETSY workspace without role escalation.");
 
   srv.close();
   console.log("\n================================================================");

@@ -12,12 +12,16 @@ const server = read('server/server.js');
 
 assert.ok(setup.includes("fetch('/api/projects'"), 'Project setup must create a server-bound project');
 assert.ok(setup.includes('Tạo project'), 'Project setup must expose a visible create action');
+assert.ok(setup.includes('canonicalProjectClassification'), 'Project setup must bind a canonical product classification');
+assert.ok(setup.includes('aria-label="Listing locale"'), 'Project setup must require an explicit listing locale');
+assert.ok(setup.includes('productFamilyVersion'), 'Project setup must send the full policy context');
 assert.ok(evidence.includes("/api/evidence?projectId="), 'Evidence gate must load project-scoped evidence');
 assert.ok(evidence.includes('/accept'), 'Evidence gate must expose the server acceptance action');
 assert.ok(evidence.includes("'RESEARCH_ACCEPTED'"), 'Evidence gate must offer the canonical research transition');
 
 for (const [name, source] of [['Amazon', amazon], ['Etsy', etsy]]) {
   assert.ok(source.includes('<ProjectSetupCard'), `${name} must guide an empty workspace to project creation`);
+  assert.ok(source.includes('category={selectedCategory}'), `${name} project creation must use the selected category`);
   assert.ok(source.includes('<ProjectEvidenceGate'), `${name} must show the evidence-to-research path`);
   assert.ok(source.includes("setSeedPhrase(selected?.seed_phrase || '')"), `${name} must restore the selected project's seed phrase`);
 }

@@ -10,6 +10,7 @@ server/*.bak*
 Mautheutest/
 *.xlsx
 !tests/fixtures/*.xlsx
+!public/templates/*.xlsx
 
 # Mutable runtime imports are state, not source. Production must point
 # OMNI_IMPORTS_DIR outside the Git worktree; dev creates this directory as needed.

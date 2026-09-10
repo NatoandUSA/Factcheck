@@ -8,7 +8,7 @@ import { parseJsonResponse } from '../utils/apiResponse';
 import { deriveXrayUploadOutcome } from '../utils/xrayUploadOutcome.js';
 import { createProjectBoundLoader } from '../utils/projectBoundLoader.js';
 
-export default function AmazonPipelineWorkflow({ 
+export default function AmazonPipelineWorkflow({
   seedPhrase, 
   selectedCategory, 
   activeProjectId, 
@@ -18,7 +18,8 @@ export default function AmazonPipelineWorkflow({
   onUpdateXraySellers,
   onUpdateCerebroSummary,
   onGenerateListingDirect,
-  isDrafting
+  isDrafting,
+  legacyDraftDisabled = false
 }) {
   // Step 1: Feed Xray State
   const [xrayFiles, setXrayFiles] = useState([]);
@@ -191,6 +192,10 @@ export default function AmazonPipelineWorkflow({
 
   // B4: Generate Amazon A10 Listing from MKL or Direct Seed
   const handleGenerateListing = async () => {
+    if (legacyDraftDisabled) {
+      onShowToast?.('Composer cũ đã khóa. Hãy dùng Luồng Staff Canonical ở phía trên.');
+      return;
+    }
     if (onGenerateListingDirect) {
       return onGenerateListingDirect();
     }
@@ -683,7 +688,7 @@ export default function AmazonPipelineWorkflow({
           <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
             <button
               onClick={handleGenerateListing}
-              disabled={drafting || isDrafting || (!cerebroSummary?.trendId && cerebroKeywords.length === 0)}
+              disabled={legacyDraftDisabled || drafting || isDrafting || (!cerebroSummary?.trendId && cerebroKeywords.length === 0)}
               className="btn btn-primary"
               style={{
                 background: 'linear-gradient(135deg, #16a34a 0%, #0284c7 100%)',
@@ -697,7 +702,7 @@ export default function AmazonPipelineWorkflow({
               }}
             >
               {(drafting || isDrafting) ? <RefreshCw size={16} className="spinner" /> : <Zap size={16} />}
-              <span>{(drafting || isDrafting) ? 'Đang tạo...' : '⚡ Sinh Nhanh Listing A10'}</span>
+              <span>{legacyDraftDisabled ? '🔒 Sinh Listing legacy đã khóa — dùng Canonical' : (drafting || isDrafting) ? 'Đang tạo...' : '⚡ Sinh Nhanh Listing A10'}</span>
             </button>
 
             <button

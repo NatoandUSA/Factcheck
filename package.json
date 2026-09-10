@@ -14,10 +14,12 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node tests/run_all_tests.cjs"
+    "test": "node tests/run_all_tests.cjs",
+    "uat:real-commerce": "node scripts/uat/realCommerceInputs.cjs"
   },
   "dependencies": {
     "@google/genai": "^2.17.0",
+    "ajv": "^8.17.1",
     "lucide-react": "^1.16.0",
     "papaparse": "^5.5.3",
     "react": "^18.3.1",

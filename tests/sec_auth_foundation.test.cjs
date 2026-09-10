@@ -1,5 +1,4 @@
 const assert = require('assert');
-const { makeProductTruthCard } = require('./helpers/productTruth.cjs');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
@@ -11,6 +10,19 @@ process.env.OMNI_MASTER_KEY = Buffer.alloc(32, 7).toString('base64');
 const { hashPassword, verifyPassword } = require('../server/security/scrypt');
 const { hashToken, generateRawToken } = require('../server/security/session');
 const { app, db, databaseReady } = require('../server/server');
+
+async function saveProductTruth(port, cookie, listingId, expectedVersion, facts = {
+  productType: { disposition: 'ASSERTED', value: 'APPAREL', basis: 'PHYSICAL_INSPECTION' }
+}) {
+  const response = await fetch(`http://127.0.0.1:${port}/api/listings/${listingId}/product-truth`, {
+    method: 'PUT',
+    headers: { Cookie: cookie, Origin: `http://127.0.0.1:${port}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ expectedVersion, facts })
+  });
+  const body = await response.json();
+  assert.strictEqual(response.status, 200, `Product Truth save failed: ${JSON.stringify(body)}`);
+  return body;
+}
 
 function dbAll(sql, params = []) {
   return new Promise((resolve, reject) => db.all(sql, params, (err, rows) => err ? reject(err) : resolve(rows)));
@@ -235,8 +247,10 @@ async function runAuthFoundationTests() {
         'Content-Type': 'application/json',
         'Origin': `http://127.0.0.1:${port}`
       },
-      body: JSON.stringify({ email: 'seller@omniseller.local', password: 'password123' })
+      body: JSON.stringify({ email: 'seller@omniseller.local', password: 'password123',
+        workspaceId: amazonWorkspace.workspace_id })
     });
+    assert.strictEqual(sellerLoginRes.status, 200, 'Seller login in selected Amazon workspace did not return 200');
     const sellerCookie = sellerLoginRes.headers.get('set-cookie')?.split(';')[0];
 
     const sellerApproveRes = await fetch(`http://127.0.0.1:${port}/api/listings/1/approve`, {
@@ -272,23 +286,23 @@ async function runAuthFoundationTests() {
         Origin: `http://127.0.0.1:${port}`
       },
       body: JSON.stringify({
-        amazonTitle: 'Personalized Embroidered Test Sweatshirt',
-        etsyTitle: 'Personalized Embroidered Test Sweatshirt',
+        amazonTitle: 'Everyday Family Sweatshirt Gift',
+        etsyTitle: 'Everyday Family Sweatshirt Gift',
         categoryName: 'Embroidery',
         payload: {
           ipVerdict: 'OK',
           ipHits: [],
-          amazonTitle: 'Personalized Embroidered Test Sweatshirt',
+          amazonTitle: 'Everyday Family Sweatshirt Gift',
           amazonBullets: [
-            '[ELEGANT DESIGN] Crafted for everyday milestone elegance.',
-            '[CUSTOM ENGRAVING] Precision laser engraved with your name or date.',
-            '[PERFECT GIFT] Packaged for birthdays, anniversaries, and holidays.',
-            '[DURABLE QUALITY] Premium grade finish built for daily wear.',
-            '[SATISFACTION GUARANTEED] Dedicated customer support for every order.'
+            '[MEANINGFUL STYLE] A thoughtful choice for everyday family moments.',
+            '[EASY GIFTING] A simple sweatshirt gift for someone special.',
+            '[EVERYDAY LOOK] Designed for casual outfits and relaxed occasions.',
+            '[FAMILY IDEA] A wearable way to celebrate a family connection.',
+            '[THOUGHTFUL CHOICE] Suitable for birthdays and everyday gifting.'
           ],
-          amazonSearchTerms: 'personalized sweatshirt custom embroidered gift',
+          amazonSearchTerms: 'family sweatshirt everyday gift',
           etsyTags: Array.from({ length: 13 }, (_, index) => `test tag ${index + 1}`),
-          amazonDescription: 'Real test fixture description: personalized embroidered sweatshirt, cotton-poly blend.',
+          amazonDescription: 'Real test fixture description for an everyday family sweatshirt gift.',
           netProfit: 8.50,
           netMargin: 35.0
         }
@@ -296,10 +310,11 @@ async function runAuthFoundationTests() {
     });
     assert.strictEqual(createListingRes.status, 200, 'Owner could not create approval fixture');
     const createdListing = await createListingRes.json();
+    const createdTruth = await saveProductTruth(port, ownerCookie, createdListing.id, 1);
     const ownerApproveRes = await fetch(`http://127.0.0.1:${port}/api/listings/${createdListing.id}/approve`, {
       method: 'PATCH',
       headers: { Cookie: ownerCookie, Origin: `http://127.0.0.1:${port}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ expectedVersion: 1, productTruthCard: makeProductTruthCard(createdListing.id, 1) })
+      body: JSON.stringify({ expectedVersion: createdTruth.listingVersion })
     });
     assert.strictEqual(ownerApproveRes.status, 200, 'Owner approval did not return 200 OK');
     const ownerApproveBody = await ownerApproveRes.json();
@@ -320,7 +335,8 @@ async function runAuthFoundationTests() {
     const managerLoginRes = await fetch(`http://127.0.0.1:${port}/api/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Origin: `http://127.0.0.1:${port}` },
-      body: JSON.stringify({ email: 'manager@omniseller.local', password: 'password123' })
+      body: JSON.stringify({ email: 'manager@omniseller.local', password: 'password123',
+        workspaceId: amazonWorkspace.workspace_id })
     });
     assert.strictEqual(managerLoginRes.status, 200);
     const managerCookie = managerLoginRes.headers.get('set-cookie')?.split(';')[0];
@@ -414,22 +430,22 @@ async function runAuthFoundationTests() {
         Origin: `http://127.0.0.1:${port}`
       },
       body: JSON.stringify({
-        amazonTitle: 'Amazon Workspace Private Listing',
-        etsyTitle: 'Amazon Workspace Private Listing',
+        amazonTitle: 'Amazon Workspace Family Gift',
+        etsyTitle: 'Amazon Workspace Family Gift',
         categoryName: 'Embroidery',
         payload: {
           ipVerdict: 'OK',
           ipHits: [],
           amazonBullets: [
-            '[ELEGANT DESIGN] Crafted for everyday milestone elegance.',
-            '[CUSTOM ENGRAVING] Precision laser engraved with your name or date.',
-            '[PERFECT GIFT] Packaged for birthdays, anniversaries, and holidays.',
-            '[DURABLE QUALITY] Premium grade finish built for daily wear.',
-            '[SATISFACTION GUARANTEED] Dedicated customer support for every order.'
+            '[FAMILY STYLE] A thoughtful idea for everyday family moments.',
+            '[GIFT IDEA] A simple choice for someone special.',
+            '[EVERYDAY LOOK] A family-themed item for casual occasions.',
+            '[THOUGHTFUL MOMENT] Suitable for birthdays and everyday gifting.',
+            '[ORDER REVIEW] Review the selected options before ordering.'
           ],
-          amazonSearchTerms: 'amazon private listing embroidered gift sweatshirt',
+          amazonSearchTerms: 'family gift everyday idea thoughtful occasion',
           etsyTags: Array.from({ length: 13 }, (_, index) => `scope tag ${index + 1}`),
-          amazonDescription: 'Real test fixture description: embroidered gift item, cotton blend, machine washable.',
+          amazonDescription: 'Real test fixture description for a family-themed everyday gift.',
           netProfit: 8.50,
           netMargin: 35.0
         }
@@ -484,21 +500,22 @@ async function runAuthFoundationTests() {
 
     // Test 16: Approval hash/version and optimistic concurrency.
     console.log('\nTest 16: Approval Hash & Version Concurrency...');
+    const scopedTruth = await saveProductTruth(port, amzCookie, scopedListing.id, 1);
     const approveRes = await fetch(`http://127.0.0.1:${port}/api/listings/${scopedListing.id}/approve`, {
       method: 'PATCH',
       headers: { Cookie: amzCookie, Origin: `http://127.0.0.1:${port}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ expectedVersion: 1, productTruthCard: makeProductTruthCard(scopedListing.id, 1) })
+      body: JSON.stringify({ expectedVersion: scopedTruth.listingVersion })
     });
-    assert.strictEqual(approveRes.status, 200);
     const approved = await approveRes.json();
-    assert.strictEqual(approved.approvedVersion, 1);
+    assert.strictEqual(approveRes.status, 200, JSON.stringify(approved));
+    assert.strictEqual(approved.approvedVersion, scopedTruth.listingVersion);
     assert.match(approved.approvedHash, /^[a-f0-9]{64}$/);
     const preMutationExport = await fetch(`http://127.0.0.1:${port}/api/listings/${scopedListing.id}/export`, { headers: { Cookie: amzCookie } });
     assert.strictEqual(preMutationExport.status, 200);
     const mutationRes = await fetch(`http://127.0.0.1:${port}/api/listings/${scopedListing.id}`, {
       method: 'PATCH',
       headers: { Cookie: amzCookie, Origin: `http://127.0.0.1:${port}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ expectedVersion: 1, amazonTitle: 'Updated', etsyTitle: 'Updated', categoryName: 'Embroidery', payload: { ipVerdict: 'ALLOW', ipHits: [], etsyTags: Array.from({ length: 13 }, (_, index) => `updated ${index + 1}`) } })
+      body: JSON.stringify({ expectedVersion: scopedTruth.listingVersion, amazonTitle: 'Updated', etsyTitle: 'Updated', categoryName: 'Embroidery', payload: { ipVerdict: 'ALLOW', ipHits: [], etsyTags: Array.from({ length: 13 }, (_, index) => `updated ${index + 1}`) } })
     });
     assert.strictEqual(mutationRes.status, 200);
     const staleMutation = await fetch(`http://127.0.0.1:${port}/api/listings/${scopedListing.id}`, {

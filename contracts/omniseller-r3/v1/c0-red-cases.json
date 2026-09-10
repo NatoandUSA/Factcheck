@@ -1,0 +1,71 @@
+{
+  "schemaVersion": "omniseller.c0-red-cases.v1",
+  "expectedPhase": "RED",
+  "cases": [
+    {
+      "id": "POLICY_CONTRACT_MUTATION_75_TO_200",
+      "expected": "Changing only the bound policy contract changes composer and validator limits."
+    },
+    {
+      "id": "POLICY_CLIENT_OVERRIDE_FORBIDDEN",
+      "expected": "Client titleLimit/highlightLimit/searchTermBytes cannot override the server-resolved contract."
+    },
+    {
+      "id": "POLICY_COMPOSER_VALIDATOR_PARITY",
+      "expected": "Compose, post-edit, approval and export report the same policyContractId and hash."
+    },
+    {
+      "id": "SINGLE_CANONICAL_COMPOSER_WRITE_PATH",
+      "expected": "Preview writes zero rows; only the canonical append repository writes immutable listing revisions."
+    },
+    {
+      "id": "LEGACY_COMPOSERS_ZERO_WRITE_AFTER_CUTOVER",
+      "expected": "All five legacy surfaces return 410 after authenticated access and change zero listing rows."
+    },
+    {
+      "id": "LEGACY_AUTH_BEFORE_RETIREMENT_RESPONSE",
+      "expected": "Unauthenticated legacy calls return 401 before authenticated callers receive 410."
+    },
+    {
+      "id": "CHAT_RESEARCH_MODE_ZERO_WRITE",
+      "expected": "Research chat remains available and changes zero listing or revision rows."
+    },
+    {
+      "id": "NO_LEGACY_UI_COMPOSER_CALLERS",
+      "expected": "Atomic cutover leaves no UI caller targeting a retired composition/create surface."
+    },
+    {
+      "id": "ROOT_V1_TRANSACTION_ROLLBACK_AND_IDEMPOTENCY",
+      "expected": "A failed v1 append rolls back its root, and retry cannot duplicate root or revision."
+    },
+    {
+      "id": "RECURSIVE_SQL_WRITER_ALLOWLIST",
+      "expected": "Recursive server scan permits immutable revision SQL only in the canonical repository."
+    },
+    {
+      "id": "POLICY_UNKNOWN_OR_AMBIGUOUS_FAILS_CLOSED",
+      "expected": "Unknown, ambiguous, account-mismatched or category-mismatched policy blocks approval/export."
+    },
+    {
+      "id": "ETSY_POLICY_VS_QUALITY_TARGET",
+      "expected": "At most 13 tags is policy; a safe shortage is reported without unsafe padding."
+    },
+    {
+      "id": "PRODUCT_NAME_DOES_NOT_PROVE_MATERIAL",
+      "fixture": { "productName": "Sterling Silver Heart Necklace", "materials": [] },
+      "expected": "Visible-copy silver claims remain blocked."
+    },
+    {
+      "id": "TRACK_A_FULL_ACCOUNTING_OVER_200",
+      "expected": "No observation, normalized phrase, disposition or rejection reason is truncated."
+    },
+    {
+      "id": "TRACK_A_CORRUPT_STORE_FAILS_VISIBLE",
+      "expected": "Malformed products.json is quarantined/reported and never silently replaced with an empty library."
+    },
+    {
+      "id": "TRACK_B_REVALIDATES_AUTHORITY_NONE",
+      "expected": "Track A imports enter unapproved state and rerun claim, IP and policy validation."
+    }
+  ]
+}

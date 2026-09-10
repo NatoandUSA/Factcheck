@@ -1,0 +1,198 @@
+'use strict';
+
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const ipGuard = require('../ipGuard');
+const { evaluateListingGuard } = require('../listingGuard');
+const { evaluateText, SURFACES } = require('../claimGuard');
+const { scoreKeywords } = require('./keywordEngine');
+const { selectAsinBatches } = require('./asinSelector');
+const { compose } = require('./amazonComposer');
+const { generateImagePromptSuite } = require('../imagePromptGenerator');
+const { fold, contentTokens } = require('./text');
+
+const ENGINE_ID = 'amazon-commerce-intelligence-v1';
+const SCORE_FIELDS = ['phrase','searchVolume','keywordSales','iq','trend','competingProducts','cpr',
+  'titleDensity','bid','minBid','maxBid','positionRank'];
+
+function factsFromSnapshot(snapshot) {
+  return Object.freeze(Object.fromEntries(Object.entries(snapshot?.asserted || {})
+    .map(([key, assertion]) => [key, assertion?.value])));
+}
+
+function text(value) {
+  if (Array.isArray(value)) return value.map(text).filter(Boolean).join(' ');
+  return value == null ? '' : String(value).trim();
+}
+
+function detectLanguage(keywords, seedPhrase = '') {
+  const seedLanguage = languageOfPhrase(seedPhrase);
+  if (seedLanguage === 'ES' || seedLanguage === 'EN') return seedLanguage;
+  const sample = keywords.slice(0, 100).map(item => item.phrase.toLowerCase()).join(' ');
+  const spanish = (sample.match(/\b(?:para|hija|regalo|collar|mujer|madre|cumpleanos|navidad|con|de)\b/g) || []).length;
+  const english = (sample.match(/\b(?:for|daughter|gift|necklace|woman|mother|birthday|christmas|with|of)\b/g) || []).length;
+  return spanish > english ? 'ES' : 'EN';
+}
+
+const SPANISH_CUES = new Set(['para','hija','regalo','regalos','collar','collares','cadena','cadenas','mujer','madre',
+  'mama','cumpleanos','navidad','con','de','del','amor','joyeria','plata','oro','graduacion']);
+const ENGLISH_CUES = new Set(['for','daughter','gift','gifts','necklace','necklaces','woman','women','mother','mom','dad',
+  'birthday','christmas','with','of','love','jewelry','silver','gold','graduation']);
+
+function languageOfPhrase(phrase) {
+  const original = String(phrase || '');
+  const tokens = contentTokens(original);
+  let es = /[áéíóúñü¿¡]/i.test(original) ? 2 : 0;
+  let en = 0;
+  for (const token of tokens) {
+    if (SPANISH_CUES.has(token)) es++;
+    if (ENGLISH_CUES.has(token)) en++;
+  }
+  if (es && en) return 'MIXED';
+  if (es) return 'ES';
+  if (en) return 'EN';
+  return 'NEUTRAL';
+}
+
+function languageCompatible(phrase, language) {
+  const detected = languageOfPhrase(phrase);
+  return detected === 'NEUTRAL' || detected === language;
+}
+
+function containsCompetitorBrand(phrase, xrayRows) {
+  const normalized = ` ${fold(phrase).replace(/[^a-z0-9]+/g, ' ').trim()} `;
+  return xrayRows.find(row => {
+    const brand = fold(row.brand || '').replace(/[^a-z0-9]+/g, ' ').trim();
+    return brand && normalized.includes(` ${brand} `);
+  }) || null;
+}
+
+function engineBindingHash() {
+  const hash = crypto.createHash('sha256'); hash.update(`${ENGINE_ID}\0`);
+  for (const file of [__filename, require.resolve('./keywordEngine'), require.resolve('./asinSelector'),
+    require.resolve('./amazonComposer'), require.resolve('./semantic'), require.resolve('../listingGuard'),
+    require.resolve('../claimGuard')]) {
+    hash.update(file.split(/[\\/]/).pop()); hash.update('\0'); hash.update(fs.readFileSync(file)); hash.update('\0');
+  }
+  return hash.digest('hex');
+}
+
+function scoreProjection(keyword) {
+  return Object.fromEntries(SCORE_FIELDS.map(field => [field, keyword[field] ?? null]));
+}
+
+function truthForComposer(facts) {
+  return {
+    productType: text(facts.productType), productName: text(facts.productName), recipient: text(facts.recipient || facts.audience),
+    occasion: text(facts.occasion), materials: facts.materials || facts.composition,
+    sizes: facts.sizes || facts.dimensions, colors: facts.colors, features: facts.features,
+    personalization: text(facts.personalization), packaging: text(facts.packaging), care: text(facts.care),
+    shipFrom: text(facts.shipFrom || facts.origin)
+  };
+}
+
+function aPlusPointsFromTruth(facts) {
+  const points = [];
+  const identity = text(facts.productName || facts.productType);
+  if (identity) points.push(identity);
+  for (const [label, value] of [
+    ['Materials', facts.materials || facts.composition], ['Personalization', facts.personalization],
+    ['Size', facts.sizes || facts.dimensions], ['Included', facts.includedItems],
+    ['Packaging', facts.packaging], ['Care', facts.care], ['Recipient', facts.recipient || facts.audience],
+    ['Occasion', facts.occasion]
+  ]) if (text(value)) points.push(`${label}: ${text(value)}`);
+  return points;
+}
+
+function canonicalContent(composed, facts, extraPpc, truthSnapshot) {
+  const ppc = [...composed.ppc.exact, ...composed.ppc.phrase, ...composed.ppc.broad].map(item => item.phrase);
+  const identity = text(facts.productName || facts.productType);
+  return {
+    amazonTitle: composed.title.text || identity,
+    itemHighlights: composed.itemHighlights.text || identity,
+    amazonBullets: composed.bullets,
+    amazonSearchTerms: composed.searchTerms[0]?.text || '',
+    amazonDescription: composed.description,
+    amazonAPlusPoints: aPlusPointsFromTruth(facts),
+    categoryName: text(facts.category),
+    ppcKeywords: [...new Set([...ppc, ...extraPpc.map(item => item.phrase)])],
+    imagePrompts: generateImagePromptSuite(truthSnapshot, 'AMAZON')
+  };
+}
+
+async function buildIntelligence({ research, productTruth, configuration = {} }) {
+  const observations = research.observations || {};
+  if (observations.marketplace !== 'AMAZON') throw Object.assign(new Error('AMAZON_RESEARCH_REQUIRED'), {
+    code: 'AMAZON_RESEARCH_REQUIRED'
+  });
+  const facts = factsFromSnapshot(productTruth.snapshot);
+  const keywordRows = (observations.cerebro?.keywords || []).map(scoreProjection);
+  if (!keywordRows.length) throw Object.assign(new Error('CEREBRO_KEYWORDS_REQUIRED'), { code: 'CEREBRO_KEYWORDS_REQUIRED' });
+  const anchors = [configuration.seedPhrase, facts.productType, facts.productName, facts.recipient, facts.occasion]
+    .map(text).filter(Boolean);
+  if (!anchors.length) throw Object.assign(new Error('INTELLIGENCE_ANCHOR_REQUIRED'), { code: 'INTELLIGENCE_ANCHOR_REQUIRED' });
+  const scored = scoreKeywords(keywordRows, { anchors, library: true,
+    screen: value => ipGuard.screenText(value), minSearchVolume: 0, negativeKeywords: [] });
+  const language = ['EN','ES'].includes(configuration.listingLanguage) ? configuration.listingLanguage
+    : detectLanguage(keywordRows, configuration.seedPhrase);
+  const xrayRows = observations.xray || [];
+  const copySafe = []; const claimTargeting = []; const languageTargeting = [];
+  const competitorBrandBlocked = []; const lexicalReviewQueue = [];
+  for (const keyword of scored) {
+    if (keyword.ipVerdict === 'BLOCK') continue;
+    const competitor = containsCompetitorBrand(keyword.phrase, xrayRows);
+    if (competitor) {
+      competitorBrandBlocked.push({ phrase: keyword.phrase, brand: competitor.brand, sourceAsin: competitor.asin });
+      continue;
+    }
+    if (keyword.suspectedBrand || keyword.rareReviewToken) {
+      lexicalReviewQueue.push({ phrase: keyword.phrase, suspectedBrand: keyword.suspectedBrand,
+        rareReviewToken: keyword.rareReviewToken });
+      continue;
+    }
+    if (!languageCompatible(keyword.phrase, language)) {
+      languageTargeting.push({ phrase: keyword.phrase, detectedLanguage: languageOfPhrase(keyword.phrase), listingLanguage: language });
+      continue;
+    }
+    const claim = evaluateText(keyword.phrase, facts, SURFACES.VISIBLE_COPY);
+    if (claim.unverifiedClaims.length) {
+      if (keyword.ipVerdict !== 'BLOCK') claimTargeting.push({ phrase: keyword.phrase,
+        searchVolume: keyword.searchVolume, bid: keyword.bid, positionRank: keyword.positionRank,
+        score: Number(keyword.score.toFixed(4)), relevance: Number(keyword.relevance.toFixed(4)),
+        unverifiedClaims: claim.unverifiedClaims });
+    } else copySafe.push(keyword);
+  }
+  Object.defineProperty(copySafe, 'meta', { value: scored.meta, enumerable: false });
+  const composed = compose(copySafe, truthForComposer(facts), { labelLanguage: language,
+    mustContainAny: anchors, searchTermBytes: 249 });
+  const content = canonicalContent(composed, facts, [...claimTargeting, ...languageTargeting], productTruth.snapshot);
+  const guarded = evaluateListingGuard({ listing: content, verifiedFacts: facts });
+  const xray = selectAsinBatches(xrayRows, { anchors, library: true,
+    screen: value => ipGuard.screenText(value), maxPerBrand: 2, batchSize: 10 });
+  const ipBlockedKeywordCount = scored.filter(item => item.ipVerdict === 'BLOCK').length;
+  const allocatedKeywordCount = copySafe.length + claimTargeting.length + languageTargeting.length
+    + competitorBrandBlocked.length + lexicalReviewQueue.length + ipBlockedKeywordCount;
+  const unallocatedCount = scored.length - allocatedKeywordCount;
+  if (unallocatedCount !== 0) throw Object.assign(new Error('INTELLIGENCE_KEYWORD_ACCOUNTING_MISMATCH'), {
+    code: 'INTELLIGENCE_KEYWORD_ACCOUNTING_MISMATCH', scoredKeywordCount: scored.length,
+    allocatedKeywordCount, unallocatedCount
+  });
+  return Object.freeze({
+    output: { marketplace: 'AMAZON', language, anchors, listingDraft: guarded.listing,
+      commerce: composed, asinSelection: xray, claimTargeting, languageTargeting,
+      competitorBrandBlocked, lexicalReviewQueue,
+      guardAccounting: { backendExcluded: guarded.backendExcluded, ppcFlagged: guarded.ppcFlagged } },
+    accounting: { inputKeywordCount: keywordRows.length, scoredKeywordCount: scored.length,
+      copySafeKeywordCount: copySafe.length, claimTargetingCount: claimTargeting.length,
+      languageTargetingCount: languageTargeting.length, competitorBrandBlockedCount: competitorBrandBlocked.length,
+      lexicalReviewCount: lexicalReviewQueue.length,
+      ipBlockedKeywordCount, allocatedKeywordCount, unallocatedCount,
+      xrayInputCount: (observations.xray || []).length, asinAcceptedCount: xray.acceptedCount,
+      asinRejectedCount: xray.rejectedCount, missingProductFacts: composed.missingFacts },
+    engineBindingHash: engineBindingHash()
+  });
+}
+
+module.exports = Object.freeze({ ENGINE_ID, aPlusPointsFromTruth, buildIntelligence, detectLanguage,
+  languageOfPhrase, languageCompatible, containsCompetitorBrand,
+  engineBindingHash, factsFromSnapshot });

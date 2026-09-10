@@ -1,0 +1,36 @@
+{
+  "schemaVersion": "omniseller.track-a-handoff.v1",
+  "packageId": "track-a-example-001",
+  "classification": "TEMPORARY_NON_CANONICAL",
+  "authority": "NONE",
+  "watermark": "INTERNAL WORKING DRAFT — NOT APPROVED — NOT FOR MARKETPLACE SUBMISSION",
+  "generatedAt": "2026-09-09T00:00:00Z",
+  "productTruthState": "STAFF_INPUT_UNVERIFIED",
+  "requiresTrackBRevalidation": true,
+  "keywordAccounting": {
+    "inputObservations": 1099,
+    "accountedObservations": 1099,
+    "complete": true
+  },
+  "bindings": {
+    "donorCommit": "UNCOMMITTED_DONOR_SHA256_MANIFEST",
+    "policyContractId": "amazon-us-nonmedia-2026-07-27-v1",
+    "policyContractHash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "claimTaxonomyVersion": "omniseller.claim-taxonomy.v1",
+    "claimValidatorVersion": "track-a-claim-guard-adapter-v1",
+    "ipCorpusVersion": "baseline-ip-library-v1",
+    "parserVersion": "track-a-import-v1",
+    "strategyVersion": "track-a-compose-v1"
+  },
+  "components": [
+    { "name": "01_PRODUCT_TRUTH.json", "sha256": "0000000000000000000000000000000000000000000000000000000000000000", "bytes": 1, "mediaType": "application/json" },
+    { "name": "02_RESEARCH_SOURCE_MANIFEST.json", "sha256": "1111111111111111111111111111111111111111111111111111111111111111", "bytes": 1, "mediaType": "application/json" },
+    { "name": "03_AMAZON_DRAFT.json", "sha256": "2222222222222222222222222222222222222222222222222222222222222222", "bytes": 1, "mediaType": "application/json" },
+    { "name": "03_AMAZON_DRAFT.csv", "sha256": "8888888888888888888888888888888888888888888888888888888888888888", "bytes": 1, "mediaType": "text/csv" },
+    { "name": "03_AMAZON_DRAFT.txt", "sha256": "3333333333333333333333333333333333333333333333333333333333333333", "bytes": 1, "mediaType": "text/plain" },
+    { "name": "04_KEYWORD_DISPOSITION.csv", "sha256": "4444444444444444444444444444444444444444444444444444444444444444", "bytes": 1, "mediaType": "text/csv" },
+    { "name": "05_CLAIM_IP_POLICY_REPORT.json", "sha256": "5555555555555555555555555555555555555555555555555555555555555555", "bytes": 1, "mediaType": "application/json" },
+    { "name": "06_PPC_REVIEW.csv", "sha256": "6666666666666666666666666666666666666666666666666666666666666666", "bytes": 1, "mediaType": "text/csv" },
+    { "name": "07_TRACK_B_IMPORT_RECEIPT_TEMPLATE.json", "sha256": "7777777777777777777777777777777777777777777777777777777777777777", "bytes": 1, "mediaType": "application/json" }
+  ]
+}

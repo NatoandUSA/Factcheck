@@ -17,7 +17,6 @@
 process.env.NODE_ENV = 'test';
 
 const assert = require('assert');
-const { makeProductTruthCard } = require('./helpers/productTruth.cjs');
 const { approvalHash } = require('../server/security/approval');
 const { app, db, databaseReady } = require('../server/server');
 
@@ -68,6 +67,15 @@ async function request(port, path, cookie, method = 'GET', body) {
     body: body ? JSON.stringify(body) : undefined
   });
   return { status: res.status, body: await res.json() };
+}
+
+async function saveProductTruth(port, cookie, listingId, expectedVersion) {
+  const result = await request(port, `/api/listings/${listingId}/product-truth`, cookie, 'PUT', {
+    expectedVersion,
+    facts: { productType: { disposition: 'ASSERTED', value: 'APPAREL', basis: 'PHYSICAL_INSPECTION' } }
+  });
+  assert.strictEqual(result.status, 200, `Product Truth save failed: ${JSON.stringify(result.body)}`);
+  return result.body;
 }
 
 async function createBenignListing(port, cookie, marketplace) {
@@ -180,9 +188,9 @@ async function main() {
     const patchedRow = await dbGet('SELECT payload FROM listings WHERE id = ?', [amazonListingId]);
     const forgedLegacyPayload = { ...JSON.parse(patchedRow.payload), ipVerdict: 'CLEAR', ipHits: [] };
     await dbRun("UPDATE listings SET status = 'NEEDS_QA', payload = ? WHERE id = ?", [JSON.stringify(forgedLegacyPayload), amazonListingId]);
+    const truth = await saveProductTruth(port, amazonCookie, amazonListingId, 2);
     const approvalAttempt = await request(port, `/api/listings/${amazonListingId}/approve`, amazonCookie, 'PATCH', {
-      expectedVersion: 2,
-      productTruthCard: makeProductTruthCard(amazonListingId, 2)
+      expectedVersion: truth.listingVersion
     });
     assert.strictEqual(approvalAttempt.status, 400, 'IP-4 protected legacy content must be denied at approval');
     assert.match(String(approvalAttempt.body.error || ''), /APPROVAL_DENIED/, 'IP-4 denial must be explicit');
@@ -204,7 +212,7 @@ async function main() {
     // rather than being rejected earlier as an unbound legacy approval.
     const fixtureRow = await dbGet('SELECT * FROM listings WHERE id=?', [amazonListingId]);
     const fixtureOwner = await dbGet("SELECT id FROM users WHERE email='owner@omniseller.local'");
-    const fixtureCard = makeProductTruthCard(amazonListingId, fixtureRow.listing_version);
+    const fixtureCard = JSON.parse(fixtureRow.product_truth_card);
     const contextHash = require('../server/currentPublishDecision').approvalContextHash(fixtureRow, fixtureCard, fixtureOwner.id);
     await dbRun('UPDATE listings SET approved_by=?,approved_at=CURRENT_TIMESTAMP,product_truth_card=?,approved_context_hash=? WHERE id=?',
       [fixtureOwner.id, JSON.stringify(fixtureCard), contextHash, amazonListingId]);

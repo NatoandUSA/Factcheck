@@ -11,6 +11,7 @@ import MarketBenchmarkWidget from './MarketBenchmarkWidget';
 import SmartPullAnalyticsBar from './SmartPullAnalyticsBar';
 import ProjectSetupCard from './ProjectSetupCard';
 import ProjectEvidenceGate from './ProjectEvidenceGate';
+import CanonicalCommerceWorkflow from './CanonicalCommerceWorkflow';
 import { createProjectBoundLoader } from '../utils/projectBoundLoader.js';
 
 export default function AmazonWorkspace({ onSelectListing, onApproveListing, onShowToast }) {
@@ -287,7 +288,7 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
         )}
       </div>
 
-      {!activeProject && <ProjectSetupCard marketplace="AMAZON" seedPhrase={seedPhrase} onCreated={handleProjectCreated} onShowToast={onShowToast} />}
+      {!activeProject && <ProjectSetupCard marketplace="AMAZON" category={selectedCategory} seedPhrase={seedPhrase} onCreated={handleProjectCreated} onShowToast={onShowToast} />}
 
       <SmartPullAnalyticsBar
         marketplace="AMAZON"
@@ -300,7 +301,17 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
         }}
       />
 
-      <ProjectEvidenceGate activeProject={activeProject} onTransition={handleTransition} onShowToast={onShowToast} />
+      <CanonicalCommerceWorkflow
+        activeProject={activeProject}
+        marketplace="AMAZON"
+        onSelectListing={onSelectListing}
+        onShowToast={onShowToast}
+      />
+
+      <details style={{ margin: '10px 0' }}>
+        <summary style={{ cursor: 'pointer', fontWeight: 800, color: '#64748b' }}>Công cụ chuyển stage legacy — không bắt buộc cho luồng R3</summary>
+        <ProjectEvidenceGate activeProject={activeProject} onTransition={handleTransition} onShowToast={onShowToast} />
+      </details>
 
       {/* 0. Market Benchmark & Go/No-Go Decision Gate (Pre-Listing Validation) */}
       <MarketBenchmarkWidget 
@@ -322,16 +333,16 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
           onClick={() => setActiveStage('workflow')}
         >
           <Layers size={18} />
-          <span>⚡ Stage 1: Quy Trình 4 Bước Amazon A10 (Workflow)</span>
+          <span>Công cụ cũ 1: Quy trình Amazon A10</span>
         </button>
 
         <button
           className={`command-stage-tab ${activeStage === 'research' ? 'active-amazon' : ''}`}
           onClick={() => setActiveStage('research')}
-          disabled={!activeProject || activeProject.state === 'EVIDENCE_INTAKE'}
+          disabled={!activeProject}
         >
           <Brain size={18} />
-          <span>🧠 Stage 2: Nghiên Cứu Sâu & Học DNA Đối Thủ (Research Hub)</span>
+          <span>Công cụ cũ 2: Research Hub (không chặn luồng R3)</span>
         </button>
 
         <button
@@ -340,7 +351,7 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
           disabled={!activeProject || !['MKL_FROZEN', 'DRAFT_GENERATED', 'PRODUCT_TRUTH_VERIFIED', 'PRODUCT_TRUTH_CONFIRMED', 'VALIDATED', 'MANAGER_APPROVED', 'PUBLISH_READY'].includes(activeProject.state)}
         >
           <Database size={18} />
-          <span>📊 Stage 3: Kho Từ Khóa Phân Tầng MKL 5-Tier</span>
+          <span>Công cụ cũ 3: Kho từ khóa MKL 5-Tier</span>
         </button>
       </div>
 
@@ -364,6 +375,7 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
           }}
           onGenerateListingDirect={handleGenerateListing}
           isDrafting={drafting}
+          legacyDraftDisabled
         />
       </div>
 
@@ -386,22 +398,22 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
           <div className="studio-panel" style={{ padding: '20px 24px', borderLeft: '4px solid #0284c7', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#f0f9ff', borderRadius: '12px', flexWrap: 'wrap', gap: '12px' }}>
             <div>
               <div style={{ fontWeight: 800, fontSize: '1rem', color: '#0369a1' }}>
-                🧠 Stage 2: Competitor DNA & Trend Research
+                Research Hub legacy — chỉ dùng để xem và phân tích
               </div>
               <div style={{ fontSize: '0.8rem', color: '#0284c7', marginTop: '2px' }}>
-                Xray có {xraySellers.length} ASIN candidate trong phiên này. Chọn link/text để học cấu trúc; sau đó accept evidence hợp lệ trước khi chấp nhận DNA.
+                Xray có {xraySellers.length} ASIN candidate trong phiên này. Việc xem dữ liệu không cần chuyển state; tạo draft chính thức dùng Luồng Staff Canonical phía trên.
               </div>
             </div>
 
             <div style={{ display: 'flex', gap: '10px' }}>
               <button
                 onClick={handleGenerateListing}
-                disabled={drafting || !['MKL_FROZEN', 'DRAFT_GENERATED', 'PRODUCT_TRUTH_VERIFIED', 'PRODUCT_TRUTH_CONFIRMED', 'VALIDATED', 'MANAGER_APPROVED', 'PUBLISH_READY'].includes(activeProject?.state)}
+                disabled
                 className="btn btn-primary"
                 style={{ background: '#16a34a', fontWeight: 800, padding: '10px 20px', borderRadius: '8px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}
               >
                 {drafting ? <RefreshCw size={16} className="spinner" /> : <Zap size={16} />}
-                <span>{drafting ? 'Đang tạo listing...' : '⚡ Sinh Listing Ngay'}</span>
+                <span>🔒 Sinh Listing legacy đã khóa — dùng Canonical</span>
               </button>
 
               <button
@@ -439,7 +451,7 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
             {/* HIGH-IMPACT PROMINENT GENERATION CTA */}
             <button
               onClick={handleGenerateListing}
-              disabled={drafting}
+              disabled
               className="btn btn-primary"
               style={{
                 background: 'linear-gradient(135deg, #7e22ce 0%, #0284c7 100%)',
@@ -456,7 +468,7 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
               }}
             >
               {drafting ? <RefreshCw size={18} className="spinner" /> : <Zap size={18} />}
-              <span>{drafting ? 'Đang sinh Amazon A10 Listing...' : '⚡ Sinh Bộ Amazon A10 Listing & Family Draft'}</span>
+              <span>🔒 Sinh Listing legacy đã khóa — dùng Canonical</span>
             </button>
           </div>
 

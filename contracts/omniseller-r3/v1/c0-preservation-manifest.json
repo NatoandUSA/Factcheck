@@ -1,0 +1,68 @@
+{
+  "schemaVersion": "omniseller.c0-preservation.v1",
+  "createdAt": "2026-09-09T00:00:00+07:00",
+  "baselineCommit": "8dd56569832164ecd3b0ddd62caea254fdade452",
+  "branch": "codex/omniseller-r3-c0",
+  "artifacts": [
+    {
+      "role": "CLAUDE_FINAL_REVIEW",
+      "path": "D:\\Claude\\Factcheck\\Claude outputs\\CLAUDE_REVIEW_MASTER_FINAL_R3_20260908.md",
+      "bytes": 15017,
+      "sha256": "17898a57f6e939b5e3a725463f9077537a329dfec85d6dcd2018ac4ef0b90470"
+    },
+    {
+      "role": "DONOR_CLAIM_GUARD",
+      "path": "D:\\Claude\\Factcheck\\Claude outputs\\amz-draft-engine\\lib\\claims.js",
+      "bytes": 12575,
+      "sha256": "89b449c57b2c020c27c894154b6e8872e560ec08eba24f4c0b094784c4b89a2a"
+    },
+    {
+      "role": "DONOR_AMAZON_COMPOSER",
+      "path": "D:\\Claude\\Factcheck\\Claude outputs\\amz-draft-engine\\lib\\compose.js",
+      "bytes": 16787,
+      "sha256": "0ff5bc7dcd1b9465c3dab97518dc54bbfe768b575d3d6578b94916a41d83a2a2"
+    },
+    {
+      "role": "DONOR_CONVENIENCE_STORE",
+      "path": "D:\\Claude\\Factcheck\\Claude outputs\\amz-draft-engine\\lib\\products.js",
+      "bytes": 9116,
+      "sha256": "e7e9449a1d3341e9dd40629a8eb1a6205aab539d0c3faa4b59c8fac187bd2f31"
+    },
+    {
+      "role": "DONOR_HTTP_SHELL",
+      "path": "D:\\Claude\\Factcheck\\Claude outputs\\amz-draft-engine\\server.js",
+      "bytes": 14155,
+      "sha256": "85429d0e01c257ca7df666f91bb33d44bb7af4b9415d5d47d8d869b48aeee93c"
+    },
+    {
+      "role": "REAL_AMAZON_CEREBRO",
+      "path": "D:\\Claude\\Factcheck\\Inputdata08092026\\Cerebro_Hija.xlsx",
+      "bytes": 260477,
+      "sha256": "c77428d8e080c70545d14409a9d64d98e076e8df72b45d0f3257877cc75615d6"
+    },
+    {
+      "role": "REAL_AMAZON_XRAY",
+      "path": "D:\\Claude\\Factcheck\\Inputdata08092026\\Xray_Hija.xlsx",
+      "bytes": 15279,
+      "sha256": "171e8935249ae00e775207efd8c08645321212048ff02abac6fbff4a8d043bfe"
+    },
+    {
+      "role": "REAL_ETSY_SEARCH_PART_1",
+      "path": "D:\\Claude\\Factcheck\\Inputdata08092026\\para_mi_hija_search_20260908_222159.csv",
+      "bytes": 45775,
+      "sha256": "70a7c212ec94cba7a880d42e71d0f984bd7cabe944b04c3c28d8068878fcd023"
+    },
+    {
+      "role": "REAL_ETSY_SEARCH_PART_2",
+      "path": "D:\\Claude\\Factcheck\\Inputdata08092026\\para_mi_hija_search_20260908_222205.csv",
+      "bytes": 47265,
+      "sha256": "72c065ff5783a0507e3b0697e2e6abd847df53268e802001fb9e250d4fbde2c5"
+    },
+    {
+      "role": "REAL_ETSY_SEARCH_PART_3",
+      "path": "D:\\Claude\\Factcheck\\Inputdata08092026\\para_mi_hija_search_20260908_222208.csv",
+      "bytes": 46879,
+      "sha256": "f3ffae62c0fbd10921637ceeb051630dcfc156b25bb1a39519f862edcb66405f"
+    }
+  ]
+}

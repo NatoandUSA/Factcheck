@@ -1,0 +1,267 @@
+'use strict';
+
+const fs = require('node:fs');
+const path = require('node:path');
+const { PolicyContractRegistry, createServerPolicyContext } = require('./policy/contractRegistry');
+const { bindingOf, validatePolicySurfaces } = require('./policy/enforce');
+const { canonicalJson, hashBytes } = require('./revisionStore');
+const { currentProductTruthRevision } = require('./productTruthStore');
+const { evaluateListingGuard } = require('./listingGuard');
+const ipGuard = require('./ipGuard');
+const { getIntelligenceSnapshot } = require('./commerceSnapshotStore');
+
+const fixtureDir = path.resolve(__dirname, '../contracts/omniseller-r3/v1/policy-fixtures');
+const draftPolicyRegistry = PolicyContractRegistry.fromDirectory(fixtureDir, {
+  lifecycleSnapshot: { completeThrough: '2026-09-09T00:00:00.000Z', events: [] }
+});
+const validatorFiles = [
+  path.resolve(__dirname, 'listingGuard.js'),
+  path.resolve(__dirname, 'ipGuard.js'),
+  path.resolve(__dirname, 'claimGuard/index.js'),
+  path.resolve(__dirname, 'claimGuard/lexicalScanner.js'),
+  path.resolve(__dirname, 'claimGuard/corroboration.js'),
+  path.resolve(__dirname, 'claimGuard/surfacePolicy.js'),
+  path.resolve(__dirname, 'claimGuard/outputAudit.js'),
+  path.resolve(__dirname, 'claimGuard/taxonomyAdapter.js'),
+  path.resolve(__dirname, 'claimGuard/ipMatcher.js'),
+  path.resolve(__dirname, 'policy/enforce.js'),
+  path.resolve(__dirname, 'policy/contractRegistry.js'),
+  path.resolve(__dirname, 'policy/contractSchemaValidator.js'),
+  path.resolve(__dirname, '../shared/policyContractInvariants.cjs'),
+  path.resolve(__dirname, '../contracts/omniseller-r3/v1/policy-contract.schema.json'),
+  path.resolve(__dirname, '../contracts/omniseller-r3/v1/policy-lifecycle-event.schema.json'),
+  path.resolve(__dirname, '../contracts/omniseller-r3/v1/claim-taxonomy.v1.json')
+];
+const validatorHash = hashBytes(validatorFiles.map(file => fs.readFileSync(file)).map(bytes => bytes.toString('base64')).join('.'));
+const claimIpBindingHash = hashBytes(canonicalJson({
+  taxonomy: fs.readFileSync(path.resolve(__dirname, '../contracts/omniseller-r3/v1/claim-taxonomy.v1.json')).toString('utf8'),
+  ipLibrary: fs.readFileSync(path.resolve(__dirname, 'ip_library.json')).toString('utf8')
+}));
+
+class CanonicalDraftError extends Error {
+  constructor(code, status = 400, details = {}) {
+    super(code); this.name = 'CanonicalDraftError'; this.code = code; this.status = status; this.details = details;
+  }
+}
+
+const get = (db, sql, params = []) => new Promise((resolve, reject) => db.get(sql, params,
+  (error, row) => error ? reject(error) : resolve(row || null)));
+
+const COMMON_FIELDS = new Set(['categoryName', 'itemHighlights', 'imagePrompts', 'creativeAssets', 'ppcKeywords']);
+const AMAZON_FIELDS = new Set([...COMMON_FIELDS, 'amazonTitle', 'amazonBullets', 'amazonSearchTerms', 'amazonDescription', 'amazonAPlusPoints']);
+const ETSY_FIELDS = new Set([...COMMON_FIELDS, 'etsyTitle', 'etsyTags', 'etsyDescription']);
+
+function exactContent(content, marketplace) {
+  if (!content || typeof content !== 'object' || Array.isArray(content)) throw new CanonicalDraftError('INVALID_LISTING_PAYLOAD');
+  const allowed = marketplace === 'AMAZON' ? AMAZON_FIELDS : ETSY_FIELDS;
+  const unexpected = Object.keys(content).find(key => !allowed.has(key));
+  if (unexpected) throw new CanonicalDraftError('UNEXPECTED_LISTING_FIELD', 400, { field: unexpected });
+  return content;
+}
+
+function factsFromSnapshot(snapshot) {
+  return Object.freeze(Object.fromEntries(Object.entries(snapshot?.asserted || {}).map(([key, assertion]) => [key, assertion.value])));
+}
+
+function scalar(value) {
+  return ['string', 'number', 'boolean'].includes(typeof value) ? String(value).trim() : '';
+}
+
+function composeTruthOnlyContent(truth, marketplace) {
+  const facts = factsFromSnapshot(truth.snapshot);
+  const productType = scalar(facts.productType || facts.productName || facts.category);
+  if (!productType) throw new CanonicalDraftError('PRODUCT_IDENTITY_REQUIRED', 409, { missing: ['productType'] });
+  const recipient = scalar(facts.recipient || facts.audience);
+  const occasion = scalar(facts.occasion);
+  const title = [productType, recipient ? `for ${recipient}` : '', occasion].filter(Boolean).join(' ').trim();
+  const detailPairs = [
+    ['Material', facts.materials || facts.composition], ['Size', facts.sizes || facts.dimensions],
+    ['Personalization', facts.personalization], ['Included', facts.includedItems],
+    ['Format', facts.fileFormat], ['Players', facts.playerCount], ['Age', facts.minimumAge], ['Duration', facts.duration]
+  ].map(([label, value]) => [label, scalar(value)]).filter(([, value]) => value);
+  const description = [title, ...detailPairs.map(([label, value]) => `${label}: ${value}`)].join('. ');
+  if (marketplace === 'AMAZON') return Object.freeze({
+    amazonTitle: title, itemHighlights: productType,
+    amazonBullets: detailPairs.length ? detailPairs.map(([label, value]) => `${label}: ${value}`) : [productType],
+    amazonSearchTerms: '', amazonDescription: description, amazonAPlusPoints: [], categoryName: scalar(facts.category)
+  });
+  const tagCandidates = [productType, recipient, occasion, ...productType.split(/\s+/)].map(value => value.trim())
+    .filter(value => value && Array.from(value).length <= 20);
+  return Object.freeze({ etsyTitle: title, etsyTags: [...new Set(tagCandidates)].slice(0, 13),
+    etsyDescription: description, itemHighlights: productType, categoryName: scalar(facts.category) });
+}
+
+async function projectPolicyContext(db, scope, projectId) {
+  const row = await get(db, `SELECT p.*,w.seller_account_label,w.site FROM research_projects p
+    JOIN workspaces w ON w.id=p.workspace_id AND w.tenant_id=p.tenant_id AND w.marketplace=p.marketplace
+    WHERE p.id=? AND p.tenant_id=? AND p.workspace_id=? AND p.marketplace=?`,
+  [projectId, scope.tenantId, scope.workspaceId, scope.marketplace]);
+  if (!row) throw new CanonicalDraftError('PROJECT_NOT_FOUND', 404);
+  const missing = ['locale', 'media_class', 'product_type_id', 'category_id', 'product_family_version',
+    'seller_account_label', 'site'].filter(key => !String(row[key] || '').trim());
+  if (missing.length) throw new CanonicalDraftError('PROJECT_POLICY_CONTEXT_INCOMPLETE', 409, { missing });
+  return row;
+}
+
+function policySurfaces(listing, marketplace) {
+  return marketplace === 'AMAZON' ? {
+    title: listing.amazonTitle,
+    itemHighlights: listing.itemHighlights,
+    bullets: listing.amazonBullets,
+    genericKeywords: listing.amazonSearchTerms
+  } : { title: listing.etsyTitle, tags: listing.etsyTags };
+}
+
+async function resolveIntelligenceBinding(db, scope, projectId, selectedIntelligenceSnapshotId, truth) {
+  if (selectedIntelligenceSnapshotId == null) return null;
+  const intelligence = await getIntelligenceSnapshot(db, scope, projectId, selectedIntelligenceSnapshotId);
+  const project = await get(db, `SELECT head_research_snapshot_id,head_product_truth_revision_id,head_intelligence_snapshot_id
+    FROM research_projects WHERE id=? AND tenant_id=? AND workspace_id=? AND marketplace=?`,
+  [projectId, scope.tenantId, scope.workspaceId, scope.marketplace]);
+  if (!project || project.head_intelligence_snapshot_id !== intelligence.id
+    || project.head_research_snapshot_id !== intelligence.research_snapshot_id
+    || project.head_product_truth_revision_id !== intelligence.product_truth_revision_id
+    || intelligence.product_truth_revision_id !== truth.id || intelligence.product_truth_hash !== truth.content_hash) {
+    throw new CanonicalDraftError('STALE_INTELLIGENCE_SNAPSHOT', 409);
+  }
+  if (!intelligence.output?.listingDraft || typeof intelligence.output.listingDraft !== 'object') {
+    throw new CanonicalDraftError('INTELLIGENCE_DRAFT_UNAVAILABLE', 409);
+  }
+  return intelligence;
+}
+
+function stablePolicyContext(project, scope) {
+  return Object.freeze({ tenantId: scope.tenantId, workspaceId: String(scope.workspaceId),
+    sellerAccountId: project.seller_account_label, marketplace: scope.marketplace, site: project.site,
+    locale: project.locale, mediaClass: project.media_class, productTypeId: project.product_type_id,
+    categoryId: project.category_id, productFamilyVersion: project.product_family_version });
+}
+
+function serverPolicyContext(project, scope) {
+  return createServerPolicyContext({ ...stablePolicyContext(project, scope), effectiveAt: new Date().toISOString() });
+}
+
+async function validateCanonicalDraft(db, scope, projectId, selectedTruthRevisionId, rawContent,
+  selectedIntelligenceSnapshotId = null, purpose = 'DRAFT') {
+  const project = await projectPolicyContext(db, scope, projectId);
+  const truth = await currentProductTruthRevision(db, scope, projectId);
+  if (Number(selectedTruthRevisionId) !== truth.id) throw new CanonicalDraftError('STALE_PRODUCT_TRUTH_REVISION', 409);
+  const intelligence = await resolveIntelligenceBinding(db, scope, projectId, selectedIntelligenceSnapshotId, truth);
+  const listing = exactContent(rawContent, scope.marketplace);
+  let guarded;
+  try { guarded = evaluateListingGuard({ listing, verifiedFacts: factsFromSnapshot(truth.snapshot) }); }
+  catch (error) { throw new CanonicalDraftError(error.code || 'LISTING_GUARD_UNAVAILABLE', error.code === 'UNVERIFIED_OUTPUT_CLAIM' ? 422 : 503, error.details); }
+  let ip;
+  try { ip = ipGuard.screenListing(guarded.listing); }
+  catch (_) { throw new CanonicalDraftError('IP_GUARD_UNAVAILABLE', 503); }
+  if (ip.verdict === 'BLOCK') throw new CanonicalDraftError('IP_CLEARANCE_REQUIRED', 409, { ipHits: ip.hits });
+  const policyContext = serverPolicyContext(project, scope);
+  let resolution;
+  let policy;
+  try {
+    resolution = draftPolicyRegistry.resolve(policyContext, { purpose });
+    policy = validatePolicySurfaces(policySurfaces(guarded.listing, scope.marketplace), resolution, policyContext);
+  } catch (error) {
+    throw new CanonicalDraftError(error.code || 'POLICY_CONTRACT_UNAVAILABLE', 409, error.details);
+  }
+  if (!policy.policyCompliant) throw new CanonicalDraftError('POLICY_VALIDATION_FAILED', 422, { violations: policy.policyViolations });
+  if (purpose === 'APPROVAL' && !policy.policyContractApprovalEligible) {
+    throw new CanonicalDraftError('POLICY_APPROVAL_BLOCKED', 409, { blockers: policy.policyApprovalBlockers });
+  }
+  const policyBinding = bindingOf(resolution, policyContext);
+  const policyContextHash = hashBytes(canonicalJson(stablePolicyContext(project, scope)));
+  return Object.freeze({
+    content: guarded.listing,
+    truth,
+    policy,
+    dependencies: Object.freeze({
+      productTruthRevisionId: truth.id,
+      productTruthHash: truth.content_hash,
+      researchSnapshotId: intelligence?.research_snapshot_id ?? null,
+      researchSnapshotHash: intelligence?.research_snapshot_hash ?? null,
+      intelligenceSnapshotId: intelligence?.id ?? null,
+      intelligenceSnapshotHash: intelligence?.snapshot_hash ?? null,
+      policyBindingHash: hashBytes(canonicalJson(policyBinding)),
+      policyContractId: resolution.policyContractId,
+      policyContractArtifactHash: resolution.policyContractArtifactHash,
+      policyContextHash,
+      policyLifecycleSnapshotDigest: resolution.lifecycleSnapshotDigest,
+      claimIpBindingHash,
+      validatorHash,
+      locale: project.locale,
+      productFamilyVersion: project.product_family_version
+    }),
+    guardAccounting: Object.freeze({ backendExcluded: guarded.backendExcluded, ppcFlagged: guarded.ppcFlagged,
+      ipVerdict: ip.verdict, policyQualityGaps: policy.qualityGaps,
+      approvalBlockers: policy.policyApprovalBlockers })
+  });
+}
+
+async function composeTruthOnlyDraft(db, scope, projectId, selectedTruthRevisionId) {
+  const truth = await currentProductTruthRevision(db, scope, projectId);
+  if (Number(selectedTruthRevisionId) !== truth.id) throw new CanonicalDraftError('STALE_PRODUCT_TRUTH_REVISION', 409);
+  const content = composeTruthOnlyContent(truth, scope.marketplace);
+  const validated = await validateCanonicalDraft(db, scope, projectId, selectedTruthRevisionId, content);
+  return Object.freeze({ ...validated, degraded: true, provider: 'DETERMINISTIC_TRUTH_ONLY' });
+}
+
+async function composeCommerceDraft(db, scope, projectId, selectedIntelligenceSnapshotId) {
+  const intelligence = await getIntelligenceSnapshot(db, scope, projectId, selectedIntelligenceSnapshotId);
+  const validated = await validateCanonicalDraft(db, scope, projectId, intelligence.product_truth_revision_id,
+    intelligence.output?.listingDraft, intelligence.id);
+  return Object.freeze({ ...validated, intelligence, degraded: false, provider: 'PERSISTED_COMMERCE_INTELLIGENCE' });
+}
+
+async function assertCanonicalDependenciesCurrent(db, scope, projectId, dependencies) {
+  const selectedId = Number(dependencies?.productTruthRevisionId);
+  const selectedHash = String(dependencies?.productTruthHash || '');
+  const row = await get(db, `SELECT r.id,r.content_hash,r.snapshot_json,p.head_research_snapshot_id,p.head_intelligence_snapshot_id
+    FROM research_projects p
+    JOIN product_truth_revisions r ON r.id=p.head_product_truth_revision_id AND r.project_id=p.id
+    WHERE p.id=? AND p.tenant_id=? AND p.workspace_id=? AND p.marketplace=?
+      AND r.tenant_id=p.tenant_id AND r.workspace_id=p.workspace_id AND r.marketplace=p.marketplace`,
+  [projectId, scope.tenantId, scope.workspaceId, scope.marketplace]);
+  if (!row || row.id !== selectedId || row.content_hash !== selectedHash) {
+    throw new CanonicalDraftError('STALE_PRODUCT_TRUTH_REVISION', 409);
+  }
+  if (hashBytes(row.snapshot_json) !== row.content_hash) {
+    throw new CanonicalDraftError('REVISION_INTEGRITY_FAILURE', 500);
+  }
+  if (dependencies?.intelligenceSnapshotId != null || dependencies?.researchSnapshotId != null) {
+    if (Number(dependencies.researchSnapshotId) !== row.head_research_snapshot_id
+      || Number(dependencies.intelligenceSnapshotId) !== row.head_intelligence_snapshot_id) {
+      throw new CanonicalDraftError('STALE_INTELLIGENCE_SNAPSHOT', 409);
+    }
+    const intelligence = await getIntelligenceSnapshot(db, scope, projectId, dependencies.intelligenceSnapshotId);
+    if (intelligence.snapshot_hash !== dependencies.intelligenceSnapshotHash
+      || intelligence.research_snapshot_id !== Number(dependencies.researchSnapshotId)
+      || intelligence.research_snapshot_hash !== dependencies.researchSnapshotHash
+      || intelligence.product_truth_revision_id !== selectedId
+      || intelligence.product_truth_hash !== selectedHash) {
+      throw new CanonicalDraftError('STALE_INTELLIGENCE_SNAPSHOT', 409);
+    }
+  }
+  const project = await projectPolicyContext(db, scope, projectId);
+  const policyContext = serverPolicyContext(project, scope);
+  let currentResolution;
+  try { currentResolution = draftPolicyRegistry.resolve(policyContext, { purpose: 'DRAFT' }); }
+  catch (error) { throw new CanonicalDraftError(error.code || 'POLICY_CONTRACT_UNAVAILABLE', 409, error.details); }
+  const currentContextHash = hashBytes(canonicalJson(stablePolicyContext(project, scope)));
+  if (!dependencies?.policyContractId || !dependencies?.policyContractArtifactHash || !dependencies?.policyContextHash
+    || dependencies.policyContractId !== currentResolution.policyContractId
+    || dependencies.policyContractArtifactHash !== currentResolution.policyContractArtifactHash
+    || dependencies.policyContextHash !== currentContextHash
+    || dependencies.policyLifecycleSnapshotDigest !== currentResolution.lifecycleSnapshotDigest
+    || dependencies.claimIpBindingHash !== claimIpBindingHash || dependencies.validatorHash !== validatorHash
+    || dependencies.locale !== project.locale || dependencies.productFamilyVersion !== project.product_family_version) {
+    throw new CanonicalDraftError('STALE_POLICY_OR_VALIDATOR_BINDING', 409);
+  }
+}
+
+module.exports = Object.freeze({
+  CanonicalDraftError,
+  assertCanonicalDependenciesCurrent,
+  composeCommerceDraft,
+  composeTruthOnlyDraft,
+  validateCanonicalDraft
+});

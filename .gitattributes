@@ -1,0 +1,7 @@
+contracts/omniseller-r3/**/*.json text eol=lf
+scripts/c0_*.cjs text eol=lf
+shared/*Invariants.cjs text eol=lf
+server/policy/*.js text eol=lf
+tests/test_c1_policy_contract_registry.cjs text eol=lf
+server/package.json text eol=lf
+package-lock.json text eol=lf

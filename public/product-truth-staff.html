@@ -48,11 +48,13 @@
         <button class="btn" id="saveLocal" type="button">Lưu tạm trên trình duyệt</button>
         <button class="btn" id="loadLocal" type="button">Mở bản lưu tạm</button>
         <button class="btn" id="importJson" type="button">Nhập JSON</button>
+        <button class="btn primary" id="importExcel" type="button">Đọc Excel và preview</button>
         <button class="btn" id="exportJson" type="button">Tải JSON canonical</button>
         <button class="btn" id="exportCsv" type="button">Tải CSV</button>
         <button class="btn" id="clearForm" type="button">Tạo phiếu mới</button>
         <button class="btn safe" id="submitApi" type="button">Gửi vào OmniSeller</button>
         <input id="jsonFile" type="file" accept="application/json,.json" hidden>
+        <input id="excelFile" type="file" accept="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.xlsx" hidden>
       </div>
       <p class="hint">Nút “Gửi vào OmniSeller” chỉ hoạt động khi trang này được mở từ cùng máy chủ OmniSeller và người dùng đã đăng nhập. Nó tạo Product Truth revision mới; không xác nhận Manager và không đăng listing.</p>
       <div id="message" class="message"></div>
@@ -109,6 +111,8 @@
     $('exportJson').onclick=()=>{try{const p=collect();download(`${p.metadata.productCode||'product-truth'}.json`,'application/json',JSON.stringify(p,null,2));show('Đã tạo JSON canonical.',true)}catch(e){show(e.message)}};
     $('exportCsv').onclick=()=>{try{const p=collect();download(`${p.metadata.productCode||'product-truth'}.csv`,'text/csv;charset=utf-8',csv());show('Đã tạo CSV chuẩn hóa.',true)}catch(e){show(e.message)}};
     $('importJson').onclick=()=>$('jsonFile').click();$('jsonFile').onchange=async e=>{try{apply(JSON.parse(await e.target.files[0].text()))}catch(error){show(`JSON không hợp lệ: ${error.message}`)}e.target.value=''};
+    $('importExcel').onclick=()=>{if(!$('project').value){show('Hãy chọn dự án OmniSeller trước khi đọc Excel.');return}$('excelFile').click()};
+    $('excelFile').onchange=async e=>{const file=e.target.files?.[0];if(!file)return;try{const form=new FormData();form.append('file',file);if($('productCode').value.trim())form.append('productCode',$('productCode').value.trim());const response=await fetch(`/api/projects/${$('project').value}/product-truth-imports/preview`,{method:'POST',credentials:'include',body:form});const data=await response.json();if(!response.ok){const choices=Array.isArray(data.productCodes)&&data.productCodes.length?` Mã có trong file: ${data.productCodes.join(', ')}.`:'';throw new Error(`${data.error||data.message||`HTTP_${response.status}`}.${choices}`)}apply({metadata:{productCode:data.selectedProductCode,staffName:$('staffName').value},expectedHeadRevisionId:headRevisionId,changeReason:$('changeReason').value,notes:$('notes').value,facts:data.facts});show(`Preview zero-write: ${data.fileName}; SHA-256 ${data.rawHash.slice(0,12)}…; ${data.accounting.assertedCount} khẳng định, ${data.accounting.unknownCount} chưa rõ, ${data.accounting.skippedCount} bỏ qua, ${data.accounting.missingCanonicalFactCount} trường canonical vắng mặt. Hãy kiểm tra rồi bấm Gửi vào OmniSeller.`,true)}catch(error){show(`Không đọc được Excel: ${error.message}`)}finally{e.target.value=''}};
     $('clearForm').onclick=()=>{if(!confirm('Xóa dữ liệu trên biểu mẫu và tạo phiếu mới?'))return;location.reload()};
     $('submitApi').onclick=async()=>{try{const p=collect();if(!p.metadata.projectId)throw new Error('Hãy chọn dự án OmniSeller.');const response=await fetch(`/api/projects/${p.metadata.projectId}/product-truth/revisions`,{method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({expectedHeadRevisionId:p.expectedHeadRevisionId,idempotencyKey:p.idempotencyKey,changeReason:p.changeReason,notes:p.notes,facts:p.facts})});const data=await response.json();if(!response.ok)throw new Error(data.error||data.message||`HTTP_${response.status}`);headRevisionId=data.productTruthRevisionId;show(`Đã lưu Product Truth revision #${data.productTruthRevisionId}, trạng thái ${data.confirmationState}.`,true);}catch(e){show(`Không thể gửi: ${e.message}`)}};
     update();projects();

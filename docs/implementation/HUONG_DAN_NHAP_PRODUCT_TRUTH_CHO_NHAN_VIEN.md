@@ -49,7 +49,15 @@ Trong sheet `Sự thật`:
 - Chọn `BỎ QUA` thì không tạo fact khi import.
 - Không thay đổi `Mã trường canonical`.
 
-Excel là biểu mẫu nhập hàng loạt và hồ sơ bàn giao. Phiên bản hiện tại chưa tự upload workbook này vào API; nhân viên có thể nhập cùng dữ liệu qua form HTML hoặc xuất/chuyển thành JSON canonical trước khi gửi vào OmniSeller.
+Để đưa Excel vào OmniSeller:
+
+1. Mở form HTML và chọn đúng dự án.
+2. Nếu workbook có nhiều mã sản phẩm, nhập chính xác `Mã sản phẩm/SKU nội bộ` cần xử lý. Nếu workbook chỉ có một mã, có thể để trống.
+3. Bấm `Đọc Excel và preview`, rồi chọn file `.xlsx`.
+4. Kiểm tra số dòng khẳng định, chưa rõ và bỏ qua. Dữ liệu mới chỉ được điền lên form; chưa ghi database.
+5. Đọc lại từng fact trên form. Sau khi đúng mới bấm `Gửi vào OmniSeller`.
+
+Excel import không tự duyệt Manager, không tạo listing và không đăng lên sàn. Công thức trong vùng dữ liệu Product Truth bị từ chối để tránh giá trị tính toán hoặc nội dung nguy hiểm đi vào fact.
 
 ## 4. Nguồn xác minh hợp lệ
 

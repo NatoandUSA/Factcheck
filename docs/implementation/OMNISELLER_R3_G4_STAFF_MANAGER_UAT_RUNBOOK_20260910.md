@@ -14,7 +14,7 @@ Run Amazon US and Etsy US through saved draft status `NEEDS_QA`. Do not merge, d
 
 ## 3. Phiếu nhập Product Truth
 
-Nhân viên sử dụng form `/product-truth-staff.html` hoặc workbook `OMNISELLER_PRODUCT_TRUTH_STAFF_TEMPLATE_VI.xlsx`. Hướng dẫn đầy đủ nằm trong `HUONG_DAN_NHAP_PRODUCT_TRUTH_CHO_NHAN_VIEN.md`.
+Nhân viên sử dụng form `/product-truth-staff.html` hoặc workbook `OMNISELLER_PRODUCT_TRUTH_STAFF_TEMPLATE_VI.xlsx`. Form có thể preview workbook zero-write, điền dữ liệu lên màn hình để kiểm tra, rồi mới tạo revision. Hướng dẫn đầy đủ nằm trong `HUONG_DAN_NHAP_PRODUCT_TRUTH_CHO_NHAN_VIEN.md`.
 
 Chỉ nhập dữ liệu đã xác minh. Trường tùy chọn có thể để `CHƯA RÕ`; hệ thống phải ghi rõ thiếu gì hoặc chặn claim liên quan thay vì tự bịa.
 

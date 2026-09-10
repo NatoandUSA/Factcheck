@@ -6,6 +6,7 @@ const path = require('node:path');
 const { JSDOM } = require('jsdom');
 const ExcelJS = require('exceljs');
 const { FACT_KEYS } = require('../server/productTruthAttestation');
+const { parseProductTruthWorkbook } = require('../server/productTruthWorkbookParser');
 
 async function tick(window) {
   await new Promise(resolve => window.setTimeout(resolve, 0));
@@ -14,6 +15,7 @@ async function tick(window) {
 (async () => {
   const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'product-truth-staff.html'), 'utf8');
   const calls = [];
+  let excelPreviewResponse = null;
   const response = body => ({ ok: true, status: 200, json: async () => body });
   const dom = new JSDOM(html, {
     runScripts: 'dangerously',
@@ -29,6 +31,7 @@ async function tick(window) {
           { id: 17, name: 'AMAZON Hija browser', seed_phrase: 'para mi hija', marketplace: 'AMAZON', state: 'EVIDENCE_INTAKE' }
         ] });
         if (String(url).endsWith('/commerce-state')) return response({ heads: { productTruthRevisionId: 41 } });
+        if (String(url).endsWith('/product-truth-imports/preview')) return response(excelPreviewResponse);
         if (String(url).endsWith('/product-truth/revisions')) return response({
           productTruthRevisionId: 42,
           confirmationState: 'STAFF_DRAFT'
@@ -103,6 +106,49 @@ async function tick(window) {
   check(Boolean(workbook.getWorksheet('Sản phẩm').getCell('L3').value?.formula)
     && Boolean(workbook.getWorksheet('Sản phẩm').getCell('M3').value?.formula),
   'Excel minimum checks must remain formula-driven');
+
+  factSheet.getCell('E3').value = 'Para Mi Hija Custom Necklace';
+  factSheet.getCell('E4').value = 'Custom necklace';
+  factSheet.getCell('D6').value = 'CHƯA RÕ';
+  factSheet.getCell('H6').value = 'Đang chờ nhà cung cấp xác nhận';
+  factSheet.getCell('I6').value = 'Supplier ticket 925';
+  const validBuffer = Buffer.from(await workbook.xlsx.writeBuffer());
+  const preview = await parseProductTruthWorkbook(validBuffer);
+  check(preview.zeroWrite === true && preview.selectedProductCode === 'PRODUCT-001',
+    'Excel preview must remain zero-write and bind one product code');
+  check(preview.facts.productName.value === 'Para Mi Hija Custom Necklace'
+    && preview.facts.materials.disposition === 'UNKNOWN', 'Excel rows must normalize into canonical asserted and unknown facts');
+  check(preview.facts.materials.reason.includes('Supplier ticket 925'),
+    'reference columns must be preserved in the canonical preview');
+  check(preview.accounting.selectedRowCount === FACT_KEYS.size && preview.accounting.missingCanonicalFactCount === 0,
+    'Excel preview accounting must cover the entire canonical fact registry');
+  excelPreviewResponse = { success: true, fileName: 'product-truth.xlsx', ...preview };
+  document.getElementById('productCode').value = '';
+  const excelInput = document.getElementById('excelFile');
+  Object.defineProperty(excelInput, 'files', { configurable: true, value: [
+    new dom.window.File([validBuffer], 'product-truth.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+  ] });
+  excelInput.dispatchEvent(new Event('change', { bubbles: true }));
+  await tick(dom.window);
+  await tick(dom.window);
+  check(calls.some(call => call.url === '/api/projects/17/product-truth-imports/preview'),
+    'HTML must send Excel to the authenticated project-scoped preview route');
+  check(document.getElementById('message').textContent.includes('Preview zero-write')
+    && document.getElementById('productCode').value === 'PRODUCT-001', 'Excel preview must populate the form for staff review');
+
+  const formulaWorkbook = new ExcelJS.Workbook();
+  await formulaWorkbook.xlsx.load(validBuffer);
+  formulaWorkbook.getWorksheet('Sự thật').getCell('E3').value = { formula: '="Invented 18k gold"', result: 'Invented 18k gold' };
+  await assert.rejects(parseProductTruthWorkbook(Buffer.from(await formulaWorkbook.xlsx.writeBuffer())),
+    error => error?.code === 'PRODUCT_TRUTH_FORMULA_FORBIDDEN');
+  measured += 1;
+
+  const multiWorkbook = new ExcelJS.Workbook();
+  await multiWorkbook.xlsx.load(validBuffer);
+  multiWorkbook.getWorksheet('Sự thật').getCell('A5').value = 'PRODUCT-002';
+  await assert.rejects(parseProductTruthWorkbook(Buffer.from(await multiWorkbook.xlsx.writeBuffer())),
+    error => error?.code === 'PRODUCT_TRUTH_PRODUCT_CODE_REQUIRED' && error.details.productCodes.length === 2);
+  measured += 1;
 
   dom.window.close();
   console.log(`Product Truth staff form: ${measured}/${measured} PASS`);

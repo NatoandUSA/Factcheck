@@ -50,6 +50,7 @@ const { evaluateListingGuard } = require('./listingGuard');
 const { buildStaffAttestedCard, normalizeSnapshot, productTruthAuthorityHash, validateStaffAttestedCard } = require('./productTruthAttestation');
 const { assertNoClientPolicyOverrides } = require('./policy/contractRegistry');
 const { appendProductTruthRevision, confirmProductTruthRevision, listProductTruthRevisions } = require('./productTruthStore');
+const { parseProductTruthWorkbook } = require('./productTruthWorkbookParser');
 const { createListingWithRevision, appendListingRevision, canonicalJson, getListingRevision, hashBytes, listListingRevisions } = require('./revisionStore');
 const { assertCanonicalDependenciesCurrent, composeCommerceDraft, composeTruthOnlyDraft,
   validateCanonicalDraft } = require('./canonicalDraftService');
@@ -291,6 +292,17 @@ const commerceResearchUpload = multer({
   fileFilter(req, file, cb) {
     const allowed = /\.(xlsx|csv)$/i.test(file.originalname || '');
     cb(allowed ? null : new Error('UNSUPPORTED_RESEARCH_FILE'), allowed);
+  }
+});
+
+// Product Truth workbooks are previewed in memory and never persisted. The
+// staff member must inspect the populated HTML form before creating a revision.
+const productTruthWorkbookUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024, files: 1, fields: 2 },
+  fileFilter(req, file, cb) {
+    const allowed = /\.xlsx$/i.test(file.originalname || '');
+    cb(allowed ? null : new Error('UNSUPPORTED_PRODUCT_TRUTH_WORKBOOK'), allowed);
   }
 });
 
@@ -1418,6 +1430,18 @@ app.post('/api/projects', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SEL
 
 // Canonical project-scoped Product Truth. This axis is intentionally
 // independent of the research DAG and exists before any Listing root.
+app.post('/api/projects/:id/product-truth-imports/preview', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']),
+  productTruthWorkbookUpload.single('file'), async (req, res) => {
+    try {
+      await requireCommerceProject(req);
+      if (!req.file?.buffer) throw Object.assign(new Error('PRODUCT_TRUTH_WORKBOOK_REQUIRED'), {
+        code: 'PRODUCT_TRUTH_WORKBOOK_REQUIRED', status: 400
+      });
+      const preview = await parseProductTruthWorkbook(req.file.buffer, { productCode: req.body?.productCode });
+      res.json({ success: true, fileName: req.file.originalname, byteLength: req.file.size, ...preview });
+    } catch (error) { rejectRevisionStore(res, error); }
+  });
+
 app.post('/api/projects/:id/product-truth/revisions', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
   try {
     const body = requireExactDto(req.body, new Set(['expectedHeadRevisionId', 'idempotencyKey', 'changeReason', 'facts', 'notes']));
@@ -5052,7 +5076,8 @@ app.use((err, req, res, next) => {
     const status = err.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
     return res.status(status).json({ success: false, error: err.code });
   }
-  if (['UNSUPPORTED_RESEARCH_FILE','UNSUPPORTED_ETSY_SEARCH_FILE','UNSUPPORTED_UPLOAD_TYPE'].includes(err?.message)) {
+  if (['UNSUPPORTED_RESEARCH_FILE','UNSUPPORTED_ETSY_SEARCH_FILE','UNSUPPORTED_UPLOAD_TYPE',
+    'UNSUPPORTED_PRODUCT_TRUTH_WORKBOOK'].includes(err?.message)) {
     return res.status(415).json({ success: false, error: err.message });
   }
   console.error('Unhandled request error:', err);

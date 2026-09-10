@@ -543,7 +543,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
         </div>
       </div>
 
-      {!activeProject && <ProjectSetupCard marketplace="ETSY" seedPhrase={seedPhrase} onCreated={handleProjectCreated} onShowToast={onShowToast} accent="#ea580c" />}
+      {!activeProject && <ProjectSetupCard marketplace="ETSY" category={selectedCategory} seedPhrase={seedPhrase} onCreated={handleProjectCreated} onShowToast={onShowToast} accent="#ea580c" />}
 
       <SmartPullAnalyticsBar
         marketplace="ETSY"

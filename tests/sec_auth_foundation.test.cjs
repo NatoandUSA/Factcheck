@@ -247,8 +247,10 @@ async function runAuthFoundationTests() {
         'Content-Type': 'application/json',
         'Origin': `http://127.0.0.1:${port}`
       },
-      body: JSON.stringify({ email: 'seller@omniseller.local', password: 'password123' })
+      body: JSON.stringify({ email: 'seller@omniseller.local', password: 'password123',
+        workspaceId: amazonWorkspace.workspace_id })
     });
+    assert.strictEqual(sellerLoginRes.status, 200, 'Seller login in selected Amazon workspace did not return 200');
     const sellerCookie = sellerLoginRes.headers.get('set-cookie')?.split(';')[0];
 
     const sellerApproveRes = await fetch(`http://127.0.0.1:${port}/api/listings/1/approve`, {
@@ -333,7 +335,8 @@ async function runAuthFoundationTests() {
     const managerLoginRes = await fetch(`http://127.0.0.1:${port}/api/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Origin: `http://127.0.0.1:${port}` },
-      body: JSON.stringify({ email: 'manager@omniseller.local', password: 'password123' })
+      body: JSON.stringify({ email: 'manager@omniseller.local', password: 'password123',
+        workspaceId: amazonWorkspace.workspace_id })
     });
     assert.strictEqual(managerLoginRes.status, 200);
     const managerCookie = managerLoginRes.headers.get('set-cookie')?.split(';')[0];

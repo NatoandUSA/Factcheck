@@ -215,7 +215,7 @@ async function main() {
     { tenant_id: 'tenant-alpha-uuid', marketplace: 'ETSY', count: 1 },
     { tenant_id: 'tenant-beta-uuid', marketplace: 'AMAZON', count: 1 }
   ], 'databaseReady must include complete workspaces without duplicates');
-  assert.strictEqual(readyCounts.memberships.length, 5);
+  assert.strictEqual(readyCounts.memberships.length, 7);
   assert.ok(readyCounts.memberships.every((row) => row.count === 1));
 
   assert.deepStrictEqual(readyCounts.agents, [

@@ -35,7 +35,8 @@ const xray = storedResearch.normalizeXrayRows([{
   'Price $': '$29.99', 'ASIN Sales': '1,005', 'Parent Level Sales': '2,004',
   'ASIN Revenue': '$30,000', 'Parent Level Revenue': '$60,000', 'Title Char. Count': '72',
   BSR: '#1,234', 'Review Count': '88', Ratings: '4.7', Fulfillment: 'FBA', Seller: 'Example LLC',
-  'Seller Country/Region': 'US', 'Active Sellers': '2', Category: 'Necklaces', 'Creation Date': '2024-01-02'
+  'Seller Country/Region': 'US', 'Active Sellers': '2', Category: 'Necklaces',
+  'Creation Date': new Date('2024-01-02T00:00:00.000Z')
 }], { importId: 12, sheet: 'Xray' });
 assert.deepEqual({
   asin: xray[0].asin, title: xray[0].title, brand: xray[0].brand, price: xray[0].price,
@@ -50,8 +51,9 @@ assert.deepEqual({
   asinSales: 1005, parentSales: 2004, asinRevenue: 30000, parentRevenue: 60000,
   titleChars: 72, bsr: 1234, reviews: 88, rating: 4.7, fulfillment: 'FBA',
   seller: 'Example LLC', sellerCountry: 'US', activeSellers: 2, category: 'Necklaces',
-  creationDate: '2024-01-02', provenance: { importId: 12, sheet: 'Xray', sourceRow: 2 }
+  creationDate: '2024-01-02T00:00:00.000Z', provenance: { importId: 12, sheet: 'Xray', sourceRow: 2 }
 });
 assert.equal(xray[0].sourceFields['Product Details'], 'Collar Para Mi Hija');
+assert.equal(xray[0].sourceFields['Creation Date'], '2024-01-02T00:00:00.000Z');
 assert.equal(cerebro.observations[0].sourceFields['Position (Rank)'], '3');
-console.log('G4 stored research normalization: 17/17 PASS');
+console.log('G4 stored research normalization: 18/18 PASS');

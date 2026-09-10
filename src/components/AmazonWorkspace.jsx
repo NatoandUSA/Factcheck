@@ -288,7 +288,7 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
         )}
       </div>
 
-      {!activeProject && <ProjectSetupCard marketplace="AMAZON" seedPhrase={seedPhrase} onCreated={handleProjectCreated} onShowToast={onShowToast} />}
+      {!activeProject && <ProjectSetupCard marketplace="AMAZON" category={selectedCategory} seedPhrase={seedPhrase} onCreated={handleProjectCreated} onShowToast={onShowToast} />}
 
       <SmartPullAnalyticsBar
         marketplace="AMAZON"

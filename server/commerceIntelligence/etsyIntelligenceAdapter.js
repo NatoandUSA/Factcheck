@@ -6,6 +6,7 @@ const ipGuard = require('../ipGuard');
 const { evaluateListingGuard } = require('../listingGuard');
 const { evaluateText, SURFACES } = require('../claimGuard');
 const { generateImagePromptSuite } = require('../imagePromptGenerator');
+const { allowedRecipientFamilies, conflictingRecipient } = require('./semantic');
 
 const ENGINE_ID = 'etsy-commerce-intelligence-v1';
 
@@ -15,7 +16,9 @@ function factsFromSnapshot(snapshot) {
 }
 function text(value) { return Array.isArray(value) ? value.map(text).filter(Boolean).join(', ') : value == null ? '' : String(value).trim(); }
 function fold(value) { return text(value).normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase(); }
-function titleCase(value) { return text(value).replace(/\b([a-záéíóúñ])/gi, letter => letter.toUpperCase()); }
+function titleCase(value) {
+  return text(value).replace(/(^|[\s,])([a-záéíóúñ])/g, (_, prefix, letter) => `${prefix}${letter.toUpperCase()}`);
+}
 const SOURCE_BOILERPLATE = /(?:no tags? found|\bfrom shop\b|\bsale price\b|\boriginal price\b|\badd to cart\b|\bmore like this\b|\bsold in the last\b|\bviews? in the last\b|\bestimated (?:total|revenue)|\bfavorites?\b|\bfree shipping\b)/i;
 const CURRENCY_OR_METRIC = /(?:[$€£¥₫₹₱₩₽฿]|\b\d+(?:[.,]\d+)?\s*(?:usd|eur|gbp|idr|vnd)\b)/i;
 const STOP_TOKENS = new Set(['the','and','for','with','from','this','that','para','con','del','las','los','gift','gifts','regalo','custom','option','available']);
@@ -40,6 +43,10 @@ const SAFE_INTENT_TOKENS = new Set(['dad','daddy','father','mom','mommy','mother
   'son','daughter','hija','hijo','sister','brother','abuela','abuelo','birthday','cumpleanos','christmas','navidad',
   'anniversary','wedding','graduation','love','amor','memorial','gift','gifts','regalo','present']);
 const PRODUCT_NOUN_TOKENS = new Set(Object.values(PRODUCT_NOUN_GROUPS).flat().map(fold));
+const SPANISH_CUES = new Set(['para','hija','regalo','regalos','collar','collares','cadena','cadenas','mujer','madre',
+  'mama','cumpleanos','navidad','con','de','del','amor','joyeria','plata','oro','graduacion','espanol']);
+const ENGLISH_CUES = new Set(['for','daughter','gift','gifts','necklace','necklaces','woman','women','mother','mom','dad',
+  'birthday','christmas','with','of','love','jewelry','silver','gold','graduation','personalized']);
 
 function sourceCandidateRejection(raw) {
   const phrase = text(raw).replace(/\s+/g, ' ');
@@ -53,6 +60,54 @@ function sourceCandidateRejection(raw) {
 
 function tokens(value) {
   return new Set(fold(value).match(/[a-z0-9]+/g)?.filter(token => token.length >= 3 && !STOP_TOKENS.has(token)) || []);
+}
+
+function languageOfPhrase(phrase) {
+  const original = text(phrase); const phraseTokens = [...tokens(original)];
+  let es = /[áéíóúñü¿¡]/i.test(original) ? 2 : 0; let en = 0;
+  for (const token of phraseTokens) {
+    if (SPANISH_CUES.has(token)) es++;
+    if (ENGLISH_CUES.has(token)) en++;
+  }
+  if (es && en) return 'MIXED';
+  if (es) return 'ES';
+  if (en) return 'EN';
+  return 'NEUTRAL';
+}
+
+function languageCompatible(phrase, language) {
+  const detected = languageOfPhrase(phrase);
+  return detected === 'NEUTRAL' || detected === language;
+}
+
+function containsCompetitorShop(phrase, sellers) {
+  const normalized = ` ${fold(phrase).replace(/[^a-z0-9]+/g, ' ').trim()} `;
+  return sellers.find(seller => {
+    const shop = fold(seller.shopName || '').replace(/[^a-z0-9]+/g, ' ').trim();
+    return shop && normalized.includes(` ${shop} `);
+  }) || null;
+}
+
+function tagVariants(value) {
+  const phrase = text(value).replace(/\s+/g, ' ');
+  if (!phrase) return [];
+  if (Array.from(phrase).length <= 20) return [phrase];
+  const words = phrase.split(' '); const variants = [];
+  const badStart = new Set(['and','con','de','del','en','from','of','the']);
+  const badEnd = new Set(['a','and','con','de','del','en','for','from','mi','of','para','to']);
+  for (let size = Math.min(4, words.length); size >= 2; size--) {
+    for (let start = 0; start + size <= words.length; start++) {
+      const part = words.slice(start, start + size);
+      if (badStart.has(fold(part[0])) || badEnd.has(fold(part.at(-1)))) continue;
+      const candidate = part.join(' ');
+      const signals = tokens(candidate);
+      if (Array.from(candidate).length <= 20 && [...signals].some(token => PRODUCT_NOUN_TOKENS.has(token)
+        || SAFE_INTENT_TOKENS.has(token) || ['custom','personalized','personalised','personalizado','personalizada'].includes(token))) {
+        variants.push(candidate);
+      }
+    }
+  }
+  return [...new Map(variants.map(item => [fold(item), item])).values()];
 }
 
 function productGroups(value) {
@@ -97,7 +152,8 @@ function isRelevant(candidate, facts, configuration, queryContexts) {
 
 function engineBindingHash() {
   const hash = crypto.createHash('sha256'); hash.update(`${ENGINE_ID}\0`);
-  for (const file of [__filename, require.resolve('../listingGuard'), require.resolve('../claimGuard'), require.resolve('../ipGuard')]) {
+  for (const file of [__filename, require.resolve('./semantic'), require.resolve('../listingGuard'),
+    require.resolve('../claimGuard'), require.resolve('../ipGuard')]) {
     hash.update(file.split(/[\\/]/).pop()); hash.update('\0'); hash.update(fs.readFileSync(file)); hash.update('\0');
   }
   return hash.digest('hex');
@@ -143,17 +199,31 @@ async function buildIntelligence({ research, productTruth, configuration = {} })
   const identity = text(facts.productName || facts.productType);
   if (!identity) throw Object.assign(new Error('PRODUCT_IDENTITY_REQUIRED'), { code: 'PRODUCT_IDENTITY_REQUIRED' });
   const corpus = candidateCorpus(observations);
+  const language = ['EN','ES'].includes(configuration.listingLanguage) ? configuration.listingLanguage : 'EN';
+  const recipientFamilies = allowedRecipientFamilies([facts.recipient, facts.audience, facts.productName, facts.productType]);
   const safe = []; const claimBlocked = []; const ipBlocked = []; const irrelevant = [];
+  const languageTargeting = []; const competitorShopBlocked = [];
   for (const candidate of corpus) {
     const ip = ipGuard.screenText(candidate.phrase);
     if (ip.verdict === 'BLOCK') { ipBlocked.push({ ...candidate, ipHits: ip.hits }); continue; }
+    const competitor = containsCompetitorShop(candidate.phrase, observations.sellers || []);
+    if (competitor) { competitorShopBlocked.push({ ...candidate, shopName: competitor.shopName,
+      listingId: competitor.listingId }); continue; }
+    if (productTypeConflict(candidate, facts)) {
+      irrelevant.push({ ...candidate, reason: 'PRODUCT_TYPE_CONFLICT' });
+      continue;
+    }
+    if (!languageCompatible(candidate.phrase, language)) {
+      languageTargeting.push({ ...candidate, detectedLanguage: languageOfPhrase(candidate.phrase), listingLanguage: language });
+      continue;
+    }
+    const recipientConflict = conflictingRecipient(candidate.phrase, recipientFamilies);
+    if (recipientConflict) { irrelevant.push({ ...candidate, reason: 'RECIPIENT_CONFLICT', token: recipientConflict }); continue; }
     const claim = evaluateText(candidate.phrase, facts, SURFACES.VISIBLE_COPY);
     if (claim.unverifiedClaims.length) claimBlocked.push({ ...candidate, unverifiedClaims: claim.unverifiedClaims });
     else if (unverifiedAppearanceTokens(candidate, facts).length) {
       claimBlocked.push({ ...candidate, unverifiedClaims: unverifiedAppearanceTokens(candidate, facts)
         .map(token => ({ claimId: 'COMPOSITION_MATERIAL_PURITY', subtype: 'APPEARANCE_DESCRIPTOR', token })) });
-    } else if (productTypeConflict(candidate, facts)) {
-      irrelevant.push({ ...candidate, reason: 'PRODUCT_TYPE_CONFLICT' });
     } else if (unverifiedProductDescriptors(candidate, facts).length) {
       irrelevant.push({ ...candidate, reason: 'UNVERIFIED_PRODUCT_DESCRIPTOR',
         tokens: unverifiedProductDescriptors(candidate, facts) });
@@ -161,30 +231,44 @@ async function buildIntelligence({ research, productTruth, configuration = {} })
       irrelevant.push({ ...candidate, reason: 'IRRELEVANT_TO_PRODUCT_TRUTH_ANCHORS' });
     } else safe.push(candidate);
   }
-  const titleParts = [identity]; const used = new Set();
-  for (const candidate of safe) {
-    const next = [...titleParts, titleCase(candidate.phrase)].join(', ');
-    if (Array.from(next).length > 140 || fold(next).includes(fold(candidate.phrase)) && titleParts.some(part => fold(part).includes(fold(candidate.phrase)))) continue;
-    titleParts.push(titleCase(candidate.phrase)); used.add(fold(candidate.phrase));
-    if (titleParts.length >= 4) break;
+  // Etsy's current title guidance favors one clear product identity and moves
+  // gifting/search variants to tags. Product Truth owns this visible claim;
+  // observed competitor phrases must not turn the title into keyword stuffing.
+  const etsyTitle = titleCase(identity).slice(0, 140).trim();
+  const used = new Set(); const usedCorpusKeys = new Set();
+  const tagPool = []; const candidateVariants = safe.map(candidate => ({ candidate, variants: tagVariants(candidate.phrase) }));
+  const maxVariants = Math.max(0, ...candidateVariants.map(item => item.variants.length));
+  for (let variantIndex = 0; variantIndex < maxVariants; variantIndex++) {
+    for (const item of candidateVariants) {
+      const value = item.variants[variantIndex];
+      if (value) tagPool.push({ value, corpusKey: fold(item.candidate.phrase) });
+    }
   }
-  const etsyTitle = titleParts.join(', ').slice(0, 140).trim();
-  const tagPool = [...safe.map(item => item.phrase), identity, text(facts.recipient), text(facts.occasion)]
-    .map(value => value.trim()).filter(value => value && Array.from(value).length <= 20);
+  for (const fact of [identity, text(facts.recipient), text(facts.occasion)]) {
+    for (const value of tagVariants(fact)) tagPool.push({ value, corpusKey: null });
+  }
   const etsyTags = [];
-  for (const tag of tagPool) {
-    const key = fold(tag); if (etsyTags.some(existing => fold(existing) === key)) continue;
-    etsyTags.push(tag); used.add(key); if (etsyTags.length === 13) break;
+  for (const item of tagPool) {
+    const key = fold(item.value); if (etsyTags.some(existing => fold(existing) === key)) continue;
+    etsyTags.push(item.value); used.add(key); if (item.corpusKey) usedCorpusKeys.add(item.corpusKey);
+    if (etsyTags.length === 13) break;
   }
   const content = { etsyTitle, etsyTags, etsyDescription: descriptionFromTruth(facts, etsyTitle),
     itemHighlights: identity, categoryName: text(facts.category), ppcKeywords: [],
     imagePrompts: generateImagePromptSuite(productTruth.snapshot, 'ETSY') };
   const guarded = evaluateListingGuard({ listing: content, verifiedFacts: facts });
-  const unallocated = safe.filter(item => !used.has(fold(item.phrase)));
+  const unallocated = safe.filter(item => !usedCorpusKeys.has(fold(item.phrase)));
+  const allocatedCorpusCount = safe.length + claimBlocked.length + ipBlocked.length + irrelevant.length
+    + languageTargeting.length + competitorShopBlocked.length;
+  const corpusAccountingGap = corpus.length - allocatedCorpusCount;
+  if (corpusAccountingGap !== 0) throw Object.assign(new Error('ETSY_KEYWORD_ACCOUNTING_MISMATCH'), {
+    code: 'ETSY_KEYWORD_ACCOUNTING_MISMATCH', corpusCount: corpus.length, allocatedCorpusCount, corpusAccountingGap
+  });
   return Object.freeze({
-    output: { marketplace: 'ETSY', listingDraft: guarded.listing,
+    output: { marketplace: 'ETSY', language, listingDraft: guarded.listing,
       keywordAllocation: { corpusCount: corpus.length, titleAndTagUsed: [...used], unallocated,
-        claimBlocked, ipBlocked, irrelevant, sourceRejected: corpus.sourceRejected,
+        claimBlocked, ipBlocked, irrelevant, languageTargeting, competitorShopBlocked,
+        sourceRejected: corpus.sourceRejected,
         reason: 'ETSY_HAS_NO_SELLER-SELECTED_PPC_KEYWORD_SURFACE' },
       competitorSummary: { observations: (observations.sellers || []).length,
         uniqueListingIds: new Set((observations.sellers || []).map(item => item.listingId).filter(Boolean)).size },
@@ -192,11 +276,14 @@ async function buildIntelligence({ research, productTruth, configuration = {} })
     accounting: { sellerObservationCount: (observations.sellers || []).length, keywordCandidateCount: corpus.length,
       titleAndTagCandidateCount: used.size, unallocatedCount: unallocated.length,
       claimBlockedCount: claimBlocked.length, ipBlockedCount: ipBlocked.length,
-      irrelevantCount: irrelevant.length, sourceRejectedCount: corpus.sourceRejected.length,
+      irrelevantCount: irrelevant.length, languageTargetingCount: languageTargeting.length,
+      competitorShopBlockedCount: competitorShopBlocked.length, allocatedCorpusCount, corpusAccountingGap,
+      sourceRejectedCount: corpus.sourceRejected.length,
       tagCount: guarded.listing.etsyTags.length, tagCapacityGap: 13 - guarded.listing.etsyTags.length },
     engineBindingHash: engineBindingHash()
   });
 }
 
 module.exports = Object.freeze({ ENGINE_ID, buildIntelligence, candidateCorpus, engineBindingHash, factsFromSnapshot,
-  productTypeConflict, unverifiedAppearanceTokens, unverifiedProductDescriptors });
+  productTypeConflict, unverifiedAppearanceTokens, unverifiedProductDescriptors, languageOfPhrase,
+  languageCompatible, containsCompetitorShop, tagVariants });

@@ -14,7 +14,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node tests/run_all_tests.cjs"
+    "test": "node tests/run_all_tests.cjs",
+    "uat:real-commerce": "node scripts/uat/realCommerceInputs.cjs"
   },
   "dependencies": {
     "@google/genai": "^2.17.0",

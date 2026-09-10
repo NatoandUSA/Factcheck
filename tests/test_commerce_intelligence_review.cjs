@@ -34,6 +34,10 @@ test('buyer mention does not create a false audience conflict', () => {
   const allowed = semantic.allowedRecipientFamilies(['moms']);
   assert.equal(semantic.conflictingRecipient('mothers day sweatshirt for mom from daughter', allowed), null);
   assert.equal(semantic.conflictingRecipient('boo boo crew nurse sweatshirt', allowed), 'nurse');
+  const daughterAllowed = semantic.allowedRecipientFamilies(['daughter', 'hija']);
+  assert.equal(semantic.conflictingRecipient('regalos para papa de hija', daughterAllowed), 'papa');
+  assert.equal(semantic.conflictingRecipient('gift for dad from daughter', daughterAllowed), 'dad');
+  assert.equal(semantic.conflictingRecipient('regalo de madre para hija', daughterAllowed), null);
 });
 
 console.log('\nCerebro metric preservation');

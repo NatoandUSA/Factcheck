@@ -159,6 +159,25 @@ const NEUTRAL_RECIPIENTS = new Set(['women', 'her', 'him', 'mujer', 'mujeres', '
 function conflictingRecipient(phrase, allowedFamilies) {
   if (!allowedFamilies || !allowedFamilies.size) return null;
   const tokens = fold(phrase).split(/[^a-z0-9]+/).filter(Boolean);
+  // Directional gift phrases name both buyer and recipient. The first family
+  // after "for/para/to" is the target, while a later "from/de" family is the
+  // giver. Presence-only matching reversed these relationships (for example,
+  // "regalos para papa de hija" was admitted to a daughter listing).
+  const targetMarkers = new Set(['for', 'para', 'to']);
+  const targetFillers = new Set(['my', 'mi', 'our', 'nuestra', 'nuestro', 'the', 'la', 'el', 'a', 'an', 'una', 'un']);
+  for (let marker = 0; marker < tokens.length; marker++) {
+    if (!targetMarkers.has(tokens[marker])) continue;
+    for (let offset = marker + 1; offset < Math.min(tokens.length, marker + 5); offset++) {
+      const token = tokens[offset];
+      if (targetFillers.has(token)) continue;
+      const index = recipientFamily(token);
+      if (index < 0) break;
+      // "for Mother's Day" describes an occasion, not the gift recipient.
+      if (tokens[offset + 1] === 'day' || tokens[offset + 1] === 'dia') break;
+      if (!allowedFamilies.has(index) && !NEUTRAL_RECIPIENTS.has(token)) return token;
+      break;
+    }
+  }
   // A second family is only a conflict when the product's OWN audience is
   // absent. "mothers day sweatshirt for mom from daughter" names the daughter
   // as the BUYER, not the wearer, and is a legitimate keyword for a mom's

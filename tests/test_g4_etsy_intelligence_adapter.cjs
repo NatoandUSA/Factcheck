@@ -14,6 +14,8 @@ async function main() {
         tags: ['regalo hija','collar 18k','cumpleanos hija'], provenance: { importId: 1 } },
       { listingId: '2', sourceRank: 2, title: 'Nike gift for daughter',
         tags: ['para mi hija','regalo especial','Daughter Lamp','No tags found','233','041 Favorites','147₫ 514','Sewing Accessories'], provenance: { importId: 1 } }
+      ,{ listingId: '3', sourceRank: 3, title: 'Regalo LunaCraft para hija', shopName: 'LunaCraft',
+        tags: ['gift for daughter'], provenance: { importId: 1 } }
     ] } },
     productTruth: { snapshot: { asserted: {
       productType: asserted('Custom Necklace'), materials: asserted('stainless steel'),
@@ -23,6 +25,8 @@ async function main() {
   });
   check(/^[0-9a-f]{64}$/.test(result.engineBindingHash), 'engine binding returned');
   check(result.output.listingDraft.etsyTitle.length <= 140, 'Etsy title within limit');
+  check(result.output.listingDraft.etsyTitle === 'Custom Necklace',
+    'Etsy title remains a clear Product Truth identity instead of keyword stuffing');
   check(result.output.listingDraft.etsyTags.length <= 13, 'Etsy tag count within limit');
   check(result.output.listingDraft.etsyTags.every(tag => Array.from(tag).length <= 20), 'every Etsy tag within limit');
   const listingText = JSON.stringify(result.output.listingDraft).toLowerCase();
@@ -30,11 +34,14 @@ async function main() {
   check(!listingText.includes('nike'), 'canonical IP block excluded');
   check(result.accounting.claimBlockedCount >= 1, 'claim exclusions accounted');
   check(result.accounting.ipBlockedCount >= 1, 'IP exclusions accounted');
+  check(result.accounting.languageTargetingCount >= 1, 'other-language phrases are accounted outside visible copy');
+  check(result.accounting.competitorShopBlockedCount >= 1, 'competitor shop identity is blocked from copy');
+  check(result.accounting.corpusAccountingGap === 0, 'every Etsy corpus candidate has exactly one disposition');
   check(result.output.keywordAllocation.unallocated.length === result.accounting.unallocatedCount,
     'unallocated keywords retained instead of silently dropped');
   check(result.output.keywordAllocation.reason.includes('NO_SELLER-SELECTED_PPC'), 'Etsy PPC limitation explicit');
   check(result.output.listingDraft.etsyDescription.includes('Materials: stainless steel'), 'description uses Product Truth');
-  check(result.output.competitorSummary.uniqueListingIds === 2, 'competitor identities counted');
+  check(result.output.competitorSummary.uniqueListingIds === 3, 'competitor identities counted');
   check(result.output.listingDraft.imagePrompts.prompts.length === 8, 'full Etsy physical image prompt suite generated');
   check(result.output.listingDraft.imagePrompts.referenceImagesRequired === true, 'image prompts require real references');
   check(result.output.listingDraft.imagePrompts.blockedCount > 0, 'missing visual facts stay visibly blocked');
@@ -65,7 +72,7 @@ async function main() {
   'unsupported style descriptors cannot enter copy until Product Truth supplies them');
   check(adapter.unverifiedProductDescriptors({ phrase: 'Floral Striped Pillow' }, { productType: 'Personalized Pillow',
     style: 'floral striped' }).length === 0, 'Product Truth style fields can explicitly unlock matching descriptors');
-  console.log(`G4 Etsy intelligence adapter: ${passed}/22 PASS`);
+  console.log(`G4 Etsy intelligence adapter: ${passed}/26 PASS`);
 }
 
 main().catch(error => { console.error(error); process.exitCode = 1; });

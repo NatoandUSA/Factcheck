@@ -40,6 +40,7 @@ async function tick(window) {
             productType: { disposition: 'ASSERTED', value: 'Custom necklace', basis: 'REFERENCE_LISTING_SAME_SOURCE', basisNote: 'same supplier' },
             materials: { disposition: 'ASSERTED', value: 'Stainless steel', basis: 'REFERENCE_LISTING_SAME_SOURCE', basisNote: 'same supplier' }
           },
+          observations: { title: 'Scanned necklace', bullets: ['Personalized gift'], description: 'Reference listing description' },
           accounting: { extractedFactCount: 3 }
         });
         if (String(url).endsWith('/product-truth/revisions')) return response({
@@ -89,6 +90,9 @@ async function tick(window) {
   check(document.querySelector('[data-key="materials"] [data-role="value"]').value === 'Stainless steel'
     && document.querySelector('[data-key="materials"] [data-role="basis"]').value === 'REFERENCE_LISTING_SAME_SOURCE',
   'listing preview must populate editable facts with same-source provenance');
+  check(document.getElementById('listingPreview').classList.contains('show')
+    && document.getElementById('sourceDescription').textContent.includes('Reference listing description'),
+  'staff must see the source title, bullets and description beside extracted facts');
 
   document.getElementById('productCode').value = 'HIJA-NECKLACE-001';
   document.getElementById('staffName').value = 'Staff QA';

@@ -12,11 +12,13 @@ for (const [name, source] of [['Etsy', etsy], ['Amazon', amazon]]) {
   assert.ok(source.includes('Active Project (bắt buộc)'), `${name} must expose an explicit project selector`);
   assert.ok(source.includes('<option value="">— Chọn project —</option>'), `${name} must default to no project`);
   assert.strictEqual(source.includes('setActiveProject(data.projects[0])'), false, `${name} must not silently select the first project`);
-  assert.ok(source.includes("disabled={!activeProject || activeProject.state === 'EVIDENCE_INTAKE'}"), `${name} research stage must remain gated by server project state`);
+  assert.ok(source.includes('disabled={!activeProject}'), `${name} read-only research hub must require a project but remain available during legacy EVIDENCE_INTAKE`);
+  assert.ok(source.includes('Research Hub (không chặn luồng R3)'), `${name} legacy research hub must be labelled as non-blocking`);
   assert.ok(source.includes("'MKL_FROZEN'"), `${name} MKL stage must reference the canonical server state`);
+  assert.ok(source.indexOf('<CanonicalCommerceWorkflow') < source.indexOf('<ProjectEvidenceGate'), `${name} canonical Product Truth workflow must render before the legacy gate`);
 }
 
-assert.ok(etsy.includes("const transitioned = await handleTransition('RESEARCH_ACCEPTED')"), 'Etsy evidence acceptance must call the server transition');
+assert.strictEqual(etsy.includes("const transitioned = await handleTransition('RESEARCH_ACCEPTED')"), false, 'Opening Etsy research must not attempt a legacy server transition');
 assert.ok(etsy.includes("await handleTransition('DNA_ACCEPTED')"), 'Etsy DNA acceptance must call the server transition');
 assert.ok(amazon.includes("await handleTransition('DNA_ACCEPTED')"), 'Amazon DNA acceptance must call the server transition');
 

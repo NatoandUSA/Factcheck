@@ -48,7 +48,7 @@ const assert = require('assert');
   let measured = 0;
   const check = (value, message) => { measured += 1; assert.ok(value, message); };
   await act(async () => { root.render(React.createElement(AuthProvider, null,
-    React.createElement(Workflow, { activeProject: { id: 3 }, marketplace: 'AMAZON' }))); });
+    React.createElement(Workflow, { activeProject: { id: 3, state: 'EVIDENCE_INTAKE' }, marketplace: 'AMAZON' }))); });
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
 
   check(document.body.textContent.includes('Luồng Staff Canonical — AMAZON US'), 'Amazon workflow must render');
@@ -61,6 +61,8 @@ const assert = require('assert');
     'listing-assisted Product Truth must be integrated into the authenticated workflow');
   check(document.body.textContent.includes('Theo keyword đầu vào'), 'AUTO listing language must be visible');
   check(document.body.textContent.includes('Luồng dừng ở NEEDS_QA'), 'workflow must stop at NEEDS_QA');
+  check(document.body.textContent.includes('trạng thái này không chặn luồng R3'),
+    'legacy EVIDENCE_INTAKE must be explained as non-blocking for canonical R3');
 
   const input = document.querySelector('input[type="file"]');
   const selected = new dom.window.File(['fixture'], 'Cerebro.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });

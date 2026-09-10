@@ -301,14 +301,17 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
         }}
       />
 
-      <ProjectEvidenceGate activeProject={activeProject} onTransition={handleTransition} onShowToast={onShowToast} />
-
       <CanonicalCommerceWorkflow
         activeProject={activeProject}
         marketplace="AMAZON"
         onSelectListing={onSelectListing}
         onShowToast={onShowToast}
       />
+
+      <details style={{ margin: '10px 0' }}>
+        <summary style={{ cursor: 'pointer', fontWeight: 800, color: '#64748b' }}>Công cụ chuyển stage legacy — không bắt buộc cho luồng R3</summary>
+        <ProjectEvidenceGate activeProject={activeProject} onTransition={handleTransition} onShowToast={onShowToast} />
+      </details>
 
       {/* 0. Market Benchmark & Go/No-Go Decision Gate (Pre-Listing Validation) */}
       <MarketBenchmarkWidget 
@@ -330,16 +333,16 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
           onClick={() => setActiveStage('workflow')}
         >
           <Layers size={18} />
-          <span>⚡ Stage 1: Quy Trình 4 Bước Amazon A10 (Workflow)</span>
+          <span>Công cụ cũ 1: Quy trình Amazon A10</span>
         </button>
 
         <button
           className={`command-stage-tab ${activeStage === 'research' ? 'active-amazon' : ''}`}
           onClick={() => setActiveStage('research')}
-          disabled={!activeProject || activeProject.state === 'EVIDENCE_INTAKE'}
+          disabled={!activeProject}
         >
           <Brain size={18} />
-          <span>🧠 Stage 2: Nghiên Cứu Sâu & Học DNA Đối Thủ (Research Hub)</span>
+          <span>Công cụ cũ 2: Research Hub (không chặn luồng R3)</span>
         </button>
 
         <button
@@ -348,7 +351,7 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
           disabled={!activeProject || !['MKL_FROZEN', 'DRAFT_GENERATED', 'PRODUCT_TRUTH_VERIFIED', 'PRODUCT_TRUTH_CONFIRMED', 'VALIDATED', 'MANAGER_APPROVED', 'PUBLISH_READY'].includes(activeProject.state)}
         >
           <Database size={18} />
-          <span>📊 Stage 3: Kho Từ Khóa Phân Tầng MKL 5-Tier</span>
+          <span>Công cụ cũ 3: Kho từ khóa MKL 5-Tier</span>
         </button>
       </div>
 
@@ -395,10 +398,10 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
           <div className="studio-panel" style={{ padding: '20px 24px', borderLeft: '4px solid #0284c7', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#f0f9ff', borderRadius: '12px', flexWrap: 'wrap', gap: '12px' }}>
             <div>
               <div style={{ fontWeight: 800, fontSize: '1rem', color: '#0369a1' }}>
-                🧠 Stage 2: Competitor DNA & Trend Research
+                Research Hub legacy — chỉ dùng để xem và phân tích
               </div>
               <div style={{ fontSize: '0.8rem', color: '#0284c7', marginTop: '2px' }}>
-                Xray có {xraySellers.length} ASIN candidate trong phiên này. Chọn link/text để học cấu trúc; sau đó accept evidence hợp lệ trước khi chấp nhận DNA.
+                Xray có {xraySellers.length} ASIN candidate trong phiên này. Việc xem dữ liệu không cần chuyển state; tạo draft chính thức dùng Luồng Staff Canonical phía trên.
               </div>
             </div>
 

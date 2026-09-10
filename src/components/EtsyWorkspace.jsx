@@ -568,14 +568,17 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
         }}
       />
 
-      <ProjectEvidenceGate activeProject={activeProject} onTransition={handleTransition} onShowToast={onShowToast} accent="#ea580c" />
-
       <CanonicalCommerceWorkflow
         activeProject={activeProject}
         marketplace="ETSY"
         onSelectListing={onSelectListing}
         onShowToast={onShowToast}
       />
+
+      <details style={{ margin: '10px 0' }}>
+        <summary style={{ cursor: 'pointer', fontWeight: 800, color: '#64748b' }}>Công cụ chuyển stage legacy — không bắt buộc cho luồng R3</summary>
+        <ProjectEvidenceGate activeProject={activeProject} onTransition={handleTransition} onShowToast={onShowToast} accent="#ea580c" />
+      </details>
 
       {/* 0. Market Benchmark & Go/No-Go Decision Gate (Pre-Listing Validation) */}
       <MarketBenchmarkWidget 
@@ -597,16 +600,16 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
           onClick={() => setActiveStage('workflow')}
         >
           <Layers size={18} />
-          <span>⚡ Stage 1: Challenger Top Sellers & MCP 13 Tags (Workflow)</span>
+          <span>Công cụ cũ 1: Challenger Top Sellers & MCP Tags</span>
         </button>
 
           <button
             className={`command-stage-tab ${activeStage === 'research' ? 'active-etsy' : ''}`}
             onClick={() => setActiveStage('research')}
-            disabled={!activeProject || activeProject.state === 'EVIDENCE_INTAKE'}
+            disabled={!activeProject}
         >
           <Brain size={18} />
-          <span>🧠 Stage 2: Nghiên Cứu Sâu & Học DNA Đối Thủ (Research Hub)</span>
+          <span>Công cụ cũ 2: Research Hub (không chặn luồng R3)</span>
         </button>
 
           <button
@@ -615,7 +618,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
             disabled={!activeProject || !['MKL_FROZEN', 'DRAFT_GENERATED', 'PRODUCT_TRUTH_VERIFIED', 'PRODUCT_TRUTH_CONFIRMED', 'VALIDATED', 'MANAGER_APPROVED', 'PUBLISH_READY'].includes(activeProject.state)}
         >
           <Database size={18} />
-          <span>📊 Stage 3: Ma Trận 13 Tags & Từ Khóa Etsy</span>
+          <span>Công cụ cũ 3: Ma trận 13 Tags & từ khóa Etsy</span>
         </button>
       </div>
 
@@ -658,23 +661,13 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
                       onShowToast?.('Tạo hoặc chọn Active Project trước khi chuyển Stage 2.');
                       return;
                     }
-                    if (activeProject?.state === 'EVIDENCE_INTAKE') {
-                      const transitioned = await handleTransition('RESEARCH_ACCEPTED');
-                      if (!transitioned) return;
-                      setActiveStage('research');
-                      return;
-                    }
-                    if (activeProject.state !== 'RESEARCH_ACCEPTED') {
-                      onShowToast?.('Accept evidence đủ điều kiện trước khi vào Research DNA.');
-                      return;
-                    }
                     setActiveStage('research');
                   }}
                   disabled={!activeProject || !mcpResult}
                   title={!activeProject ? 'Chọn Active Project trước.' : !mcpResult ? 'Nạp observed research từ MCP hoặc Etsy Feed trước.' : undefined}
                   style={{ background: '#c2410c', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 800, cursor: 'pointer' }}
                 >
-                  <span>➡️ Chốt Evidence Stage 1 & Chuyển Sang Stage 2 (Research DNA)</span>
+                  <span>Mở Research Hub để xem và phân tích</span>
                 </button>
               </div>
 
@@ -774,10 +767,10 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
           <div className="studio-panel" style={{ padding: '20px 24px', borderLeft: '4px solid #ea580c', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#fff7ed', borderRadius: '12px' }}>
             <div>
               <div style={{ fontWeight: 800, fontSize: '1rem', color: '#c2410c' }}>
-                🧠 Stage 2: Competitor DNA & Trend Research
+                Research Hub legacy — chỉ dùng để xem và phân tích
               </div>
               <div style={{ fontSize: '0.8rem', color: '#ea580c', marginTop: '2px' }}>
-                Review dữ liệu observed trước khi accept DNA. Chỉ evidence đã accept và project ở RESEARCH_ACCEPTED mới mở bước này.
+                Có thể review dữ liệu observed ở mọi state. Tạo draft chính thức dùng Luồng Staff Canonical phía trên; nút chấp nhận DNA bên phải chỉ dành cho transition legacy.
               </div>
             </div>
 

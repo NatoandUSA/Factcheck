@@ -300,6 +300,9 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
     <div>
       <h2 style={{ margin: 0, color: accent }}>Luồng Staff Canonical — {marketplace} US</h2>
       <p style={{ margin: '6px 0 0', color: '#475569' }}>Import dữ liệu thật → khóa bằng hash → Product Truth → intelligence → draft + prompt ảnh. Luồng dừng ở <b>NEEDS_QA</b>, không tự đăng.</p>
+      {activeProject?.state === 'EVIDENCE_INTAKE' && <div style={{ marginTop: 8, padding: 9, borderRadius: 8, background: '#dcfce7', color: '#166534', fontSize: '.8rem', fontWeight: 800 }}>
+        Project đang mang trạng thái legacy EVIDENCE_INTAKE, nhưng trạng thái này không chặn luồng R3 bên dưới. Staff có thể nhập Product Truth và import research ngay trong project hiện tại.
+      </div>}
     </div>
     {error && <div role="alert" style={{ background: '#fef2f2', border: '1px solid #fca5a5', color: '#991b1b', padding: 10, borderRadius: 8 }}>{error}</div>}
 

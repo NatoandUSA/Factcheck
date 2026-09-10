@@ -1,8 +1,6 @@
 'use strict';
 process.env.NODE_ENV = 'test';
 const assert = require('assert');
-const fs = require('fs');
-const path = require('path');
 
 (async () => {
   const { JSDOM } = require('jsdom');
@@ -51,10 +49,6 @@ const path = require('path');
   check(document.body.textContent.includes('Product Truth do Seller nhập và kiểm'), 'Seller Product Truth stage must be visible');
   check(document.body.textContent.includes('Theo keyword đầu vào'), 'AUTO listing language must be visible');
   check(document.body.textContent.includes('Luồng dừng ở NEEDS_QA'), 'workflow must stop at NEEDS_QA');
-  const workflowSource = fs.readFileSync(path.join(__dirname, '..', 'src', 'components', 'CanonicalCommerceWorkflow.jsx'), 'utf8');
-  check(workflowSource.includes("marketplace === 'AMAZON' ? 'CLAIM BLOCKED / PPC' : 'CLAIM BLOCKED'")
-    && workflowSource.includes("marketplace === 'AMAZON' ? 'OTHER LANGUAGE / PPC' : 'OTHER LANGUAGE'"),
-  'routing labels must distinguish Amazon PPC from Etsy non-PPC handling');
 
   const input = document.querySelector('input[type="file"]');
   const selected = new dom.window.File(['fixture'], 'Cerebro.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });

@@ -172,8 +172,8 @@ process.env.NODE_ENV = 'test';
     for (let index = 0; index < 8; index += 1) await flush();
     if (marketplace === 'ETSY') {
       const stageButton = [...document.querySelectorAll('button')]
-        .find(button => button.textContent.includes('Ma Trận 13 Tags'));
-      check(Boolean(stageButton), 'Etsy outer workspace must expose its real MKL stage');
+        .find(button => button.textContent.includes('Công cụ cũ 3: Ma trận 13 Tags'));
+      check(Boolean(stageButton), 'Etsy outer workspace must expose the labelled legacy MKL tool');
       await act(async () => stageButton.click());
       for (let index = 0; index < 4; index += 1) await flush();
       const draftButton = [...document.querySelectorAll('button')]

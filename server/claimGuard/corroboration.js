@@ -38,7 +38,10 @@ const FIELD_RULES = deepFreeze([
   { paths: ['origin', 'shipFrom', 'facility', 'productionPartner'], claimIds: [C.ORIGIN] },
   { paths: ['fulfillment', 'processingTime', 'delivery'], claimIds: [C.FULFILLMENT] },
   { paths: ['socialProof', 'rank', 'certifications'], claimIds: [C.SOCIAL] },
-  { paths: ['packaging', 'accessories', 'includedExtras'], claimIds: [C.PACKAGING] },
+  // An explicitly verified included item can itself be packaging/presentation
+  // (for example a message card or gift box). Keep identity excluded, but let
+  // the dedicated included-items fact corroborate the matching packaging token.
+  { paths: ['packaging', 'accessories', 'includedExtras', 'includedItems'], claimIds: [C.PACKAGING] },
   { paths: ['safety', 'medical', 'health', 'ageCompliance', 'compliance'], claimIds: [C.SAFETY] },
   { paths: ['performance', 'durability', 'compatibility', 'care'], claimIds: [C.PERFORMANCE] },
   { paths: ['environment', 'ethical', 'sustainability'], claimIds: [C.ENVIRONMENT] },

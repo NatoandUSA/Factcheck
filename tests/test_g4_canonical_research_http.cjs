@@ -79,6 +79,22 @@ async function main() {
   check((await get('SELECT COUNT(*) AS n FROM research_imports')).n === before.imports, 'preview creates no import');
   check((await get('SELECT COUNT(*) AS n FROM research_snapshots')).n === before.snapshots, 'preview creates no snapshot');
   check((await get('SELECT COUNT(*) AS n FROM commerce_write_receipts')).n === before.receipts, 'preview creates no receipt');
+  const xrayWorkbook = new ExcelJS.Workbook();
+  xrayWorkbook.addWorksheet('Xray').addRows([
+    ['ASIN', 'Product Details', 'Brand', 'Price $', 'ASIN Sales'],
+    ['B0ABC12345', 'Para Mi Hija Necklace', 'Brand One', 29.99, 400],
+    ['B0ABC12346', 'Collar Para Mi Hija', 'Brand Two', 31.99, 300]
+  ]);
+  const xrayPreview = await upload(`/api/projects/${projectId}/research-imports/preview`, {
+    kind: 'AMAZON_XRAY', researchFile: { name: 'sample_xray.xlsx', bytes: Buffer.from(await xrayWorkbook.xlsx.writeBuffer()) }
+  });
+  check(xrayPreview.status === 200, JSON.stringify(xrayPreview.body));
+  check(xrayPreview.body.asinSelection.batches.length === 1
+    && xrayPreview.body.asinSelection.batches[0].asins.length === 2
+    && xrayPreview.body.asinSelection.batches[0].asins.length <= 10,
+  'Xray preview returns copy-ready Cerebro batches of at most ten ASINs before any Cerebro import');
+  check((await get('SELECT COUNT(*) AS n FROM research_imports')).n === before.imports,
+    'Xray ASIN batch preview remains zero write');
   const unsupported = await upload(`/api/projects/${projectId}/research-imports/preview`, {
     kind: 'AMAZON_CEREBRO', researchFile: { name: 'research.txt', bytes: Buffer.from('not a workbook') }
   });

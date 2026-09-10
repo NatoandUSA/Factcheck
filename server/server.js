@@ -60,6 +60,7 @@ const { appendIntelligenceSnapshot, appendResearchImport, appendResearchSnapshot
 const { recordCanonicalSubmission, requestCanonicalSubmission, reviewCanonicalListing } = require('./canonicalReviewHandoffStore');
 const amazonResearchAdapter = require('./commerceIntelligence/amazonResearchAdapter');
 const amazonIntelligenceAdapter = require('./commerceIntelligence/amazonIntelligenceAdapter');
+const { selectAsinBatches } = require('./commerceIntelligence/asinSelector');
 const etsyResearchAdapter = require('./commerceIntelligence/etsyResearchAdapter');
 const etsyIntelligenceAdapter = require('./commerceIntelligence/etsyIntelligenceAdapter');
 
@@ -1537,6 +1538,14 @@ function researchAdapterFor(project) {
   return project.marketplace === 'AMAZON' ? amazonResearchAdapter : etsyResearchAdapter;
 }
 
+function xrayBatchPreview(project, file, inspected) {
+  if (project.marketplace !== 'AMAZON' || file.kind !== 'AMAZON_XRAY') return null;
+  return selectAsinBatches(inspected.built.observations?.xray || [], {
+    anchors: [String(project.seed_phrase || '').trim()].filter(Boolean),
+    library: true, screen: value => ipGuard.screenText(value), batchSize: 10, maxPerBrand: 2
+  });
+}
+
 function canonicalResearchFile(req, allowedFields, marketplace) {
   const body = requireExactDto(req.body || {}, allowedFields);
   assertNoClientPolicyOverrides(body);
@@ -1586,7 +1595,8 @@ app.post('/api/projects/:id/research-imports/preview', requireAuth(db), requireR
       res.json({ success: true, zeroWrite: true, projectId, kind: file.kind, fileName: file.fileName,
         rawHash: inspected.rawHash, byteLength: file.rawBytes.length, parserId: adapter.PARSER_ID,
         parserHash: inspected.parserHash, accounting: inspected.built.accounting,
-        sourceCoverage: inspected.source, headerSignature: inspected.headerSignature });
+        sourceCoverage: inspected.source, headerSignature: inspected.headerSignature,
+        asinSelection: xrayBatchPreview(project, file, inspected) });
     } catch (error) { rejectRevisionStore(res, error); }
   });
 
@@ -1604,7 +1614,8 @@ app.post('/api/projects/:id/research-imports', requireAuth(db), requireRole(['OW
         parserHash: inspected.parserHash
       });
       res.status(result.duplicate ? 200 : 201).json({ success: true, ...result,
-        accounting: inspected.built.accounting, sourceCoverage: inspected.source });
+        accounting: inspected.built.accounting, sourceCoverage: inspected.source,
+        asinSelection: xrayBatchPreview(project, file, inspected) });
     } catch (error) { rejectRevisionStore(res, error); }
   });
 

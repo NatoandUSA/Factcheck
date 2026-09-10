@@ -55,6 +55,8 @@ const assert = require('assert');
   check(document.body.textContent.includes('không tự đăng'), 'workflow must disclose its stop boundary');
   check(!document.body.textContent.includes('Manager xác nhận'), 'Seller must not receive Manager confirmation action');
   check(document.body.textContent.includes('Cerebro keywords') && document.body.textContent.includes('Xray competitors'), 'Amazon must accept both research kinds');
+  check(document.body.textContent.includes('Xray tùy chọn') && document.body.textContent.includes('Cerebro bắt buộc'),
+    'Amazon UI must explain Xray-to-Cerebro order and which input is actually required');
   check(document.body.textContent.includes('Preview zero-write'), 'research and intelligence previews must be visible');
   check(document.body.textContent.includes('Product Truth do Seller nhập và kiểm'), 'Seller Product Truth stage must be visible');
   check(document.body.textContent.includes('Dùng ngay tài khoản, workspace và project đang mở'),

@@ -67,6 +67,12 @@ test('dedicated truth fields corroborate matching material and size claims', () 
   assert.equal(audit.clean, true);
 });
 
+test('verified included items corroborate message cards without making identity authoritative', () => {
+  const truth = { productName: 'Necklace Message Card', includedItems: 'Message card' };
+  assert.equal(guard.auditComposedOutput({ title: 'Necklace with message card' }, truth).clean, true);
+  assert.equal(guard.auditComposedOutput({ title: 'Necklace with velvet pouch' }, truth).claimSurfaceBlockingFree, false);
+});
+
 test('wrong material and wrong size remain blocked', () => {
   const truth = { materials: ['14k gold plated stainless steel'], sizes: ['18 inch'] };
   const audit = guard.auditComposedOutput({ title: 'Sterling silver necklace', bullet: '20 inch chain' }, truth);

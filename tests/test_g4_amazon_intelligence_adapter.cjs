@@ -67,7 +67,34 @@ async function main() {
   check(result.output.listingDraft.amazonAPlusPoints.includes('Materials: stainless steel')
     && !JSON.stringify(result.output.listingDraft.amazonAPlusPoints).toLowerCase().includes('18k'),
   'A+ copy points are non-empty and derived only from Product Truth');
-  console.log(`G4 Amazon intelligence adapter: ${passed}/25 PASS`);
+
+  const productionLike = structuredClone(input);
+  productionLike.productTruth.snapshot.asserted.productName = asserted('Para Mi Hija Necklace Message Card');
+  productionLike.productTruth.snapshot.asserted.includedItems = asserted('Message card');
+  productionLike.productTruth.snapshot.asserted.packaging = asserted('Gift box');
+  productionLike.productTruth.snapshot.asserted.colors = asserted('Silver / Yellow');
+  const productionResult = await adapter.buildIntelligence(productionLike);
+  const productionVisible = [productionResult.output.listingDraft.amazonTitle,
+    ...productionResult.output.listingDraft.amazonBullets,
+    productionResult.output.listingDraft.amazonDescription].join(' ').toLowerCase();
+  check(productionVisible.includes('message card'), 'verified included message card survives claim guard');
+  check(!productionVisible.includes('silver'), 'ambiguous silver color cannot become a material claim');
+  check(productionResult.output.factClaimReview.some(item => item.field === 'colors' && item.value.includes('Silver')),
+    'omitted ambiguous color remains visible in review accounting');
+  let missingCerebro;
+  try {
+    await adapter.buildIntelligence({ ...input, research: { observations: { marketplace: 'AMAZON', xray: [] } } });
+  } catch (error) { missingCerebro = error; }
+  check(missingCerebro?.code === 'CEREBRO_KEYWORDS_REQUIRED' && missingCerebro?.status === 409,
+    'missing Cerebro is an actionable workflow precondition, not a server failure');
+  const unsafeIdentity = structuredClone(input);
+  unsafeIdentity.productTruth.snapshot.asserted.productName = asserted('Sterling Silver Necklace');
+  let blockedOutput;
+  try { await adapter.buildIntelligence(unsafeIdentity); } catch (error) { blockedOutput = error; }
+  check(blockedOutput?.code === 'UNVERIFIED_OUTPUT_CLAIM' && blockedOutput?.status === 422
+    && blockedOutput?.details?.blocking?.some(item => item.token === 'silver'),
+  'true output contamination stays blocked with field-level 422 diagnostics');
+  console.log(`G4 Amazon intelligence adapter: ${passed}/${passed} PASS`);
 }
 
 main().catch(error => { console.error(error); process.exitCode = 1; });

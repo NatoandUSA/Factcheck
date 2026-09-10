@@ -27,6 +27,7 @@ const ROUTES = [
   { method: 'GET', path: '/api/projects', public: false },
   { method: 'POST', path: '/api/projects', public: false },
   { method: 'POST', path: '/api/projects/:id/product-truth-imports/preview', public: false },
+  { method: 'POST', path: '/api/projects/:id/product-truth-listing/preview', public: false },
   { method: 'POST', path: '/api/projects/:id/product-truth/revisions', public: false },
   { method: 'GET', path: '/api/projects/:id/product-truth/revisions', public: false },
   { method: 'POST', path: '/api/projects/:id/product-truth/revisions/:revisionId/confirm', public: false },

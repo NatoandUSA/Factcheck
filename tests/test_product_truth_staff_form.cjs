@@ -7,6 +7,7 @@ const { JSDOM } = require('jsdom');
 const ExcelJS = require('exceljs');
 const { FACT_KEYS } = require('../server/productTruthAttestation');
 const { parseProductTruthWorkbook } = require('../server/productTruthWorkbookParser');
+const { parseListingHtml } = require('../server/productTruthListingParser');
 
 async function tick(window) {
   await new Promise(resolve => window.setTimeout(resolve, 0));
@@ -32,6 +33,15 @@ async function tick(window) {
         ] });
         if (String(url).endsWith('/commerce-state')) return response({ heads: { productTruthRevisionId: 41 } });
         if (String(url).endsWith('/product-truth-imports/preview')) return response(excelPreviewResponse);
+        if (String(url).endsWith('/product-truth-listing/preview')) return response({
+          success: true, zeroWrite: true, rawHash: 'a'.repeat(64),
+          facts: {
+            productName: { disposition: 'ASSERTED', value: 'Scanned necklace', basis: 'REFERENCE_LISTING_SAME_SOURCE', basisNote: 'same supplier' },
+            productType: { disposition: 'ASSERTED', value: 'Custom necklace', basis: 'REFERENCE_LISTING_SAME_SOURCE', basisNote: 'same supplier' },
+            materials: { disposition: 'ASSERTED', value: 'Stainless steel', basis: 'REFERENCE_LISTING_SAME_SOURCE', basisNote: 'same supplier' }
+          },
+          accounting: { extractedFactCount: 3 }
+        });
         if (String(url).endsWith('/product-truth/revisions')) return response({
           productTruthRevisionId: 42,
           confirmationState: 'STAFF_DRAFT'
@@ -53,12 +63,32 @@ async function tick(window) {
     'HTML keys must exactly match the server canonical Product Truth registry');
   check(document.body.textContent.includes('STAFF_DRAFT'), 'form must disclose its non-manager state');
   check(!document.body.textContent.includes('Xác nhận Manager'), 'staff form must not expose Manager confirmation');
+  check(document.querySelectorAll('#factRows tr:not(.profile-hidden)').length === 13,
+    'physical profile must show only the core physical/custom fields by default');
+  document.getElementById('entryProfile').value = 'DIGITAL';
+  document.getElementById('entryProfile').dispatchEvent(new Event('change', { bubbles: true }));
+  check(!document.querySelector('[data-key="fileFormat"]').classList.contains('profile-hidden')
+    && document.querySelector('[data-key="materials"]').classList.contains('profile-hidden'),
+  'digital profile must swap in digital facts without deleting canonical fields');
+  document.getElementById('entryProfile').value = 'PHYSICAL';
+  document.getElementById('entryProfile').dispatchEvent(new Event('change', { bubbles: true }));
 
   const project = document.getElementById('project');
   project.value = '17';
   project.dispatchEvent(new Event('change', { bubbles: true }));
   await tick(dom.window);
   check(document.getElementById('message').textContent.includes('41'), 'form must load the current Product Truth head');
+
+  document.getElementById('listingSource').value = 'B0ABC12345';
+  document.getElementById('sameSource').checked = true;
+  document.getElementById('scanListing').click();
+  await tick(dom.window);
+  await tick(dom.window);
+  check(calls.some(call => call.url === '/api/projects/17/product-truth-listing/preview'),
+    'form must preview one ASIN/Etsy listing through the project-scoped route');
+  check(document.querySelector('[data-key="materials"] [data-role="value"]').value === 'Stainless steel'
+    && document.querySelector('[data-key="materials"] [data-role="basis"]').value === 'REFERENCE_LISTING_SAME_SOURCE',
+  'listing preview must populate editable facts with same-source provenance');
 
   document.getElementById('productCode').value = 'HIJA-NECKLACE-001';
   document.getElementById('staffName').value = 'Staff QA';
@@ -92,19 +122,22 @@ async function tick(window) {
 
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.readFile(path.join(__dirname, '..', 'public', 'templates', 'OMNISELLER_PRODUCT_TRUTH_STAFF_TEMPLATE_VI.xlsx'));
-  check(['Sản phẩm', 'Sự thật', 'Hướng dẫn'].every(name => workbook.getWorksheet(name)),
-    'Excel template must contain the three Vietnamese workflow sheets');
+  check(['Sản phẩm', 'Sự thật', 'Bổ sung', 'Hướng dẫn'].every(name => workbook.getWorksheet(name)),
+    'Excel template must separate core and optional Vietnamese fact sheets');
   const factSheet = workbook.getWorksheet('Sự thật');
   const excelKeys = new Set();
-  for (let row = 3; row <= factSheet.rowCount; row += 1) {
-    const key = String(factSheet.getCell(`B${row}`).value || '').trim();
-    if (key) excelKeys.add(key);
+  for (const sheetName of ['Sự thật', 'Bổ sung']) {
+    const sheet = workbook.getWorksheet(sheetName);
+    for (let row = 3; row <= sheet.rowCount; row += 1) {
+      const key = String(sheet.getCell(`B${row}`).value || '').trim();
+      if (key) excelKeys.add(key);
+    }
   }
   check(excelKeys.size === FACT_KEYS.size && [...FACT_KEYS].every(key => excelKeys.has(key)),
     'Excel keys must exactly match the server canonical Product Truth registry');
   check(Boolean(factSheet.getCell('D3').dataValidation?.formulae), 'Excel fact status must use a dropdown validation');
-  check(Boolean(workbook.getWorksheet('Sản phẩm').getCell('L3').value?.formula)
-    && Boolean(workbook.getWorksheet('Sản phẩm').getCell('M3').value?.formula),
+  check(Boolean(workbook.getWorksheet('Sản phẩm').getCell('G3').value?.formula)
+    && Boolean(workbook.getWorksheet('Sản phẩm').getCell('H3').value?.formula),
   'Excel minimum checks must remain formula-driven');
 
   factSheet.getCell('E3').value = 'Para Mi Hija Custom Necklace';
@@ -149,6 +182,15 @@ async function tick(window) {
   await assert.rejects(parseProductTruthWorkbook(Buffer.from(await multiWorkbook.xlsx.writeBuffer())),
     error => error?.code === 'PRODUCT_TRUTH_PRODUCT_CODE_REQUIRED' && error.details.productCodes.length === 2);
   measured += 1;
+
+  const etsyPreview = parseListingHtml(`<!doctype html><html><head><meta property="og:title" content="Printable murder mystery game"></head><body>
+    <script type="application/ld+json">{"@type":"Product","name":"Who Killed Arthur Blackwood?","material":["Digital PDF"],"description":"Printable game for 1-6 players"}</script>
+    <div data-id="description-text">Printable game for 1-6 players, age 14+</div></body></html>`,
+  { marketplace: 'ETSY', sourceReference: 'https://www.etsy.com/listing/123456789' });
+  check(etsyPreview.facts.productName.value === 'Who Killed Arthur Blackwood?'
+    && etsyPreview.facts.materials.value === 'Digital PDF', 'Etsy saved HTML/JSON-LD must populate editable facts');
+  check(etsyPreview.zeroWrite === true && etsyPreview.dna.descriptionLength > 0,
+    'listing extraction must return zero-write facts and observed DNA metadata together');
 
   dom.window.close();
   console.log(`Product Truth staff form: ${measured}/${measured} PASS`);

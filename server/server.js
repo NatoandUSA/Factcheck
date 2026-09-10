@@ -39,7 +39,7 @@ const { approvalHash } = require('./security/approval');
 const { validateProductTruthCard } = require('../shared/productTruth.cjs');
 const { projectVerifiedAiInput, renderVerifiedCommerceListing, validateModelClaims } = require('../shared/aiTruthBoundary.cjs');
 const { readFirstWorksheet } = require('./services/spreadsheetReader');
-const { UrlGuardError } = require('./security/urlGuard');
+const { safeFetch, UrlGuardError } = require('./security/urlGuard');
 const { resolveRuntimePaths } = require('./config/paths');
 const { parseEtsySearchInput } = require('./etsyPastedSearchParser');
 const { buildEvidenceHealth } = require('./evidenceHealth');
@@ -51,6 +51,7 @@ const { buildStaffAttestedCard, normalizeSnapshot, productTruthAuthorityHash, va
 const { assertNoClientPolicyOverrides } = require('./policy/contractRegistry');
 const { appendProductTruthRevision, confirmProductTruthRevision, listProductTruthRevisions } = require('./productTruthStore');
 const { parseProductTruthWorkbook } = require('./productTruthWorkbookParser');
+const { parseListingHtml } = require('./productTruthListingParser');
 const { createListingWithRevision, appendListingRevision, canonicalJson, getListingRevision, hashBytes, listListingRevisions } = require('./revisionStore');
 const { assertCanonicalDependenciesCurrent, composeCommerceDraft, composeTruthOnlyDraft,
   validateCanonicalDraft } = require('./canonicalDraftService');
@@ -303,6 +304,17 @@ const productTruthWorkbookUpload = multer({
   fileFilter(req, file, cb) {
     const allowed = /\.xlsx$/i.test(file.originalname || '');
     cb(allowed ? null : new Error('UNSUPPORTED_PRODUCT_TRUTH_WORKBOOK'), allowed);
+  }
+});
+
+// A saved marketplace page is parsed in memory only. The extracted facts are
+// shown to staff as a zero-write preview before a Product Truth revision exists.
+const productTruthListingUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024, files: 1, fields: 4 },
+  fileFilter(req, file, cb) {
+    const allowed = /\.html?$/i.test(file.originalname || '');
+    cb(allowed ? null : new Error('UNSUPPORTED_LISTING_HTML'), allowed);
   }
 });
 
@@ -1439,6 +1451,44 @@ app.post('/api/projects/:id/product-truth-imports/preview', requireAuth(db), req
       });
       const preview = await parseProductTruthWorkbook(req.file.buffer, { productCode: req.body?.productCode });
       res.json({ success: true, fileName: req.file.originalname, byteLength: req.file.size, ...preview });
+    } catch (error) { rejectRevisionStore(res, error); }
+  });
+
+app.post('/api/projects/:id/product-truth-listing/preview', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']),
+  productTruthListingUpload.single('file'), async (req, res) => {
+    try {
+      const project = await requireCommerceProject(req);
+      if (String(req.body?.confirmSameSource || '').toLowerCase() !== 'true') {
+        throw Object.assign(new Error('SAME_SOURCE_CONFIRMATION_REQUIRED'), {
+          code: 'SAME_SOURCE_CONFIRMATION_REQUIRED', status: 400
+        });
+      }
+      let sourceReference = String(req.body?.source || '').trim();
+      if (sourceReference.length > 2000) throw Object.assign(new Error('LISTING_REFERENCE_TOO_LARGE'), {
+        code: 'LISTING_REFERENCE_TOO_LARGE', status: 400
+      });
+      let html = req.file?.buffer?.toString('utf8') || '';
+      if (!html) {
+        if (project.marketplace === 'AMAZON' && /^[A-Z0-9]{10}$/i.test(sourceReference)) {
+          sourceReference = `https://www.amazon.com/dp/${sourceReference.toUpperCase()}`;
+        } else if (project.marketplace === 'ETSY' && /^\d{6,15}$/.test(sourceReference)) {
+          sourceReference = `https://www.etsy.com/listing/${sourceReference}`;
+        }
+        if (!/^https:\/\//i.test(sourceReference)) {
+          throw Object.assign(new Error('LISTING_REFERENCE_REQUIRED'), { code: 'LISTING_REFERENCE_REQUIRED', status: 400 });
+        }
+        try { html = await safeFetch(sourceReference, project.marketplace); }
+        catch (error) {
+          if (error instanceof UrlGuardError) throw error;
+          throw Object.assign(new Error('LISTING_FETCH_FAILED_USE_HTML'), {
+            code: 'LISTING_FETCH_FAILED_USE_HTML', status: 422
+          });
+        }
+      } else if (!sourceReference) {
+        sourceReference = req.file.originalname;
+      }
+      const preview = parseListingHtml(html, { marketplace: project.marketplace, sourceReference });
+      res.json({ success: true, fileName: req.file?.originalname || null, byteLength: Buffer.byteLength(html), ...preview });
     } catch (error) { rejectRevisionStore(res, error); }
   });
 
@@ -5077,7 +5127,7 @@ app.use((err, req, res, next) => {
     return res.status(status).json({ success: false, error: err.code });
   }
   if (['UNSUPPORTED_RESEARCH_FILE','UNSUPPORTED_ETSY_SEARCH_FILE','UNSUPPORTED_UPLOAD_TYPE',
-    'UNSUPPORTED_PRODUCT_TRUTH_WORKBOOK'].includes(err?.message)) {
+    'UNSUPPORTED_PRODUCT_TRUTH_WORKBOOK','UNSUPPORTED_LISTING_HTML'].includes(err?.message)) {
     return res.status(415).json({ success: false, error: err.message });
   }
   console.error('Unhandled request error:', err);

@@ -57,6 +57,36 @@ let server;
   assert.equal((await get('SELECT COUNT(*) AS n FROM product_truth_revisions')).n, before,
     'preview must not create a Product Truth revision');
 
+  const listingHtml = `<!doctype html><html><body>
+    <span id="productTitle">Para Mi Hija Custom Necklace</span>
+    <div id="feature-bullets"><ul><li><span class="a-list-item">Personalized message card included</span></li></ul></div>
+    <table><tr><th>Material</th><td>Stainless steel, 14k gold plating</td></tr><tr><th>Item dimensions</th><td>45 cm + 5 cm extension</td></tr></table>
+    <div id="productDescription">A custom gift necklace for daughter.</div>
+  </body></html>`;
+  const listingForm = new FormData();
+  listingForm.append('file', new Blob([listingHtml], { type: 'text/html' }), 'amazon-listing.html');
+  listingForm.append('source', 'B0ABC12345');
+  listingForm.append('confirmSameSource', 'true');
+  const listingResponse = await fetch(`${origin}/api/projects/${project.projectId}/product-truth-listing/preview`, {
+    method: 'POST', headers: { Cookie: `omni_session=${session.rawToken}`, Origin: origin }, body: listingForm
+  });
+  const listingPreview = await listingResponse.json();
+  assert.equal(listingResponse.status, 200, JSON.stringify(listingPreview));
+  assert.equal(listingPreview.zeroWrite, true);
+  assert.equal(listingPreview.facts.productName.value, 'Para Mi Hija Custom Necklace');
+  assert.equal(listingPreview.facts.materials.value, 'Stainless steel, 14k gold plating');
+  assert.equal(listingPreview.facts.materials.basis, 'REFERENCE_LISTING_SAME_SOURCE');
+  assert.equal(listingPreview.facts.sizes.value, '45 cm + 5 cm extension');
+  assert.equal((await get('SELECT COUNT(*) AS n FROM product_truth_revisions')).n, before,
+    'listing preview must not create a Product Truth revision');
+
+  const unconfirmedListing = new FormData();
+  unconfirmedListing.append('file', new Blob([listingHtml]), 'amazon-listing.html');
+  const unconfirmedResponse = await fetch(`${origin}/api/projects/${project.projectId}/product-truth-listing/preview`, {
+    method: 'POST', headers: { Cookie: `omni_session=${session.rawToken}`, Origin: origin }, body: unconfirmedListing
+  });
+  assert.equal(unconfirmedResponse.status, 400);
+
   const unauthenticated = new FormData();
   unauthenticated.append('file', new Blob([bytes]), 'truth.xlsx');
   const denied = await fetch(`${origin}/api/projects/${project.projectId}/product-truth-imports/preview`, {
@@ -71,7 +101,7 @@ let server;
   });
   assert.equal(unsupported.status, 415);
 
-  console.log('Product Truth workbook HTTP: 9/9 PASS');
+  console.log('Product Truth workbook/listing HTTP: 17/17 PASS');
 })().catch(error => { console.error(error); process.exitCode = 1; }).finally(async () => {
   if (server) await new Promise(resolve => server.close(resolve));
   if (db?.open) await new Promise(resolve => db.close(resolve));

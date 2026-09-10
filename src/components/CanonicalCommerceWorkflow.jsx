@@ -1,22 +1,20 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 
-const FACT_FIELDS = [
+const CORE_FACT_FIELDS = [
   ['productName', 'Tên sản phẩm', true], ['productType', 'Loại sản phẩm', true],
-  ['category', 'Danh mục'], ['materials', 'Chất liệu'], ['composition', 'Thành phần'],
-  ['colors', 'Màu sắc'], ['finish', 'Hoàn thiện bề mặt'],
-  ['design', 'Thiết kế'], ['style', 'Phong cách'], ['theme', 'Chủ đề'], ['pattern', 'Họa tiết'],
-  ['purity', 'Độ tinh khiết / mạ'], ['gemstones', 'Đá'], ['sizes', 'Kích thước'],
-  ['dimensions', 'Kích thước chi tiết'], ['weight', 'Khối lượng'], ['quantity', 'Số lượng'],
-  ['personalization', 'Cá nhân hóa'], ['process', 'Quy trình sản xuất'],
+  ['category', 'Danh mục'], ['materials', 'Chất liệu'], ['colors', 'Màu sắc'], ['sizes', 'Kích thước'],
+  ['personalization', 'Cá nhân hóa'], ['process', 'Cách sản xuất / cá nhân hóa'],
   ['includedItems', 'Vật phẩm đi kèm'], ['packaging', 'Đóng gói'], ['care', 'Bảo quản'],
   ['recipient', 'Người nhận'], ['occasion', 'Dịp'], ['audience', 'Đối tượng'],
-  ['shipFrom', 'Nơi gửi'], ['origin', 'Xuất xứ'], ['processingTime', 'Thời gian xử lý'],
+];
+const DIGITAL_FACT_FIELDS = [
   ['digital', 'Sản phẩm số'], ['digitalDetails', 'Chi tiết sản phẩm số'],
   ['fileFormat', 'Định dạng file'], ['license', 'Giấy phép'], ['usageRights', 'Quyền sử dụng'],
   ['playerCount', 'Số người chơi'], ['minimumAge', 'Tuổi tối thiểu'], ['duration', 'Thời lượng'],
   ['language', 'Ngôn ngữ sản phẩm']
 ];
+const FACT_FIELDS = [...CORE_FACT_FIELDS, ...DIGITAL_FACT_FIELDS];
 
 const emptyFacts = Object.fromEntries(FACT_FIELDS.map(([key]) => [key, '']));
 const uuid = () => globalThis.crypto?.randomUUID?.() || `${Date.now().toString(16)}-0000-4000-8000-${Math.random().toString(16).slice(2, 14).padEnd(12, '0')}`;
@@ -70,7 +68,7 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
   const [facts, setFacts] = useState(emptyFacts);
   const [truthNotes, setTruthNotes] = useState('');
   const [truthBasis, setTruthBasis] = useState('OTHER');
-  const [truthBasisNote, setTruthBasisNote] = useState('Seller entered and checked in canonical workflow');
+  const [truthBasisNote, setTruthBasisNote] = useState('Nhân viên nhập từ supplier hoặc hồ sơ listing nội bộ');
   const [file, setFile] = useState(null);
   const [kind, setKind] = useState(marketplace === 'AMAZON' ? 'AMAZON_CEREBRO' : 'ETSY_SEARCH');
   const [filePreview, setFilePreview] = useState(null);
@@ -166,7 +164,7 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
     const truthFacts = Object.fromEntries(FACT_FIELDS.map(([key]) => {
       const value = text(facts[key]).trim();
       return [key, value ? { disposition: 'ASSERTED', value, basis: truthBasis,
-        basisNote: truthBasisNote.trim() || 'Seller entered and checked in canonical workflow' }
+        basisNote: truthBasisNote.trim() || 'Seller đã nhập và kiểm tra trong workflow canonical' }
         : { disposition: 'UNKNOWN', reason: 'Not provided at this Product Truth revision' }];
     }));
     const result = await api(`/api/projects/${projectId}/product-truth/revisions`, jsonOptions({
@@ -299,25 +297,32 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
         <a href="/product-truth-staff.html" target="_blank" rel="noreferrer" style={{
           display: 'inline-block', padding: '9px 14px', borderRadius: 8, background: '#155eef', color: '#fff',
           fontWeight: 800, textDecoration: 'none'
-        }}>Mở phiếu Product Truth tiếng Việt — đủ 56 trường</a>
+        }}>Quét listing / nhập Product Truth</a>
         <a href="/templates/OMNISELLER_PRODUCT_TRUTH_STAFF_TEMPLATE_VI.xlsx" download style={{
           display: 'inline-block', padding: '9px 14px', borderRadius: 8, background: '#e8eef7', color: '#22314d',
           fontWeight: 800, textDecoration: 'none'
         }}>Tải mẫu Excel Product Truth</a>
-        <span style={{ fontSize: '.78rem', color: '#475569' }}>Phiếu chi tiết tạo STAFF_DRAFT; quản lý duyệt ở bước riêng.</span>
+        <span style={{ fontSize: '.78rem', color: '#475569' }}>Khuyên dùng: quét 1 ASIN/Etsy listing hoặc upload HTML, kiểm vài trường chính rồi lưu STAFF_DRAFT.</span>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))', gap: 9 }}>
-        {FACT_FIELDS.map(([key, label, required]) => <label key={key} style={{ display: 'grid', gap: 3, fontSize: '.75rem', fontWeight: 800 }}>
+        {CORE_FACT_FIELDS.map(([key, label, required]) => <label key={key} style={{ display: 'grid', gap: 3, fontSize: '.75rem', fontWeight: 800 }}>
           {label}{required ? ' *' : ''}<input value={facts[key]} onChange={event => setFacts(previous => ({ ...previous, [key]: event.target.value }))} style={{ padding: 8, border: '1px solid #cbd5e1', borderRadius: 7 }} />
         </label>)}
       </div>
+      <details style={{ marginTop: 10 }}><summary style={{ cursor: 'pointer', fontWeight: 800, fontSize: '.82rem' }}>Thông tin digital / printable nếu áp dụng</summary>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))', gap: 9, marginTop: 9 }}>
+          {DIGITAL_FACT_FIELDS.map(([key, label]) => <label key={key} style={{ display: 'grid', gap: 3, fontSize: '.75rem', fontWeight: 800 }}>
+            {label}<input value={facts[key]} onChange={event => setFacts(previous => ({ ...previous, [key]: event.target.value }))} style={{ padding: 8, border: '1px solid #cbd5e1', borderRadius: 7 }} />
+          </label>)}
+        </div>
+      </details>
       <label style={{ display: 'grid', gap: 3, marginTop: 9, fontSize: '.75rem', fontWeight: 800 }}>Ghi chú / dữ liệu còn thiếu
         <textarea value={truthNotes} onChange={event => setTruthNotes(event.target.value)} rows={3} style={{ padding: 8, border: '1px solid #cbd5e1', borderRadius: 7 }} placeholder="Thiếu gì thì ghi rõ; hệ thống vẫn sinh draft nhưng không được bịa." />
       </label>
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(180px,.35fr) 1fr', gap: 9, marginTop: 9 }}>
         <label style={{ display: 'grid', gap: 3, fontSize: '.75rem', fontWeight: 800 }}>Nguồn xác minh
           <select value={truthBasis} onChange={event => setTruthBasis(event.target.value)}>
-            <option value="SUPPLIER_SPEC">Supplier specification</option><option value="PHYSICAL_INSPECTION">Physical inspection</option>
+            <option value="SUPPLIER_SPEC">Thông tin supplier</option><option value="OWN_LISTING_RECORD">Listing đã đăng của công ty</option><option value="REFERENCE_LISTING_SAME_SOURCE">Listing cùng supplier / nguồn hàng</option><option value="PHYSICAL_INSPECTION">Kiểm tra sản phẩm thật</option>
             <option value="PRODUCTION_WORKFLOW">Production workflow</option><option value="RIGHTS_RECORD">Rights record</option><option value="OTHER">Other / staff verified</option>
           </select>
         </label>

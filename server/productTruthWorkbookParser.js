@@ -39,25 +39,26 @@ async function parseProductTruthWorkbook(buffer, options = {}) {
   const workbook = new ExcelJS.Workbook();
   try { await workbook.xlsx.load(buffer); }
   catch (_) { throw new ProductTruthWorkbookError('INVALID_PRODUCT_TRUTH_WORKBOOK'); }
-  const sheet = workbook.getWorksheet('Sự thật');
-  if (!sheet) throw new ProductTruthWorkbookError('PRODUCT_TRUTH_FACT_SHEET_REQUIRED');
-  const headers = EXPECTED_HEADERS.map((_, index) => textCell(sheet.getCell(2, index + 1), 2, index + 1));
-  if (headers.some((header, index) => header !== EXPECTED_HEADERS[index])) {
-    throw new ProductTruthWorkbookError('PRODUCT_TRUTH_HEADERS_MISMATCH', 400, { expected: EXPECTED_HEADERS, actual: headers });
-  }
-
   const records = [];
   const productCodes = new Set();
-  const maxRow = Math.min(Math.max(sheet.actualRowCount, 2), 1002);
-  for (let row = 3; row <= maxRow; row += 1) {
-    const values = Array.from({ length: 10 }, (_, index) => textCell(sheet.getCell(row, index + 1), row, index + 1));
-    if (values.every(value => !value)) continue;
-    const [productCode, factKey, label, rawStatus, value, basis, basisNote, unknownReason, reference, staffNote] = values;
-    if (!productCode || !factKey || !rawStatus) {
-      throw new ProductTruthWorkbookError('PRODUCT_TRUTH_ROW_INCOMPLETE', 400, { row });
+  const sheets = ['Sự thật', 'Bổ sung'].map(name => workbook.getWorksheet(name)).filter(Boolean);
+  if (!sheets.length || sheets[0].name !== 'Sự thật') throw new ProductTruthWorkbookError('PRODUCT_TRUTH_FACT_SHEET_REQUIRED');
+  for (const sheet of sheets) {
+    const headers = EXPECTED_HEADERS.map((_, index) => textCell(sheet.getCell(2, index + 1), 2, index + 1));
+    if (headers.some((header, index) => header !== EXPECTED_HEADERS[index])) {
+      throw new ProductTruthWorkbookError('PRODUCT_TRUTH_HEADERS_MISMATCH', 400, { sheet: sheet.name, expected: EXPECTED_HEADERS, actual: headers });
     }
-    productCodes.add(productCode);
-    records.push({ row, productCode, factKey, label, rawStatus, value, basis, basisNote, unknownReason, reference, staffNote });
+    const maxRow = Math.min(Math.max(sheet.actualRowCount, 2), 1002);
+    for (let row = 3; row <= maxRow; row += 1) {
+      const values = Array.from({ length: 10 }, (_, index) => textCell(sheet.getCell(row, index + 1), row, index + 1));
+      if (values.every(value => !value)) continue;
+      const [productCode, factKey, label, rawStatus, value, basis, basisNote, unknownReason, reference, staffNote] = values;
+      if (!productCode || !factKey || !rawStatus) {
+        throw new ProductTruthWorkbookError('PRODUCT_TRUTH_ROW_INCOMPLETE', 400, { sheet: sheet.name, row });
+      }
+      productCodes.add(productCode);
+      records.push({ sheet: sheet.name, row, productCode, factKey, label, rawStatus, value, basis, basisNote, unknownReason, reference, staffNote });
+    }
   }
   if (!records.length) throw new ProductTruthWorkbookError('PRODUCT_TRUTH_ROWS_REQUIRED');
 

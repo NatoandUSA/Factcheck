@@ -15,7 +15,8 @@ const FACT_KEYS = Object.freeze(new Set([
   'playerCount', 'minimumAge', 'duration', 'language'
 ]));
 const BASES = Object.freeze(new Set([
-  'SUPPLIER_SPEC', 'PHYSICAL_INSPECTION', 'PRODUCTION_WORKFLOW', 'RIGHTS_RECORD', 'OTHER'
+  'SUPPLIER_SPEC', 'OWN_LISTING_RECORD', 'REFERENCE_LISTING_SAME_SOURCE', 'PHYSICAL_INSPECTION',
+  'PRODUCTION_WORKFLOW', 'RIGHTS_RECORD', 'OTHER'
 ]));
 
 function fail(code, details = {}) {

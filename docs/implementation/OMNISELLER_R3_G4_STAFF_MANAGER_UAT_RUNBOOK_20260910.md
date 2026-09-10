@@ -12,30 +12,22 @@ Run Amazon US and Etsy US through saved draft status `NEEDS_QA`. Do not merge, d
 | Manager | Open exact review package, compare facts/claims/accounting, request changes | Invent facts, approve while policy gate is blocked |
 | Owner | Observe evidence and decide later whether release gates may proceed | Treat a test result as policy evidence |
 
-## 3. Phiếu nhập Product Truth
+## 3. Product Truth — quét trước, sửa sau
 
-Nhân viên sử dụng form `/product-truth-staff.html` hoặc workbook `OMNISELLER_PRODUCT_TRUTH_STAFF_TEMPLATE_VI.xlsx`. Form có thể preview workbook zero-write, điền dữ liệu lên màn hình để kiểm tra, rồi mới tạo revision. Hướng dẫn đầy đủ nằm trong `HUONG_DAN_NHAP_PRODUCT_TRUTH_CHO_NHAN_VIEN.md`.
+Nhân viên sử dụng form `/product-truth-staff.html`. Luồng mặc định: quét một ASIN/Etsy listing hoặc upload trang HTML đã lưu, để tool điền các trường chính, rồi staff sửa khác biệt. Workbook `OMNISELLER_PRODUCT_TRUTH_STAFF_TEMPLATE_VI.xlsx` là lựa chọn nhập hàng loạt. Mọi import đều preview zero-write trước khi tạo revision.
 
-Chỉ nhập dữ liệu đã xác minh. Trường tùy chọn có thể để `CHƯA RÕ`; hệ thống phải ghi rõ thiếu gì hoặc chặn claim liên quan thay vì tự bịa.
+Listing đối thủ/bestseller được dùng làm nguồn fact khi staff xác nhận đó là sản phẩm cùng supplier/cùng nguồn hàng. Listing khác sản phẩm chỉ dùng để học DNA. Trường tùy chọn có thể bỏ qua và bổ sung ở revision sau.
 
-| Sự thật sản phẩm | Giá trị nhân viên nhập | Nguồn xác minh | Tài liệu/tham chiếu | Manager đã kiểm |
-|---|---|---|---|---|
-| Product name |  |  |  |  |
-| Product type/category |  |  |  |  |
-| Recipient/audience |  |  |  |  |
-| Personalization capability |  |  |  |  |
-| Personalization method |  |  |  |  |
-| Materials/composition |  |  |  |  |
-| Purity/plating/finish |  |  |  |  |
-| Sizes/dimensions |  |  |  |  |
-| Colors/variants |  |  |  |  |
-| Included items |  |  |  |  |
-| Packaging |  |  |  |  |
-| Care |  |  |  |  |
-| Ship-from/origin |  |  |  |  |
-| Rights/IP record |  |  |  |  |
+| Thông tin chính | Giá trị quét/nhân viên sửa | Nguồn | Manager đã kiểm |
+|---|---|---|---|
+| Product name/type/category |  |  |  |
+| Materials/colors/sizes |  |  |  |
+| Personalization/process |  |  |  |
+| Included items/packaging |  |  |  |
+| Recipient/occasion/audience |  |  |  |
+| Digital file/license/usage (nếu áp dụng) |  |  |  |
 
-Examples such as `18k`, `925`, `engraved`, `laser`, gift box, delivery speed, ratings, bestseller, certification, or origin are not permitted unless the corresponding fact is verified above.
+Staff phải sửa các thuộc tính khác variation. Rating, bestseller và tốc độ giao hàng của listing tham chiếu không trở thành fact của sản phẩm mới.
 
 ## 4. Amazon US scenario
 

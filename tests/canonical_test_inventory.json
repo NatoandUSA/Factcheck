@@ -50,6 +50,7 @@
   "tests/test_g4_etsy_intelligence_adapter.cjs",
   "tests/test_g4_etsy_canonical_http.cjs",
   "tests/test_g4_image_prompt_generator.cjs",
+  "tests/test_product_truth_staff_form.cjs",
   "tests/test_legacy_migration_integrity.test.cjs",
   "tests/test_listing_ip_rescreen.cjs",
   "tests/test_listing_truth_boundary.cjs",

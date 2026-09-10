@@ -295,6 +295,17 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
     </Step>
 
     <Step number="2" title="Product Truth do Seller nhập và kiểm" accent={accent} done={Boolean(head(state, 'productTruthRevisionId'))}>
+      <div style={{ display: 'flex', gap: 9, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
+        <a href="/product-truth-staff.html" target="_blank" rel="noreferrer" style={{
+          display: 'inline-block', padding: '9px 14px', borderRadius: 8, background: '#155eef', color: '#fff',
+          fontWeight: 800, textDecoration: 'none'
+        }}>Mở phiếu Product Truth tiếng Việt — đủ 56 trường</a>
+        <a href="/templates/OMNISELLER_PRODUCT_TRUTH_STAFF_TEMPLATE_VI.xlsx" download style={{
+          display: 'inline-block', padding: '9px 14px', borderRadius: 8, background: '#e8eef7', color: '#22314d',
+          fontWeight: 800, textDecoration: 'none'
+        }}>Tải mẫu Excel Product Truth</a>
+        <span style={{ fontSize: '.78rem', color: '#475569' }}>Phiếu chi tiết tạo STAFF_DRAFT; quản lý duyệt ở bước riêng.</span>
+      </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))', gap: 9 }}>
         {FACT_FIELDS.map(([key, label, required]) => <label key={key} style={{ display: 'grid', gap: 3, fontSize: '.75rem', fontWeight: 800 }}>
           {label}{required ? ' *' : ''}<input value={facts[key]} onChange={event => setFacts(previous => ({ ...previous, [key]: event.target.value }))} style={{ padding: 8, border: '1px solid #cbd5e1', borderRadius: 7 }} />

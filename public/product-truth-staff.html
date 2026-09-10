@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Nhập Product Truth — OmniSeller</title>
+  <style>
+    :root{font-family:Arial,sans-serif;color:#172033;background:#f4f7fb}*{box-sizing:border-box}body{margin:0}.wrap{max-width:1420px;margin:0 auto;padding:24px}.head{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;margin-bottom:16px}.head h1{margin:0;font-size:24px}.head p{margin:7px 0 0;color:#526078}.badge{padding:7px 11px;border-radius:999px;background:#fff4d6;color:#7c4a03;font-weight:700;font-size:13px}.panel{background:#fff;border:1px solid #dce4ef;border-radius:14px;padding:18px;margin-bottom:16px;box-shadow:0 5px 18px rgba(20,40,80,.05)}.panel h2{margin:0 0 12px;font-size:17px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:11px}label{display:grid;gap:5px;font-size:12px;font-weight:700;color:#344158}input,select,textarea{width:100%;border:1px solid #bfcadd;border-radius:8px;padding:9px;font:inherit;color:#172033;background:#fff}textarea{resize:vertical;min-height:70px}.hint{font-size:12px;color:#66758e;line-height:1.45}.warning{background:#fff8e8;border:1px solid #f2cf7b;color:#6d4b00;padding:10px;border-radius:9px;font-size:13px}.toolbar{display:flex;gap:8px;flex-wrap:wrap}.btn{border:0;border-radius:8px;padding:10px 13px;font-weight:700;cursor:pointer;background:#e8eef7;color:#22314d}.btn.primary{background:#155eef;color:#fff}.btn.safe{background:#087f5b;color:#fff}.btn:disabled{opacity:.45;cursor:not-allowed}.facts{width:100%;border-collapse:separate;border-spacing:0;font-size:12px}.facts th{position:sticky;top:0;background:#23324d;color:#fff;text-align:left;padding:9px;border-right:1px solid #53617a;z-index:1}.facts td{padding:7px;border-bottom:1px solid #e6ebf2;vertical-align:top}.facts tr.required td:first-child{border-left:4px solid #e9a100}.facts .label{min-width:165px;font-weight:700}.facts .key{display:block;color:#77849a;font-family:monospace;font-size:10px;margin-top:3px}.facts select{min-width:125px}.facts input{min-width:170px}.facts textarea{min-width:210px;min-height:58px}.facts tr[data-mode="SKIP"] .entry{opacity:.42}.facts tr[data-mode="UNKNOWN"] .assert-only{display:none}.facts tr:not([data-mode="UNKNOWN"]) .unknown-only{display:none}.scroll{overflow:auto;max-height:62vh;border:1px solid #dce4ef;border-radius:10px}.status{display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:8px;margin-top:12px}.metric{background:#f6f8fc;border:1px solid #e0e7f1;border-radius:9px;padding:9px}.metric b{display:block;font-size:18px}.metric span{font-size:11px;color:#68758b}.message{margin-top:10px;padding:10px;border-radius:8px;display:none}.message.ok{display:block;background:#e8f7ef;color:#075f42}.message.bad{display:block;background:#ffeded;color:#8f1d1d}@media(max-width:760px){.wrap{padding:12px}.head{display:block}.status{grid-template-columns:1fr 1fr}.facts th{position:static}}
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <div class="head">
+      <div><h1>Phiếu nhập Product Truth</h1><p>Nhân viên nhập sự thật đã kiểm chứng. Dữ liệu nghiên cứu và keyword không được dùng để tự xác nhận thuộc tính sản phẩm.</p></div>
+      <div class="badge">Trạng thái khi gửi: STAFF_DRAFT</div>
+    </div>
+
+    <section class="panel">
+      <h2>1. Chọn dự án và thông tin phiếu</h2>
+      <div class="grid">
+        <label>Dự án OmniSeller
+          <select id="project"><option value="">Đang tải danh sách dự án…</option></select>
+        </label>
+        <label>Mã sản phẩm/SKU nội bộ<input id="productCode" maxlength="128" placeholder="Ví dụ: HIJA-NECKLACE-001"></label>
+        <label>Người nhập<input id="staffName" maxlength="128" placeholder="Họ tên nhân viên"></label>
+        <label>Lý do tạo revision<input id="changeReason" maxlength="128" value="STAFF_PRODUCT_TRUTH_ENTRY"></label>
+      </div>
+      <label style="margin-top:11px">Ghi chú chung<textarea id="notes" maxlength="4000" placeholder="Ghi rõ dữ liệu còn thiếu, câu hỏi cho Manager hoặc nguồn cần kiểm lại."></textarea></label>
+      <div class="warning" style="margin-top:12px">Không điền suy đoán. Nếu chưa biết, chọn <b>CHƯA RÕ</b> và ghi lý do. Các claim như 18k, 925, chất liệu, kích thước, phương pháp khắc/thêu, đóng gói, xuất xứ, giao hàng, rating hoặc chứng nhận đều cần nguồn xác minh.</div>
+    </section>
+
+    <section class="panel">
+      <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap"><h2 style="margin:0">2. Nhập sự thật sản phẩm</h2><div class="hint">Dấu vàng = tối thiểu cần có để sinh draft hữu ích.</div></div>
+      <div class="scroll" style="margin-top:12px">
+        <table class="facts"><thead><tr><th>Trường</th><th>Trạng thái</th><th>Giá trị đã xác minh</th><th>Nguồn xác minh</th><th>Ghi chú nguồn</th><th>Lý do chưa rõ</th></tr></thead><tbody id="factRows"></tbody></table>
+      </div>
+      <div class="status">
+        <div class="metric"><b id="assertedCount">0</b><span>Đã khẳng định</span></div>
+        <div class="metric"><b id="unknownCount">0</b><span>Chưa rõ</span></div>
+        <div class="metric"><b id="skippedCount">0</b><span>Bỏ qua</span></div>
+        <div class="metric"><b id="requiredStatus">Thiếu</b><span>Tên và loại sản phẩm</span></div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>3. Lưu hoặc gửi dữ liệu</h2>
+      <div class="toolbar">
+        <button class="btn" id="saveLocal" type="button">Lưu tạm trên trình duyệt</button>
+        <button class="btn" id="loadLocal" type="button">Mở bản lưu tạm</button>
+        <button class="btn" id="importJson" type="button">Nhập JSON</button>
+        <button class="btn" id="exportJson" type="button">Tải JSON canonical</button>
+        <button class="btn" id="exportCsv" type="button">Tải CSV</button>
+        <button class="btn" id="clearForm" type="button">Tạo phiếu mới</button>
+        <button class="btn safe" id="submitApi" type="button">Gửi vào OmniSeller</button>
+        <input id="jsonFile" type="file" accept="application/json,.json" hidden>
+      </div>
+      <p class="hint">Nút “Gửi vào OmniSeller” chỉ hoạt động khi trang này được mở từ cùng máy chủ OmniSeller và người dùng đã đăng nhập. Nó tạo Product Truth revision mới; không xác nhận Manager và không đăng listing.</p>
+      <div id="message" class="message"></div>
+    </section>
+  </main>
+  <script>
+  (() => {
+    const FACTS = [
+      ['productName','Tên sản phẩm',true],['productType','Loại sản phẩm',true],['category','Danh mục'],
+      ['materials','Chất liệu'],['composition','Thành phần'],['colors','Màu sắc'],['finish','Hoàn thiện bề mặt'],
+      ['design','Thiết kế'],['style','Phong cách'],['theme','Chủ đề'],['pattern','Họa tiết'],['purity','Độ tinh khiết / lớp mạ'],
+      ['components','Bộ phận / cấu kiện'],['gemstones','Đá / thành phần trang sức'],['includedItems','Vật phẩm đi kèm'],
+      ['sizes','Kích thước'],['dimensions','Kích thước chi tiết'],['weight','Khối lượng'],['quantity','Số lượng'],['capacity','Dung tích / sức chứa'],
+      ['capabilities','Tính năng / khả năng'],['personalization','Khả năng cá nhân hóa'],['process','Quy trình / phương pháp sản xuất'],
+      ['origin','Xuất xứ'],['shipFrom','Nơi gửi hàng'],['facility','Cơ sở sản xuất'],['productionPartner','Đối tác sản xuất'],
+      ['fulfillment','Phương thức hoàn tất đơn'],['processingTime','Thời gian xử lý'],['delivery','Thông tin giao hàng'],
+      ['packaging','Đóng gói'],['accessories','Phụ kiện'],['safety','Thông tin an toàn'],['medical','Thông tin y tế'],
+      ['health','Thông tin sức khỏe'],['ageCompliance','Tuân thủ độ tuổi'],['compliance','Chứng nhận / tuân thủ'],
+      ['performance','Hiệu năng'],['durability','Độ bền'],['compatibility','Khả năng tương thích'],['care','Hướng dẫn bảo quản'],
+      ['environment','Điều kiện môi trường'],['ethical','Thông tin đạo đức / lao động'],['sustainability','Thông tin bền vững'],
+      ['recipient','Người nhận'],['occasion','Dịp sử dụng'],['audience','Đối tượng'],['digital','Sản phẩm số'],['digitalDetails','Chi tiết sản phẩm số'],
+      ['fileFormat','Định dạng file'],['license','Giấy phép'],['usageRights','Quyền sử dụng'],['playerCount','Số người chơi'],
+      ['minimumAge','Tuổi tối thiểu'],['duration','Thời lượng'],['language','Ngôn ngữ sản phẩm']
+    ];
+    const BASES = [['SUPPLIER_SPEC','Thông số nhà cung cấp'],['PHYSICAL_INSPECTION','Kiểm tra sản phẩm thực tế'],
+      ['PRODUCTION_WORKFLOW','Quy trình sản xuất'],['RIGHTS_RECORD','Hồ sơ quyền sở hữu / IP'],['OTHER','Nguồn khác đã kiểm tra']];
+    const $ = id => document.getElementById(id);
+    const rows = $('factRows');
+    const escapeHtml = value => String(value).replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+    rows.innerHTML = FACTS.map(([key,label,required]) => `<tr data-key="${key}" data-mode="${required?'ASSERTED':'SKIP'}" class="${required?'required':''}">
+      <td class="label">${escapeHtml(label)}<span class="key">${key}</span></td>
+      <td><select data-role="mode"><option value="SKIP" ${required?'':'selected'}>BỎ QUA</option><option value="ASSERTED" ${required?'selected':''}>KHẲNG ĐỊNH</option><option value="UNKNOWN">CHƯA RÕ</option></select></td>
+      <td class="entry assert-only"><textarea data-role="value" maxlength="4000"></textarea></td>
+      <td class="entry assert-only"><select data-role="basis">${BASES.map(([v,l])=>`<option value="${v}">${l}</option>`).join('')}</select></td>
+      <td class="entry assert-only"><textarea data-role="basisNote" maxlength="4000" placeholder="Tên file, URL, mã supplier, cách kiểm…"></textarea></td>
+      <td class="entry unknown-only"><textarea data-role="reason" maxlength="4000" placeholder="Vì sao chưa xác định?"></textarea></td></tr>`).join('');
+
+    let headRevisionId = null;
+    function show(message, ok=false){const box=$('message');box.textContent=message;box.className=`message ${ok?'ok':'bad'}`;}
+    function update(){let asserted=0,unknown=0,skipped=0;for(const row of rows.querySelectorAll('tr')){row.dataset.mode=row.querySelector('[data-role=mode]').value;if(row.dataset.mode==='ASSERTED')asserted++;else if(row.dataset.mode==='UNKNOWN')unknown++;else skipped++;}$('assertedCount').textContent=asserted;$('unknownCount').textContent=unknown;$('skippedCount').textContent=skipped;const required=FACTS.filter(x=>x[2]).every(([key])=>{const row=rows.querySelector(`[data-key="${key}"]`);return row.dataset.mode==='ASSERTED'&&row.querySelector('[data-role=value]').value.trim()});$('requiredStatus').textContent=required?'Đủ':'Thiếu';$('requiredStatus').style.color=required?'#087f5b':'#b42318';}
+    rows.addEventListener('input',update);rows.addEventListener('change',update);
+
+    function collect(validate=true){const facts={};const errors=[];for(const row of rows.querySelectorAll('tr')){const key=row.dataset.key;const mode=row.querySelector('[data-role=mode]').value;if(mode==='ASSERTED'){const value=row.querySelector('[data-role=value]').value.trim();const basis=row.querySelector('[data-role=basis]').value;const basisNote=row.querySelector('[data-role=basisNote]').value.trim();if(!value)errors.push(`${key}: chưa có giá trị`);else facts[key]={disposition:'ASSERTED',value,basis,...(basisNote?{basisNote}:{})};}else if(mode==='UNKNOWN'){const reason=row.querySelector('[data-role=reason]').value.trim();if(!reason)errors.push(`${key}: chưa ghi lý do`);else facts[key]={disposition:'UNKNOWN',reason};}}
+      for(const key of ['productName','productType'])if(facts[key]?.disposition!=='ASSERTED')errors.push(`${key}: cần khẳng định để sinh draft hữu ích`);
+      const projectId=Number($('project').value)||null;const payload={schemaVersion:'omniseller.product-truth-staff.v1',metadata:{projectId,productCode:$('productCode').value.trim(),staffName:$('staffName').value.trim(),capturedAt:new Date().toISOString()},expectedHeadRevisionId:headRevisionId,idempotencyKey:crypto.randomUUID(),changeReason:$('changeReason').value.trim()||'STAFF_PRODUCT_TRUTH_ENTRY',notes:$('notes').value.trim()||null,facts};if(validate&&errors.length)throw new Error(errors.join('; '));return payload;}
+    function download(name,type,text){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([text],{type}));a.download=name;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},0)}
+    function safeCsv(value){let s=String(value??'');if(/^[=+\-@]/.test(s))s="'"+s;return `"${s.replace(/"/g,'""')}"`;}
+    function csv(){const p=collect();const lines=[['product_code','project_id','fact_key','disposition','value','basis','basis_note','unknown_reason','staff_name','captured_at'].map(safeCsv).join(',')];for(const [key,fact] of Object.entries(p.facts))lines.push([p.metadata.productCode,p.metadata.projectId,key,fact.disposition,fact.value||'',fact.basis||'',fact.basisNote||'',fact.reason||'',p.metadata.staffName,p.metadata.capturedAt].map(safeCsv).join(','));return '\ufeff'+lines.join('\r\n');}
+    async function projects(){try{const response=await fetch('/api/projects',{credentials:'include'});const data=await response.json();if(!response.ok)throw new Error(data.error||`HTTP_${response.status}`);$('project').innerHTML='<option value="">— Chọn dự án —</option>'+data.projects.map(p=>`<option value="${p.id}">#${p.id} ${escapeHtml(p.name||p.seed_phrase)} — ${p.marketplace} — ${p.state}</option>`).join('');}catch(error){$('project').innerHTML='<option value="">Không tải được — vẫn có thể xuất file</option>';show('Không tải được dự án. Hãy đăng nhập OmniSeller hoặc dùng chức năng xuất JSON/CSV.');}}
+    $('project').addEventListener('change',async()=>{headRevisionId=null;if(!$('project').value)return;try{const r=await fetch(`/api/projects/${$('project').value}/commerce-state`,{credentials:'include'});const d=await r.json();if(!r.ok)throw new Error(d.error||`HTTP_${r.status}`);headRevisionId=d.heads?.productTruthRevisionId??null;show(`Đã nạp project. Revision hiện tại: ${headRevisionId??'chưa có'}.`,true);}catch(e){show(`Không đọc được trạng thái project: ${e.message}`);}});
+    $('saveLocal').onclick=()=>{localStorage.setItem('omniseller.productTruth.vi',JSON.stringify(collect(false)));show('Đã lưu tạm trên trình duyệt này.',true)};
+    function apply(p){$('productCode').value=p.metadata?.productCode||'';$('staffName').value=p.metadata?.staffName||'';$('notes').value=p.notes||'';$('changeReason').value=p.changeReason||'STAFF_PRODUCT_TRUTH_ENTRY';headRevisionId=p.expectedHeadRevisionId??null;for(const row of rows.querySelectorAll('tr')){const fact=p.facts?.[row.dataset.key];const mode=fact?.disposition||'SKIP';row.querySelector('[data-role=mode]').value=mode;row.querySelector('[data-role=value]').value=fact?.value??'';row.querySelector('[data-role=basis]').value=fact?.basis||'SUPPLIER_SPEC';row.querySelector('[data-role=basisNote]').value=fact?.basisNote||'';row.querySelector('[data-role=reason]').value=fact?.reason||'';}update();show('Đã nạp dữ liệu vào biểu mẫu.',true)}
+    $('loadLocal').onclick=()=>{const raw=localStorage.getItem('omniseller.productTruth.vi');raw?apply(JSON.parse(raw)):show('Chưa có bản lưu tạm trên trình duyệt.')};
+    $('exportJson').onclick=()=>{try{const p=collect();download(`${p.metadata.productCode||'product-truth'}.json`,'application/json',JSON.stringify(p,null,2));show('Đã tạo JSON canonical.',true)}catch(e){show(e.message)}};
+    $('exportCsv').onclick=()=>{try{const p=collect();download(`${p.metadata.productCode||'product-truth'}.csv`,'text/csv;charset=utf-8',csv());show('Đã tạo CSV chuẩn hóa.',true)}catch(e){show(e.message)}};
+    $('importJson').onclick=()=>$('jsonFile').click();$('jsonFile').onchange=async e=>{try{apply(JSON.parse(await e.target.files[0].text()))}catch(error){show(`JSON không hợp lệ: ${error.message}`)}e.target.value=''};
+    $('clearForm').onclick=()=>{if(!confirm('Xóa dữ liệu trên biểu mẫu và tạo phiếu mới?'))return;location.reload()};
+    $('submitApi').onclick=async()=>{try{const p=collect();if(!p.metadata.projectId)throw new Error('Hãy chọn dự án OmniSeller.');const response=await fetch(`/api/projects/${p.metadata.projectId}/product-truth/revisions`,{method:'POST',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({expectedHeadRevisionId:p.expectedHeadRevisionId,idempotencyKey:p.idempotencyKey,changeReason:p.changeReason,notes:p.notes,facts:p.facts})});const data=await response.json();if(!response.ok)throw new Error(data.error||data.message||`HTTP_${response.status}`);headRevisionId=data.productTruthRevisionId;show(`Đã lưu Product Truth revision #${data.productTruthRevisionId}, trạng thái ${data.confirmationState}.`,true);}catch(e){show(`Không thể gửi: ${e.message}`)}};
+    update();projects();
+  })();
+  </script>
+</body>
+</html>

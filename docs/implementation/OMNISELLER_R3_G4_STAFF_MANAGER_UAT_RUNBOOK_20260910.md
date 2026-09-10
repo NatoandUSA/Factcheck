@@ -12,11 +12,13 @@ Run Amazon US and Etsy US through saved draft status `NEEDS_QA`. Do not merge, d
 | Manager | Open exact review package, compare facts/claims/accounting, request changes | Invent facts, approve while policy gate is blocked |
 | Owner | Observe evidence and decide later whether release gates may proceed | Treat a test result as policy evidence |
 
-## 3. Product Truth worksheet
+## 3. Phiếu nhập Product Truth
 
-Enter only verified facts. Empty optional facts are allowed and must produce an explicit missing/blocked result rather than invented copy.
+Nhân viên sử dụng form `/product-truth-staff.html` hoặc workbook `OMNISELLER_PRODUCT_TRUTH_STAFF_TEMPLATE_VI.xlsx`. Hướng dẫn đầy đủ nằm trong `HUONG_DAN_NHAP_PRODUCT_TRUTH_CHO_NHAN_VIEN.md`.
 
-| Fact | Seller value | Evidence basis | Source/reference | Manager checked |
+Chỉ nhập dữ liệu đã xác minh. Trường tùy chọn có thể để `CHƯA RÕ`; hệ thống phải ghi rõ thiếu gì hoặc chặn claim liên quan thay vì tự bịa.
+
+| Sự thật sản phẩm | Giá trị nhân viên nhập | Nguồn xác minh | Tài liệu/tham chiếu | Manager đã kiểm |
 |---|---|---|---|---|
 | Product name |  |  |  |  |
 | Product type/category |  |  |  |  |

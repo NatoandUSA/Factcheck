@@ -137,6 +137,7 @@ Focused suites passed after remediation:
 - Workspace switching and authorization: passed.
 - Security/auth foundation: 18/18 in the post-fix isolated rerun.
 - Production frontend build: passed.
+- Linux CI run `34452824609` passed on the AUTO-language remediation SHA `b19d3e89af661dfe482eda505e2e455ddabbdccb`.
 
 The earlier full local run completed 84 suites with 78 passes and six failures. The security failure from that run was fixed and its complete suite then passed. The remaining five are not represented as product passes: two require a live provider and three expose the existing Windows runner/process-tree shutdown defect. Linux CI is the authoritative clean-room regression for the pushed commit.
 

@@ -4,7 +4,7 @@
 
 **Review date:** 2026-09-10 (Asia/Bangkok)
 
-**Decision:** `IR-01 REMEDIATED — STAFF UAT ELIGIBLE AFTER CLEAN CI`
+**Decision:** `APPROVE STAFF UAT — PR REMAINS UNMERGED`
 
 ## 1. Scope and invariants
 
@@ -80,4 +80,4 @@ Until then, Staff UAT may be prepared but must not be signed off.
 - Both persisted drafts stopped at `NEEDS_QA`.
 - Production build: PASS.
 
-The final remaining criterion is clean Linux CI on the pushed remediation SHA. PR #33 must remain open and unmerged during Staff UAT.
+Linux CI run `34452824609` passed on remediation SHA `b19d3e89af661dfe482eda505e2e455ddabbdccb`, including native SQLite loading, production build, and the complete canonical suite. IR-01 is closed. PR #33 must remain open and unmerged during Staff UAT.

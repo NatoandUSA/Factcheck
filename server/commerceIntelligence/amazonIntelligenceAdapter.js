@@ -82,12 +82,22 @@ function scoreProjection(keyword) {
 }
 
 function truthForComposer(facts) {
+  const colorValues = (Array.isArray(facts.colors) ? facts.colors : String(facts.colors || '').split(/[,;/\n]/))
+    .map(value => text(value)).filter(Boolean);
+  const colors = [];
+  const factClaimReview = [];
+  for (const value of colorValues) {
+    const audit = evaluateText(value, facts, SURFACES.VISIBLE_COPY);
+    if (audit.unverifiedClaims.length) factClaimReview.push({ field: 'colors', value,
+      reason: 'AMBIGUOUS_ATTRIBUTE_TOKEN', unverifiedClaims: audit.unverifiedClaims });
+    else colors.push(value);
+  }
   return {
     productType: text(facts.productType), productName: text(facts.productName), recipient: text(facts.recipient || facts.audience),
     occasion: text(facts.occasion), materials: facts.materials || facts.composition,
-    sizes: facts.sizes || facts.dimensions, colors: facts.colors, features: facts.features,
+    sizes: facts.sizes || facts.dimensions, colors, features: facts.features,
     personalization: text(facts.personalization), packaging: text(facts.packaging), care: text(facts.care),
-    shipFrom: text(facts.shipFrom || facts.origin)
+    shipFrom: text(facts.shipFrom || facts.origin), factClaimReview
   };
 }
 
@@ -123,14 +133,18 @@ function canonicalContent(composed, facts, extraPpc, truthSnapshot) {
 async function buildIntelligence({ research, productTruth, configuration = {} }) {
   const observations = research.observations || {};
   if (observations.marketplace !== 'AMAZON') throw Object.assign(new Error('AMAZON_RESEARCH_REQUIRED'), {
-    code: 'AMAZON_RESEARCH_REQUIRED'
+    code: 'AMAZON_RESEARCH_REQUIRED', status: 409
   });
   const facts = factsFromSnapshot(productTruth.snapshot);
   const keywordRows = (observations.cerebro?.keywords || []).map(scoreProjection);
-  if (!keywordRows.length) throw Object.assign(new Error('CEREBRO_KEYWORDS_REQUIRED'), { code: 'CEREBRO_KEYWORDS_REQUIRED' });
+  if (!keywordRows.length) throw Object.assign(new Error('CEREBRO_KEYWORDS_REQUIRED'), {
+    code: 'CEREBRO_KEYWORDS_REQUIRED', status: 409
+  });
   const anchors = [configuration.seedPhrase, facts.productType, facts.productName, facts.recipient, facts.occasion]
     .map(text).filter(Boolean);
-  if (!anchors.length) throw Object.assign(new Error('INTELLIGENCE_ANCHOR_REQUIRED'), { code: 'INTELLIGENCE_ANCHOR_REQUIRED' });
+  if (!anchors.length) throw Object.assign(new Error('INTELLIGENCE_ANCHOR_REQUIRED'), {
+    code: 'INTELLIGENCE_ANCHOR_REQUIRED', status: 409
+  });
   const scored = scoreKeywords(keywordRows, { anchors, library: true,
     screen: value => ipGuard.screenText(value), minSearchVolume: 0, negativeKeywords: [] });
   const language = ['EN','ES'].includes(configuration.listingLanguage) ? configuration.listingLanguage
@@ -163,10 +177,17 @@ async function buildIntelligence({ research, productTruth, configuration = {} })
     } else copySafe.push(keyword);
   }
   Object.defineProperty(copySafe, 'meta', { value: scored.meta, enumerable: false });
-  const composed = compose(copySafe, truthForComposer(facts), { labelLanguage: language,
+  const composerTruth = truthForComposer(facts);
+  const factClaimReview = composerTruth.factClaimReview;
+  const composed = compose(copySafe, composerTruth, { labelLanguage: language,
     mustContainAny: anchors, searchTermBytes: 249 });
   const content = canonicalContent(composed, facts, [...claimTargeting, ...languageTargeting], productTruth.snapshot);
-  const guarded = evaluateListingGuard({ listing: content, verifiedFacts: facts });
+  let guarded;
+  try { guarded = evaluateListingGuard({ listing: content, verifiedFacts: facts }); }
+  catch (error) {
+    if (error?.code === 'UNVERIFIED_OUTPUT_CLAIM') error.status = 422;
+    throw error;
+  }
   const xray = selectAsinBatches(xrayRows, { anchors, library: true,
     screen: value => ipGuard.screenText(value), maxPerBrand: 2, batchSize: 10 });
   const ipBlockedKeywordCount = scored.filter(item => item.ipVerdict === 'BLOCK').length;
@@ -180,12 +201,12 @@ async function buildIntelligence({ research, productTruth, configuration = {} })
   return Object.freeze({
     output: { marketplace: 'AMAZON', language, anchors, listingDraft: guarded.listing,
       commerce: composed, asinSelection: xray, claimTargeting, languageTargeting,
-      competitorBrandBlocked, lexicalReviewQueue,
+      competitorBrandBlocked, lexicalReviewQueue, factClaimReview,
       guardAccounting: { backendExcluded: guarded.backendExcluded, ppcFlagged: guarded.ppcFlagged } },
     accounting: { inputKeywordCount: keywordRows.length, scoredKeywordCount: scored.length,
       copySafeKeywordCount: copySafe.length, claimTargetingCount: claimTargeting.length,
       languageTargetingCount: languageTargeting.length, competitorBrandBlockedCount: competitorBrandBlocked.length,
-      lexicalReviewCount: lexicalReviewQueue.length,
+      lexicalReviewCount: lexicalReviewQueue.length, factClaimReviewCount: factClaimReview.length,
       ipBlockedKeywordCount, allocatedKeywordCount, unallocatedCount,
       xrayInputCount: (observations.xray || []).length, asinAcceptedCount: xray.acceptedCount,
       asinRejectedCount: xray.rejectedCount, missingProductFacts: composed.missingFacts },

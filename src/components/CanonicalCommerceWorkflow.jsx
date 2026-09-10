@@ -99,7 +99,13 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
 
   const notify = (message, type = 'success') => onShowToast?.(message, type);
   const reportError = errorValue => {
-    const message = errorValue?.message || 'UNKNOWN_ERROR';
+    const blocking = Array.isArray(errorValue?.payload?.blocking) ? errorValue.payload.blocking : [];
+    const claimSummary = [...new Set(blocking.map(item => `${item.field}: “${item.token}”`))].slice(0, 6).join('; ');
+    const message = errorValue?.code === 'UNVERIFIED_OUTPUT_CLAIM' && claimSummary
+      ? `Draft có claim chưa được Product Truth chứng thực — ${claimSummary}`
+      : errorValue?.code === 'CEREBRO_KEYWORDS_REQUIRED'
+        ? 'Cần import Cerebro để phân bổ keyword và tạo draft. Xray chỉ là bước tùy chọn để chọn batch ASIN.'
+        : errorValue?.message || 'UNKNOWN_ERROR';
     setError(message);
     notify(`Không thể hoàn tất: ${message}`, 'error');
   };
@@ -290,7 +296,7 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
   const previewOutput = intelligencePreview?.output;
   const listing = draft?.content;
   const prompts = listing?.imagePrompts?.prompts || listing?.imagePrompts || [];
-  const requiredKinds = marketplace === 'AMAZON' ? ['AMAZON_CEREBRO', 'AMAZON_XRAY'] : ['ETSY_SEARCH'];
+  const requiredKinds = marketplace === 'AMAZON' ? ['AMAZON_CEREBRO'] : ['ETSY_SEARCH'];
   const importedKinds = new Set(imports.map(item => item.kind));
   const importCoverageReady = requiredKinds.every(required => importedKinds.has(required));
 
@@ -306,7 +312,11 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
     </div>
     {error && <div role="alert" style={{ background: '#fef2f2', border: '1px solid #fca5a5', color: '#991b1b', padding: 10, borderRadius: 8 }}>{error}</div>}
 
-    <Step number="1" title="Nạp và kiểm file research" accent={accent} done={importCoverageReady}>
+    <Step number="1" title="Nạp keyword và dữ liệu thị trường (độc lập Product Truth)" accent={accent} done={importCoverageReady}>
+      {marketplace === 'AMAZON' && <div style={{ marginBottom: 10, padding: 10, borderRadius: 8, background: '#eff6ff', color: '#1e3a8a', fontSize: '.8rem' }}>
+        <b>Luồng đúng:</b> Xray <b>tùy chọn</b> → lấy các batch tối đa 10 ASIN để chạy Helium 10 → import Cerebro <b>bắt buộc cho phân bổ keyword/draft</b>.
+        Product Truth không cần Xray hoặc Cerebro và có thể nhập/lưu riêng ở Bước 2.
+      </div>}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
         {marketplace === 'AMAZON' && <select aria-label="Loại file research" value={kind} onChange={event => { setKind(event.target.value); setFilePreview(null); }}>
           <option value="AMAZON_CEREBRO">Cerebro keywords</option><option value="AMAZON_XRAY">Xray competitors</option>
@@ -319,6 +329,15 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
         <Metric label="FILE" value={filePreview.fileName} /><Metric label="RAW SHA-256" value={filePreview.rawHash} />
         <Metric label="ROWS" value={filePreview.accounting?.sourceRowCount ?? filePreview.accounting?.inputRowCount} />
         <Metric label="UNCONSUMED" value={filePreview.accounting?.unconsumedRowCount ?? 0} />
+      </div>}
+      {marketplace === 'AMAZON' && filePreview?.asinSelection?.batches?.length > 0 && <div style={{ marginTop: 12, border: '1px solid #93c5fd', borderRadius: 9, padding: 10, background: '#fff' }}>
+        <b>Batch ASIN để dán vào Helium 10 Cerebro</b>
+        <div style={{ fontSize: '.76rem', color: '#475569', marginTop: 3 }}>Đã chọn {filePreview.asinSelection.acceptedCount} ASIN; mỗi batch tối đa 10, không tự điền ASIN giả.</div>
+        {filePreview.asinSelection.batches.map(batch => <div key={batch.batchNumber} style={{ marginTop: 8, padding: 8, borderRadius: 7, background: '#f8fafc' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}><b>Batch {batch.batchNumber} ({batch.size})</b>
+            <button type="button" onClick={() => navigator.clipboard?.writeText(batch.cerebroInput)}>Copy ASIN</button></div>
+          <code style={{ display: 'block', marginTop: 4, overflowWrap: 'anywhere' }}>{batch.cerebroInput}</code>
+        </div>)}
       </div>}
       {imports.length > 0 && <div style={{ marginTop: 12 }}><b>File đã lưu — chọn nguồn cho snapshot:</b>
         {imports.map(item => <label key={item.id} style={{ display: 'block', marginTop: 6 }}>
@@ -406,6 +425,7 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
         <Metric label="LEXICAL REVIEW" value={intelligencePreview.accounting?.lexicalReviewCount ?? 0} />
         <Metric label="IP BLOCKED" value={intelligencePreview.accounting?.ipBlockedKeywordCount} />
         <Metric label="UNALLOCATED" value={intelligencePreview.accounting?.unallocatedCount ?? 0} />
+        <Metric label="FACT CẦN XEM LẠI" value={intelligencePreview.accounting?.factClaimReviewCount ?? 0} />
       </div>}
     </Step>
 

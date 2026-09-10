@@ -101,14 +101,15 @@ async function main() {
     });
     const intelligencePreview = await api.json(`/api/projects/${project.projectId}/intelligence-snapshots/preview`, 'POST', {
       researchSnapshotId: research.researchSnapshotId, productTruthRevisionId: truth.productTruthRevisionId,
-      listingLanguage: 'ES'
+      listingLanguage: 'AUTO'
     });
     assert.equal(intelligencePreview.zeroWrite, true);
     const intelligence = await api.json(`/api/projects/${project.projectId}/intelligence-snapshots`, 'POST', {
       expectedHeadIntelligenceSnapshotId: null, researchSnapshotId: research.researchSnapshotId,
-      productTruthRevisionId: truth.productTruthRevisionId, listingLanguage: 'ES', idempotencyKey: crypto.randomUUID(),
+      productTruthRevisionId: truth.productTruthRevisionId, listingLanguage: 'AUTO', idempotencyKey: crypto.randomUUID(),
       changeReason: 'REAL_INPUT_UAT_INTELLIGENCE_LOCK'
     });
+    assert.equal(intelligence.output.language, 'ES', `${marketplace}:AUTO_LANGUAGE_MUST_FOLLOW_SPANISH_SEED`);
     const listingPreview = await api.json(`/api/projects/${project.projectId}/listings/commerce-preview`, 'POST', {
       intelligenceSnapshotId: intelligence.intelligenceSnapshotId
     });

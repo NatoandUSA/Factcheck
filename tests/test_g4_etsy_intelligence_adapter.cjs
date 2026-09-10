@@ -72,7 +72,19 @@ async function main() {
   'unsupported style descriptors cannot enter copy until Product Truth supplies them');
   check(adapter.unverifiedProductDescriptors({ phrase: 'Floral Striped Pillow' }, { productType: 'Personalized Pillow',
     style: 'floral striped' }).length === 0, 'Product Truth style fields can explicitly unlock matching descriptors');
-  console.log(`G4 Etsy intelligence adapter: ${passed}/26 PASS`);
+  const automaticSpanish = await adapter.buildIntelligence({
+    research: { observations: { marketplace: 'ETSY', queryContexts: ['para mi hija'], sellers: [
+      { listingId: 'auto-es-1', sourceRank: 1, title: 'Collar para mi hija',
+        tags: ['regalo para hija', 'collar personalizado'], provenance: { importId: 3 } }
+    ] } }, productTruth: { snapshot: { asserted: {
+      productName: asserted('Collar personalizado para mi hija'), productType: asserted('Collar'),
+      personalization: asserted('Nombre personalizado'), recipient: asserted('hija')
+    } } }, configuration: { seedPhrase: 'para mi hija' }
+  });
+  check(automaticSpanish.output.language === 'ES', 'AUTO infers Spanish from the canonical project seed');
+  check(automaticSpanish.accounting.languageTargetingCount === 0,
+    'AUTO does not misroute Spanish source phrases into the other-language bucket');
+  console.log(`G4 Etsy intelligence adapter: ${passed}/28 PASS`);
 }
 
 main().catch(error => { console.error(error); process.exitCode = 1; });

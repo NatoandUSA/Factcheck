@@ -80,6 +80,20 @@ function languageCompatible(phrase, language) {
   return detected === 'NEUTRAL' || detected === language;
 }
 
+function resolveListingLanguage(configuration, corpus) {
+  if (configuration.listingLanguage === 'EN' || configuration.listingLanguage === 'ES') {
+    return configuration.listingLanguage;
+  }
+  const seedLanguage = languageOfPhrase(configuration.seedPhrase);
+  if (seedLanguage === 'EN' || seedLanguage === 'ES') return seedLanguage;
+  const counts = { EN: 0, ES: 0 };
+  for (const candidate of corpus) {
+    const detected = languageOfPhrase(candidate.phrase);
+    if (detected === 'EN' || detected === 'ES') counts[detected] += Math.max(1, Number(candidate.score) || 1);
+  }
+  return counts.ES > counts.EN ? 'ES' : 'EN';
+}
+
 function containsCompetitorShop(phrase, sellers) {
   const normalized = ` ${fold(phrase).replace(/[^a-z0-9]+/g, ' ').trim()} `;
   return sellers.find(seller => {
@@ -199,7 +213,7 @@ async function buildIntelligence({ research, productTruth, configuration = {} })
   const identity = text(facts.productName || facts.productType);
   if (!identity) throw Object.assign(new Error('PRODUCT_IDENTITY_REQUIRED'), { code: 'PRODUCT_IDENTITY_REQUIRED' });
   const corpus = candidateCorpus(observations);
-  const language = ['EN','ES'].includes(configuration.listingLanguage) ? configuration.listingLanguage : 'EN';
+  const language = resolveListingLanguage(configuration, corpus);
   const recipientFamilies = allowedRecipientFamilies([facts.recipient, facts.audience, facts.productName, facts.productType]);
   const safe = []; const claimBlocked = []; const ipBlocked = []; const irrelevant = [];
   const languageTargeting = []; const competitorShopBlocked = [];
@@ -286,4 +300,4 @@ async function buildIntelligence({ research, productTruth, configuration = {} })
 
 module.exports = Object.freeze({ ENGINE_ID, buildIntelligence, candidateCorpus, engineBindingHash, factsFromSnapshot,
   productTypeConflict, unverifiedAppearanceTokens, unverifiedProductDescriptors, languageOfPhrase,
-  languageCompatible, containsCompetitorShop, tagVariants });
+  languageCompatible, resolveListingLanguage, containsCompetitorShop, tagVariants });

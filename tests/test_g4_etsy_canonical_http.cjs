@@ -66,10 +66,11 @@ async function main() {
   check(truth.status === 201, JSON.stringify(truth.body));
   const intelligence = await json(`/api/projects/${projectId}/intelligence-snapshots`, 'POST', {
     expectedHeadIntelligenceSnapshotId: null, researchSnapshotId: research.body.researchSnapshotId,
-    productTruthRevisionId: truth.body.productTruthRevisionId, listingLanguage: 'ES',
+    productTruthRevisionId: truth.body.productTruthRevisionId, listingLanguage: 'AUTO',
     idempotencyKey: key(4), changeReason: 'SAVE_ETSY_INTELLIGENCE'
   });
   check(intelligence.status === 201, JSON.stringify(intelligence.body));
+  check(intelligence.body.output.language === 'ES', 'AUTO resolves Spanish from the persisted project seed');
   const draft = intelligence.body.output.listingDraft;
   check(draft.etsyTitle.length <= 140, 'Etsy title cap');
   check(draft.etsyTags.length <= 13 && draft.etsyTags.every(tag => Array.from(tag).length <= 20), 'Etsy tag caps');
@@ -93,7 +94,7 @@ async function main() {
   check(dependencies.intelligenceSnapshotHash === intelligence.body.intelligenceSnapshotHash, 'Etsy intelligence hash bound');
   check(intelligence.body.output.keywordAllocation.unallocated.length === intelligence.body.accounting.unallocatedCount,
     'unused Etsy keywords retained with accounting');
-  console.log(`G4 Etsy canonical HTTP: ${passed}/21 PASS`);
+  console.log(`G4 Etsy canonical HTTP: ${passed}/22 PASS`);
 }
 
 main().catch(error => { console.error(error); process.exitCode = 1; }).finally(async () => {

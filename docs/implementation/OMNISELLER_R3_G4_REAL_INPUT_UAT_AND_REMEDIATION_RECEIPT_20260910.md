@@ -5,6 +5,7 @@
 **Branch:** `codex/omniseller-r3-g4-commerce`
 
 **PR:** `#33`
+
 **Phase boundary:** draft creation and `NEEDS_QA` only. No merge, deployment, marketplace submission, or fabricated Owner attestation is authorized by this receipt.
 
 ## 1. Verdict
@@ -65,6 +66,7 @@ Import inspection found:
 ### Etsy intelligence
 
 - Etsy now has explicit EN/ES/MIXED/NEUTRAL language handling.
+- AUTO resolves from the canonical project seed first and weighted normalized corpus second; the real-input UAT now exercises AUTO rather than bypassing it with explicit `ES`.
 - Conflicting product type, recipient direction, and competitor shop names are blocked from title/tags.
 - Tags are generated from safe contiguous phrase variants with diversity, not arbitrary truncation.
 - The output fills 13 distinct tags when the safe source permits; every tag is at most 20 characters.
@@ -85,7 +87,7 @@ Import inspection found:
 | Evidence | Result |
 |---|---|
 | Research snapshot | `b7711fa8ba2fb0acc140d798b55db7161b6cc1d0e5059ad16aee44ba259530f9` |
-| Intelligence snapshot | `b36cff4f0cdb93f44764dc305c5cb6f4e64d96bccfb20a71b24239b0bb6b6b9d` |
+| Intelligence snapshot | `526e301b78b348a921186f382c2e0d65ee4434d1cb0310fa5a5e176e0ce601fc` |
 | Unique input / scored / allocated | 1,084 / 1,084 / 1,084 |
 | Copy-safe | 146 |
 | Claim targeting | 65 |
@@ -106,7 +108,7 @@ Amazon draft constraints passed: title <=75 characters and Generic Keywords <=24
 | Evidence | Result |
 |---|---|
 | Research snapshot | `57ef89984a421f206ef8193ef6333423ef44195e71ae5937f9379d2ecf839d3e` |
-| Intelligence snapshot | `36f0323884dada1e72604c19e29a65f0e4bb052fca050fe064f41c5d4e348866` |
+| Intelligence snapshot | `6e5ddd8595ba335a880eb759e580fba97c4bcb45d363af5731abacc47037b4c9` |
 | Seller observations | 195 |
 | Keyword candidates / allocated | 601 / 601 |
 | Claim blocked | 38 |
@@ -125,11 +127,11 @@ Amazon draft constraints passed: title <=75 characters and Generic Keywords <=24
 Focused suites passed after remediation:
 
 - Amazon intelligence: 25/25.
-- Etsy intelligence: 26/26.
+- Etsy intelligence: 28/28, including AUTO Spanish inference.
 - Stored research normalization: 18/18.
 - Commerce intelligence review: 22/22.
 - Canonical Amazon HTTP workflow: 73/73.
-- Canonical Etsy HTTP workflow: 21/21.
+- Canonical Etsy HTTP workflow: 22/22, including AUTO Spanish persistence through the HTTP boundary.
 - Canonical commerce UI: passed.
 - Database fixture isolation: passed.
 - Workspace switching and authorization: passed.
@@ -166,4 +168,4 @@ Both policy contracts remain `DRAFT_ONLY`. Consequently, approval/publishing is 
 
 ## 8. Handoff decision
 
-Push this remediation to PR #33 and run CI. Keep the PR open and unmerged. If CI is green, the next authorized activity is independent review of this exact commit plus staff UAT at the `NEEDS_QA` boundary—not deployment or marketplace submission.
+Independent review found and remediated the Etsy AUTO-language defect documented in `OMNISELLER_R3_G4_INDEPENDENT_REVIEW_F31FF2665_20260910.md`. Keep PR #33 open and unmerged. After clean CI on the remediation commit, the next authorized activity is Staff/Manager execution of `OMNISELLER_R3_G4_STAFF_MANAGER_UAT_RUNBOOK_20260910.md` at the `NEEDS_QA` boundary—not deployment or marketplace submission.

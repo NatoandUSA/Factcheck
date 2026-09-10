@@ -47,6 +47,17 @@ function runPlatformTests() {
       console.log(`  ℹ️ bash binary unavailable in host environment; file existence verified: ${scriptPath}`);
     }
   }
+  const deployScript = fs.readFileSync(path.resolve(__dirname, '../scripts/vps_deploy_and_verify.sh'), 'utf8');
+  assert.ok(deployScript.includes('NODE_HOME="${OMNI_NODE_HOME:-${BASE_DIR}/.nvm/versions/node/v22.23.2}"'),
+    'Deploy must resolve the pinned Node 22 runtime independently of the login shell PATH');
+  assert.ok(deployScript.includes('MAKEFLAGS=-j1 npm_config_jobs=1'),
+    'Native dependency build must use bounded parallelism on the production VPS');
+  assert.ok(deployScript.includes("sqlite3.OPEN_READONLY"),
+    'Snapshot integrity probe must not checkpoint or mutate the backup artifact');
+  assert.ok(deployScript.indexOf('PRAGMA integrity_check') < deployScript.indexOf('checksums.sha256'),
+    'Backup checksum must be recorded after the read-only integrity probe');
+  assert.ok(deployScript.includes('sha256sum -c checksums.sha256'),
+    'Recorded backup checksums must be verified before cutover');
 
   // Test 2: Systemd Template Validity & Preserved Contract
   console.log('\nTest 2: Systemd service unit template validation...');

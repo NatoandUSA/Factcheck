@@ -21,6 +21,9 @@ DB_PATH="${OMNI_DB_PATH:-${STATE_DIR}/db/app.db}"
 ENV_FILE="${DOTENV_PATH:-${STATE_DIR}/env/omniseller.env}"
 [ ! -f "${ENV_FILE}" ] && ENV_FILE="${STATE_DIR}/omniseller.env"
 BACKUP_DIR="${STATE_DIR}/backups"
+NODE_HOME="${OMNI_NODE_HOME:-${BASE_DIR}/.nvm/versions/node/v22.23.2}"
+NODE_BIN="${NODE_HOME}/bin/node"
+NPM_CLI="${NODE_HOME}/lib/node_modules/npm/bin/npm-cli.js"
 
 echo "========================================================================"
 echo "  OMNISELLER STUDIO — IMMUTABLE RELEASE DEPLOYMENT RUNBOOK"
@@ -30,6 +33,18 @@ echo "========================================================================"
 echo -e "\n[Step 1/7] Capturing Baseline SHA & Resolving Target Release..."
 
 mkdir -p "${RELEASES_DIR}" "${STATE_DIR}/db" "${STATE_DIR}/imports" "${BACKUP_DIR}"
+
+if [ ! -x "${NODE_BIN}" ] || [ ! -f "${NPM_CLI}" ]; then
+    echo "🔴 ERROR: Required Node 22 runtime not found under ${NODE_HOME}."
+    exit 1
+fi
+
+NODE_MAJOR=$("${NODE_BIN}" -p "process.versions.node.split('.')[0]")
+if [ "${NODE_MAJOR}" != "22" ]; then
+    echo "🔴 ERROR: Deployment requires Node 22; resolved ${NODE_BIN} as major ${NODE_MAJOR}."
+    exit 1
+fi
+echo "🟢 Deployment runtime: $("${NODE_BIN}" --version) (${NODE_BIN})"
 
 if [ ! -d "${WORKTREE_REPO}" ]; then
     echo "🔴 ERROR: Repository worktree ${WORKTREE_REPO} does not exist."
@@ -136,13 +151,13 @@ if [ ! -f "${MANIFEST_FILE}" ]; then
     cd "${TARGET_RELEASE_DIR}"
 
     echo "Installing production dependencies & building native addons from source (Ubuntu 22.04 LTS)..."
-    npm ci --build-from-source --production=false || { rollback; }
+    MAKEFLAGS=-j1 npm_config_jobs=1 "${NODE_BIN}" "${NPM_CLI}" ci --build-from-source --production=false || { rollback; }
 
     echo "Verifying native SQLite addon loading..."
-    node -e "require('./node_modules/sqlite3'); console.log('🟢 Native sqlite3 addon verified in release directory.');" || { rollback; }
+    "${NODE_BIN}" -e "require('./node_modules/sqlite3'); console.log('🟢 Native sqlite3 addon verified in release directory.');" || { rollback; }
 
     echo "Building Vite production bundle inside release directory..."
-    npm run build || { rollback; }
+    "${NODE_BIN}" "${NPM_CLI}" run build || { rollback; }
 
     # Write Atomic Completion Manifest
     cat << EOF > "${MANIFEST_FILE}"
@@ -175,13 +190,10 @@ if [ -f "${DB_PATH}" ]; then
     [ -f "${DB_PATH}-wal" ] && cp -p "${DB_PATH}-wal" "${BACKUP_SUBDIR}/app.db-wal"
     [ -f "${DB_PATH}-shm" ] && cp -p "${DB_PATH}-shm" "${BACKUP_SUBDIR}/app.db-shm"
     
-    echo "Calculating SHA-256 checksums..."
-    sha256sum "${BACKUP_SUBDIR}"/app.db* > "${BACKUP_SUBDIR}/checksums.sha256"
-    
-    echo "Verifying SQLite database integrity on SNAPSHOT ARTIFACT..."
-    node -e "
+    echo "Verifying SQLite database integrity on read-only SNAPSHOT ARTIFACT..."
+    "${NODE_BIN}" -e "
       const sqlite3 = require('${TARGET_RELEASE_DIR}/node_modules/sqlite3');
-      const db = new sqlite3.Database('${BACKUP_SUBDIR}/app.db');
+      const db = new sqlite3.Database('${BACKUP_SUBDIR}/app.db', sqlite3.OPEN_READONLY);
       db.get('PRAGMA integrity_check', (err, row) => {
         if (err || !row || row.integrity_check !== 'ok') {
           console.error('🔴 DB Snapshot Integrity Error:', err || row);
@@ -191,6 +203,12 @@ if [ -f "${DB_PATH}" ]; then
         db.close();
       });
     " || { echo "🔴 DB snapshot integrity check failed"; rollback; }
+
+    echo "Calculating and verifying SHA-256 checksums after the read-only integrity probe..."
+    sha256sum "${BACKUP_SUBDIR}"/app.db* > "${BACKUP_SUBDIR}/checksums.sha256"
+    (cd "${BACKUP_SUBDIR}" && sha256sum -c checksums.sha256) || {
+        echo "🔴 DB snapshot checksum verification failed"; rollback;
+    }
 fi
 
 # --- STEP 4: ATOMIC SYMLINK SWITCH ---
@@ -222,7 +240,7 @@ for i in {1..5}; do
     RESPONSE=$(curl -s "http://127.0.0.1:${PORT}/api/health" || echo "")
     if [ -n "${RESPONSE}" ]; then
         LOCAL_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${PORT}/api/health" || echo "000")
-        LOCAL_REVISION=$(node -e "try { console.log(JSON.parse(process.argv[1]).revision || ''); } catch(_) {}" "${RESPONSE}")
+        LOCAL_REVISION=$("${NODE_BIN}" -e "try { console.log(JSON.parse(process.argv[1]).revision || ''); } catch(_) {}" "${RESPONSE}")
         if [ "${LOCAL_STATUS}" -eq 200 ] && [ "${LOCAL_REVISION}" = "${TARGET_SHA}" ]; then
             break
         fi
@@ -254,7 +272,7 @@ if [ "${PUBLIC_STATUS}" -ne 200 ]; then
     PUBLIC_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${PUBLIC_DOMAIN}/api/health" || echo "000")
 fi
 
-PUBLIC_REVISION=$(node -e "try { console.log(JSON.parse(process.argv[1]).revision || ''); } catch(_) {}" "${PUBLIC_RESPONSE}")
+PUBLIC_REVISION=$("${NODE_BIN}" -e "try { console.log(JSON.parse(process.argv[1]).revision || ''); } catch(_) {}" "${PUBLIC_RESPONSE}")
 
 if [ "${PUBLIC_STATUS}" -ne 200 ] || [ "${PUBLIC_REVISION}" != "${TARGET_SHA}" ]; then
     echo "🔴 FAIL-CLOSED DEPLOYMENT ERROR: Public Cloudflare health check failed or revision mismatched."

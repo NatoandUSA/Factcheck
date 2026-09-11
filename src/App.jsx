@@ -22,6 +22,19 @@ export default function App() {
   const [toasts, setToasts] = useState([]);
   const { user, switchWorkspace } = useAuth();
 
+  // A restored/login session may start in Etsy while React's initial tab is
+  // Amazon (or vice versa). Keep the visible commerce workspace aligned with
+  // the server-authoritative session before a project can be selected or
+  // created. Non-workspace tabs such as history/review are left untouched.
+  useEffect(() => {
+    if (!user?.marketplace) return;
+    const sessionWorkspaceTab = user.marketplace === 'ETSY' ? 'etsy-workspace' : 'amazon-workspace';
+    setActiveTab(previous => ['amazon-workspace', 'etsy-workspace'].includes(previous)
+      ? sessionWorkspaceTab
+      : previous);
+    setCurrentListing(null);
+  }, [user?.workspaceId, user?.marketplace]);
+
   const handleTabChange = async (tab) => {
     if (tab === 'etsy-workspace' && user && user.marketplace !== 'ETSY') {
       try {

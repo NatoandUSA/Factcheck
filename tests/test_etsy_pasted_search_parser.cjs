@@ -392,6 +392,29 @@ async function waitForEtsyOwner() {
     assert.strictEqual(preview.body.ordering, 'SOURCE_ORDER_NOT_PERFORMANCE_RANK');
     assert.strictEqual((await dbAll('SELECT id FROM research_evidence')).length, countBefore, 'Preview must make zero DB writes');
 
+    // Production regression: a real pasted HTML/text request was 428,161
+    // bytes, above Express's former global 100 KiB default. The endpoint's
+    // documented 5 MiB input contract must be reachable without opening the
+    // same budget on every JSON route.
+    const productionSizedText = `${SAMPLE}\n${' '.repeat(430 * 1024)}`;
+    const productionSizedPreview = await post('/api/etsy/feed-search-results', {
+      rawText: productionSizedText, seed: 'para mi hija', projectId, confirm: false
+    });
+    assert.strictEqual(productionSizedPreview.status, 200, JSON.stringify(productionSizedPreview.body));
+    assert.strictEqual(productionSizedPreview.body.preview, true);
+    assert.strictEqual((await dbAll('SELECT id FROM research_evidence')).length, countBefore,
+      'Large preview must remain zero-write');
+
+    const oversizedResponse = await fetch(base + '/api/etsy/feed-search-results', {
+      method: 'POST', headers,
+      body: JSON.stringify({ rawText: `${SAMPLE}\n${'x'.repeat(6 * 1024 * 1024)}`, seed: 'para mi hija', projectId })
+    });
+    const oversized = await oversizedResponse.json();
+    assert.strictEqual(oversizedResponse.status, 413);
+    assert.strictEqual(oversized.error, 'REQUEST_BODY_TOO_LARGE');
+    assert.strictEqual((await dbAll('SELECT id FROM research_evidence')).length, countBefore,
+      'Parser-level oversized rejection must make zero DB writes');
+
     const filePreviewForm = new FormData();
     filePreviewForm.append('searchResultsFile', new Blob([CSV_SAMPLE], { type: 'text/csv' }), 'para-mi-hija.csv');
     filePreviewForm.append('seed', 'para mi hija');

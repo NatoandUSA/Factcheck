@@ -233,7 +233,17 @@ process.on('unhandledRejection', (reason) => {
 const app = express();
 app.set('trust proxy', 1);
 app.use(cors(corsOptionsDelegate));
-app.use(express.json({ limit: '100kb' }));
+// Most API requests are deliberately small. The Etsy pasted-search endpoint is
+// the one exception: its contract accepts up to 5 MiB of staff-supplied HTML or
+// text. Skip the global 100 KiB parser for that exact route, then parse it only
+// after authentication/role checks at the route declaration below. This keeps
+// the larger parsing budget off public and unrelated endpoints.
+const defaultJsonParser = express.json({ limit: '100kb' });
+const etsySearchFeedJsonParser = express.json({ limit: '6mb' });
+app.use((req, res, next) => {
+  if (req.method === 'POST' && req.path === '/api/etsy/feed-search-results') return next();
+  return defaultJsonParser(req, res, next);
+});
 app.use(requireCsrfOrigin);
 
 // Runtime state paths (DB + uploaded-report imports dir): single source of
@@ -3724,7 +3734,7 @@ async function handleEtsySearchResultFeed(req, res, supplied = {}) {
   );
 }
 
-app.post('/api/etsy/feed-search-results', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
+app.post('/api/etsy/feed-search-results', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), etsySearchFeedJsonParser, (req, res) => {
   handleEtsySearchResultFeed(req, res);
 });
 
@@ -5133,6 +5143,18 @@ if (fs.existsSync(distDir)) {
 // Express's default HTML error page — so the frontend always gets JSON back.
 app.use((err, req, res, next) => {
   if (res.headersSent) return next(err);
+  if (err?.type === 'entity.too.large' || err?.status === 413) {
+    const contentLength = Number(req.get('content-length')) || null;
+    console.warn('Request body rejected:', {
+      method: req.method, path: req.originalUrl, contentLength,
+      limit: Number(err.limit) || null, type: err.type || null
+    });
+    return res.status(413).json({
+      success: false,
+      error: 'REQUEST_BODY_TOO_LARGE',
+      message: 'Dữ liệu gửi lên vượt giới hạn của thao tác này. Với HTML/CSV lớn, hãy dùng nút upload file.'
+    });
+  }
   if (err instanceof multer.MulterError) {
     const status = err.code === 'LIMIT_FILE_SIZE' ? 413 : 400;
     return res.status(status).json({ success: false, error: err.code });
@@ -5141,7 +5163,12 @@ app.use((err, req, res, next) => {
     'UNSUPPORTED_PRODUCT_TRUTH_WORKBOOK','UNSUPPORTED_LISTING_HTML'].includes(err?.message)) {
     return res.status(415).json({ success: false, error: err.message });
   }
-  console.error('Unhandled request error:', err);
+  console.error('Unhandled request error:', {
+    method: req.method,
+    path: req.originalUrl,
+    contentLength: Number(req.get('content-length')) || null,
+    error: err
+  });
   res.status(500).json({ success: false, error: 'INTERNAL_SERVER_ERROR', message: err.message });
 });
 

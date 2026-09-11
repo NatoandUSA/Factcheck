@@ -299,6 +299,20 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
   const requiredKinds = marketplace === 'AMAZON' ? ['AMAZON_CEREBRO'] : ['ETSY_SEARCH'];
   const importedKinds = new Set(imports.map(item => item.kind));
   const importCoverageReady = requiredKinds.every(required => importedKinds.has(required));
+  const researchReady = Boolean(head(state, 'researchSnapshotId'));
+  const truthReady = Boolean(head(state, 'productTruthRevisionId'));
+  const intelligenceReady = Boolean(head(state, 'intelligenceSnapshotId'));
+  const nextAction = !importCoverageReady
+    ? `Bước 1A: chọn và preview ${marketplace === 'AMAZON' ? 'file Cerebro' : 'CSV Etsy'}`
+    : !researchReady
+      ? 'Bước 1C: chọn nguồn đã import và khóa Research Snapshot'
+      : !truthReady
+        ? 'Bước 2: nhập tối thiểu tên/loại sản phẩm rồi lưu Product Truth'
+        : !intelligenceReady
+          ? (intelligencePreview?.zeroWrite ? 'Bước 3B: khóa Intelligence Snapshot' : 'Bước 3A: chạy preview phân bổ keyword')
+          : !draft?.content
+            ? 'Bước 4A: tạo draft zero-write'
+            : 'Bước 4B: đọc/sửa draft rồi lưu ở NEEDS_QA';
 
   if (!activeProject) return null;
 
@@ -306,6 +320,12 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
     <div>
       <h2 style={{ margin: 0, color: accent }}>Luồng Staff Canonical — {marketplace} US</h2>
       <p style={{ margin: '6px 0 0', color: '#475569' }}>Import dữ liệu thật → khóa bằng hash → Product Truth → intelligence → draft + prompt ảnh. Luồng dừng ở <b>NEEDS_QA</b>, không tự đăng.</p>
+      <div data-testid="canonical-next-action" style={{ marginTop: 10, padding: '10px 12px', borderRadius: 9, background: '#ecfeff', border: '1px solid #67e8f9', color: '#164e63', fontWeight: 800 }}>
+        Việc cần làm tiếp: {nextAction}
+        <div style={{ marginTop: 4, fontSize: '.72rem', fontWeight: 600 }}>
+          Research #{head(state, 'researchSnapshotId') || 'chưa có'} · Product Truth #{head(state, 'productTruthRevisionId') || 'chưa có'} · Intelligence #{head(state, 'intelligenceSnapshotId') || 'chưa có'}
+        </div>
+      </div>
       {activeProject?.state === 'EVIDENCE_INTAKE' && <div style={{ marginTop: 8, padding: 9, borderRadius: 8, background: '#dcfce7', color: '#166534', fontSize: '.8rem', fontWeight: 800 }}>
         Project đang mang trạng thái legacy EVIDENCE_INTAKE, nhưng trạng thái này không chặn luồng R3 bên dưới. Staff có thể nhập Product Truth và import research ngay trong project hiện tại.
       </div>}

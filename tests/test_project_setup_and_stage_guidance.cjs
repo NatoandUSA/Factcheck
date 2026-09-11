@@ -31,7 +31,11 @@ assert.ok(amazon.includes('scannedSellers={xraySellers}'), 'Amazon Xray candidat
 assert.ok(pipeline.includes('Tạo hoặc chọn Active Project trước khi nạp Xray'), 'Xray upload must fail early without project context');
 assert.ok(pipeline.includes('Tạo hoặc chọn Active Project trước khi nạp Cerebro'), 'Cerebro upload must fail early without project context');
 assert.strictEqual(etsy.includes('13 Tags chuẩn 100%'), false, 'Etsy feed UI must not guarantee provider extraction');
-assert.ok(etsy.includes('disabled={mcpPulling || !activeProject || !seedPhrase.trim()}'), 'Etsy MCP pull must be visibly gated by active project');
+assert.ok(etsy.includes('const YTRENDS_CONNECTOR_READY = false;'), 'Uncertified Etsy MCP connector must remain explicitly unavailable');
+assert.ok(
+  etsy.includes('disabled={!YTRENDS_CONNECTOR_READY || mcpPulling || !activeProject || !seedPhrase.trim()}'),
+  'Etsy MCP pull must remain project-gated even while the connector is unavailable'
+);
 assert.ok(server.includes("const projectName = typeof name === 'string' ? name.trim() : '';"), 'Project creation must normalize the project name on the server');
 assert.ok(server.includes("if (!projectName || !normalizedSeedPhrase)"), 'Whitespace-only project inputs must be rejected on the server');
 

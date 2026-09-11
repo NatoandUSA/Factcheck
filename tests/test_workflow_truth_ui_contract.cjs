@@ -5,6 +5,7 @@ const path = require('path');
 const read = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
 const etsy = read('src/components/EtsyWorkspace.jsx');
 const amazon = read('src/components/AmazonWorkspace.jsx');
+const app = read('src/App.jsx');
 const server = read('server/server.js');
 const pastedParser = read('server/etsyPastedSearchParser.js');
 
@@ -16,11 +17,17 @@ for (const [name, source] of [['Etsy', etsy], ['Amazon', amazon]]) {
   assert.ok(source.includes('Research Hub (không chặn luồng R3)'), `${name} legacy research hub must be labelled as non-blocking`);
   assert.ok(source.includes("'MKL_FROZEN'"), `${name} MKL stage must reference the canonical server state`);
   assert.ok(source.indexOf('<CanonicalCommerceWorkflow') < source.indexOf('<ProjectEvidenceGate'), `${name} canonical Product Truth workflow must render before the legacy gate`);
+  assert.ok(source.indexOf('<CanonicalCommerceWorkflow') < source.indexOf('<SmartPullAnalyticsBar'), `${name} canonical workflow must render before optional Smart Pull`);
+  assert.ok(source.includes(`data-testid="${name.toLowerCase()}-optional-tools"`), `${name} legacy/research tools must be collapsed as optional`);
 }
 
 assert.strictEqual(etsy.includes("const transitioned = await handleTransition('RESEARCH_ACCEPTED')"), false, 'Opening Etsy research must not attempt a legacy server transition');
 assert.ok(etsy.includes("await handleTransition('DNA_ACCEPTED')"), 'Etsy DNA acceptance must call the server transition');
 assert.ok(amazon.includes("await handleTransition('DNA_ACCEPTED')"), 'Amazon DNA acceptance must call the server transition');
+assert.ok(app.includes("user.marketplace === 'ETSY' ? 'etsy-workspace' : 'amazon-workspace'"),
+  'restored/login session marketplace must select the matching visible workspace');
+assert.ok(app.includes("[user?.workspaceId, user?.marketplace]"),
+  'visible workspace synchronization must rerun after a session workspace change');
 
 assert.ok(server.includes("parsed.inputFormat === 'CSV' ? 'ETSY_SEARCH_CSV'"), 'CSV feed response must preserve its staff-file provider');
 assert.ok(server.includes("parsed.inputFormat === 'HTML' ? 'ETSY_SEARCH_HTML'"), 'HTML feed response must preserve its staff-file provider');

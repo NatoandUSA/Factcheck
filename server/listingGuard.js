@@ -100,6 +100,10 @@ function sanitizeBackendKeywords(listing, truth) {
       excluded.push({ field: `etsyTags[${index}]`, value: tag, claims: result.unverifiedClaims });
       return false;
     });
+    if (Array.isArray(sanitized.etsyTagExplanations)) {
+      const retained = new Set(sanitized.etsyTags.map(tag => String(tag).trim().toLowerCase()));
+      sanitized.etsyTagExplanations = sanitized.etsyTagExplanations.filter(item => retained.has(String(item?.tag || '').trim().toLowerCase()));
+    }
   }
 
   return { sanitized, excluded };

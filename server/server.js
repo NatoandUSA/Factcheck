@@ -63,6 +63,7 @@ const amazonIntelligenceAdapter = require('./commerceIntelligence/amazonIntellig
 const { selectAsinBatches } = require('./commerceIntelligence/asinSelector');
 const etsyResearchAdapter = require('./commerceIntelligence/etsyResearchAdapter');
 const etsyIntelligenceAdapter = require('./commerceIntelligence/etsyIntelligenceAdapter');
+const marketplaceWorkflow = require('./marketplaceResearchWorkflow');
 
 const PROJECT_POLICY_CLASSIFICATIONS = Object.freeze({
   CUSTOM_SWEATSHIRT: Object.freeze({ mediaClass: 'NON_MEDIA', productTypeId: 'CUSTOM_SWEATSHIRT', categoryId: 'APPAREL_SWEATSHIRT', productFamilyVersion: 'custom-sweatshirt-v1' }),
@@ -313,7 +314,7 @@ const commerceResearchUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 20 * 1024 * 1024, files: 1, fields: 8 },
   fileFilter(req, file, cb) {
-    const allowed = /\.(xlsx|csv)$/i.test(file.originalname || '');
+    const allowed = /\.(xlsx|csv|html?)$/i.test(file.originalname || '');
     cb(allowed ? null : new Error('UNSUPPORTED_RESEARCH_FILE'), allowed);
   }
 });
@@ -1626,7 +1627,13 @@ function canonicalResearchFile(req, allowedFields, marketplace) {
     code: 'MARKETPLACE_IMPORT_KIND_REQUIRED', status: 400, details: { marketplace, allowedKinds }
   });
   const extension = path.extname(req.file.originalname || '').toLowerCase();
-  const mediaType = extension === '.csv' ? 'text/csv' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  const allowedExtensions = marketplace === 'AMAZON' ? ['.xlsx', '.csv'] : ['.csv', '.html', '.htm'];
+  if (!allowedExtensions.includes(extension)) throw Object.assign(new Error('MARKETPLACE_RESEARCH_FILE_TYPE_MISMATCH'), {
+    code: 'MARKETPLACE_RESEARCH_FILE_TYPE_MISMATCH', status: 400, details: { marketplace, allowedExtensions }
+  });
+  const mediaType = extension === '.csv' ? 'text/csv'
+    : ['.html', '.htm'].includes(extension) ? 'text/html'
+      : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
   return { body, kind, mediaType, rawBytes: req.file.buffer, fileName: path.basename(req.file.originalname) };
 }
 
@@ -1697,28 +1704,200 @@ app.post('/api/projects/:id/research-snapshots', requireAuth(db), requireRole(['
   } catch (error) { rejectRevisionStore(res, error); }
 });
 
-function intelligenceConfiguration(project, body) {
+app.get('/api/projects/:id/marketplace-workflow', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    const project = await requireCommerceProject(req);
+    const result = await marketplaceWorkflow.getWorkflowState(db, revisionScope(req.user), project.id);
+    res.json({ success: true, marketplace: project.marketplace, ...result });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+async function amazonBatchBuild(req) {
+  const project = await requireCommerceProject(req);
+  if (project.marketplace !== 'AMAZON') throw Object.assign(new Error('AMAZON_PROJECT_REQUIRED'), { code: 'AMAZON_PROJECT_REQUIRED' });
+  const body = requireExactDto(req.body, new Set(['xrayImportId','xrayImportIds','maxBatches','selectedAsins','expectedHeadArtifactId','idempotencyKey','changeReason']));
+  assertNoClientPolicyOverrides(body);
+  const preview = await marketplaceWorkflow.previewAmazonBatches(db, revisionScope(req.user), project.id,
+    body.xrayImportIds || body.xrayImportId, project.seed_phrase, { maxBatches: body.maxBatches, selectedAsins: body.selectedAsins,
+      screen: value => ipGuard.screenText(value) });
+  return { project, body, preview };
+}
+
+app.post('/api/projects/:id/amazon/asin-batches/preview', requireAuth(db), requireRole(['OWNER','MANAGER','SELLER']), async (req, res) => {
+  try { const { project, preview } = await amazonBatchBuild(req); res.json({ success: true, projectId: project.id, ...preview }); }
+  catch (error) { rejectRevisionStore(res, error); }
+});
+
+app.post('/api/projects/:id/amazon/asin-batches', requireAuth(db), requireRole(['OWNER','MANAGER','SELLER']), async (req, res) => {
+  try {
+    const { project, body, preview } = await amazonBatchBuild(req);
+    const result = await marketplaceWorkflow.appendArtifact(db, revisionScope(req.user), project.id, {
+      kind: 'AMAZON_ASIN_BATCH_PLAN', expectedHeadArtifactId: body.expectedHeadArtifactId,
+      idempotencyKey: body.idempotencyKey, changeReason: body.changeReason,
+      dependencies: preview.dependencies, payload: preview.payload, accounting: preview.accounting
+    });
+    res.status(result.duplicate ? 200 : 201).json({ success: true, projectId: project.id, ...result });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+app.post('/api/projects/:id/amazon/cerebro-bindings', requireAuth(db), requireRole(['OWNER','MANAGER','SELLER']), async (req, res) => {
+  try {
+    const project = await requireCommerceProject(req);
+    const body = requireExactDto(req.body, new Set(['asinBatchArtifactId','batchNumber','cerebroImportId',
+      'expectedHeadArtifactId','idempotencyKey','changeReason'])); assertNoClientPolicyOverrides(body);
+    const built = await marketplaceWorkflow.buildCerebroBinding(db, revisionScope(req.user), project.id, body);
+    const result = await marketplaceWorkflow.appendArtifact(db, revisionScope(req.user), project.id, {
+      kind: 'AMAZON_CEREBRO_BINDING', expectedHeadArtifactId: body.expectedHeadArtifactId,
+      idempotencyKey: body.idempotencyKey, changeReason: body.changeReason, ...built
+    });
+    res.status(result.duplicate ? 200 : 201).json({ success: true, projectId: project.id, ...result });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+app.post('/api/projects/:id/amazon/master-keywords', requireAuth(db), requireRole(['OWNER','MANAGER','SELLER']), async (req, res) => {
+  try {
+    const project = await requireCommerceProject(req);
+    const body = requireExactDto(req.body, new Set(['researchSnapshotId','asinBatchArtifactId','cerebroBindingArtifactIds',
+      'expectedHeadArtifactId','idempotencyKey','changeReason'])); assertNoClientPolicyOverrides(body);
+    const research = await marketplaceWorkflow.researchSnapshot(db, revisionScope(req.user), project.id, body.researchSnapshotId);
+    const plan = await marketplaceWorkflow.getArtifact(db, revisionScope(req.user), project.id, body.asinBatchArtifactId, 'AMAZON_ASIN_BATCH_PLAN');
+    const bindingIds = Array.isArray(body.cerebroBindingArtifactIds) ? body.cerebroBindingArtifactIds : [];
+    if (!bindingIds.length) throw Object.assign(new Error('CEREBRO_BATCH_BINDING_REQUIRED'), { code: 'CEREBRO_BATCH_BINDING_REQUIRED' });
+    const bindings = await Promise.all(bindingIds.map(id => marketplaceWorkflow.getArtifact(db, revisionScope(req.user), project.id, id, 'AMAZON_CEREBRO_BINDING')));
+    if (bindings.some(binding => binding.dependencies.asinBatchArtifactId !== plan.id)) {
+      throw Object.assign(new Error('CEREBRO_BINDING_PLAN_MISMATCH'), { code: 'CEREBRO_BINDING_PLAN_MISMATCH' });
+    }
+    const boundBatchNumbers = new Set(bindings.map(binding => Number(binding.payload.batchNumber)));
+    const missingBatchNumbers = plan.payload.batches.map(batch => batch.batchNumber).filter(number => !boundBatchNumbers.has(number));
+    if (missingBatchNumbers.length) throw Object.assign(new Error('CEREBRO_REQUIRED_FOR_EACH_ASIN_BATCH'), {
+      code: 'CEREBRO_REQUIRED_FOR_EACH_ASIN_BATCH', status: 409, details: { missingBatchNumbers }
+    });
+    const snapshotImportIds = new Set(research.importManifest.map(item => Number(item.id)));
+    const requiredImportIds = [
+      ...(Array.isArray(plan.dependencies.xrayImports)
+        ? plan.dependencies.xrayImports.map(item => Number(item.id))
+        : [Number(plan.dependencies.xrayImportId)]),
+      ...bindings.map(binding => Number(binding.dependencies.cerebroImportId))];
+    const missingImportIds = requiredImportIds.filter(id => !snapshotImportIds.has(id));
+    if (missingImportIds.length) throw Object.assign(new Error('MASTER_KEYWORD_RESEARCH_IMPORT_MISMATCH'), {
+      code: 'MASTER_KEYWORD_RESEARCH_IMPORT_MISMATCH', status: 409, details: { missingImportIds }
+    });
+    const built = marketplaceWorkflow.amazonMasterKeywords(research);
+    const result = await marketplaceWorkflow.appendArtifact(db, revisionScope(req.user), project.id, {
+      kind: 'AMAZON_MASTER_KEYWORDS', expectedHeadArtifactId: body.expectedHeadArtifactId,
+      idempotencyKey: body.idempotencyKey, changeReason: body.changeReason,
+      dependencies: { researchSnapshotId: research.id, researchSnapshotHash: research.snapshotHash,
+        asinBatchArtifactId: plan.id, asinBatchArtifactHash: plan.artifactHash,
+        cerebroBindings: bindings.map(binding => ({ id: binding.id, artifactHash: binding.artifactHash,
+          cerebroImportId: binding.dependencies.cerebroImportId, batchNumber: binding.payload.batchNumber })) },
+      ...built
+    });
+    res.status(result.duplicate ? 200 : 201).json({ success: true, projectId: project.id, ...result });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+async function etsyWinnerBuild(req) {
+  const project = await requireCommerceProject(req);
+  if (project.marketplace !== 'ETSY') throw Object.assign(new Error('ETSY_PROJECT_REQUIRED'), { code: 'ETSY_PROJECT_REQUIRED' });
+  const body = requireExactDto(req.body, new Set(['researchSnapshotId','winnerCount','selectedEntityKeys','expectedHeadArtifactId','idempotencyKey','changeReason']));
+  assertNoClientPolicyOverrides(body);
+  const research = await marketplaceWorkflow.researchSnapshot(db, revisionScope(req.user), project.id, body.researchSnapshotId);
+  const built = marketplaceWorkflow.buildEtsyWinners(research, body.winnerCount, body.selectedEntityKeys);
+  return { project, body, research, built };
+}
+
+app.post('/api/projects/:id/etsy/winners/preview', requireAuth(db), requireRole(['OWNER','MANAGER','SELLER']), async (req, res) => {
+  try { const { project, research, built } = await etsyWinnerBuild(req); res.json({ success: true, zeroWrite: true,
+    projectId: project.id, dependencies: { researchSnapshotId: research.id, researchSnapshotHash: research.snapshotHash }, ...built }); }
+  catch (error) { rejectRevisionStore(res, error); }
+});
+
+app.post('/api/projects/:id/etsy/winners', requireAuth(db), requireRole(['OWNER','MANAGER','SELLER']), async (req, res) => {
+  try {
+    const { project, body, research, built } = await etsyWinnerBuild(req);
+    const result = await marketplaceWorkflow.appendArtifact(db, revisionScope(req.user), project.id, {
+      kind: 'ETSY_WINNER_SET', expectedHeadArtifactId: body.expectedHeadArtifactId,
+      idempotencyKey: body.idempotencyKey, changeReason: body.changeReason,
+      dependencies: { researchSnapshotId: research.id, researchSnapshotHash: research.snapshotHash }, ...built
+    });
+    res.status(result.duplicate ? 200 : 201).json({ success: true, projectId: project.id, ...result });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+app.post('/api/projects/:id/etsy/patterns', requireAuth(db), requireRole(['OWNER','MANAGER','SELLER']), async (req, res) => {
+  try {
+    const project = await requireCommerceProject(req);
+    const body = requireExactDto(req.body, new Set(['winnerSetArtifactId','expectedHeadArtifactId','idempotencyKey','changeReason'])); assertNoClientPolicyOverrides(body);
+    const winners = await marketplaceWorkflow.getArtifact(db, revisionScope(req.user), project.id, body.winnerSetArtifactId, 'ETSY_WINNER_SET');
+    const built = marketplaceWorkflow.buildEtsyPatterns(winners);
+    const result = await marketplaceWorkflow.appendArtifact(db, revisionScope(req.user), project.id, {
+      kind: 'ETSY_PATTERN_SNAPSHOT', expectedHeadArtifactId: body.expectedHeadArtifactId,
+      idempotencyKey: body.idempotencyKey, changeReason: body.changeReason, ...built
+    });
+    res.status(result.duplicate ? 200 : 201).json({ success: true, projectId: project.id, ...result });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+app.post('/api/projects/:id/etsy/master-keywords', requireAuth(db), requireRole(['OWNER','MANAGER','SELLER']), async (req, res) => {
+  try {
+    const project = await requireCommerceProject(req);
+    const body = requireExactDto(req.body, new Set(['researchSnapshotId','winnerSetArtifactId','patternArtifactId',
+      'expectedHeadArtifactId','idempotencyKey','changeReason'])); assertNoClientPolicyOverrides(body);
+    const research = await marketplaceWorkflow.researchSnapshot(db, revisionScope(req.user), project.id, body.researchSnapshotId);
+    const winners = await marketplaceWorkflow.getArtifact(db, revisionScope(req.user), project.id, body.winnerSetArtifactId, 'ETSY_WINNER_SET');
+    const patterns = await marketplaceWorkflow.getArtifact(db, revisionScope(req.user), project.id, body.patternArtifactId, 'ETSY_PATTERN_SNAPSHOT');
+    if (Number(winners.dependencies.researchSnapshotId) !== research.id) throw Object.assign(
+      new Error('ETSY_WINNER_RESEARCH_MISMATCH'), { code: 'ETSY_WINNER_RESEARCH_MISMATCH', status: 409 });
+    if (Number(patterns.dependencies.winnerSetArtifactId) !== winners.id) throw Object.assign(
+      new Error('ETSY_PATTERN_WINNER_MISMATCH'), { code: 'ETSY_PATTERN_WINNER_MISMATCH', status: 409 });
+    const built = marketplaceWorkflow.buildEtsyMaster(research, winners, patterns);
+    const result = await marketplaceWorkflow.appendArtifact(db, revisionScope(req.user), project.id, {
+      kind: 'ETSY_MASTER_KEYWORDS', expectedHeadArtifactId: body.expectedHeadArtifactId,
+      idempotencyKey: body.idempotencyKey, changeReason: body.changeReason, ...built
+    });
+    res.status(result.duplicate ? 200 : 201).json({ success: true, projectId: project.id, ...result });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+async function intelligenceConfiguration(project, body, user) {
   const requested = String(body.listingLanguage || 'AUTO').trim().toUpperCase();
   if (!['AUTO','EN','ES'].includes(requested)) throw Object.assign(new Error('LISTING_LANGUAGE_UNSUPPORTED'), {
     code: 'LISTING_LANGUAGE_UNSUPPORTED', status: 400
   });
-  return Object.freeze({ seedPhrase: String(project.seed_phrase || '').trim(),
+  const artifactId = Number(body.masterKeywordArtifactId);
+  if (!Number.isInteger(artifactId) || artifactId < 1) throw Object.assign(new Error('MASTER_KEYWORD_SNAPSHOT_REQUIRED'), {
+    code: 'MASTER_KEYWORD_SNAPSHOT_REQUIRED', status: 409
+  });
+  const kind = project.marketplace === 'AMAZON' ? 'AMAZON_MASTER_KEYWORDS' : 'ETSY_MASTER_KEYWORDS';
+  const master = await marketplaceWorkflow.getArtifact(db, revisionScope(user), project.id, artifactId, kind);
+  if (Number(master.dependencies.researchSnapshotId) !== Number(body.researchSnapshotId)) {
+    throw Object.assign(new Error('MASTER_KEYWORD_RESEARCH_SNAPSHOT_MISMATCH'), {
+      code: 'MASTER_KEYWORD_RESEARCH_SNAPSHOT_MISMATCH', status: 409
+    });
+  }
+  const configuration = Object.freeze({ seedPhrase: String(project.seed_phrase || '').trim(),
+    masterKeywordArtifactId: master.id, masterKeywordArtifactHash: master.artifactHash,
+    masterKeywordCount: master.accounting.masterKeywordCount,
     ...(requested === 'AUTO' ? {} : { listingLanguage: requested }) });
+  return Object.freeze({ configuration, master });
 }
 
-function intelligenceAdapterFor(project) {
-  return project.marketplace === 'AMAZON' ? amazonIntelligenceAdapter : etsyIntelligenceAdapter;
+function intelligenceAdapterFor(project, master) {
+  const adapter = project.marketplace === 'AMAZON' ? amazonIntelligenceAdapter : etsyIntelligenceAdapter;
+  return Object.freeze({ buildIntelligence: input => adapter.buildIntelligence({ ...input,
+    masterKeywords: master.payload.keywords }) });
 }
 
 app.post('/api/projects/:id/intelligence-snapshots/preview', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
   try {
     const project = await requireCommerceProject(req);
-    const body = requireExactDto(req.body, new Set(['researchSnapshotId', 'productTruthRevisionId', 'listingLanguage']));
+    const body = requireExactDto(req.body, new Set(['researchSnapshotId', 'productTruthRevisionId', 'masterKeywordArtifactId', 'listingLanguage']));
     assertNoClientPolicyOverrides(body);
+    const resolved = await intelligenceConfiguration(project, body, req.user);
     const result = await previewIntelligence(db, revisionScope(req.user), project.id, {
       researchSnapshotId: body.researchSnapshotId, productTruthRevisionId: body.productTruthRevisionId,
-      configuration: intelligenceConfiguration(project, body)
-    }, intelligenceAdapterFor(project));
+      configuration: resolved.configuration
+    }, intelligenceAdapterFor(project, resolved.master));
     res.json({ success: true, ...result });
   } catch (error) { rejectRevisionStore(res, error); }
 });
@@ -1727,14 +1906,15 @@ app.post('/api/projects/:id/intelligence-snapshots', requireAuth(db), requireRol
   try {
     const project = await requireCommerceProject(req);
     const body = requireExactDto(req.body, new Set(['expectedHeadIntelligenceSnapshotId', 'researchSnapshotId',
-      'productTruthRevisionId', 'listingLanguage', 'idempotencyKey', 'changeReason']));
+      'productTruthRevisionId', 'masterKeywordArtifactId', 'listingLanguage', 'idempotencyKey', 'changeReason']));
     assertNoClientPolicyOverrides(body);
+    const resolved = await intelligenceConfiguration(project, body, req.user);
     const result = await appendIntelligenceSnapshot(db, revisionScope(req.user), project.id, {
       expectedHeadIntelligenceSnapshotId: body.expectedHeadIntelligenceSnapshotId,
       researchSnapshotId: body.researchSnapshotId, productTruthRevisionId: body.productTruthRevisionId,
       idempotencyKey: body.idempotencyKey, changeReason: body.changeReason,
-      configuration: intelligenceConfiguration(project, body)
-    }, intelligenceAdapterFor(project));
+      configuration: resolved.configuration
+    }, intelligenceAdapterFor(project, resolved.master));
     const persisted = await getIntelligenceSnapshot(db, revisionScope(req.user), project.id, result.intelligenceSnapshotId);
     res.status(result.revisionNumber === 1 ? 201 : 200).json({ success: true, ...result,
       output: persisted.output, accounting: persisted.accounting, configuration: persisted.configuration });

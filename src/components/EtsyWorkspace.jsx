@@ -558,7 +558,10 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
       />
 
       <details data-testid="etsy-optional-tools" style={{ margin: '10px 0', border: '1px solid #fed7aa', borderRadius: '12px', padding: '12px', background: '#fff7ed' }}>
-        <summary style={{ cursor: 'pointer', fontWeight: 800, color: '#9a3412' }}>Công cụ nghiên cứu cũ / MCP bổ sung (tùy chọn — không cần để chạy luồng chính)</summary>
+        <summary style={{ cursor: 'pointer', fontWeight: 800, color: '#9a3412' }}>Omni Etsy Research &amp; DNA Lab — module kế thừa đang nối vào canonical</summary>
+        <div style={{ margin: '9px 0', padding: 10, borderRadius: 8, background: '#ffedd5', color: '#7c2d12', fontSize: '.78rem' }}>
+          <b>Không bỏ Omni cũ:</b> Smart Pull, MCP/YTrends, Challenger, Benchmark và Learning Box tiếp tục tạo seed, candidate và market observations. CSV/HTML Search Evidence, Winners, Pattern và Master KW được khóa ở luồng canonical phía trên. Các nút stage/draft legacy chỉ giữ để đối chiếu trong lúc chuyển đổi, không được tạo một nguồn sự thật thứ hai.
+        </div>
       <SmartPullAnalyticsBar
         marketplace="ETSY"
         activeProjectId={activeProject?.id || null}
@@ -607,7 +610,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
           onClick={() => setActiveStage('workflow')}
         >
           <Layers size={18} />
-          <span>Công cụ cũ 1: Challenger Top Sellers & MCP Tags</span>
+          <span>Omni Challenger &amp; MCP Tags kế thừa</span>
         </button>
 
           <button
@@ -616,7 +619,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
             disabled={!activeProject}
         >
           <Brain size={18} />
-          <span>Công cụ cũ 2: Research Hub (không chặn luồng R3)</span>
+          <span>Omni Research Hub kế thừa</span>
         </button>
 
           <button
@@ -625,7 +628,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
             disabled={!activeProject || !['MKL_FROZEN', 'DRAFT_GENERATED', 'PRODUCT_TRUTH_VERIFIED', 'PRODUCT_TRUTH_CONFIRMED', 'VALIDATED', 'MANAGER_APPROVED', 'PUBLISH_READY'].includes(activeProject.state)}
         >
           <Database size={18} />
-          <span>Công cụ cũ 3: Ma trận 13 Tags & từ khóa Etsy</span>
+          <span>Omni 13 Tags &amp; keyword matrix kế thừa / đối chiếu</span>
         </button>
       </div>
 

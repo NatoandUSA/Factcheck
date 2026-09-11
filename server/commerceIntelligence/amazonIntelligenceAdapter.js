@@ -130,16 +130,19 @@ function canonicalContent(composed, facts, extraPpc, truthSnapshot) {
   };
 }
 
-async function buildIntelligence({ research, productTruth, configuration = {} }) {
+async function buildIntelligence({ research, productTruth, configuration = {}, masterKeywords = null }) {
   const observations = research.observations || {};
   if (observations.marketplace !== 'AMAZON') throw Object.assign(new Error('AMAZON_RESEARCH_REQUIRED'), {
     code: 'AMAZON_RESEARCH_REQUIRED', status: 409
   });
   const facts = factsFromSnapshot(productTruth.snapshot);
-  const keywordRows = (observations.cerebro?.keywords || []).map(scoreProjection);
+  const keywordRows = (Array.isArray(masterKeywords) ? masterKeywords : observations.cerebro?.keywords || []).map(scoreProjection);
   if (!keywordRows.length) throw Object.assign(new Error('CEREBRO_KEYWORDS_REQUIRED'), {
     code: 'CEREBRO_KEYWORDS_REQUIRED', status: 409
   });
+  if (configuration.masterKeywordCount != null && keywordRows.length !== configuration.masterKeywordCount) {
+    throw Object.assign(new Error('MASTER_KEYWORD_COUNT_MISMATCH'), { code: 'MASTER_KEYWORD_COUNT_MISMATCH', status: 409 });
+  }
   const anchors = [configuration.seedPhrase, facts.productType, facts.productName, facts.recipient, facts.occasion]
     .map(text).filter(Boolean);
   if (!anchors.length) throw Object.assign(new Error('INTELLIGENCE_ANCHOR_REQUIRED'), {

@@ -206,13 +206,16 @@ function descriptionFromTruth(facts, title) {
   return lines.join('\n\n');
 }
 
-async function buildIntelligence({ research, productTruth, configuration = {} }) {
+async function buildIntelligence({ research, productTruth, configuration = {}, masterKeywords = null }) {
   const observations = research.observations || {};
   if (observations.marketplace !== 'ETSY') throw Object.assign(new Error('ETSY_RESEARCH_REQUIRED'), { code: 'ETSY_RESEARCH_REQUIRED' });
   const facts = factsFromSnapshot(productTruth.snapshot);
   const identity = text(facts.productName || facts.productType);
   if (!identity) throw Object.assign(new Error('PRODUCT_IDENTITY_REQUIRED'), { code: 'PRODUCT_IDENTITY_REQUIRED' });
-  const corpus = candidateCorpus(observations);
+  const corpus = Array.isArray(masterKeywords) ? masterKeywords : candidateCorpus(observations);
+  if (configuration.masterKeywordCount != null && corpus.length !== configuration.masterKeywordCount) {
+    throw Object.assign(new Error('MASTER_KEYWORD_COUNT_MISMATCH'), { code: 'MASTER_KEYWORD_COUNT_MISMATCH', status: 409 });
+  }
   const language = resolveListingLanguage(configuration, corpus);
   const recipientFamilies = allowedRecipientFamilies([facts.recipient, facts.audience, facts.productName, facts.productType]);
   const safe = []; const claimBlocked = []; const ipBlocked = []; const irrelevant = [];
@@ -261,13 +264,18 @@ async function buildIntelligence({ research, productTruth, configuration = {} })
   for (const fact of [identity, text(facts.recipient), text(facts.occasion)]) {
     for (const value of tagVariants(fact)) tagPool.push({ value, corpusKey: null });
   }
-  const etsyTags = [];
+  const etsyTags = []; const etsyTagExplanations = [];
   for (const item of tagPool) {
     const key = fold(item.value); if (etsyTags.some(existing => fold(existing) === key)) continue;
-    etsyTags.push(item.value); used.add(key); if (item.corpusKey) usedCorpusKeys.add(item.corpusKey);
+    etsyTags.push(item.value); etsyTagExplanations.push({ tag: item.value,
+      source: item.corpusKey ? 'MASTER_KEYWORD_CORPUS' : 'PRODUCT_TRUTH_FALLBACK',
+      sourcePhrase: item.corpusKey || item.value,
+      reason: item.corpusKey ? 'Selected for relevant winner/search coverage after IP, language and claim screening'
+        : 'Filled from verified Product Truth because fewer than 13 safe research tags were available' });
+    used.add(key); if (item.corpusKey) usedCorpusKeys.add(item.corpusKey);
     if (etsyTags.length === 13) break;
   }
-  const content = { etsyTitle, etsyTags, etsyDescription: descriptionFromTruth(facts, etsyTitle),
+  const content = { etsyTitle, etsyTags, etsyTagExplanations, etsyDescription: descriptionFromTruth(facts, etsyTitle),
     itemHighlights: identity, categoryName: text(facts.category), ppcKeywords: [],
     imagePrompts: generateImagePromptSuite(productTruth.snapshot, 'ETSY') };
   const guarded = evaluateListingGuard({ listing: content, verifiedFacts: facts });
@@ -282,7 +290,7 @@ async function buildIntelligence({ research, productTruth, configuration = {} })
     output: { marketplace: 'ETSY', language, listingDraft: guarded.listing,
       keywordAllocation: { corpusCount: corpus.length, titleAndTagUsed: [...used], unallocated,
         claimBlocked, ipBlocked, irrelevant, languageTargeting, competitorShopBlocked,
-        sourceRejected: corpus.sourceRejected,
+        sourceRejected: corpus.sourceRejected || [],
         reason: 'ETSY_HAS_NO_SELLER-SELECTED_PPC_KEYWORD_SURFACE' },
       competitorSummary: { observations: (observations.sellers || []).length,
         uniqueListingIds: new Set((observations.sellers || []).map(item => item.listingId).filter(Boolean)).size },
@@ -292,7 +300,7 @@ async function buildIntelligence({ research, productTruth, configuration = {} })
       claimBlockedCount: claimBlocked.length, ipBlockedCount: ipBlocked.length,
       irrelevantCount: irrelevant.length, languageTargetingCount: languageTargeting.length,
       competitorShopBlockedCount: competitorShopBlocked.length, allocatedCorpusCount, corpusAccountingGap,
-      sourceRejectedCount: corpus.sourceRejected.length,
+      sourceRejectedCount: (corpus.sourceRejected || []).length,
       tagCount: guarded.listing.etsyTags.length, tagCapacityGap: 13 - guarded.listing.etsyTags.length },
     engineBindingHash: engineBindingHash()
   });

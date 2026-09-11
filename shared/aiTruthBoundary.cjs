@@ -10,7 +10,7 @@ const CREATIVE_PROFILES = Object.freeze({
 });
 const COMMERCE_FIELDS = Object.freeze([
   'amazonTitle', 'amazonBullets', 'amazonSearchTerms', 'amazonDescription',
-  'amazonAPlusContent', 'amazonAPlusPoints', 'etsyTitle', 'etsyTags',
+  'amazonAPlusContent', 'amazonAPlusPoints', 'etsyTitle', 'etsyTags', 'etsyTagExplanations',
   'etsyMaterials', 'etsyPersonalizationInstructions', 'etsyDescription'
 ]);
 const SERVER_METADATA_FIELDS = new Set([

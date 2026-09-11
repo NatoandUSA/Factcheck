@@ -11,7 +11,7 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { execSync } = require('child_process');
+const { execFileSync, execSync } = require('child_process');
 
 function runPlatformTests() {
   console.log('================================================================');
@@ -38,7 +38,9 @@ function runPlatformTests() {
     assert.ok(fs.existsSync(fullPath), `Script ${scriptPath} must exist in repository`);
     if (hasBash) {
       try {
-        execSync(`bash -n "${fullPath}"`);
+        // Feed the script through stdin so Git Bash on Windows does not have
+        // to interpret a drive-letter path such as D:\\... as a POSIX path.
+        execFileSync('bash', ['-n'], { input: fs.readFileSync(fullPath) });
         console.log(`  🟢 Bash syntax valid: ${scriptPath}`);
       } catch (err) {
         assert.fail(`Syntax check failed for ${scriptPath}: ${err.message}`);

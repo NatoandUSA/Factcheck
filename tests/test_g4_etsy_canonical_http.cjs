@@ -55,6 +55,22 @@ async function main() {
     idempotencyKey: key(2), changeReason: 'CONFIRM_ETSY_RESEARCH'
   });
   check(research.status === 201, JSON.stringify(research.body));
+  const winners = await json(`/api/projects/${projectId}/etsy/winners`, 'POST', {
+    researchSnapshotId: research.body.researchSnapshotId, winnerCount: 5, expectedHeadArtifactId: null,
+    idempotencyKey: key(101), changeReason: 'CONFIRM_ETSY_WINNERS'
+  });
+  check(winners.status === 201, JSON.stringify(winners.body));
+  const patterns = await json(`/api/projects/${projectId}/etsy/patterns`, 'POST', {
+    winnerSetArtifactId: winners.body.id, expectedHeadArtifactId: null,
+    idempotencyKey: key(102), changeReason: 'LOCK_ETSY_PATTERNS'
+  });
+  check(patterns.status === 201, JSON.stringify(patterns.body));
+  const master = await json(`/api/projects/${projectId}/etsy/master-keywords`, 'POST', {
+    researchSnapshotId: research.body.researchSnapshotId, winnerSetArtifactId: winners.body.id,
+    patternArtifactId: patterns.body.id, expectedHeadArtifactId: null,
+    idempotencyKey: key(103), changeReason: 'LOCK_ETSY_MASTER_KW'
+  });
+  check(master.status === 201 && master.body.accounting.droppedKeywordCount === 0, JSON.stringify(master.body));
   const truth = await json(`/api/projects/${projectId}/product-truth/revisions`, 'POST', {
     expectedHeadRevisionId: null, idempotencyKey: key(3), changeReason: 'STAFF_DRAFT', facts: {
       productType: { disposition: 'ASSERTED', value: 'Custom Necklace', basis: 'SUPPLIER_SPEC' },
@@ -66,7 +82,7 @@ async function main() {
   check(truth.status === 201, JSON.stringify(truth.body));
   const intelligence = await json(`/api/projects/${projectId}/intelligence-snapshots`, 'POST', {
     expectedHeadIntelligenceSnapshotId: null, researchSnapshotId: research.body.researchSnapshotId,
-    productTruthRevisionId: truth.body.productTruthRevisionId, listingLanguage: 'AUTO',
+    productTruthRevisionId: truth.body.productTruthRevisionId, masterKeywordArtifactId: master.body.id, listingLanguage: 'AUTO',
     idempotencyKey: key(4), changeReason: 'SAVE_ETSY_INTELLIGENCE'
   });
   check(intelligence.status === 201, JSON.stringify(intelligence.body));
@@ -74,6 +90,7 @@ async function main() {
   const draft = intelligence.body.output.listingDraft;
   check(draft.etsyTitle.length <= 140, 'Etsy title cap');
   check(draft.etsyTags.length <= 13 && draft.etsyTags.every(tag => Array.from(tag).length <= 20), 'Etsy tag caps');
+  check(draft.etsyTagExplanations.length === draft.etsyTags.length, 'every Etsy tag has an explanation');
   check(!JSON.stringify(draft).toLowerCase().includes('18k'), 'unverified claim excluded');
   check(intelligence.body.accounting.claimBlockedCount >= 1, 'claim exclusion accounted');
   const previewListing = await json(`/api/projects/${projectId}/listings/commerce-preview`, 'POST', {
@@ -94,7 +111,7 @@ async function main() {
   check(dependencies.intelligenceSnapshotHash === intelligence.body.intelligenceSnapshotHash, 'Etsy intelligence hash bound');
   check(intelligence.body.output.keywordAllocation.unallocated.length === intelligence.body.accounting.unallocatedCount,
     'unused Etsy keywords retained with accounting');
-  console.log(`G4 Etsy canonical HTTP: ${passed}/22 PASS`);
+  console.log(`G4 Etsy canonical HTTP: ${passed}/${passed} PASS`);
 }
 
 main().catch(error => { console.error(error); process.exitCode = 1; }).finally(async () => {

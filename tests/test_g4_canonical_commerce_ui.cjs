@@ -22,6 +22,7 @@ const assert = require('assert');
     if (String(url).endsWith('/commerce-state')) return response({ success: true, heads: {
       productTruthRevisionId: null, researchSnapshotId: null, intelligenceSnapshotId: null
     }, imports: [], researchSnapshots: [], intelligenceSnapshots: [] });
+    if (String(url).endsWith('/marketplace-workflow')) return response({ success: true, heads: {}, artifacts: [] });
     if (String(url).endsWith('/product-truth/revisions')) return response({ success: true, revisions: [] });
     if (String(url).endsWith('/product-truth-listing/preview')) return response({ success: true, zeroWrite: true,
       sourceReference: 'https://www.amazon.com/dp/B0D5XS64LH', rawHash: 'b'.repeat(64),
@@ -54,9 +55,9 @@ const assert = require('assert');
   check(document.body.textContent.includes('Luồng Staff Canonical — AMAZON US'), 'Amazon workflow must render');
   check(document.body.textContent.includes('không tự đăng'), 'workflow must disclose its stop boundary');
   check(!document.body.textContent.includes('Manager xác nhận'), 'Seller must not receive Manager confirmation action');
-  check(document.body.textContent.includes('Cerebro keywords') && document.body.textContent.includes('Xray competitors'), 'Amazon must accept both research kinds');
-  check(document.body.textContent.includes('Xray tùy chọn') && document.body.textContent.includes('Cerebro bắt buộc'),
-    'Amazon UI must explain Xray-to-Cerebro order and which input is actually required');
+  check(document.body.textContent.includes('Xray từ seed') && document.body.textContent.includes('Cerebro từ batch ASIN'), 'Amazon must accept both research kinds in business order');
+  check(document.body.textContent.includes('Luồng Amazon bắt buộc') && document.body.textContent.includes('xác nhận batch'),
+    'Amazon UI must explain the mandatory Xray-to-batch-to-Cerebro order');
   check(document.body.textContent.includes('Preview zero-write'), 'research and intelligence previews must be visible');
   check(document.body.textContent.includes('Product Truth do Seller nhập và kiểm'), 'Seller Product Truth stage must be visible');
   check(document.body.textContent.includes('Dùng ngay tài khoản, workspace và project đang mở'),

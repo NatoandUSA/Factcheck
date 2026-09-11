@@ -12,6 +12,7 @@ const LISTING_REVISION_VALIDATION_ACCOUNTING_MIGRATION = '012_listing_revision_v
 const COMMERCE_SNAPSHOT_MIGRATION = '013_commerce_research_intelligence_snapshots';
 const CANONICAL_REVIEW_HANDOFF_MIGRATION = '014_canonical_review_submission_handoff';
 const OWNER_SUBMISSION_AUTHORIZATION_MIGRATION = '015_owner_submission_authorization';
+const MARKETPLACE_RESEARCH_WORKFLOW_MIGRATION = '016_marketplace_research_workflow_artifacts';
 const crypto = require('node:crypto');
 
 function run(db, sql, params = []) {
@@ -418,6 +419,36 @@ async function migrateCommerceSnapshots(db) {
   }
 }
 
+async function migrateMarketplaceResearchWorkflow(db) {
+  await run(db, `CREATE TABLE IF NOT EXISTS commerce_workflow_artifacts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id TEXT NOT NULL, workspace_id INTEGER NOT NULL,
+    marketplace TEXT NOT NULL CHECK(marketplace IN ('AMAZON','ETSY')),
+    project_id INTEGER NOT NULL REFERENCES research_projects(id),
+    kind TEXT NOT NULL CHECK(kind IN (
+      'AMAZON_ASIN_BATCH_PLAN','AMAZON_CEREBRO_BINDING','AMAZON_MASTER_KEYWORDS',
+      'ETSY_WINNER_SET','ETSY_PATTERN_SNAPSHOT','ETSY_MASTER_KEYWORDS')),
+    revision_number INTEGER NOT NULL,
+    parent_revision_id INTEGER REFERENCES commerce_workflow_artifacts(id),
+    dependency_manifest_json TEXT NOT NULL,
+    dependency_manifest_hash TEXT NOT NULL CHECK(length(dependency_manifest_hash)=64),
+    payload_json TEXT NOT NULL, payload_hash TEXT NOT NULL CHECK(length(payload_hash)=64),
+    accounting_json TEXT NOT NULL, accounting_hash TEXT NOT NULL CHECK(length(accounting_hash)=64),
+    engine_binding_hash TEXT NOT NULL CHECK(length(engine_binding_hash)=64),
+    artifact_hash TEXT NOT NULL CHECK(length(artifact_hash)=64),
+    change_reason TEXT NOT NULL, idempotency_key TEXT NOT NULL,
+    created_by INTEGER NOT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(project_id,kind,revision_number),
+    UNIQUE(tenant_id,workspace_id,marketplace,kind,idempotency_key)
+  )`);
+  await run(db, `CREATE INDEX IF NOT EXISTS idx_commerce_workflow_artifacts_scope
+    ON commerce_workflow_artifacts(tenant_id,workspace_id,marketplace,project_id,kind,revision_number)`);
+  await run(db, `CREATE TRIGGER IF NOT EXISTS commerce_workflow_artifacts_immutable_update
+    BEFORE UPDATE ON commerce_workflow_artifacts BEGIN SELECT RAISE(ABORT,'IMMUTABLE_COMMERCE_WORKFLOW_ARTIFACT'); END`);
+  await run(db, `CREATE TRIGGER IF NOT EXISTS commerce_workflow_artifacts_immutable_delete
+    BEFORE DELETE ON commerce_workflow_artifacts BEGIN SELECT RAISE(ABORT,'IMMUTABLE_COMMERCE_WORKFLOW_ARTIFACT'); END`);
+}
+
 async function migrateCanonicalReviewHandoff(db) {
   await run(db, `CREATE TABLE IF NOT EXISTS canonical_listing_reviews (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -740,6 +771,18 @@ async function runMigrations(db) {
       throw error;
     }
   }
+  const marketplaceWorkflowApplied = await all(db, 'SELECT id FROM schema_migrations WHERE id=?', [MARKETPLACE_RESEARCH_WORKFLOW_MIGRATION]);
+  if (marketplaceWorkflowApplied.length === 0) {
+    await run(db, 'BEGIN IMMEDIATE');
+    try {
+      await migrateMarketplaceResearchWorkflow(db);
+      await run(db, 'INSERT INTO schema_migrations(id) VALUES (?)', [MARKETPLACE_RESEARCH_WORKFLOW_MIGRATION]);
+      await run(db, 'COMMIT');
+    } catch (error) {
+      try { await run(db, 'ROLLBACK'); } catch (_) {}
+      throw error;
+    }
+  }
 }
 
 async function migrateAgentWorkspaceScope(db) {
@@ -834,6 +877,7 @@ module.exports = {
   COMMERCE_SNAPSHOT_MIGRATION,
   CANONICAL_REVIEW_HANDOFF_MIGRATION,
   OWNER_SUBMISSION_AUTHORIZATION_MIGRATION,
+  MARKETPLACE_RESEARCH_WORKFLOW_MIGRATION,
   migrateOwnerSubmissionAuthorization,
   AGENT_WORKSPACE_SCOPE_MIGRATION,
   PROJECT_SCOPED_EVIDENCE_MIGRATION,

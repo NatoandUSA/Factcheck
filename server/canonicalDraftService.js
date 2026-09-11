@@ -49,7 +49,7 @@ const get = (db, sql, params = []) => new Promise((resolve, reject) => db.get(sq
 
 const COMMON_FIELDS = new Set(['categoryName', 'itemHighlights', 'imagePrompts', 'creativeAssets', 'ppcKeywords']);
 const AMAZON_FIELDS = new Set([...COMMON_FIELDS, 'amazonTitle', 'amazonBullets', 'amazonSearchTerms', 'amazonDescription', 'amazonAPlusPoints']);
-const ETSY_FIELDS = new Set([...COMMON_FIELDS, 'etsyTitle', 'etsyTags', 'etsyDescription']);
+const ETSY_FIELDS = new Set([...COMMON_FIELDS, 'etsyTitle', 'etsyTags', 'etsyTagExplanations', 'etsyDescription']);
 
 function exactContent(content, marketplace) {
   if (!content || typeof content !== 'object' || Array.isArray(content)) throw new CanonicalDraftError('INVALID_LISTING_PAYLOAD');

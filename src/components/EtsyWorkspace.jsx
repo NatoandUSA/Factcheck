@@ -482,7 +482,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
           {activeProject && (
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', background: '#ea580c', color: '#fff', padding: '6px 14px', borderRadius: '10px', fontSize: '0.82rem', fontWeight: 800, marginTop: '15px' }}>
               <span>📌 Active Project #{activeProject.id}: <u style={{ textUnderlineOffset: '3px' }}>{activeProject.state}</u></span>
-              {activeProject.state === 'EVIDENCE_INTAKE' && <span style={{ fontSize: '0.72rem' }}>Accept evidence ở Gate bên dưới</span>}
+              {activeProject.state === 'EVIDENCE_INTAKE' && <span style={{ fontSize: '0.72rem' }}>State legacy — không chặn luồng Canonical R3</span>}
               {activeProject.state === 'RESEARCH_ACCEPTED' && (
                 <button onClick={() => handleTransition('DNA_ACCEPTED')} style={{ background: '#fff', color: '#ea580c', border: 'none', padding: '3px 10px', borderRadius: '6px', cursor: 'pointer', fontWeight: 800 }}>
                   Accept DNA →
@@ -517,12 +517,12 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
             title="Nạp CSV, HTML, TXT hoặc text Etsy/HeyEtsy; luôn xem Preview trước khi lưu"
           >
             <Sparkles size={16} color="#059669" />
-            <span>📥 Nạp kết quả Etsy</span>
+            <span>📥 Nạp kết quả Etsy kiểu cũ (tùy chọn)</span>
           </button>
 
           <button
             onClick={handleMcpPull}
-            disabled={mcpPulling || !activeProject || !seedPhrase.trim()}
+            disabled
             className="btn btn-primary"
             style={{
               background: '#ea580c',
@@ -532,19 +532,29 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
               display: 'flex',
               alignItems: 'center',
               gap: '8px',
-              cursor: (mcpPulling || !activeProject || !seedPhrase.trim()) ? 'not-allowed' : 'pointer',
+              cursor: 'not-allowed',
+              opacity: 0.6,
               marginTop: '15px',
               boxShadow: '0 4px 12px rgba(234, 88, 12, 0.25)'
             }}
           >
             <RefreshCw size={16} className={mcpPulling ? 'spinner' : ''} />
-            <span>{mcpPulling ? 'Đang kéo MCP...' : '⚡ Auto-Pull Live Tags (MCP)'}</span>
+            <span>YTrends MCP tùy chọn — đang kiểm tra connector</span>
           </button>
         </div>
       </div>
 
       {!activeProject && <ProjectSetupCard marketplace="ETSY" category={selectedCategory} seedPhrase={seedPhrase} onCreated={handleProjectCreated} onShowToast={onShowToast} accent="#ea580c" />}
 
+      <CanonicalCommerceWorkflow
+        activeProject={activeProject}
+        marketplace="ETSY"
+        onSelectListing={onSelectListing}
+        onShowToast={onShowToast}
+      />
+
+      <details data-testid="etsy-optional-tools" style={{ margin: '10px 0', border: '1px solid #fed7aa', borderRadius: '12px', padding: '12px', background: '#fff7ed' }}>
+        <summary style={{ cursor: 'pointer', fontWeight: 800, color: '#9a3412' }}>Công cụ nghiên cứu cũ / MCP bổ sung (tùy chọn — không cần để chạy luồng chính)</summary>
       <SmartPullAnalyticsBar
         marketplace="ETSY"
         activeProjectId={activeProject?.id || null}
@@ -566,13 +576,6 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
           });
           setActiveStage('workflow');
         }}
-      />
-
-      <CanonicalCommerceWorkflow
-        activeProject={activeProject}
-        marketplace="ETSY"
-        onSelectListing={onSelectListing}
-        onShowToast={onShowToast}
       />
 
       <details style={{ margin: '10px 0' }}>
@@ -837,6 +840,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
           <MasterKeywordTable marketplace="ETSY" activeProjectId={activeProject?.id || null} onShowToast={onShowToast} />
         </div>
       )}
+      </details>
 
 
       {/* Unified IP Gate Modal */}

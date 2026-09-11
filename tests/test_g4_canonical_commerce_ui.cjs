@@ -63,6 +63,7 @@ const assert = require('assert');
     'listing-assisted Product Truth must be integrated into the authenticated workflow');
   check(document.body.textContent.includes('Theo keyword đầu vào'), 'AUTO listing language must be visible');
   check(document.body.textContent.includes('Luồng dừng ở NEEDS_QA'), 'workflow must stop at NEEDS_QA');
+  check(document.querySelector('[data-testid="canonical-next-action"]'), 'workflow must expose one concrete next action');
   check(document.body.textContent.includes('trạng thái này không chặn luồng R3'),
     'legacy EVIDENCE_INTAKE must be explained as non-blocking for canonical R3');
 

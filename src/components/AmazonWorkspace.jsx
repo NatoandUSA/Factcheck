@@ -273,7 +273,7 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
         {activeProject && (
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', background: '#0284c7', color: '#fff', padding: '6px 14px', borderRadius: '10px', fontSize: '0.82rem', fontWeight: 800 }}>
             <span>📌 Active Project #{activeProject.id}: <u style={{ textUnderlineOffset: '3px' }}>{activeProject.state}</u></span>
-            {activeProject.state === 'EVIDENCE_INTAKE' && <span style={{ fontSize: '0.72rem' }}>Accept evidence ở Gate bên dưới</span>}
+            {activeProject.state === 'EVIDENCE_INTAKE' && <span style={{ fontSize: '0.72rem' }}>State legacy — không chặn luồng Canonical R3</span>}
             {activeProject.state === 'RESEARCH_ACCEPTED' && (
               <button onClick={() => handleTransition('DNA_ACCEPTED')} style={{ background: '#fff', color: '#0284c7', border: 'none', padding: '3px 10px', borderRadius: '6px', cursor: 'pointer', fontWeight: 800 }}>
                 Accept DNA →
@@ -290,6 +290,15 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
 
       {!activeProject && <ProjectSetupCard marketplace="AMAZON" category={selectedCategory} seedPhrase={seedPhrase} onCreated={handleProjectCreated} onShowToast={onShowToast} />}
 
+      <CanonicalCommerceWorkflow
+        activeProject={activeProject}
+        marketplace="AMAZON"
+        onSelectListing={onSelectListing}
+        onShowToast={onShowToast}
+      />
+
+      <details data-testid="amazon-optional-tools" style={{ margin: '10px 0', border: '1px solid #cbd5e1', borderRadius: '12px', padding: '12px', background: '#f8fafc' }}>
+        <summary style={{ cursor: 'pointer', fontWeight: 800, color: '#475569' }}>Công cụ nghiên cứu cũ / bổ sung (tùy chọn — không cần để chạy luồng chính)</summary>
       <SmartPullAnalyticsBar
         marketplace="AMAZON"
         activeProjectId={activeProject?.id || null}
@@ -299,13 +308,6 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
           if (seed) setSeedPhrase(seed);
           setActiveStage('workflow');
         }}
-      />
-
-      <CanonicalCommerceWorkflow
-        activeProject={activeProject}
-        marketplace="AMAZON"
-        onSelectListing={onSelectListing}
-        onShowToast={onShowToast}
       />
 
       <details style={{ margin: '10px 0' }}>
@@ -475,6 +477,7 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
           <MasterKeywordTable marketplace="AMAZON" activeProjectId={activeProject?.id || null} onShowToast={onShowToast} />
         </div>
       )}
+      </details>
 
       {/* Unified IP Gate Modal */}
       <UnifiedIpGateModal

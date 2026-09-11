@@ -64,6 +64,17 @@ const { selectAsinBatches } = require('./commerceIntelligence/asinSelector');
 const etsyResearchAdapter = require('./commerceIntelligence/etsyResearchAdapter');
 const etsyIntelligenceAdapter = require('./commerceIntelligence/etsyIntelligenceAdapter');
 
+const PROJECT_POLICY_CLASSIFICATIONS = Object.freeze({
+  CUSTOM_SWEATSHIRT: Object.freeze({ mediaClass: 'NON_MEDIA', productTypeId: 'CUSTOM_SWEATSHIRT', categoryId: 'APPAREL_SWEATSHIRT', productFamilyVersion: 'custom-sweatshirt-v1' }),
+  CUSTOM_SHIRT: Object.freeze({ mediaClass: 'NON_MEDIA', productTypeId: 'CUSTOM_SHIRT', categoryId: 'APPAREL_SHIRT', productFamilyVersion: 'custom-shirt-v1' }),
+  CUSTOM_HOODIE: Object.freeze({ mediaClass: 'NON_MEDIA', productTypeId: 'CUSTOM_HOODIE', categoryId: 'APPAREL_HOODIE', productFamilyVersion: 'custom-hoodie-v1' }),
+  CUSTOM_MUG: Object.freeze({ mediaClass: 'NON_MEDIA', productTypeId: 'CUSTOM_MUG', categoryId: 'MUG', productFamilyVersion: 'custom-mug-v1' }),
+  CUSTOM_BLANKET: Object.freeze({ mediaClass: 'NON_MEDIA', productTypeId: 'CUSTOM_BLANKET', categoryId: 'BLANKET', productFamilyVersion: 'custom-blanket-v1' }),
+  CUSTOM_NECKLACE: Object.freeze({ mediaClass: 'NON_MEDIA', productTypeId: 'CUSTOM_NECKLACE', categoryId: 'JEWELRY_NECKLACE', productFamilyVersion: 'custom-necklace-v1' }),
+  CUSTOM_EMBROIDERY: Object.freeze({ mediaClass: 'NON_MEDIA', productTypeId: 'CUSTOM_EMBROIDERY', categoryId: 'CUSTOM_EMBROIDERY', productFamilyVersion: 'custom-embroidery-v1' }),
+  CUSTOM_ACRYLIC: Object.freeze({ mediaClass: 'NON_MEDIA', productTypeId: 'CUSTOM_ACRYLIC', categoryId: 'CUSTOM_ACRYLIC', productFamilyVersion: 'custom-acrylic-v1' })
+});
+
 function rejectListingGuard(res, error) {
   const code = error?.code || 'LISTING_GUARD_UNAVAILABLE';
   const clientContractFailure = code.startsWith('CLIENT_');
@@ -1449,6 +1460,53 @@ app.post('/api/projects', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SEL
     if (this.changes !== 1) return res.status(404).json({ success: false, error: 'WORKSPACE_NOT_FOUND' });
     insertProject();
   });
+});
+
+// Legacy projects predate canonical policy bindings. Bind the missing context
+// once, in place, so staff keep their Product Truth and research lineage.
+app.patch('/api/projects/:id/policy-context', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    const projectId = Number(req.params.id);
+    if (!Number.isInteger(projectId) || projectId < 1) throw Object.assign(new Error('PROJECT_CONTEXT_REQUIRED'), { code: 'PROJECT_CONTEXT_REQUIRED', status: 400 });
+    const body = requireExactDto(req.body, new Set(['classificationKey', 'locale']));
+    const classificationKey = String(body.classificationKey || '').trim().toUpperCase();
+    const locale = String(body.locale || '').trim();
+    const classification = PROJECT_POLICY_CLASSIFICATIONS[classificationKey];
+    if (!classification) throw Object.assign(new Error('UNSUPPORTED_PROJECT_CLASSIFICATION'), {
+      code: 'UNSUPPORTED_PROJECT_CLASSIFICATION', status: 400,
+      details: { allowedClassifications: Object.keys(PROJECT_POLICY_CLASSIFICATIONS) }
+    });
+    if (!['en-US', 'es-US'].includes(locale)) throw Object.assign(new Error('UNSUPPORTED_LISTING_LOCALE'), { code: 'UNSUPPORTED_LISTING_LOCALE', status: 400 });
+    const project = await new Promise((resolve, reject) => db.get(`SELECT * FROM research_projects
+      WHERE id=? AND tenant_id=? AND workspace_id=? AND marketplace=?`,
+    [projectId, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+    (error, row) => error ? reject(error) : resolve(row || null)));
+    if (!project) throw Object.assign(new Error('PROJECT_NOT_FOUND'), { code: 'PROJECT_NOT_FOUND', status: 404 });
+    const fields = ['locale', 'media_class', 'product_type_id', 'category_id', 'product_family_version'];
+    const present = fields.filter(field => String(project[field] || '').trim());
+    const requested = { locale, media_class: classification.mediaClass, product_type_id: classification.productTypeId,
+      category_id: classification.categoryId, product_family_version: classification.productFamilyVersion };
+    if (present.length === fields.length) {
+      const matches = fields.every(field => project[field] === requested[field]);
+      if (!matches) throw Object.assign(new Error('PROJECT_POLICY_CONTEXT_ALREADY_BOUND'), { code: 'PROJECT_POLICY_CONTEXT_ALREADY_BOUND', status: 409 });
+      return res.json({ success: true, projectId, policyContextState: 'COMPLETE', policyContext: requested, replay: true });
+    }
+    if (present.length) throw Object.assign(new Error('PARTIAL_PROJECT_POLICY_CONTEXT_REQUIRES_REVIEW'), {
+      code: 'PARTIAL_PROJECT_POLICY_CONTEXT_REQUIRES_REVIEW', status: 409, details: { present, missing: fields.filter(field => !present.includes(field)) }
+    });
+    const update = await new Promise((resolve, reject) => db.run(`UPDATE research_projects SET
+      locale=?,media_class=?,product_type_id=?,category_id=?,product_family_version=?,updated_at=CURRENT_TIMESTAMP
+      WHERE id=? AND tenant_id=? AND workspace_id=? AND marketplace=?
+        AND locale IS NULL AND media_class IS NULL AND product_type_id IS NULL AND category_id IS NULL AND product_family_version IS NULL`,
+    [locale, classification.mediaClass, classification.productTypeId, classification.categoryId, classification.productFamilyVersion,
+      projectId, req.user.tenantId, req.user.workspaceId, req.user.marketplace],
+    function onUpdate(error) { return error ? reject(error) : resolve(this.changes); }));
+    if (update !== 1) throw Object.assign(new Error('PROJECT_POLICY_CONTEXT_WRITE_CONFLICT'), { code: 'PROJECT_POLICY_CONTEXT_WRITE_CONFLICT', status: 409 });
+    db.run(`INSERT INTO audit_events (tenant_id,actor_id,workspace_id,marketplace,action,resource_type,resource_id,outcome,metadata)
+      VALUES (?,?,?,?,?,?,?,?,?)`, [req.user.tenantId, req.user.userId, req.user.workspaceId, req.user.marketplace,
+      'project:bind-policy-context', 'research_project', String(projectId), 'SUCCESS', JSON.stringify({ classificationKey, locale })]);
+    res.json({ success: true, projectId, policyContextState: 'COMPLETE', policyContext: requested, replay: false });
+  } catch (error) { rejectRevisionStore(res, error); }
 });
 
 // Canonical project-scoped Product Truth. This axis is intentionally

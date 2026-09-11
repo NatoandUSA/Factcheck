@@ -227,10 +227,10 @@ Draft title UAT: `Collar Personalizado Para Mi Hija`.
 | Production build | PASS, 2,426 modules |
 | Real Amazon + Etsy input UAT | PASS |
 
-Full repository runner trên Windows đạt 85/87. Hai failure còn lại không nằm trong workflow sản phẩm:
+Full repository runner trên Windows hiện đạt tương đương 86/87: lỗi Git Bash drive-letter của
+`vps_platform_scripts.test.cjs` đã được sửa và test pass độc lập. Failure còn lại không nằm trong workflow sản phẩm:
 
 1. `test_runner_accounting.cjs`: Windows runner chưa theo dõi/diệt được detached descendant bằng Linux `/proc` token model.
-2. `vps_platform_scripts.test.cjs`: drive-letter path truyền vào Git Bash; test đã được sửa dùng stdin và hiện pass độc lập.
 
 CI Linux phải chạy lại để xác nhận canonical total. Không được đổi hai failure hạ tầng thành tuyên bố “workflow fail”.
 

@@ -15,6 +15,12 @@ const DIGITAL_FACT_FIELDS = [
   ['language', 'Ngôn ngữ sản phẩm']
 ];
 const FACT_FIELDS = [...CORE_FACT_FIELDS, ...DIGITAL_FACT_FIELDS];
+const POLICY_CHOICES = Object.freeze([
+  ['CUSTOM_NECKLACE', 'Custom Jewelry / Necklace'], ['CUSTOM_EMBROIDERY', 'Custom Embroidery'],
+  ['CUSTOM_ACRYLIC', 'Custom Acrylic'], ['CUSTOM_BLANKET', 'Custom Blanket'],
+  ['CUSTOM_SWEATSHIRT', 'Custom Sweatshirt'], ['CUSTOM_SHIRT', 'Custom Shirt'],
+  ['CUSTOM_HOODIE', 'Custom Hoodie'], ['CUSTOM_MUG', 'Custom Mug']
+]);
 
 const emptyFacts = Object.fromEntries(FACT_FIELDS.map(([key]) => [key, '']));
 const uuid = () => globalThis.crypto?.randomUUID?.() || `${Date.now().toString(16)}-0000-4000-8000-${Math.random().toString(16).slice(2, 14).padEnd(12, '0')}`;
@@ -87,6 +93,9 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
   const [submissionNotes, setSubmissionNotes] = useState('');
   const [externalReference, setExternalReference] = useState('');
   const [submissionConfirmed, setSubmissionConfirmed] = useState(false);
+  const [policyContext, setPolicyContext] = useState(null);
+  const [policyClassification, setPolicyClassification] = useState('CUSTOM_NECKLACE');
+  const [policyLocale, setPolicyLocale] = useState('en-US');
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
 
@@ -128,6 +137,14 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
       for (const [key, entry] of Object.entries(revision.snapshot.asserted || {})) hydrated[key] = typeof entry.value === 'string' ? entry.value : JSON.stringify(entry.value);
       setFacts(hydrated);
       setTruthNotes(revision.snapshot.notes || '');
+      const productWords = `${hydrated.productType} ${hydrated.productName} ${hydrated.category}`.toLowerCase();
+      const suggested = productWords.includes('embroider') ? 'CUSTOM_EMBROIDERY'
+        : productWords.includes('acrylic') ? 'CUSTOM_ACRYLIC'
+          : productWords.includes('blanket') ? 'CUSTOM_BLANKET'
+            : productWords.includes('hoodie') ? 'CUSTOM_HOODIE'
+              : productWords.includes('shirt') ? 'CUSTOM_SHIRT'
+                : productWords.includes('mug') ? 'CUSTOM_MUG' : 'CUSTOM_NECKLACE';
+      setPolicyClassification(suggested);
     } else {
       setFacts(emptyFacts);
       setTruthNotes('');
@@ -138,6 +155,12 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
     setFile(null); setFilePreview(null); setIntelligencePreview(null); setDraft(null); setError('');
     setListingSource(''); setListingHtmlFile(null); setSameSourceConfirmed(false); setListingFactPreview(null);
     setKind(marketplace === 'AMAZON' ? 'AMAZON_CEREBRO' : 'ETSY_SEARCH');
+    setPolicyContext(activeProject ? {
+      locale: activeProject.locale, media_class: activeProject.media_class,
+      product_type_id: activeProject.product_type_id, category_id: activeProject.category_id,
+      product_family_version: activeProject.product_family_version
+    } : null);
+    setPolicyLocale(activeProject?.locale || (/\b(para|hija|regalo|collar)\b/i.test(activeProject?.seed_phrase || '') ? 'es-US' : 'en-US'));
     if (projectId) refresh().catch(reportError); else { setState(null); setTruthRevisions([]); setListingQueue([]); }
   }, [projectId, marketplace]);
 
@@ -240,6 +263,15 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
     setDraft(result); notify('Đã tạo draft zero-write; hãy đọc và sửa trước khi lưu.');
   });
 
+  const savePolicyContext = () => run('policy-context', async () => {
+    const result = await api(`/api/projects/${projectId}/policy-context`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ classificationKey: policyClassification, locale: policyLocale })
+    });
+    setPolicyContext(result.policyContext);
+    notify('Đã liên kết phân loại/policy cho project cũ; giữ nguyên toàn bộ Product Truth và research.');
+  });
+
   const updateDraft = (key, value) => setDraft(previous => ({ ...previous, content: { ...previous.content, [key]: value } }));
   const saveDraft = () => run('save-draft', async () => {
     if (!draft?.content) throw new Error('Chưa có draft để lưu.');
@@ -302,7 +334,11 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
   const researchReady = Boolean(head(state, 'researchSnapshotId'));
   const truthReady = Boolean(head(state, 'productTruthRevisionId'));
   const intelligenceReady = Boolean(head(state, 'intelligenceSnapshotId'));
-  const nextAction = !importCoverageReady
+  const policyReady = ['locale', 'media_class', 'product_type_id', 'category_id', 'product_family_version']
+    .every(field => String(policyContext?.[field] || '').trim());
+  const nextAction = !policyReady
+    ? 'Bước 0B: xác nhận loại sản phẩm và ngôn ngữ cho project cũ'
+    : !importCoverageReady
     ? `Bước 1A: chọn và preview ${marketplace === 'AMAZON' ? 'file Cerebro' : 'CSV Etsy'}`
     : !researchReady
       ? 'Bước 1C: chọn nguồn đã import và khóa Research Snapshot'
@@ -331,6 +367,22 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
       </div>}
     </div>
     {error && <div role="alert" style={{ background: '#fef2f2', border: '1px solid #fca5a5', color: '#991b1b', padding: 10, borderRadius: 8 }}>{error}</div>}
+
+    {!policyReady && <section data-testid="legacy-policy-context-recovery" style={{ border: '2px solid #f59e0b', borderRadius: 12, padding: 14, background: '#fffbeb' }}>
+      <b>0B. Xác nhận phân loại cho project cũ — chỉ làm một lần</b>
+      <p style={{ margin: '6px 0 10px', color: '#78350f', fontSize: '.8rem' }}>
+        Project được tạo trước R3 nên thiếu mã policy. Chọn loại sản phẩm và ngôn ngữ; thao tác này không xóa hay tạo lại Product Truth, research hoặc intelligence.
+      </p>
+      <div style={{ display: 'flex', gap: 9, flexWrap: 'wrap', alignItems: 'center' }}>
+        <label>Loại sản phẩm {' '}<select aria-label="Phân loại project cũ" value={policyClassification} onChange={event => setPolicyClassification(event.target.value)}>
+          {POLICY_CHOICES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        </select></label>
+        <label>Ngôn ngữ listing {' '}<select aria-label="Ngôn ngữ policy project" value={policyLocale} onChange={event => setPolicyLocale(event.target.value)}>
+          <option value="en-US">English (US)</option><option value="es-US">Español (US)</option>
+        </select></label>
+        <ActionButton accent="#b45309" disabled={busy} onClick={savePolicyContext}>Lưu và tiếp tục workflow</ActionButton>
+      </div>
+    </section>}
 
     <Step number="1" title="Nạp keyword và dữ liệu thị trường (độc lập Product Truth)" accent={accent} done={importCoverageReady}>
       {marketplace === 'AMAZON' && <div style={{ marginBottom: 10, padding: 10, borderRadius: 8, background: '#eff6ff', color: '#1e3a8a', fontSize: '.8rem' }}>
@@ -450,7 +502,7 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
     </Step>
 
     <Step number="4" title="Draft hoàn chỉnh và bộ prompt ảnh" accent={accent} done={Boolean(listing)}>
-      <ActionButton accent={accent} disabled={!latestIntelligence || busy} onClick={previewDraft}>4A. Tạo / làm mới draft zero-write</ActionButton>
+      <ActionButton accent={accent} disabled={!latestIntelligence || !policyReady || busy} onClick={previewDraft}>4A. Tạo / làm mới draft zero-write</ActionButton>
       {listing && <div style={{ display: 'grid', gap: 9, marginTop: 12 }}>
         {marketplace === 'AMAZON' ? <>
           <label><b>Amazon Title</b><textarea value={listing.amazonTitle || ''} onChange={event => updateDraft('amazonTitle', event.target.value)} rows={2} style={{ width: '100%' }} /></label>

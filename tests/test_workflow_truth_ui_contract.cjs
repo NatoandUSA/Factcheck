@@ -8,6 +8,11 @@ const amazon = read('src/components/AmazonWorkspace.jsx');
 const app = read('src/App.jsx');
 const server = read('server/server.js');
 const pastedParser = read('server/etsyPastedSearchParser.js');
+const canonical = read('src/components/CanonicalCommerceWorkflow.jsx');
+
+assert.ok(canonical.includes('legacy-policy-context-recovery'), 'legacy projects must expose an in-place policy recovery card');
+assert.ok(canonical.includes('/policy-context'), 'policy recovery must stay project-scoped');
+assert.ok(canonical.includes('không xóa hay tạo lại Product Truth, research hoặc intelligence'), 'recovery must explain lineage preservation');
 
 for (const [name, source] of [['Etsy', etsy], ['Amazon', amazon]]) {
   assert.ok(source.includes('Active Project (bắt buộc)'), `${name} must expose an explicit project selector`);

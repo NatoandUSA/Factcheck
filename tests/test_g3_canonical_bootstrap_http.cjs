@@ -34,6 +34,33 @@ async function main() {
     return { status: response.status, body: await response.json() };
   };
 
+  const legacyProject = await request('/api/projects', 'POST', {
+    name: `Legacy Hija ${Date.now()}`, seedPhrase: 'para mi hija'
+  });
+  assert.equal(legacyProject.status, 200, JSON.stringify(legacyProject.body));
+  assert.equal(legacyProject.body.policyContextState, 'INCOMPLETE');
+  const unsupportedPolicy = await request(`/api/projects/${legacyProject.body.projectId}/policy-context`, 'PATCH', {
+    classificationKey: 'INVENTED_PRODUCT', locale: 'es-US'
+  });
+  assert.equal(unsupportedPolicy.status, 400, JSON.stringify(unsupportedPolicy.body));
+  assert.equal(unsupportedPolicy.body.error, 'UNSUPPORTED_PROJECT_CLASSIFICATION');
+  const repairedPolicy = await request(`/api/projects/${legacyProject.body.projectId}/policy-context`, 'PATCH', {
+    classificationKey: 'CUSTOM_NECKLACE', locale: 'es-US'
+  });
+  assert.equal(repairedPolicy.status, 200, JSON.stringify(repairedPolicy.body));
+  assert.equal(repairedPolicy.body.policyContext.category_id, 'JEWELRY_NECKLACE');
+  assert.equal(repairedPolicy.body.replay, false);
+  const replayedPolicy = await request(`/api/projects/${legacyProject.body.projectId}/policy-context`, 'PATCH', {
+    classificationKey: 'CUSTOM_NECKLACE', locale: 'es-US'
+  });
+  assert.equal(replayedPolicy.status, 200, JSON.stringify(replayedPolicy.body));
+  assert.equal(replayedPolicy.body.replay, true);
+  const reboundPolicy = await request(`/api/projects/${legacyProject.body.projectId}/policy-context`, 'PATCH', {
+    classificationKey: 'CUSTOM_SWEATSHIRT', locale: 'en-US'
+  });
+  assert.equal(reboundPolicy.status, 409, JSON.stringify(reboundPolicy.body));
+  assert.equal(reboundPolicy.body.error, 'PROJECT_POLICY_CONTEXT_ALREADY_BOUND');
+
   const project = await request('/api/projects', 'POST', {
     name: `G3 Hija ${Date.now()}`, seedPhrase: 'para mi hija', locale: 'en-US', mediaClass: 'NON_MEDIA',
     productTypeId: 'CUSTOM_NECKLACE', categoryId: 'JEWELRY_NECKLACE', productFamilyVersion: 'custom-necklace-v1'
@@ -183,7 +210,7 @@ async function main() {
   });
   assert.equal(forbidden.status, 400);
   assert.equal(forbidden.body.error, 'UNEXPECTED_REQUEST_FIELD');
-  console.log('G3 canonical HTTP bootstrap: 40/40 PASS');
+  console.log('G3 canonical HTTP bootstrap: legacy policy recovery + canonical draft PASS');
 }
 
 main().catch(error => { console.error(error); process.exitCode = 1; }).finally(async () => {

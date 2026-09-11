@@ -2,7 +2,7 @@
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
-const { parseEtsySearchCsv } = require('../etsyPastedSearchParser');
+const { parseEtsySearchInput } = require('../etsyPastedSearchParser');
 
 const ADAPTER_ID = 'etsy-research-snapshot-v1';
 const PARSER_ID = 'etsy-search-csv-v1';
@@ -27,10 +27,14 @@ async function buildSnapshot(imports) {
     if (row.kind !== 'ETSY_SEARCH') throw Object.assign(new Error('ETSY_IMPORT_KIND_UNSUPPORTED'), {
       code: 'ETSY_IMPORT_KIND_UNSUPPORTED', details: { importId: row.id, kind: row.kind }
     });
-    if (!/\.csv$/i.test(row.file_name) && !/^text\/csv(?:;|$)/i.test(row.media_type)) {
-      throw Object.assign(new Error('ETSY_CSV_REQUIRED'), { code: 'ETSY_CSV_REQUIRED', details: { importId: row.id } });
+    const extension = String(row.file_name || '').split('.').pop().toUpperCase();
+    const inputFormat = extension === 'CSV' ? 'CSV' : ['HTML', 'HTM'].includes(extension) ? 'HTML' : 'AUTO';
+    if (!['CSV', 'HTML'].includes(inputFormat)) {
+      throw Object.assign(new Error('ETSY_SEARCH_FILE_REQUIRED'), {
+        code: 'ETSY_SEARCH_FILE_REQUIRED', details: { importId: row.id }
+      });
     }
-    const parsed = parseEtsySearchCsv(Buffer.from(row.raw_bytes).toString('utf8'));
+    const parsed = parseEtsySearchInput(Buffer.from(row.raw_bytes).toString('utf8'), inputFormat);
     const sellers = parsed.sellers.map(seller => ({ ...seller,
       provenance: { importId: row.id, sourceRow: seller.sourceRank + 1, rawHash: row.raw_hash } }));
     observations.push(...sellers);

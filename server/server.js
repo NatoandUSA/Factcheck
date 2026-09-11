@@ -97,6 +97,20 @@ function requireExactDto(body, allowed) {
   return body;
 }
 
+// R4.3 cutover mode keeps legacy code readable for recovery while preventing
+// ordinary staff traffic from mutating a second workflow. CI for historical
+// contracts can omit the flag; W1 browser/UAT must run with it enabled.
+function denyLegacyWriteInR43(req, res, next) {
+  if (process.env.OMNI_R43_SINGLE_PATH === '1') {
+    return res.status(410).json({
+      success: false,
+      error: 'LEGACY_WRITE_ROUTE_RETIRED',
+      message: 'This legacy write route is not available in the R4.3 staff workflow.'
+    });
+  }
+  return next();
+}
+
 function revisionScope(user) {
   return Object.freeze({ tenantId: user.tenantId, workspaceId: user.workspaceId,
     marketplace: user.marketplace, actorId: user.userId, role: user.role });
@@ -313,7 +327,7 @@ const commerceResearchUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 20 * 1024 * 1024, files: 1, fields: 8 },
   fileFilter(req, file, cb) {
-    const allowed = /\.(xlsx|csv)$/i.test(file.originalname || '');
+    const allowed = /\.(xlsx|csv|html?)$/i.test(file.originalname || '');
     cb(allowed ? null : new Error('UNSUPPORTED_RESEARCH_FILE'), allowed);
   }
 });
@@ -1328,7 +1342,7 @@ app.post('/api/evidence', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SEL
 });
 
 // POST /api/evidence/:id/accept - Staff accepts research evidence (Restricted to OWNER & MANAGER)
-app.post('/api/evidence/:id/accept', requireAuth(db), requireRole(['OWNER', 'MANAGER']), (req, res) => {
+app.post('/api/evidence/:id/accept', requireAuth(db), requireRole(['OWNER', 'MANAGER']), denyLegacyWriteInR43, (req, res) => {
   const id = req.params.id;
   const now = new Date().toISOString();
 
@@ -1626,7 +1640,13 @@ function canonicalResearchFile(req, allowedFields, marketplace) {
     code: 'MARKETPLACE_IMPORT_KIND_REQUIRED', status: 400, details: { marketplace, allowedKinds }
   });
   const extension = path.extname(req.file.originalname || '').toLowerCase();
-  const mediaType = extension === '.csv' ? 'text/csv' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  const allowedExtensions = marketplace === 'AMAZON' ? ['.xlsx', '.csv'] : ['.csv', '.html', '.htm'];
+  if (!allowedExtensions.includes(extension)) throw Object.assign(new Error('MARKETPLACE_RESEARCH_FILE_TYPE_MISMATCH'), {
+    code: 'MARKETPLACE_RESEARCH_FILE_TYPE_MISMATCH', status: 400, details: { marketplace, allowedExtensions }
+  });
+  const mediaType = extension === '.csv' ? 'text/csv'
+    : ['.html', '.htm'].includes(extension) ? 'text/html'
+      : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
   return { body, kind, mediaType, rawBytes: req.file.buffer, fileName: path.basename(req.file.originalname) };
 }
 
@@ -1885,7 +1905,7 @@ app.post('/api/listings/:id/submission-requests', requireAuth(db), requireRole([
   } catch (error) { rejectRevisionStore(res, error); }
 });
 
-app.post('/api/listings/:id/submission-handoffs', requireAuth(db), requireRole(['OWNER']), async (req, res) => {
+app.post('/api/listings/:id/submission-handoffs', requireAuth(db), requireRole(['OWNER']), denyLegacyWriteInR43, async (req, res) => {
   try {
     const body = requireExactDto(req.body, new Set(['submissionRequestId', 'confirmedExternalSubmission', 'externalReference', 'notes', 'idempotencyKey']));
     assertNoClientPolicyOverrides(body);
@@ -1974,7 +1994,7 @@ app.get('/api/listings/:id/revisions/:revisionId', requireAuth(db), requireRole(
 const ALLOWED_PROJECT_TRANSITIONS = projectStates.transitions;
 
 // PATCH /api/projects/:id/transition - Server-authoritative state transition
-app.patch('/api/projects/:id/transition', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
+app.patch('/api/projects/:id/transition', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), denyLegacyWriteInR43, (req, res) => {
   const projectId = req.params.id;
   const { targetState, productTruthNotes } = req.body || {};
 
@@ -2318,7 +2338,7 @@ app.post('/api/login', (req, res) => {
 
 
 // Create a new listing (DRAFT/NEEDS_QA or IP_RISK_BLOCKED)
-app.post('/api/listings', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
+app.post('/api/listings', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), denyLegacyWriteInR43, (req, res) => {
   const { amazonTitle, etsyTitle, categoryName, projectId, stage, payload = {} } = req.body || {};
   
   // Stage 1/Stage 2 Invariant: Cannot generate listings during intake, research, DNA, or MKL freezing
@@ -2677,7 +2697,7 @@ app.put('/api/listings/:id/product-truth', requireAuth(db), requireRole(['OWNER'
 });
 
 // Approve a listing using Canonical Publish Gate (Fail-Closed Gate Authority - Protected)
-app.patch('/api/listings/:id/approve', requireAuth(db), requireRole(['OWNER', 'MANAGER']), (req, res) => {
+app.patch('/api/listings/:id/approve', requireAuth(db), requireRole(['OWNER', 'MANAGER']), denyLegacyWriteInR43, (req, res) => {
   const { id } = req.params;
 
   const { expectedVersion, productTruthNotes } = req.body || {};
@@ -3312,7 +3332,7 @@ app.post('/api/settings/llm', requireAuth(db), requireRole(['OWNER']), (req, res
 });
 
 // API: Learning Box — Analyze Amazon/Etsy URL or Competitor text & Extract Structural DNA
-app.post('/api/learning/analyze', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+app.post('/api/learning/analyze', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), denyLegacyWriteInR43, async (req, res) => {
   const { url = '', rawText = '', category = 'Custom Gift' } = req.body;
   // Marketplace is server-derived from the authenticated session, never
   // trusted from the client body (GPT PR-5 review finding P0-B1).
@@ -3479,7 +3499,7 @@ app.get('/api/learning/templates', requireAuth(db), requireRole(['OWNER', 'MANAG
 
 
 // API: Delete learned template (workspace-scoped — IDOR-safe 404 for out-of-scope IDs)
-app.delete('/api/learning/templates/:id', requireAuth(db), requireRole(['OWNER', 'MANAGER']), (req, res) => {
+app.delete('/api/learning/templates/:id', requireAuth(db), requireRole(['OWNER', 'MANAGER']), denyLegacyWriteInR43, (req, res) => {
   const { id } = req.params;
   db.run(
     "DELETE FROM learned_templates WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?",
@@ -3550,7 +3570,7 @@ app.post('/api/etsy/scan-search', requireAuth(db), requireRole(['OWNER', 'MANAGE
 });
 
 // API: ETSY Evidence Batch Learn — SEO recommendation only, not Product Truth.
-app.post('/api/etsy/batch-learn', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+app.post('/api/etsy/batch-learn', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), denyLegacyWriteInR43, async (req, res) => {
   if (req.user.marketplace !== 'ETSY') {
     return res.status(403).json({ success: false, error: 'MARKETPLACE_MISMATCH', message: 'This endpoint requires an Etsy workspace session.' });
   }
@@ -3809,7 +3829,7 @@ app.post('/api/etsy/feed-search-results-file', requireAuth(db), requireRole(['OW
 });
 
 // POST /api/research/smart-pull - Project-bound market evidence analysis.
-app.post('/api/research/smart-pull', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+app.post('/api/research/smart-pull', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), denyLegacyWriteInR43, async (req, res) => {
   const { query, unitCost, projectId } = req.body || {};
   const rawInput = typeof query === 'string' ? query.trim() : '';
   if (!rawInput) {
@@ -3966,7 +3986,7 @@ app.post('/api/research/smart-pull', requireAuth(db), requireRole(['OWNER', 'MAN
 });
 
 // API: Amazon Quick Draft (Works directly from Seed Phrase, 10 ASINs, or Cerebro)
-app.post('/api/amazon/quick-draft', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+app.post('/api/amazon/quick-draft', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), denyLegacyWriteInR43, async (req, res) => {
   if (req.user.marketplace !== 'AMAZON') {
     return res.status(403).json({ success: false, error: 'MARKETPLACE_MISMATCH' });
   }
@@ -4607,8 +4627,8 @@ const handleReportUpload = async (req, res) => {
   }
 };
 
-app.post('/api/upload-h10', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), upload.any(), handleReportUpload);
-app.post('/api/upload-trends', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), upload.any(), handleReportUpload);
+app.post('/api/upload-h10', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), denyLegacyWriteInR43, upload.any(), handleReportUpload);
+app.post('/api/upload-trends', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), denyLegacyWriteInR43, upload.any(), handleReportUpload);
 
 // API: Batch a pasted ASIN list into Cerebro-ready groups of 10 (AsinBatcherWidget's
 // manual-paste flow — separate from /api/upload-h10's file-upload flow)
@@ -4702,7 +4722,7 @@ app.get('/api/trends', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER
 });
 
 // API: Instantly Draft listing for a specific trend using Multi-LLM Gateway (Gemini / GPT-4o / Claude) + Few-Shot Learning
-app.post('/api/trends/:id/draft', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+app.post('/api/trends/:id/draft', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), denyLegacyWriteInR43, async (req, res) => {
   const { id } = req.params;
   const { projectId } = req.body || {};
   try { assertNoClientPolicyOverrides(req.body || {}); } catch (error) { return rejectListingGuard(res, error); }

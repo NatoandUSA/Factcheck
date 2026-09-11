@@ -79,9 +79,9 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
   const [listingHtmlFile, setListingHtmlFile] = useState(null);
   const [sameSourceConfirmed, setSameSourceConfirmed] = useState(false);
   const [listingFactPreview, setListingFactPreview] = useState(null);
-  const [file, setFile] = useState(null);
-  const [kind, setKind] = useState(marketplace === 'AMAZON' ? 'AMAZON_CEREBRO' : 'ETSY_SEARCH');
-  const [filePreview, setFilePreview] = useState(null);
+  const [files, setFiles] = useState([]);
+  const [kind, setKind] = useState(marketplace === 'AMAZON' ? 'AMAZON_XRAY' : 'ETSY_SEARCH');
+  const [filePreviews, setFilePreviews] = useState([]);
   const [selectedImports, setSelectedImports] = useState([]);
   const [language, setLanguage] = useState('AUTO');
   const [intelligencePreview, setIntelligencePreview] = useState(null);
@@ -89,10 +89,6 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
   const [listingQueue, setListingQueue] = useState([]);
   const [reviewReason, setReviewReason] = useState('');
   const [reviewPackages, setReviewPackages] = useState({});
-  const [submissionRequestNotes, setSubmissionRequestNotes] = useState('');
-  const [submissionNotes, setSubmissionNotes] = useState('');
-  const [externalReference, setExternalReference] = useState('');
-  const [submissionConfirmed, setSubmissionConfirmed] = useState(false);
   const [policyContext, setPolicyContext] = useState(null);
   const [policyClassification, setPolicyClassification] = useState('CUSTOM_NECKLACE');
   const [policyLocale, setPolicyLocale] = useState('en-US');
@@ -101,8 +97,6 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
 
   const currentTruth = truthRevisions.find(item => Number(item.id) === Number(head(state, 'productTruthRevisionId'))) || truthRevisions[0];
   const isManager = ['OWNER', 'MANAGER'].includes(user?.role);
-  const isOwner = user?.role === 'OWNER';
-  const isSeller = user?.role === 'SELLER';
   const imports = state?.imports || [];
   const latestIntelligence = state?.intelligenceSnapshots?.[0];
 
@@ -113,7 +107,7 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
     const message = errorValue?.code === 'UNVERIFIED_OUTPUT_CLAIM' && claimSummary
       ? `Draft có claim chưa được Product Truth chứng thực — ${claimSummary}`
       : errorValue?.code === 'CEREBRO_KEYWORDS_REQUIRED'
-        ? 'Cần import Cerebro để phân bổ keyword và tạo draft. Xray chỉ là bước tùy chọn để chọn batch ASIN.'
+        ? 'Cần import Cerebro để phân bổ keyword và tạo draft. Xray là bước upstream khuyến nghị để chọn các nhóm ASIN, nhưng Cerebro có sẵn được import độc lập.'
         : errorValue?.message || 'UNKNOWN_ERROR';
     setError(message);
     notify(`Không thể hoàn tất: ${message}`, 'error');
@@ -152,9 +146,9 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
   };
 
   useEffect(() => {
-    setFile(null); setFilePreview(null); setIntelligencePreview(null); setDraft(null); setError('');
+    setFiles([]); setFilePreviews([]); setIntelligencePreview(null); setDraft(null); setError('');
     setListingSource(''); setListingHtmlFile(null); setSameSourceConfirmed(false); setListingFactPreview(null);
-    setKind(marketplace === 'AMAZON' ? 'AMAZON_CEREBRO' : 'ETSY_SEARCH');
+    setKind(marketplace === 'AMAZON' ? 'AMAZON_XRAY' : 'ETSY_SEARCH');
     setPolicyContext(activeProject ? {
       locale: activeProject.locale, media_class: activeProject.media_class,
       product_type_id: activeProject.product_type_id, category_id: activeProject.category_id,
@@ -169,18 +163,42 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
     try { return await operation(); } catch (caught) { reportError(caught); return null; } finally { setBusy(''); }
   };
 
-  const upload = async confirm => run(confirm ? 'import' : 'preview-file', async () => {
-    if (!file) throw new Error('Hãy chọn file trước.');
-    const form = new FormData(); form.append('kind', kind);
-    if (confirm) form.append('idempotencyKey', uuid());
-    form.append('researchFile', file);
-    const result = await api(`/api/projects/${projectId}/research-imports${confirm ? '' : '/preview'}`, { method: 'POST', body: form });
-    setFilePreview(result);
-    if (confirm) {
-      notify(`Đã lưu file nguồn #${result.researchImportId}; raw hash được khóa.`);
-      await refresh();
-      setSelectedImports(previous => [...new Set([...previous, result.researchImportId])]);
+  const chooseFiles = selected => {
+    setFiles(Array.from(selected || []));
+    setFilePreviews([]);
+  };
+
+  const upload = async confirm => run(confirm ? 'import-group' : 'preview-group', async () => {
+    if (!files.length) throw new Error('Hãy chọn ít nhất một file trước.');
+    const eligible = confirm ? filePreviews.filter(item => item.result?.zeroWrite && !item.error) : files.map(file => ({ file }));
+    if (confirm && !eligible.length) throw new Error('Không có file preview hợp lệ để xác nhận.');
+    const results = [];
+    const committedIds = [];
+    for (const entry of eligible) {
+      const selectedFile = entry.file;
+      const form = new FormData(); form.append('kind', kind);
+      if (confirm) form.append('idempotencyKey', uuid());
+      form.append('researchFile', selectedFile);
+      try {
+        const result = await api(`/api/projects/${projectId}/research-imports${confirm ? '' : '/preview'}`,
+          { method: 'POST', body: form });
+        results.push({ file: selectedFile, result });
+        if (confirm) committedIds.push(result.researchImportId);
+      } catch (caught) {
+        results.push({ file: selectedFile, error: caught.message || 'FILE_PROCESSING_FAILED', code: caught.code });
+      }
     }
+    setFilePreviews(results);
+    if (confirm) {
+      await refresh();
+      setSelectedImports(previous => [...new Set([...previous, ...committedIds])]);
+      notify(`Đã lưu ${committedIds.length}/${eligible.length} file hợp lệ; mỗi file có raw hash và accounting riêng.`,
+        committedIds.length === eligible.length ? 'success' : 'error');
+    } else {
+      const valid = results.filter(item => item.result?.zeroWrite).length;
+      notify(`Preview zero-write: ${valid}/${files.length} file hợp lệ.`, valid === files.length ? 'success' : 'error');
+    }
+    return results;
   });
 
   const createResearchSnapshot = () => run('snapshot', async () => {
@@ -304,27 +322,6 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
     notify(`Đã tải exact review package của listing #${listingId}.`); return result;
   });
 
-  const requestSubmission = listingId => run('submission-request', async () => {
-    if (!submissionRequestNotes.trim()) throw new Error('Seller cần ghi chú yêu cầu submit.');
-    const result = await api(`/api/listings/${listingId}/submission-requests`, jsonOptions({
-      notes: submissionRequestNotes.trim(), idempotencyKey: uuid()
-    }));
-    notify(`Đã tạo yêu cầu submit #${result.submissionRequestId}; Owner phải xác nhận exact package.`);
-    setSubmissionRequestNotes(''); await refresh(); return result;
-  });
-
-  const recordSubmission = listingId => run('submission-handoff', async () => {
-    if (!submissionConfirmed) throw new Error('Chỉ xác nhận sau khi Seller đã thực sự submit bên ngoài OmniSeller.');
-    if (!submissionNotes.trim()) throw new Error('Cần ghi chú bàn giao submission.');
-    const result = await api(`/api/listings/${listingId}/submission-handoffs`, jsonOptions({
-      submissionRequestId: listingQueue.find(item => item.id === listingId)?.submissionRequestId,
-      confirmedExternalSubmission: true, externalReference: externalReference.trim(),
-      notes: submissionNotes.trim(), idempotencyKey: uuid()
-    }));
-    notify(`Đã ghi nhận listing #${listingId} là SUBMITTED; OmniSeller không tự đăng lên sàn.`);
-    setSubmissionConfirmed(false); setSubmissionNotes(''); setExternalReference(''); await refresh(); return result;
-  });
-
   const previewOutput = intelligencePreview?.output;
   const listing = draft?.content;
   const prompts = listing?.imagePrompts?.prompts || listing?.imagePrompts || [];
@@ -339,7 +336,7 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
   const nextAction = !policyReady
     ? 'Bước 0B: xác nhận loại sản phẩm và ngôn ngữ cho project cũ'
     : !importCoverageReady
-    ? `Bước 1A: chọn và preview ${marketplace === 'AMAZON' ? 'file Cerebro' : 'CSV Etsy'}`
+    ? `Bước 1A: chọn và preview ${marketplace === 'AMAZON' ? 'Xray hoặc Cerebro đang có' : 'CSV/HTML Etsy'}`
     : !researchReady
       ? 'Bước 1C: chọn nguồn đã import và khóa Research Snapshot'
       : !truthReady
@@ -355,7 +352,7 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
   return <div data-testid={`canonical-commerce-${marketplace.toLowerCase()}`} style={{ border: `2px solid ${accent}`, borderRadius: 16, padding: 18, background: '#f8fafc', display: 'grid', gap: 14 }}>
     <div>
       <h2 style={{ margin: 0, color: accent }}>Luồng Staff Canonical — {marketplace} US</h2>
-      <p style={{ margin: '6px 0 0', color: '#475569' }}>Import dữ liệu thật → khóa bằng hash → Product Truth → intelligence → draft + prompt ảnh. Luồng dừng ở <b>NEEDS_QA</b>, không tự đăng.</p>
+      <p style={{ margin: '6px 0 0', color: '#475569' }}>Research/Master KW và Product Truth chạy song song → safe compose → draft + prompt ảnh. Luồng dừng ở <b>NEEDS_QA</b> trong W1, không tự đăng.</p>
       <div data-testid="canonical-next-action" style={{ marginTop: 10, padding: '10px 12px', borderRadius: 9, background: '#ecfeff', border: '1px solid #67e8f9', color: '#164e63', fontWeight: 800 }}>
         Việc cần làm tiếp: {nextAction}
         <div style={{ marginTop: 4, fontSize: '.72rem', fontWeight: 600 }}>
@@ -386,30 +383,40 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
 
     <Step number="1" title="Nạp keyword và dữ liệu thị trường (độc lập Product Truth)" accent={accent} done={importCoverageReady}>
       {marketplace === 'AMAZON' && <div style={{ marginBottom: 10, padding: 10, borderRadius: 8, background: '#eff6ff', color: '#1e3a8a', fontSize: '.8rem' }}>
-        <b>Luồng đúng:</b> Xray <b>tùy chọn</b> → lấy các batch tối đa 10 ASIN để chạy Helium 10 → import Cerebro <b>bắt buộc cho phân bổ keyword/draft</b>.
-        Product Truth không cần Xray hoặc Cerebro và có thể nhập/lưu riêng ở Bước 2.
+        <b>Luồng chuẩn:</b> Seed → Xray → các nhóm ASIN gợi ý (tối đa 10 ASIN/nhóm, được sửa tự do) → Helium 10 Cerebro → Master KW.
+        Nếu staff đã có file Cerebro hợp lệ thì được import trực tiếp, không cần chứng minh file thuộc batch nào. Product Truth chạy song song và chỉ bắt buộc tại ranh giới tạo copy.
       </div>}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
-        {marketplace === 'AMAZON' && <select aria-label="Loại file research" value={kind} onChange={event => { setKind(event.target.value); setFilePreview(null); }}>
+        {marketplace === 'AMAZON' && <select aria-label="Loại file research" value={kind} onChange={event => { setKind(event.target.value); setFiles([]); setFilePreviews([]); }}>
           <option value="AMAZON_CEREBRO">Cerebro keywords</option><option value="AMAZON_XRAY">Xray competitors</option>
         </select>}
-        <input aria-label="File research" type="file" accept={marketplace === 'AMAZON' ? '.xlsx,.csv' : '.csv'} onChange={event => { setFile(event.target.files?.[0] || null); setFilePreview(null); }} />
-        <ActionButton accent={accent} disabled={!file || busy} onClick={() => upload(false)}>1A. Preview zero-write</ActionButton>
-        <ActionButton accent={accent} disabled={!filePreview?.zeroWrite || busy} onClick={() => upload(true)}>1B. Xác nhận import</ActionButton>
+        <input aria-label="File research" type="file" multiple
+          accept={marketplace === 'AMAZON' ? '.xlsx,.csv' : '.csv,.html,.htm,text/csv,text/html'}
+          onChange={event => chooseFiles(event.target.files)} />
+        <ActionButton accent={accent} disabled={!files.length || busy} onClick={() => upload(false)}>1A. Preview {files.length || ''} file zero-write</ActionButton>
+        <ActionButton accent={accent} disabled={!filePreviews.some(item => item.result?.zeroWrite) || busy} onClick={() => upload(true)}>
+          1B. Xác nhận {filePreviews.filter(item => item.result?.zeroWrite).length || ''} file hợp lệ
+        </ActionButton>
       </div>
-      {filePreview && <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 8, marginTop: 10 }}>
-        <Metric label="FILE" value={filePreview.fileName} /><Metric label="RAW SHA-256" value={filePreview.rawHash} />
-        <Metric label="ROWS" value={filePreview.accounting?.sourceRowCount ?? filePreview.accounting?.inputRowCount} />
-        <Metric label="UNCONSUMED" value={filePreview.accounting?.unconsumedRowCount ?? 0} />
+      {filePreviews.length > 0 && <div data-testid="multi-file-preview-results" style={{ display: 'grid', gap: 8, marginTop: 10 }}>
+        {filePreviews.map((entry, index) => entry.error
+          ? <div key={`${entry.file.name}-${index}`} role="alert" style={{ border: '1px solid #fca5a5', background: '#fef2f2', color: '#991b1b', borderRadius: 8, padding: 9 }}>
+              <b>{entry.file.name}</b> — {entry.code ? `${entry.code}: ` : ''}{entry.error}
+            </div>
+          : <div key={`${entry.file.name}-${entry.result.rawHash || 'committed'}-${index}`} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 8 }}>
+              <Metric label="FILE" value={entry.result.fileName} /><Metric label="RAW SHA-256" value={entry.result.rawHash} />
+              <Metric label="ROWS" value={entry.result.accounting?.sourceRowCount ?? entry.result.accounting?.inputRowCount} />
+              <Metric label="UNCONSUMED" value={entry.result.accounting?.unconsumedRowCount ?? 0} />
+            </div>)}
       </div>}
-      {marketplace === 'AMAZON' && filePreview?.asinSelection?.batches?.length > 0 && <div style={{ marginTop: 12, border: '1px solid #93c5fd', borderRadius: 9, padding: 10, background: '#fff' }}>
+      {marketplace === 'AMAZON' && filePreviews.some(entry => entry.result?.asinSelection?.batches?.length > 0) && <div style={{ marginTop: 12, border: '1px solid #93c5fd', borderRadius: 9, padding: 10, background: '#fff' }}>
         <b>Batch ASIN để dán vào Helium 10 Cerebro</b>
-        <div style={{ fontSize: '.76rem', color: '#475569', marginTop: 3 }}>Đã chọn {filePreview.asinSelection.acceptedCount} ASIN; mỗi batch tối đa 10, không tự điền ASIN giả.</div>
-        {filePreview.asinSelection.batches.map(batch => <div key={batch.batchNumber} style={{ marginTop: 8, padding: 8, borderRadius: 7, background: '#f8fafc' }}>
+        <div style={{ fontSize: '.76rem', color: '#475569', marginTop: 3 }}>Preview gợi ý theo từng Xray; đây không phải batch lock và nhân viên có thể chọn lại ở W2.</div>
+        {filePreviews.flatMap((entry, fileIndex) => (entry.result?.asinSelection?.batches || []).map(batch => <div key={`${fileIndex}-${batch.batchNumber}`} style={{ marginTop: 8, padding: 8, borderRadius: 7, background: '#f8fafc' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}><b>Batch {batch.batchNumber} ({batch.size})</b>
             <button type="button" onClick={() => navigator.clipboard?.writeText(batch.cerebroInput)}>Copy ASIN</button></div>
           <code style={{ display: 'block', marginTop: 4, overflowWrap: 'anywhere' }}>{batch.cerebroInput}</code>
-        </div>)}
+        </div>))}
       </div>}
       {imports.length > 0 && <div style={{ marginTop: 12 }}><b>File đã lưu — chọn nguồn cho snapshot:</b>
         {imports.map(item => <label key={item.id} style={{ display: 'block', marginTop: 6 }}>
@@ -515,7 +522,7 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
           <label><b>PPC targeting — có thể chứa keyword claim chưa xác minh, không phải copy hiển thị</b><textarea value={(listing.ppcKeywords || []).map(item => typeof item === 'string' ? item : item.phrase || '').join('\n')} onChange={event => updateDraft('ppcKeywords', event.target.value.split('\n').map(phrase => phrase.trim()).filter(Boolean))} rows={6} style={{ width: '100%' }} /></label>
         </> : <>
           <label><b>Etsy Title ({Array.from(listing.etsyTitle || '').length}/140)</b><textarea value={listing.etsyTitle || ''} onChange={event => updateDraft('etsyTitle', event.target.value)} rows={2} style={{ width: '100%' }} /></label>
-          <label><b>13 Tags — mỗi dòng một tag</b><textarea value={(listing.etsyTags || []).join('\n')} onChange={event => updateDraft('etsyTags', event.target.value.split('\n').map(item => item.trim()).filter(Boolean).slice(0, 13))} rows={7} style={{ width: '100%' }} /></label>
+          <label><b>Tối đa 13 Tags an toàn — mỗi dòng một tag</b><textarea value={(listing.etsyTags || []).join('\n')} onChange={event => updateDraft('etsyTags', event.target.value.split('\n').map(item => item.trim()).filter(Boolean).slice(0, 13))} rows={7} style={{ width: '100%' }} /></label>
           <label><b>Description</b><textarea value={listing.etsyDescription || ''} onChange={event => updateDraft('etsyDescription', event.target.value)} rows={7} style={{ width: '100%' }} /></label>
           <label><b>Item Highlights</b><textarea value={listing.itemHighlights || ''} onChange={event => updateDraft('itemHighlights', event.target.value)} rows={3} style={{ width: '100%' }} /></label>
           <label><b>Category</b><input value={listing.categoryName || ''} onChange={event => updateDraft('categoryName', event.target.value)} style={{ width: '100%' }} /></label>
@@ -531,8 +538,8 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
       </div>}
     </Step>
 
-    <Step number="5" title="Manager QA và bàn giao submission thủ công" accent={accent} done={listingQueue.some(item => item.status === 'SUBMITTED')}>
-      <p style={{ marginTop: 0, color: '#475569' }}>Manager phải mở và đọc exact package trước khi duyệt. Seller chỉ tạo yêu cầu submit; Owner đối chiếu package, thực hiện/kiểm tra submission bên ngoài rồi mới ghi nhận <b>SUBMITTED</b>. OmniSeller không gọi API đăng sàn ở phase này.</p>
+    <Step number="5" title="Manager QA — submission authority triển khai ở W5" accent={accent} done={listingQueue.some(item => item.status === 'MANAGER_APPROVED')}>
+      <p style={{ marginTop: 0, color: '#475569' }}>Manager phải mở và đọc exact package trước khi duyệt. W1 không hiển thị writer submission cũ. Chuỗi W5 đã khóa là: Seller yêu cầu → Owner authorize exact package → exact export → Seller/operator submit thủ công → <b>OPERATOR_REPORTED_SUBMITTED</b>.</p>
       {isManager && <label style={{ display: 'grid', gap: 4, marginBottom: 10, fontWeight: 800, fontSize: '.78rem' }}>Lý do review
         <textarea rows={2} value={reviewReason} onChange={event => setReviewReason(event.target.value)} placeholder="Đã kiểm Product Truth, claim, IP, policy và chất lượng copy..." />
       </label>}
@@ -549,26 +556,12 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
           <details><summary>Toàn bộ listing content</summary><pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{JSON.stringify(reviewPackages[item.id].content, null, 2)}</pre></details>
           <details><summary>Dependency manifest + validation accounting</summary><pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{JSON.stringify({ dependencies: reviewPackages[item.id].dependencies, validationAccounting: reviewPackages[item.id].validationAccounting }, null, 2)}</pre></details>
         </div>}
-        {item.submittedAt && <div style={{ fontSize: '.78rem', color: '#166534' }}>Submitted: {item.submittedAt}{item.externalReference ? ` · Ref: ${item.externalReference}` : ''}</div>}
-        {isManager && item.status !== 'SUBMITTED' && <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+        {isManager && item.status !== 'MANAGER_APPROVED' && <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
           <ActionButton accent="#166534" disabled={!reviewReason.trim() || busy || !reviewPackages[item.id]?.approvalReadiness?.ready} onClick={() => reviewListing(item.id, 'APPROVED')}>Manager duyệt exact package</ActionButton>
           <ActionButton accent="#b45309" disabled={!reviewReason.trim() || busy || !reviewPackages[item.id]} onClick={() => reviewListing(item.id, 'CHANGES_REQUESTED')}>Yêu cầu sửa exact package</ActionButton>
         </div>}
-        {item.status === 'MANAGER_APPROVED' && !item.submissionRequestId && isSeller && <div style={{ display: 'grid', gap: 7, marginTop: 10, borderTop: '1px solid #e2e8f0', paddingTop: 9 }}>
-          <textarea rows={2} value={submissionRequestNotes} onChange={event => setSubmissionRequestNotes(event.target.value)} placeholder="Seller ghi chú yêu cầu Owner submit exact package này..." />
-          <ActionButton accent="#0369a1" disabled={!submissionRequestNotes.trim() || busy} onClick={() => requestSubmission(item.id)}>Seller yêu cầu submit</ActionButton>
-        </div>}
-        {item.status === 'MANAGER_APPROVED' && !item.submissionRequestId && !isSeller && <div style={{ marginTop: 9, color: '#475569' }}>Đang chờ Seller quyết định và tạo yêu cầu submit exact package.</div>}
-        {item.status === 'MANAGER_APPROVED' && item.submissionRequestId && <div style={{ display: 'grid', gap: 7, marginTop: 10, borderTop: '1px solid #e2e8f0', paddingTop: 9 }}>
-          <div><b>Submission request #{item.submissionRequestId}</b> · package {item.submissionPackageHash}</div>
-          {item.submissionRequestNotes && <div>{item.submissionRequestNotes}</div>}
-          {isOwner && <>
-          <input value={externalReference} onChange={event => setExternalReference(event.target.value)} placeholder="Marketplace reference / URL (nếu có)" />
-          <textarea rows={2} value={submissionNotes} onChange={event => setSubmissionNotes(event.target.value)} placeholder="Ghi chú: đã submit ở đâu, lúc nào..." />
-          <label><input type="checkbox" checked={submissionConfirmed} onChange={event => setSubmissionConfirmed(event.target.checked)} /> Tôi xác nhận đã thực sự submit listing này bên ngoài OmniSeller.</label>
-          <ActionButton accent="#7c3aed" disabled={!submissionConfirmed || !submissionNotes.trim() || !externalReference.trim() || busy} onClick={() => recordSubmission(item.id)}>Owner ghi nhận SUBMITTED</ActionButton>
-          </>}
-          {!isOwner && <div style={{ color: '#7c3aed' }}>Đang chờ Owner đối chiếu exact package và bằng chứng marketplace.</div>}
+        {item.status === 'MANAGER_APPROVED' && <div style={{ marginTop: 9, color: '#7c3aed', fontWeight: 800 }}>
+          Exact package đã được Manager duyệt. W1 dừng tại đây; không có nút submit hoặc writer trạng thái ngoài marketplace.
         </div>}
       </div>)}
     </Step>

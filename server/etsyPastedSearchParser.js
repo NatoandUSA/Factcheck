@@ -700,58 +700,89 @@ function parseEtsySearchCsv(rawText) {
 }
 
 function parseEtsySearchHtml(rawText) {
-  const normalizedRaw = decodeEntities(rawText).replace(/\r\n?/g, '\n');
+  // Do not decode the whole document before JSON.parse: Etsy descriptions can
+  // legitimately contain `&quot;` inside JSON strings, and global decoding would
+  // turn those entities into unescaped quotes and corrupt valid JSON-LD.
+  const normalizedRaw = String(rawText ?? '').replace(/\r\n?/g, '\n');
   const $ = cheerio.load(normalizedRaw);
   const sellers = [];
+  const appendProduct = (item, position, rawBlock) => {
+    if (!item?.name) return;
+    const offers = Array.isArray(item.offers) ? item.offers[0] : (item.offers || {});
+    const aggregateRating = item.aggregateRating || {};
+    const rank = Number(position);
+    const sourceRank = Number.isFinite(rank) && rank > 0 ? rank : sellers.length + 1;
+    const listingId = normalizeLine(item.sku || item.productID) || null;
+    const shopName = normalizeLine(item.brand?.name || item.author?.name || item.seller?.name) || null;
+    sellers.push({
+      id: `html-${sourceRank}`,
+      listingId,
+      sourceRank,
+      title: normalizeLine(item.name),
+      shopName,
+      shopNameEvidenceState: shopName ? 'STAFF_FILE_HTML' : 'UNKNOWN',
+      sourceLabel: 'STAFF_FILE_ETSY_HTML',
+      rating: parseNumberEvidence(aggregateRating.ratingValue).value,
+      reviewCount: parseNumberEvidence(aggregateRating.reviewCount || aggregateRating.ratingCount).value,
+      price: offers.price != null ? String(offers.price) : null,
+      priceAmount: parseNumberEvidence(offers.price).value,
+      priceCurrency: normalizeLine(offers.priceCurrency) || null,
+      originalPrice: offers.priceSpecification?.price != null ? String(offers.priceSpecification.price) : null,
+      originalPriceAmount: parseNumberEvidence(offers.priceSpecification?.price).value,
+      discountPercent: null,
+      totalViews: null, avgViews: null, views24h: null, totalSold: null, sold24h: null,
+      revenue: null, revenueCurrency: null, revenueApproximate: false, revenueRaw: null,
+      favorites: null, favoriteRate: null, favoriteRateApproximate: false,
+      conversionRate: null, conversionRateApproximate: false,
+      createdDate: null, createdRaw: null, updatedRaw: null,
+      tags: splitSuggestions(item.keywords), tagSource: item.keywords ? 'ETSY_HTML_METADATA' : 'NO_TAGS_REPORTED',
+      categories: [], country: null, shopCountry: null,
+      url: normalizeLine(item.url) || null,
+      fieldProvenance: {
+        listingId: observedCsvField(listingId, listingId),
+        priceAmount: observedCsvField(parseNumberEvidence(offers.price).value, offers.price),
+        reviewCount: observedCsvField(parseNumberEvidence(aggregateRating.reviewCount || aggregateRating.ratingCount).value,
+          aggregateRating.reviewCount || aggregateRating.ratingCount),
+        rating: observedCsvField(parseNumberEvidence(aggregateRating.ratingValue).value, aggregateRating.ratingValue)
+      },
+      evidenceSource: 'STAFF_MANUAL_ASSERTION',
+      evidenceState: 'UNVERIFIED_INPUT',
+      evidenceProvider: 'ETSY_SEARCH_HTML',
+      isSynthetic: false,
+      selected: true,
+      rawBlock: JSON.stringify(rawBlock || item)
+    });
+  };
   $('script[type="application/ld+json"]').each((_, element) => {
     let payload;
     try { payload = JSON.parse($(element).text()); } catch (_) { return; }
     const list = Array.isArray(payload) ? payload : [payload];
-    for (const itemList of list) {
-      const entries = itemList?.['@type'] === 'ItemList' ? itemList.itemListElement : [];
+    for (const jsonLd of list) {
+      if (jsonLd?.['@type'] === 'Product') appendProduct(jsonLd, sellers.length + 1, jsonLd);
+      const entries = jsonLd?.['@type'] === 'ItemList' ? jsonLd.itemListElement : [];
       for (const entry of entries || []) {
         const item = entry?.item || {};
-        const offers = Array.isArray(item.offers) ? item.offers[0] : (item.offers || {});
-        const rank = Number(entry.position);
-        if (!item.name) continue;
-        sellers.push({
-          id: `html-${Number.isFinite(rank) ? rank : sellers.length + 1}`,
-          sourceRank: Number.isFinite(rank) ? rank : sellers.length + 1,
-          title: normalizeLine(item.name),
-          shopName: normalizeLine(item.brand?.name) || null,
-          shopNameEvidenceState: item.brand?.name ? 'STAFF_FILE_HTML' : 'UNKNOWN',
-          sourceLabel: 'STAFF_FILE_ETSY_HTML',
-          rating: null,
-          reviewCount: null,
-          price: offers.price != null ? String(offers.price) : null,
-          priceAmount: parseNumberEvidence(offers.price).value,
-          priceCurrency: normalizeLine(offers.priceCurrency) || null,
-          originalPrice: offers.priceSpecification?.price != null ? String(offers.priceSpecification.price) : null,
-          originalPriceAmount: parseNumberEvidence(offers.priceSpecification?.price).value,
-          discountPercent: null,
-          totalViews: null, avgViews: null, views24h: null, totalSold: null, sold24h: null,
-          revenue: null, revenueCurrency: null, revenueApproximate: false, revenueRaw: null,
-          favorites: null, favoriteRate: null, favoriteRateApproximate: false,
-          conversionRate: null, conversionRateApproximate: false,
-          createdDate: null, createdRaw: null, updatedRaw: null,
-          tags: [], tagSource: 'NO_TAGS_REPORTED', categories: [], country: null, shopCountry: null,
-          url: normalizeLine(item.url) || null,
-          evidenceSource: 'STAFF_MANUAL_ASSERTION',
-          evidenceState: 'UNVERIFIED_INPUT',
-          evidenceProvider: 'ETSY_SEARCH_HTML',
-          isSynthetic: false,
-          selected: true,
-          rawBlock: JSON.stringify(entry)
-        });
+        appendProduct(item, entry.position, entry);
       }
     }
   });
+  const headerDiagnostics = {
+    recognizedColumns: [
+      { sourceColumn: 'JSON-LD Product.name', canonicalField: 'title' },
+      { sourceColumn: 'JSON-LD Product.sku', canonicalField: 'listingId' },
+      { sourceColumn: 'JSON-LD Product.offers', canonicalField: 'price' }
+    ],
+    unmappedColumns: [], canonicalCollisions: [], duplicateHeaderCollisions: [], invalidHeaders: [],
+    recognizedColumnCount: 3, unmappedColumnCount: 0, fieldCountValidated: true
+  };
   return finalizeParsedInput({
     normalizedRaw,
     parserVersion: 'ETSY_SEARCH_HTML_JSONLD_V1',
     inputFormat: 'HTML',
-    searchContext: { appliedFilters: [], unappliedFilters: [], resultCount: null, pageContainsAds: false, sortMode: null },
-    sellers
+    searchContext: { appliedFilters: [], unappliedFilters: [], resultCount: sellers.length, pageContainsAds: false, sortMode: null },
+    sellers,
+    headerDiagnostics,
+    rowAccounting: { inputRows: sellers.length, validRows: sellers.length }
   });
 }
 

@@ -4,8 +4,8 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const { parseEtsySearchInput } = require('../etsyPastedSearchParser');
 
-const ADAPTER_ID = 'etsy-research-snapshot-v2';
-const PARSER_ID = 'etsy-search-csv-html-v2';
+const ADAPTER_ID = 'etsy-research-snapshot-v1';
+const PARSER_ID = 'etsy-search-csv-v1';
 
 function hashFiles(id, files) {
   const hash = crypto.createHash('sha256'); hash.update(id); hash.update('\0');
@@ -30,18 +30,17 @@ async function buildSnapshot(imports) {
     const extension = String(row.file_name || '').split('.').pop().toUpperCase();
     const inputFormat = extension === 'CSV' ? 'CSV' : ['HTML', 'HTM'].includes(extension) ? 'HTML' : 'AUTO';
     if (!['CSV', 'HTML'].includes(inputFormat)) {
-      throw Object.assign(new Error('ETSY_SEARCH_FILE_REQUIRED'), { code: 'ETSY_SEARCH_FILE_REQUIRED', details: { importId: row.id } });
+      throw Object.assign(new Error('ETSY_SEARCH_FILE_REQUIRED'), {
+        code: 'ETSY_SEARCH_FILE_REQUIRED', details: { importId: row.id }
+      });
     }
     const parsed = parseEtsySearchInput(Buffer.from(row.raw_bytes).toString('utf8'), inputFormat);
     const sellers = parsed.sellers.map(seller => ({ ...seller,
       provenance: { importId: row.id, sourceRow: seller.sourceRank + 1, rawHash: row.raw_hash } }));
     observations.push(...sellers);
-    const headerDiagnostics = parsed.headerDiagnostics || { recognizedColumns: [], unmappedColumns: [] };
-    const rowAccounting = parsed.rowAccounting || { inputRows: parsed.sellers.length, validRows: parsed.sellers.length,
-      uniqueRows: parsed.returnedCount, duplicateRowsRemoved: parsed.duplicatesRemoved, returnedRows: parsed.returnedCount, truncatedRows: 0 };
     sources.push({ importId: row.id, kind: row.kind, rawHash: row.raw_hash, parserId: row.parser_id,
       parserHash: row.parser_hash, inputFormat: parsed.inputFormat, parserVersion: parsed.parserVersion,
-      headerDiagnostics, rowAccounting });
+      headerDiagnostics: parsed.headerDiagnostics, rowAccounting: parsed.rowAccounting });
   }
   const listingIds = new Set(observations.map(item => item.listingId).filter(Boolean));
   const queryContexts = [...new Set(observations.map(item => item.sourceHints?.keywordContext?.value).filter(Boolean))];

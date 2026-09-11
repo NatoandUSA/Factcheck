@@ -22,7 +22,6 @@ const assert = require('assert');
     if (String(url).endsWith('/commerce-state')) return response({ success: true, heads: {
       productTruthRevisionId: null, researchSnapshotId: null, intelligenceSnapshotId: null
     }, imports: [], researchSnapshots: [], intelligenceSnapshots: [] });
-    if (String(url).endsWith('/marketplace-workflow')) return response({ success: true, heads: {}, artifacts: [] });
     if (String(url).endsWith('/product-truth/revisions')) return response({ success: true, revisions: [] });
     if (String(url).endsWith('/product-truth-listing/preview')) return response({ success: true, zeroWrite: true,
       sourceReference: 'https://www.amazon.com/dp/B0D5XS64LH', rawHash: 'b'.repeat(64),
@@ -55,9 +54,9 @@ const assert = require('assert');
   check(document.body.textContent.includes('Luồng Staff Canonical — AMAZON US'), 'Amazon workflow must render');
   check(document.body.textContent.includes('không tự đăng'), 'workflow must disclose its stop boundary');
   check(!document.body.textContent.includes('Manager xác nhận'), 'Seller must not receive Manager confirmation action');
-  check(document.body.textContent.includes('Upload Xray từ seed') && document.body.textContent.includes('import và gắn Cerebro'), 'Amazon must present both research kinds in business order');
-  check(document.body.textContent.includes('Luồng Amazon bắt buộc') && document.body.textContent.includes('xác nhận batch'),
-    'Amazon UI must explain the mandatory Xray-to-batch-to-Cerebro order');
+  check(document.body.textContent.includes('Cerebro keywords') && document.body.textContent.includes('Xray competitors'), 'Amazon must accept both research kinds');
+  check(document.body.textContent.includes('Seed → Xray') && document.body.textContent.includes('Cerebro hợp lệ'),
+    'Amazon UI must explain the normal Xray-to-Cerebro order and independent Cerebro import');
   check(document.body.textContent.includes('Preview zero-write'), 'research and intelligence previews must be visible');
   check(document.body.textContent.includes('Product Truth do Seller nhập và kiểm'), 'Seller Product Truth stage must be visible');
   check(document.body.textContent.includes('Dùng ngay tài khoản, workspace và project đang mở'),
@@ -69,19 +68,22 @@ const assert = require('assert');
     'legacy EVIDENCE_INTAKE must be explained as non-blocking for canonical R3');
 
   const input = document.querySelector('input[type="file"]');
-  const selected = new dom.window.File(['fixture'], 'Xray.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-  Object.defineProperty(input, 'files', { value: [selected], configurable: true });
+  check(input.multiple, 'research picker must accept multiple files in one selection');
+  const selected = new dom.window.File(['fixture-one'], 'Cerebro-one.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  const selectedTwo = new dom.window.File(['fixture-two'], 'Cerebro-two.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+  Object.defineProperty(input, 'files', { value: [selected, selectedTwo], configurable: true });
   await act(async () => { input.dispatchEvent(new dom.window.Event('change', { bubbles: true })); });
   const buttons = () => [...document.querySelectorAll('button')];
-  await act(async () => { buttons().find(button => button.textContent.includes('Preview') && button.textContent.includes('file')).click(); });
-  check(calls.some(call => call.url.endsWith('/research-imports/preview')), 'preview must call zero-write route');
+  await act(async () => { buttons().find(button => button.textContent.includes('1A. Preview')).click(); });
+  check(calls.filter(call => call.url.endsWith('/research-imports/preview')).length === 2,
+    'one multi-file selection must preview every file through the zero-write route');
   check(document.body.textContent.includes('1099'), 'preview accounting must render');
   check(document.body.textContent.includes('aaaaaaaaaaaa'), 'raw hash must render for staff inspection');
-  const confirm = buttons().find(button => button.textContent.includes('Xác nhận import cả nhóm'));
+  const confirm = buttons().find(button => button.textContent.includes('1B. Xác nhận'));
   check(confirm && !confirm.disabled, 'confirm must unlock only after preview succeeds');
   await act(async () => { confirm.click(); });
-  check(calls.some(call => call.url.endsWith('/research-imports') && !call.url.endsWith('/preview')),
-    'explicit confirm must call immutable import route separately');
+  check(calls.filter(call => call.url.endsWith('/research-imports') && !call.url.endsWith('/preview')).length === 2,
+    'explicit confirm must persist each previewed file separately');
 
   const sameSource = [...document.querySelectorAll('input[type="checkbox"]')].find(item => item.parentElement.textContent.includes('cùng supplier'));
   await act(async () => { sameSource.click(); });

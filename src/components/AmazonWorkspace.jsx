@@ -298,7 +298,10 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
       />
 
       <details data-testid="amazon-optional-tools" style={{ margin: '10px 0', border: '1px solid #cbd5e1', borderRadius: '12px', padding: '12px', background: '#f8fafc' }}>
-        <summary style={{ cursor: 'pointer', fontWeight: 800, color: '#475569' }}>Công cụ nghiên cứu cũ / bổ sung (tùy chọn — không cần để chạy luồng chính)</summary>
+        <summary style={{ cursor: 'pointer', fontWeight: 800, color: '#475569' }}>Omni Research &amp; DNA Lab — module kế thừa đang nối vào canonical</summary>
+        <div style={{ margin: '9px 0', padding: 10, borderRadius: 8, background: '#e0f2fe', color: '#0c4a6e', fontSize: '.78rem' }}>
+          <b>Không bỏ Omni cũ:</b> Smart Pull, Benchmark, Trends và Learning Box tiếp tục dùng để tìm seed/candidate và học cấu trúc thị trường. Xray/Cerebro cùng quyết định ASIN được đưa vào luồng canonical phía trên để có hash, accounting và dependency rõ ràng. Các nút stage/draft legacy chỉ giữ để đối chiếu trong lúc chuyển đổi, không được tạo một nguồn sự thật thứ hai.
+        </div>
       <SmartPullAnalyticsBar
         marketplace="AMAZON"
         activeProjectId={activeProject?.id || null}
@@ -335,7 +338,7 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
           onClick={() => setActiveStage('workflow')}
         >
           <Layers size={18} />
-          <span>Công cụ cũ 1: Quy trình Amazon A10</span>
+          <span>Omni A10 kế thừa: Seed, Xray và nghiên cứu đối thủ</span>
         </button>
 
         <button
@@ -344,7 +347,7 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
           disabled={!activeProject}
         >
           <Brain size={18} />
-          <span>Công cụ cũ 2: Research Hub (không chặn luồng R3)</span>
+          <span>Omni Research Hub kế thừa</span>
         </button>
 
         <button
@@ -353,7 +356,7 @@ export default function AmazonWorkspace({ onSelectListing, onApproveListing, onS
           disabled={!activeProject || !['MKL_FROZEN', 'DRAFT_GENERATED', 'PRODUCT_TRUTH_VERIFIED', 'PRODUCT_TRUTH_CONFIRMED', 'VALIDATED', 'MANAGER_APPROVED', 'PUBLISH_READY'].includes(activeProject.state)}
         >
           <Database size={18} />
-          <span>Công cụ cũ 3: Kho từ khóa MKL 5-Tier</span>
+          <span>Omni MKL 5-Tier kế thừa / đối chiếu</span>
         </button>
       </div>
 

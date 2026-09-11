@@ -19,12 +19,17 @@ for (const [name, source] of [['Etsy', etsy], ['Amazon', amazon]]) {
   assert.ok(source.includes('<option value="">— Chọn project —</option>'), `${name} must default to no project`);
   assert.strictEqual(source.includes('setActiveProject(data.projects[0])'), false, `${name} must not silently select the first project`);
   assert.ok(source.includes('disabled={!activeProject}'), `${name} read-only research hub must require a project but remain available during legacy EVIDENCE_INTAKE`);
-  assert.ok(source.includes('Research Hub (không chặn luồng R3)'), `${name} legacy research hub must be labelled as non-blocking`);
+  assert.ok(source.includes('Omni Research Hub kế thừa'), `${name} inherited research hub must be labelled explicitly`);
   assert.ok(source.includes("'MKL_FROZEN'"), `${name} MKL stage must reference the canonical server state`);
   assert.ok(source.indexOf('<CanonicalCommerceWorkflow') < source.indexOf('<ProjectEvidenceGate'), `${name} canonical Product Truth workflow must render before the legacy gate`);
   assert.ok(source.indexOf('<CanonicalCommerceWorkflow') < source.indexOf('<SmartPullAnalyticsBar'), `${name} canonical workflow must render before optional Smart Pull`);
-  assert.ok(source.includes(`data-testid="${name.toLowerCase()}-optional-tools"`), `${name} legacy/research tools must be collapsed as optional`);
+  assert.ok(source.includes(`data-testid="${name.toLowerCase()}-optional-tools"`), `${name} inherited research lab must remain available during canonical migration`);
 }
+assert.ok(amazon.includes('Omni Research &amp; DNA Lab — module kế thừa đang nối vào canonical'), 'Amazon must explain inherited Omni modules');
+assert.ok(etsy.includes('Omni Etsy Research &amp; DNA Lab — module kế thừa đang nối vào canonical'), 'Etsy must explain inherited Omni modules');
+assert.ok(canonical.includes('type="file" multiple'), 'canonical workflow must support selecting multiple research files in one operation');
+assert.ok(canonical.includes('.csv,.html,.htm,text/csv,text/html'), 'canonical Etsy evidence must accept saved HTML as well as CSV');
+assert.ok(canonical.includes('Chọn file Cerebro cho batch'), 'Amazon binding must select the exact Cerebro file for each batch');
 
 assert.strictEqual(etsy.includes("const transitioned = await handleTransition('RESEARCH_ACCEPTED')"), false, 'Opening Etsy research must not attempt a legacy server transition');
 assert.ok(etsy.includes("await handleTransition('DNA_ACCEPTED')"), 'Etsy DNA acceptance must call the server transition');

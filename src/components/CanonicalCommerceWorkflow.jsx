@@ -80,14 +80,15 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
   const [listingHtmlFile, setListingHtmlFile] = useState(null);
   const [sameSourceConfirmed, setSameSourceConfirmed] = useState(false);
   const [listingFactPreview, setListingFactPreview] = useState(null);
-  const [file, setFile] = useState(null);
+  const [files, setFiles] = useState([]);
   const [kind, setKind] = useState(marketplace === 'AMAZON' ? 'AMAZON_XRAY' : 'ETSY_SEARCH');
-  const [filePreview, setFilePreview] = useState(null);
+  const [filePreviews, setFilePreviews] = useState([]);
   const [selectedImports, setSelectedImports] = useState([]);
   const [language, setLanguage] = useState('AUTO');
   const [intelligencePreview, setIntelligencePreview] = useState(null);
   const [decisionPreview, setDecisionPreview] = useState(null);
   const [batchNumber, setBatchNumber] = useState(1);
+  const [cerebroImportId, setCerebroImportId] = useState('');
   const [maxBatches, setMaxBatches] = useState(2);
   const [selectedAsins, setSelectedAsins] = useState([]);
   const [selectedEtsyEntities, setSelectedEtsyEntities] = useState([]);
@@ -119,7 +120,7 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
     const message = errorValue?.code === 'UNVERIFIED_OUTPUT_CLAIM' && claimSummary
       ? `Draft có claim chưa được Product Truth chứng thực — ${claimSummary}`
       : errorValue?.code === 'CEREBRO_KEYWORDS_REQUIRED'
-        ? 'Cần import Cerebro để phân bổ keyword và tạo draft. Xray chỉ là bước tùy chọn để chọn batch ASIN.'
+        ? 'Cần hoàn tất Xray → ASIN batches → import và gắn Cerebro cho từng batch trước khi phân bổ keyword.'
         : errorValue?.message || 'UNKNOWN_ERROR';
     setError(message);
     notify(`Không thể hoàn tất: ${message}`, 'error');
@@ -162,10 +163,10 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
   };
 
   useEffect(() => {
-    setFile(null); setFilePreview(null); setIntelligencePreview(null); setDraft(null); setError('');
+    setFiles([]); setFilePreviews([]); setIntelligencePreview(null); setDraft(null); setError('');
     setListingSource(''); setListingHtmlFile(null); setSameSourceConfirmed(false); setListingFactPreview(null);
     setKind(marketplace === 'AMAZON' ? 'AMAZON_XRAY' : 'ETSY_SEARCH');
-    setDecisionPreview(null); setBatchNumber(1); setMaxBatches(2); setSelectedAsins([]); setSelectedEtsyEntities([]);
+    setDecisionPreview(null); setBatchNumber(1); setCerebroImportId(''); setMaxBatches(2); setSelectedAsins([]); setSelectedEtsyEntities([]);
     setPolicyContext(activeProject ? {
       locale: activeProject.locale, media_class: activeProject.media_class,
       product_type_id: activeProject.product_type_id, category_id: activeProject.category_id,
@@ -180,18 +181,28 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
     try { return await operation(); } catch (caught) { reportError(caught); return null; } finally { setBusy(''); }
   };
 
+  const chooseFiles = (nextKind, fileList) => {
+    setKind(nextKind);
+    setFiles(Array.from(fileList || []));
+    setFilePreviews([]);
+  };
+
   const upload = async confirm => run(confirm ? 'import' : 'preview-file', async () => {
-    if (!file) throw new Error('Hãy chọn file trước.');
-    const form = new FormData(); form.append('kind', kind);
-    if (confirm) form.append('idempotencyKey', uuid());
-    form.append('researchFile', file);
-    const result = await api(`/api/projects/${projectId}/research-imports${confirm ? '' : '/preview'}`, { method: 'POST', body: form });
-    setFilePreview(result);
-    if (confirm) {
-      notify(`Đã lưu file nguồn #${result.researchImportId}; raw hash được khóa.`);
-      await refresh();
-      setSelectedImports(previous => [...new Set([...previous, result.researchImportId])]);
+    if (!files.length) throw new Error('Hãy chọn ít nhất một file trước.');
+    const results = [];
+    for (const researchFile of files) {
+      const form = new FormData(); form.append('kind', kind);
+      if (confirm) form.append('idempotencyKey', uuid());
+      form.append('researchFile', researchFile);
+      results.push(await api(`/api/projects/${projectId}/research-imports${confirm ? '' : '/preview'}`, { method: 'POST', body: form }));
     }
+    setFilePreviews(results);
+    if (confirm) {
+      notify(`Đã lưu ${results.length} file nguồn trong một thao tác; từng file có raw hash riêng.`);
+      await refresh();
+      setSelectedImports(previous => [...new Set([...previous, ...results.map(result => result.researchImportId)])]);
+    }
+    return results;
   });
 
   const createResearchSnapshot = () => run('snapshot', async () => {
@@ -204,9 +215,9 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
   });
 
   const buildAmazonBatches = confirm => run(confirm ? 'confirm-batches' : 'preview-batches', async () => {
-    const xray = imports.find(item => item.kind === 'AMAZON_XRAY');
-    if (!xray) throw new Error('Hãy import Xray trước để chọn ASIN cạnh tranh.');
-    const body = { xrayImportId: xray.id, maxBatches, ...(selectedAsins.length ? { selectedAsins } : {}) };
+    const xrays = imports.filter(item => item.kind === 'AMAZON_XRAY' && selectedImports.includes(item.id));
+    if (!xrays.length) throw new Error('Hãy import và chọn ít nhất một file Xray trước để chọn ASIN cạnh tranh.');
+    const body = { xrayImportIds: xrays.map(item => item.id), maxBatches, ...(selectedAsins.length ? { selectedAsins } : {}) };
     if (confirm) Object.assign(body, { expectedHeadArtifactId: workflowState?.heads?.AMAZON_ASIN_BATCH_PLAN?.id || null,
       idempotencyKey: uuid(), changeReason: 'STAFF_CONFIRMED_ASIN_BATCH_PLAN' });
     const result = await api(`/api/projects/${projectId}/amazon/asin-batches${confirm ? '' : '/preview'}`, jsonOptions(body));
@@ -217,7 +228,7 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
 
   const bindCerebro = () => run('bind-cerebro', async () => {
     const plan = workflowState?.heads?.AMAZON_ASIN_BATCH_PLAN;
-    const cerebro = imports.find(item => item.kind === 'AMAZON_CEREBRO');
+    const cerebro = imports.find(item => item.kind === 'AMAZON_CEREBRO' && Number(item.id) === Number(cerebroImportId));
     if (!plan || !cerebro) throw new Error('Cần kế hoạch ASIN batch đã khóa và file Cerebro đã import.');
     const result = await api(`/api/projects/${projectId}/amazon/cerebro-bindings`, jsonOptions({
       asinBatchArtifactId: plan.id, batchNumber: Number(batchNumber), cerebroImportId: cerebro.id,
@@ -225,6 +236,7 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
       idempotencyKey: uuid(), changeReason: `STAFF_BOUND_CEREBRO_BATCH_${batchNumber}`
     }));
     notify(`Đã chứng minh Cerebro #${cerebro.id} thuộc batch ${batchNumber}; khớp ${result.accounting.matchedAsinCount} ASIN.`);
+    setCerebroImportId('');
     await refresh();
   });
 
@@ -507,29 +519,45 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
         Product Truth là lane độc lập và chỉ gặp research khi tạo intelligence.
       </div>}
       {marketplace === 'ETSY' && <div style={{ marginBottom: 10, padding: 10, borderRadius: 8, background: '#fff7ed', color: '#7c2d12', fontSize: '.8rem' }}>
-        <b>Luồng Etsy:</b> có thể import nhiều CSV cho cùng seed. Hệ thống hợp nhất listing theo listing ID, chấm winners, khai thác pattern rồi mới tạo Master KW. 13 tags chỉ được tạo sau Product Truth và mỗi tag phải có lý do.
+        <b>Luồng Etsy:</b> có thể chọn nhiều CSV/HTML cho cùng seed trong một lần. Hệ thống hợp nhất listing theo listing ID, chấm winners, khai thác pattern rồi mới tạo Master KW. 13 tags chỉ được tạo sau Product Truth và mỗi tag phải có lý do.
       </div>}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
-        {marketplace === 'AMAZON' && <select aria-label="Loại file research" value={kind} onChange={event => { setKind(event.target.value); setFilePreview(null); }}>
-          <option value="AMAZON_XRAY">1. Xray từ seed</option><option value="AMAZON_CEREBRO">3. Cerebro từ batch ASIN</option>
-        </select>}
-        <input aria-label="File research" type="file" accept={marketplace === 'AMAZON' ? '.xlsx,.csv' : '.csv'} onChange={event => { setFile(event.target.files?.[0] || null); setFilePreview(null); }} />
-        <ActionButton accent={accent} disabled={!file || busy} onClick={() => upload(false)}>1A. Preview zero-write</ActionButton>
-        <ActionButton accent={accent} disabled={!filePreview?.zeroWrite || busy} onClick={() => upload(true)}>1B. Xác nhận import</ActionButton>
+      <div style={{ padding: 11, border: `1px solid ${marketplace === 'AMAZON' ? '#93c5fd' : '#fdba74'}`, borderRadius: 9, background: '#fff' }}>
+        <b>{marketplace === 'AMAZON' ? '1. Upload Xray từ seed — trước khi tạo batch' : '1. Upload Search Evidence — CSV hoặc trang HTML đã lưu'}</b>
+        <div style={{ margin: '5px 0 8px', fontSize: '.76rem', color: '#475569' }}>
+          Chọn một hoặc nhiều file cùng lúc. Sau này vẫn có thể bổ sung thêm; mỗi file được lưu riêng với hash và accounting riêng.
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
+          <input aria-label={marketplace === 'AMAZON' ? 'File Xray' : 'File Etsy Search Evidence'} type="file" multiple
+            accept={marketplace === 'AMAZON' ? '.xlsx,.csv' : '.csv,.html,.htm,text/csv,text/html'}
+            onChange={event => chooseFiles(marketplace === 'AMAZON' ? 'AMAZON_XRAY' : 'ETSY_SEARCH', event.target.files)} />
+          <ActionButton accent={accent} disabled={!files.length || kind !== (marketplace === 'AMAZON' ? 'AMAZON_XRAY' : 'ETSY_SEARCH') || busy} onClick={() => upload(false)}>Preview {files.length || ''} file zero-write</ActionButton>
+          <ActionButton accent={accent} disabled={!filePreviews.length || filePreviews.length !== files.length || kind !== (marketplace === 'AMAZON' ? 'AMAZON_XRAY' : 'ETSY_SEARCH') || busy} onClick={() => upload(true)}>Xác nhận import cả nhóm</ActionButton>
+        </div>
       </div>
-      {filePreview && <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 8, marginTop: 10 }}>
-        <Metric label="FILE" value={filePreview.fileName} /><Metric label="RAW SHA-256" value={filePreview.rawHash} />
-        <Metric label="ROWS" value={filePreview.accounting?.sourceRowCount ?? filePreview.accounting?.inputRowCount} />
-        <Metric label="UNCONSUMED" value={filePreview.accounting?.unconsumedRowCount ?? 0} />
+      {marketplace === 'AMAZON' && amazonPlanReady && <div style={{ marginTop: 10, padding: 11, border: '1px solid #60a5fa', borderRadius: 9, background: '#eff6ff' }}>
+        <b>3. Upload Cerebro sau khi đã chạy từng ASIN batch trên Helium 10</b>
+        <div style={{ margin: '5px 0 8px', fontSize: '.76rem', color: '#1e3a8a' }}>Chọn nhiều file Cerebro cùng lúc nếu đã chạy nhiều batch. Bước 4 bên dưới sẽ buộc chọn đúng file cho từng batch; Xray và Cerebro không còn nằm chung một ô.</div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
+          <input aria-label="File Cerebro" type="file" multiple accept=".xlsx,.csv" onChange={event => chooseFiles('AMAZON_CEREBRO', event.target.files)} />
+          <ActionButton accent={accent} disabled={!files.length || kind !== 'AMAZON_CEREBRO' || busy} onClick={() => upload(false)}>Preview {files.length || ''} Cerebro</ActionButton>
+          <ActionButton accent={accent} disabled={!filePreviews.length || filePreviews.length !== files.length || kind !== 'AMAZON_CEREBRO' || busy} onClick={() => upload(true)}>Import cả nhóm Cerebro</ActionButton>
+        </div>
       </div>}
-      {marketplace === 'AMAZON' && filePreview?.asinSelection?.batches?.length > 0 && <div style={{ marginTop: 12, border: '1px solid #93c5fd', borderRadius: 9, padding: 10, background: '#fff' }}>
+      {filePreviews.length > 0 && <div style={{ display: 'grid', gap: 8, marginTop: 10 }}>
+        {filePreviews.map(filePreview => <div key={`${filePreview.fileName}-${filePreview.rawHash}`} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 8 }}>
+          <Metric label="FILE" value={filePreview.fileName} /><Metric label="RAW SHA-256" value={filePreview.rawHash} />
+          <Metric label="ROWS" value={filePreview.accounting?.sourceRowCount ?? filePreview.accounting?.inputRowCount} />
+          <Metric label="UNCONSUMED" value={filePreview.accounting?.unconsumedRowCount ?? 0} />
+        </div>)}
+      </div>}
+      {marketplace === 'AMAZON' && filePreviews.some(item => item.asinSelection?.batches?.length > 0) && <div style={{ marginTop: 12, border: '1px solid #93c5fd', borderRadius: 9, padding: 10, background: '#fff' }}>
         <b>Preview Xray — chưa phải quyết định đã lưu</b>
-        <div style={{ fontSize: '.76rem', color: '#475569', marginTop: 3 }}>Đã chọn {filePreview.asinSelection.acceptedCount} ASIN; mỗi batch tối đa 10, không tự điền ASIN giả.</div>
-        {filePreview.asinSelection.batches.map(batch => <div key={batch.batchNumber} style={{ marginTop: 8, padding: 8, borderRadius: 7, background: '#f8fafc' }}>
+        <div style={{ fontSize: '.76rem', color: '#475569', marginTop: 3 }}>Preview nhanh theo từng file; quyết định batch chính thức sẽ hợp nhất và khử trùng ASIN từ mọi Xray đã chọn.</div>
+        {filePreviews.flatMap((preview, fileIndex) => (preview.asinSelection?.batches || []).map(batch => <div key={`${fileIndex}-${batch.batchNumber}`} style={{ marginTop: 8, padding: 8, borderRadius: 7, background: '#f8fafc' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}><b>Batch {batch.batchNumber} ({batch.size})</b>
             <button type="button" onClick={() => navigator.clipboard?.writeText(batch.cerebroInput)}>Copy ASIN</button></div>
           <code style={{ display: 'block', marginTop: 4, overflowWrap: 'anywhere' }}>{batch.cerebroInput}</code>
-        </div>)}
+        </div>))}
       </div>}
       {imports.length > 0 && <div style={{ marginTop: 12 }}><b>File đã lưu — chọn nguồn cho snapshot:</b>
         {imports.map(item => <label key={item.id} style={{ display: 'block', marginTop: 6 }}>
@@ -569,11 +597,15 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
       </div>}
       {marketplace === 'AMAZON' && amazonPlanReady && importedKinds.has('AMAZON_CEREBRO') && <div style={{ marginTop: 12, padding: 11, border: '1px solid #93c5fd', borderRadius: 9, background: '#fff' }}>
         <b>4. Chứng minh file Cerebro thuộc batch nào</b>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }}>
           <label>Batch {' '}<select value={batchNumber} onChange={event => setBatchNumber(Number(event.target.value))}>
             {(workflowState?.heads?.AMAZON_ASIN_BATCH_PLAN?.payload?.batches || []).map(batch => <option key={batch.batchNumber} value={batch.batchNumber}>{batch.batchNumber} ({batch.size} ASIN)</option>)}
           </select></label>
-          <ActionButton accent={accent} disabled={busy} onClick={bindCerebro}>4A. Gắn Cerebro với batch</ActionButton>
+          <label>File Cerebro {' '}<select aria-label="Chọn file Cerebro cho batch" value={cerebroImportId} onChange={event => setCerebroImportId(event.target.value)}>
+            <option value="">— chọn đúng file đã chạy từ batch này —</option>
+            {imports.filter(item => item.kind === 'AMAZON_CEREBRO').map(item => <option key={item.id} value={item.id}>#{item.id} · {item.file_name}</option>)}
+          </select></label>
+          <ActionButton accent={accent} disabled={!cerebroImportId || busy} onClick={bindCerebro}>4A. Kiểm ASIN và gắn file với batch</ActionButton>
         </div>
         {amazonBindingReady && <div style={{ marginTop: 6, color: amazonAllBindingsReady ? '#166534' : '#b45309' }}>Đã gắn {boundAmazonBatches.size}/{amazonPlan.payload.batches.length} batch. Binding mới nhất #{workflowState.heads.AMAZON_CEREBRO_BINDING.id}: khớp {workflowState.heads.AMAZON_CEREBRO_BINDING.accounting.matchedAsinCount} ASIN.</div>}
       </div>}
@@ -692,22 +724,32 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
       <ActionButton accent={accent} disabled={!latestIntelligence || !policyReady || busy} onClick={previewDraft}>4A. Tạo / làm mới draft zero-write</ActionButton>
       {listing && <div style={{ display: 'grid', gap: 9, marginTop: 12 }}>
         {marketplace === 'AMAZON' ? <>
-          <label><b>Amazon Title</b><textarea value={listing.amazonTitle || ''} onChange={event => updateDraft('amazonTitle', event.target.value)} rows={2} style={{ width: '100%' }} /></label>
-          <label><b>5 Bullet Points</b><textarea value={(listing.amazonBullets || []).join('\n')} onChange={event => updateDraft('amazonBullets', event.target.value.split('\n').filter(Boolean))} rows={7} style={{ width: '100%' }} /></label>
+          <label><b>Amazon Title ({Array.from(listing.amazonTitle || '').length}/{previewOutput?.commerce?.title?.limit || 75} ký tự theo policy engine hiện tại)</b><textarea value={listing.amazonTitle || ''} onChange={event => updateDraft('amazonTitle', event.target.value)} rows={2} style={{ width: '100%' }} /></label>
+          <label><b>5 Bullet Points — {(listing.amazonBullets || []).map((item, index) => `B${index + 1}: ${Array.from(item).length}/${previewOutput?.commerce?.bullets?.limit || 230}`).join(' · ')}</b><textarea value={(listing.amazonBullets || []).join('\n')} onChange={event => updateDraft('amazonBullets', event.target.value.split('\n').filter(Boolean))} rows={7} style={{ width: '100%' }} /></label>
           <label><b>Backend Search Terms ({new TextEncoder().encode(listing.amazonSearchTerms || '').length}/249 bytes)</b><textarea value={listing.amazonSearchTerms || ''} onChange={event => updateDraft('amazonSearchTerms', event.target.value)} rows={3} style={{ width: '100%' }} /></label>
-          <label><b>Description</b><textarea value={listing.amazonDescription || ''} onChange={event => updateDraft('amazonDescription', event.target.value)} rows={7} style={{ width: '100%' }} /></label>
-          <label><b>Item Highlights</b><textarea value={listing.itemHighlights || ''} onChange={event => updateDraft('itemHighlights', event.target.value)} rows={3} style={{ width: '100%' }} /></label>
+          <small>Không lặp token đã có trong Title/Bullets/Description chỉ để lấp đủ 249 bytes. Mục tiêu là phủ tối đa keyword an toàn, độc nhất; keyword chưa đặt vẫn phải nằm trong PPC/blocked/accounting, không được biến mất.</small>
+          <label><b>Description ({Array.from(listing.amazonDescription || '').length} ký tự)</b><textarea value={listing.amazonDescription || ''} onChange={event => updateDraft('amazonDescription', event.target.value)} rows={7} style={{ width: '100%' }} /></label>
+          <label><b>Item Highlights ({Array.from(listing.itemHighlights || '').length}/{previewOutput?.commerce?.itemHighlights?.limit || 125})</b><textarea value={listing.itemHighlights || ''} onChange={event => updateDraft('itemHighlights', event.target.value)} rows={3} style={{ width: '100%' }} /></label>
           <label><b>Category</b><input value={listing.categoryName || ''} onChange={event => updateDraft('categoryName', event.target.value)} style={{ width: '100%' }} /></label>
-          <label><b>Amazon A+ copy points — mỗi dòng một điểm</b><textarea value={(listing.amazonAPlusPoints || []).join('\n')} onChange={event => updateDraft('amazonAPlusPoints', event.target.value.split('\n').map(item => item.trim()).filter(Boolean))} rows={5} style={{ width: '100%' }} /></label>
+          <label><b>Amazon A+ copy points — {(listing.amazonAPlusPoints || []).length} điểm / {(listing.amazonAPlusPoints || []).reduce((sum, item) => sum + Array.from(item).length, 0)} ký tự</b><textarea value={(listing.amazonAPlusPoints || []).join('\n')} onChange={event => updateDraft('amazonAPlusPoints', event.target.value.split('\n').map(item => item.trim()).filter(Boolean))} rows={5} style={{ width: '100%' }} /></label>
           <label><b>PPC targeting — có thể chứa keyword claim chưa xác minh, không phải copy hiển thị</b><textarea value={(listing.ppcKeywords || []).map(item => typeof item === 'string' ? item : item.phrase || '').join('\n')} onChange={event => updateDraft('ppcKeywords', event.target.value.split('\n').map(phrase => phrase.trim()).filter(Boolean))} rows={6} style={{ width: '100%' }} /></label>
+          {previewOutput?.commerce && <details><summary><b>Keyword accounting của draft</b></summary><pre style={{ whiteSpace: 'pre-wrap', fontSize: '.72rem' }}>{JSON.stringify({
+            inputCorpus: previewOutput.commerce.keywordsUsed?.corpus,
+            titlePhrases: previewOutput.commerce.keywordsUsed?.title,
+            highlightPhrases: previewOutput.commerce.keywordsUsed?.highlights,
+            backendUniqueTokens: previewOutput.commerce.keywordsUsed?.searchTermTokens,
+            blocked: previewOutput.commerce.keywordsUsed?.blocked,
+            review: previewOutput.commerce.keywordsUsed?.review,
+            coverage: previewOutput.commerce.coverage
+          }, null, 2)}</pre></details>}
         </> : <>
           <label><b>Etsy Title ({Array.from(listing.etsyTitle || '').length}/140)</b><textarea value={listing.etsyTitle || ''} onChange={event => updateDraft('etsyTitle', event.target.value)} rows={2} style={{ width: '100%' }} /></label>
           <label><b>13 Tags — mỗi dòng một tag</b><textarea value={(listing.etsyTags || []).join('\n')} onChange={event => updateDraft('etsyTags', event.target.value.split('\n').map(item => item.trim()).filter(Boolean).slice(0, 13))} rows={7} style={{ width: '100%' }} /></label>
           {(listing.etsyTagExplanations || []).length > 0 && <details><summary><b>Giải thích 13 tags</b></summary>
             {(listing.etsyTagExplanations || []).map(item => <div key={item.tag} style={{ padding: '6px 0', borderBottom: '1px solid #e2e8f0' }}><b>{item.tag}</b> — {item.reason}<br /><small>Nguồn: {item.sourcePhrase}</small></div>)}
           </details>}
-          <label><b>Description</b><textarea value={listing.etsyDescription || ''} onChange={event => updateDraft('etsyDescription', event.target.value)} rows={7} style={{ width: '100%' }} /></label>
-          <label><b>Item Highlights</b><textarea value={listing.itemHighlights || ''} onChange={event => updateDraft('itemHighlights', event.target.value)} rows={3} style={{ width: '100%' }} /></label>
+          <label><b>Description ({Array.from(listing.etsyDescription || '').length} ký tự)</b><textarea value={listing.etsyDescription || ''} onChange={event => updateDraft('etsyDescription', event.target.value)} rows={7} style={{ width: '100%' }} /></label>
+          <label><b>Item Highlights ({Array.from(listing.itemHighlights || '').length} ký tự)</b><textarea value={listing.itemHighlights || ''} onChange={event => updateDraft('itemHighlights', event.target.value)} rows={3} style={{ width: '100%' }} /></label>
           <label><b>Category</b><input value={listing.categoryName || ''} onChange={event => updateDraft('categoryName', event.target.value)} style={{ width: '100%' }} /></label>
         </>}
         <div><b>Bộ prompt ảnh bên ngoài ({Array.isArray(prompts) ? prompts.length : 0})</b>

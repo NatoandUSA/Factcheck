@@ -50,10 +50,18 @@ async function main() {
     ['B0ABC12347','Regalo Para Mi Hija Collar','Brand C',35,300,60]
   ]);
   const xrayId = await amazon.upload(amazonId, 'AMAZON_XRAY', 'xray.xlsx', Buffer.from(await xrayBook.xlsx.writeBuffer()), 1);
-  const planPreview = await amazon.json(`/api/projects/${amazonId}/amazon/asin-batches/preview`, 'POST', { xrayImportId: xrayId, maxBatches: 2 });
+  const xrayBook2 = new ExcelJS.Workbook(); xrayBook2.addWorksheet('Xray').addRows([
+    ['ASIN','Product Details','Brand','Price $','ASIN Sales','Review Count'],
+    ['B0ABC12345','Para Mi Hija Necklace duplicate','Brand A',29,450,100],
+    ['B0ABC12348','Collar Hija Nuevo','Brand D',27,350,45]
+  ]);
+  const xrayId2 = await amazon.upload(amazonId, 'AMAZON_XRAY', 'xray-page-2.xlsx', Buffer.from(await xrayBook2.xlsx.writeBuffer()), 12);
+  const planPreview = await amazon.json(`/api/projects/${amazonId}/amazon/asin-batches/preview`, 'POST', { xrayImportIds: [xrayId,xrayId2], maxBatches: 2 });
   check(planPreview.status === 200 && planPreview.body.zeroWrite, JSON.stringify(planPreview.body));
-  check(planPreview.body.payload.batches[0].asins.length === 3, 'Xray creates a visible ASIN batch');
-  const plan = await amazon.json(`/api/projects/${amazonId}/amazon/asin-batches`, 'POST', { xrayImportId: xrayId,
+  check(planPreview.body.payload.batches[0].asins.length === 4, 'multiple Xray files create one deduplicated candidate pool');
+  check(planPreview.body.accounting.duplicateAsinRows === 1 && planPreview.body.dependencies.xrayImports.length === 2,
+    'multi-Xray duplicate rows and dependencies are accounted');
+  const plan = await amazon.json(`/api/projects/${amazonId}/amazon/asin-batches`, 'POST', { xrayImportIds: [xrayId,xrayId2],
     maxBatches: 2, expectedHeadArtifactId: null, idempotencyKey: key(2), changeReason: 'CONFIRM_ASIN_BATCHES' });
   check(plan.status === 201 && plan.body.kind === 'AMAZON_ASIN_BATCH_PLAN', JSON.stringify(plan.body));
   const cerebroBook = new ExcelJS.Workbook(); cerebroBook.addWorksheet('Cerebro').addRows([
@@ -66,7 +74,7 @@ async function main() {
     expectedHeadArtifactId: null, idempotencyKey: key(4), changeReason: 'BIND_CEREBRO_BATCH_1' });
   check(binding.status === 201 && binding.body.accounting.matchedAsinCount === 2, JSON.stringify(binding.body));
   const research = await amazon.json(`/api/projects/${amazonId}/research-snapshots`, 'POST', {
-    expectedHeadResearchSnapshotId: null, importIds: [xrayId,cerebroId], idempotencyKey: key(5), changeReason: 'LOCK_AMAZON_RESEARCH' });
+    expectedHeadResearchSnapshotId: null, importIds: [xrayId,xrayId2,cerebroId], idempotencyKey: key(5), changeReason: 'LOCK_AMAZON_RESEARCH' });
   check(research.status === 201, JSON.stringify(research.body));
   const amzMaster = await amazon.json(`/api/projects/${amazonId}/amazon/master-keywords`, 'POST', {
     researchSnapshotId: research.body.researchSnapshotId, asinBatchArtifactId: plan.body.id,
@@ -83,8 +91,13 @@ async function main() {
   const rows = ['listing_id,title,shop,he_tags,keyword_context,rank_position,he_sold,he_revenue_usd,reviews'];
   for (let index = 1; index <= 8; index++) rows.push(`${index},"Para Mi Hija Necklace ${index}",Shop${index},"regalo hija|collar hija",para mi hija,${index},${900-index*50},${5000-index*100},${200-index}`);
   const etsyImportId = await etsy.upload(etsyId, 'ETSY_SEARCH', 'etsy.csv', Buffer.from(rows.join('\n')), 7);
+  const html = `<!doctype html><html><body><script type="application/ld+json">${JSON.stringify({
+    '@type': 'ItemList', itemListElement: [{ position: 9, item: { name: 'Regalo Hija Necklace HTML',
+      url: 'https://www.etsy.com/listing/9009', brand: { name: 'HtmlShop' }, offers: { price: '24.00', priceCurrency: 'USD' } } }]
+  })}</script></body></html>`;
+  const etsyHtmlImportId = await etsy.upload(etsyId, 'ETSY_SEARCH', 'etsy-page-2.html', Buffer.from(html), 17);
   const etsyResearch = await etsy.json(`/api/projects/${etsyId}/research-snapshots`, 'POST', {
-    expectedHeadResearchSnapshotId: null, importIds: [etsyImportId], idempotencyKey: key(8), changeReason: 'LOCK_ETSY_RESEARCH' });
+    expectedHeadResearchSnapshotId: null, importIds: [etsyImportId,etsyHtmlImportId], idempotencyKey: key(8), changeReason: 'LOCK_ETSY_RESEARCH' });
   check(etsyResearch.status === 201, JSON.stringify(etsyResearch.body));
   const winnersPreview = await etsy.json(`/api/projects/${etsyId}/etsy/winners/preview`, 'POST', {
     researchSnapshotId: etsyResearch.body.researchSnapshotId, winnerCount: 5 });
@@ -95,7 +108,7 @@ async function main() {
   const winners = await etsy.json(`/api/projects/${etsyId}/etsy/winners`, 'POST', {
     researchSnapshotId: etsyResearch.body.researchSnapshotId, winnerCount: 5, selectedEntityKeys: staffWinnerKeys,
     expectedHeadArtifactId: null, idempotencyKey: key(9), changeReason: 'CONFIRM_ETSY_WINNERS' });
-  check(winners.status === 201 && winners.body.accounting.entityCount === 8, JSON.stringify(winners.body));
+  check(winners.status === 201 && winners.body.accounting.entityCount === 9, JSON.stringify(winners.body));
   check(winners.body.accounting.selectionMode === 'STAFF_SELECTED_FROM_SEARCH_EVIDENCE'
     && winners.body.payload.winners.map(item => item.entityKey).join('|') === staffWinnerKeys.join('|'),
   'staff-selected Etsy winners are preserved exactly');

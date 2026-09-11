@@ -314,7 +314,7 @@ const commerceResearchUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 20 * 1024 * 1024, files: 1, fields: 8 },
   fileFilter(req, file, cb) {
-    const allowed = /\.(xlsx|csv)$/i.test(file.originalname || '');
+    const allowed = /\.(xlsx|csv|html?)$/i.test(file.originalname || '');
     cb(allowed ? null : new Error('UNSUPPORTED_RESEARCH_FILE'), allowed);
   }
 });
@@ -1627,7 +1627,13 @@ function canonicalResearchFile(req, allowedFields, marketplace) {
     code: 'MARKETPLACE_IMPORT_KIND_REQUIRED', status: 400, details: { marketplace, allowedKinds }
   });
   const extension = path.extname(req.file.originalname || '').toLowerCase();
-  const mediaType = extension === '.csv' ? 'text/csv' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  const allowedExtensions = marketplace === 'AMAZON' ? ['.xlsx', '.csv'] : ['.csv', '.html', '.htm'];
+  if (!allowedExtensions.includes(extension)) throw Object.assign(new Error('MARKETPLACE_RESEARCH_FILE_TYPE_MISMATCH'), {
+    code: 'MARKETPLACE_RESEARCH_FILE_TYPE_MISMATCH', status: 400, details: { marketplace, allowedExtensions }
+  });
+  const mediaType = extension === '.csv' ? 'text/csv'
+    : ['.html', '.htm'].includes(extension) ? 'text/html'
+      : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
   return { body, kind, mediaType, rawBytes: req.file.buffer, fileName: path.basename(req.file.originalname) };
 }
 
@@ -1709,10 +1715,10 @@ app.get('/api/projects/:id/marketplace-workflow', requireAuth(db), requireRole([
 async function amazonBatchBuild(req) {
   const project = await requireCommerceProject(req);
   if (project.marketplace !== 'AMAZON') throw Object.assign(new Error('AMAZON_PROJECT_REQUIRED'), { code: 'AMAZON_PROJECT_REQUIRED' });
-  const body = requireExactDto(req.body, new Set(['xrayImportId','maxBatches','selectedAsins','expectedHeadArtifactId','idempotencyKey','changeReason']));
+  const body = requireExactDto(req.body, new Set(['xrayImportId','xrayImportIds','maxBatches','selectedAsins','expectedHeadArtifactId','idempotencyKey','changeReason']));
   assertNoClientPolicyOverrides(body);
   const preview = await marketplaceWorkflow.previewAmazonBatches(db, revisionScope(req.user), project.id,
-    body.xrayImportId, project.seed_phrase, { maxBatches: body.maxBatches, selectedAsins: body.selectedAsins,
+    body.xrayImportIds || body.xrayImportId, project.seed_phrase, { maxBatches: body.maxBatches, selectedAsins: body.selectedAsins,
       screen: value => ipGuard.screenText(value) });
   return { project, body, preview };
 }
@@ -1767,7 +1773,10 @@ app.post('/api/projects/:id/amazon/master-keywords', requireAuth(db), requireRol
       code: 'CEREBRO_REQUIRED_FOR_EACH_ASIN_BATCH', status: 409, details: { missingBatchNumbers }
     });
     const snapshotImportIds = new Set(research.importManifest.map(item => Number(item.id)));
-    const requiredImportIds = [Number(plan.dependencies.xrayImportId),
+    const requiredImportIds = [
+      ...(Array.isArray(plan.dependencies.xrayImports)
+        ? plan.dependencies.xrayImports.map(item => Number(item.id))
+        : [Number(plan.dependencies.xrayImportId)]),
       ...bindings.map(binding => Number(binding.dependencies.cerebroImportId))];
     const missingImportIds = requiredImportIds.filter(id => !snapshotImportIds.has(id));
     if (missingImportIds.length) throw Object.assign(new Error('MASTER_KEYWORD_RESEARCH_IMPORT_MISMATCH'), {

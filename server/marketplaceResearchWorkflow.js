@@ -140,11 +140,14 @@ async function researchSnapshot(db, rawScope, projectId, snapshotId) {
     observations: JSON.parse(row.observations_json), accounting: JSON.parse(row.accounting_json) };
 }
 
-async function previewAmazonBatches(db, scope, projectId, xrayImportId, seedPhrase, options = {}) {
+async function previewAmazonBatches(db, scope, projectId, xrayImportIds, seedPhrase, options = {}) {
   if (scope.marketplace !== 'AMAZON') throw new MarketplaceWorkflowError('AMAZON_PROJECT_REQUIRED');
-  const source = await getResearchImport(db, scope, projectId, xrayImportId, { includeRaw: true });
-  if (source.kind !== 'AMAZON_XRAY') throw new MarketplaceWorkflowError('AMAZON_XRAY_IMPORT_REQUIRED');
-  const built = await amazonResearchAdapter.buildSnapshot([source]);
+  const ids = [...new Set((Array.isArray(xrayImportIds) ? xrayImportIds : [xrayImportIds])
+    .map(Number).filter(Number.isInteger))];
+  if (!ids.length) throw new MarketplaceWorkflowError('AMAZON_XRAY_IMPORT_REQUIRED');
+  const sources = await Promise.all(ids.map(id => getResearchImport(db, scope, projectId, id, { includeRaw: true })));
+  if (sources.some(source => source.kind !== 'AMAZON_XRAY')) throw new MarketplaceWorkflowError('AMAZON_XRAY_IMPORT_REQUIRED');
+  const built = await amazonResearchAdapter.buildSnapshot(sources);
   const requestedAsins = Array.isArray(options.selectedAsins)
     ? [...new Set(options.selectedAsins.map(value => String(value).trim().toUpperCase()).filter(Boolean))] : [];
   const maxBatches = Math.min(3, Math.max(1, Number(options.maxBatches) || 2));
@@ -154,20 +157,29 @@ async function previewAmazonBatches(db, scope, projectId, xrayImportId, seedPhra
   if (requestedAsins.length > maxBatches * 10) throw new MarketplaceWorkflowError(
     'STAFF_ASIN_SELECTION_EXCEEDS_BATCH_CAPACITY', 409,
     { selectedAsinCount: requestedAsins.length, maxBatches, capacity: maxBatches * 10 });
-  const xrayByAsin = new Map(built.observations.xray.map(item => [item.asin, item]));
+  const xrayByAsin = new Map();
+  for (const item of built.observations.xray) {
+    const existing = xrayByAsin.get(item.asin);
+    if (!existing || Number(item.asinSales || 0) > Number(existing.asinSales || 0)) xrayByAsin.set(item.asin, item);
+  }
+  const uniqueXray = [...xrayByAsin.values()];
   const absentAsins = requestedAsins.filter(asin => !xrayByAsin.has(asin));
   if (absentAsins.length) throw new MarketplaceWorkflowError('SELECTED_ASIN_NOT_IN_XRAY', 409, { absentAsins });
   const staffSelected = requestedAsins.length > 0;
-  const selected = selectAsinBatches(staffSelected ? requestedAsins.map(asin => xrayByAsin.get(asin)) : built.observations.xray,
+  const selected = selectAsinBatches(staffSelected ? requestedAsins.map(asin => xrayByAsin.get(asin)) : uniqueXray,
     staffSelected ? { anchors: [], batchSize: 10, maxPerBrand: 30, excludeOwnAsins: false }
       : { anchors: [seedPhrase].filter(Boolean), library: true, screen: options.screen, batchSize: 10, maxPerBrand: 2 });
   const batches = selected.batches.slice(0, maxBatches);
-  return { zeroWrite: true, dependencies: { xrayImportId: source.id, xrayRawHash: source.raw_hash },
+  return { zeroWrite: true, dependencies: {
+      xrayImports: sources.map(source => ({ id: source.id, rawHash: source.raw_hash })),
+      ...(sources.length === 1 ? { xrayImportId: sources[0].id, xrayRawHash: sources[0].raw_hash } : {})
+    },
     payload: { seedPhrase, selectionMode: staffSelected ? 'STAFF_SELECTED_FROM_XRAY' : 'ENGINE_RECOMMENDED',
       selectedAsins: requestedAsins, batchSize: 10, maxBatches, batches, rejected: selected.rejected,
-      candidatePool: built.observations.xray.map(item => ({ asin: item.asin, title: item.title, brand: item.brand,
+      candidatePool: uniqueXray.map(item => ({ asin: item.asin, title: item.title, brand: item.brand,
         price: item.price, asinSales: item.asinSales, reviews: item.reviews })) },
-    accounting: { inputRows: selected.totalRows, acceptedCandidates: selected.acceptedCount,
+    accounting: { inputRows: built.observations.xray.length, uniqueAsinCandidates: uniqueXray.length,
+      duplicateAsinRows: built.observations.xray.length - uniqueXray.length, acceptedCandidates: selected.acceptedCount,
       rejectedCandidates: selected.rejectedCount, selectedBatchCount: batches.length,
       selectedAsinCount: batches.reduce((sum, batch) => sum + batch.size, 0), unselectedEligibleCount:
         Math.max(0, selected.acceptedCount - batches.reduce((sum, batch) => sum + batch.size, 0)) } };

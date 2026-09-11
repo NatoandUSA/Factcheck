@@ -15,6 +15,10 @@ import CanonicalCommerceWorkflow from './CanonicalCommerceWorkflow';
 import { parseJsonResponse } from '../utils/apiResponse';
 import { createProjectBoundLoader } from '../utils/projectBoundLoader.js';
 
+// Keep the optional provider visibly unavailable until its session handshake is
+// certified. File/paste research and the canonical workflow remain usable.
+const YTRENDS_CONNECTOR_READY = false;
+
 export default function EtsyWorkspace({ onSelectListing, onApproveListing, onShowToast, onViewHistory }) {
   const [seedPhrase, setSeedPhrase] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('✨ Custom Jewelry');
@@ -522,7 +526,7 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
 
           <button
             onClick={handleMcpPull}
-            disabled
+            disabled={!YTRENDS_CONNECTOR_READY || mcpPulling || !activeProject || !seedPhrase.trim()}
             className="btn btn-primary"
             style={{
               background: '#ea580c',

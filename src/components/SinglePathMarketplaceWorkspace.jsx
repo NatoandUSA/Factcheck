@@ -11,12 +11,16 @@ const CATEGORIES = Object.freeze([
 async function loadProjects() {
   const response = await fetch('/api/projects', { credentials: 'include' });
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.message || payload.error || `HTTP_${response.status}`);
+  if (!response.ok) {
+    const error = new Error(payload.message || payload.error || `HTTP_${response.status}`);
+    error.status = response.status;
+    throw error;
+  }
   return payload.projects || [];
 }
 
-export default function SinglePathMarketplaceWorkspace({ marketplace, onSelectListing, onShowToast }) {
-  const { user } = useAuth();
+export default function SinglePathMarketplaceWorkspace({ marketplace, onSelectListing, onShowToast, onRequireLogin }) {
+  const { user, authLoading, invalidateSession } = useAuth();
   const accent = marketplace === 'AMAZON' ? '#0369a1' : '#c2410c';
   const [projects, setProjects] = useState([]);
   const [activeProjectId, setActiveProjectId] = useState('');
@@ -39,6 +43,11 @@ export default function SinglePathMarketplaceWorkspace({ marketplace, onSelectLi
       });
       if (rows.length) setShowCreate(false);
     } catch (caught) {
+      if (caught.status === 401) {
+        invalidateSession();
+        setProjects([]); setActiveProjectId('');
+        onRequireLogin?.();
+      }
       setError(caught.message);
       toastRef.current?.(`Không tải được project: ${caught.message}`, 'error');
     } finally { setLoading(false); }
@@ -61,8 +70,8 @@ export default function SinglePathMarketplaceWorkspace({ marketplace, onSelectLi
             Dùng chung tài khoản, workspace và project. Các workflow legacy không còn xuất hiện trong điều hướng staff.
           </p>
         </div>
-        <button type="button" onClick={() => setShowCreate(value => !value)} style={{ border: `1px solid ${accent}`, color: accent, background: '#fff', borderRadius: 8, padding: '8px 12px', fontWeight: 800 }}>
-          {showCreate ? 'Đóng tạo project' : 'Tạo project mới'}
+        <button type="button" disabled={authLoading} onClick={() => user ? setShowCreate(value => !value) : onRequireLogin?.()} style={{ border: `1px solid ${accent}`, color: accent, background: '#fff', borderRadius: 8, padding: '8px 12px', fontWeight: 800 }}>
+          {!user ? 'Đăng nhập để bắt đầu' : showCreate ? 'Đóng tạo project' : 'Tạo project mới'}
         </button>
       </div>
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', marginTop: 12, flexWrap: 'wrap' }}>
@@ -81,14 +90,15 @@ export default function SinglePathMarketplaceWorkspace({ marketplace, onSelectLi
       {error && <div role="alert" style={{ marginTop: 10, color: '#991b1b' }}>{error}</div>}
     </section>
 
-    {(showCreate || (!loading && !projects.length)) && <div style={{ display: 'grid', gap: 8 }}>
+    {(!authLoading && (showCreate || (!loading && !projects.length))) && <div style={{ display: 'grid', gap: 8 }}>
       <label style={{ width: 'fit-content' }}>Loại sản phẩm {' '}
         <select value={category} onChange={event => setCategory(event.target.value)}>
           {CATEGORIES.map(item => <option key={item} value={item}>{item}</option>)}
         </select>
       </label>
       <ProjectSetupCard marketplace={marketplace} category={category} seedPhrase="" accent={accent}
-        onShowToast={onShowToast} onCreated={async created => { await refreshProjects(created.id); }} />
+        onShowToast={onShowToast} onRequireLogin={onRequireLogin}
+        onCreated={async created => { await refreshProjects(created.id); }} />
     </div>}
 
     {activeProject && <CanonicalCommerceWorkflow activeProject={activeProject} marketplace={marketplace}

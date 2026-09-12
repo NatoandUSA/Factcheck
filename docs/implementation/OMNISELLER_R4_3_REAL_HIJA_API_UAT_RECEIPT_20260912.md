@@ -58,3 +58,7 @@ Environment: isolated local test database; no production mutation.
 ## Remaining gate
 
 This receipt proves API-level processing with the real Hija fixtures. It does not replace normal-browser Owner/staff UAT. PR merge and VPS deployment remain unauthorized until browser UAT and release authority are recorded.
+
+## Local browser runtime correction
+
+The first browser handoff exposed a runtime-mode error outside the API fixture run: the backend had been started with `NODE_ENV=test`, which intentionally selects SQLite `:memory:`. Restarting that process invalidated the browser cookie and discarded its temporary session/project records. Local staff UAT must run in development mode against the persistent `server/app.db`; isolated API tests remain in test mode. The active UI now also hides project creation behind the shared OmniSeller login boundary and invalidates stale React auth state on a 401 response instead of allowing a doomed create request.

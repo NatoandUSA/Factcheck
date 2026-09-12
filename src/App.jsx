@@ -285,6 +285,7 @@ export default function App() {
         {activeTab === 'amazon-workspace' && (
           <SinglePathMarketplaceWorkspace
             marketplace="AMAZON"
+            onRequireLogin={() => setIsLoginModalOpen(true)}
             onSelectListing={(item) => {
               handleSelectFromHistory(item);
               setActiveTab('product-page');
@@ -297,6 +298,7 @@ export default function App() {
         {activeTab === 'etsy-workspace' && (
           <SinglePathMarketplaceWorkspace
             marketplace="ETSY"
+            onRequireLogin={() => setIsLoginModalOpen(true)}
             onSelectListing={(item) => {
               handleSelectFromHistory(item);
               setActiveTab('product-page');

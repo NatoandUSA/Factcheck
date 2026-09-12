@@ -18,10 +18,13 @@ const assert = require('assert');
   const { createRoot } = await import('react-dom/client');
   const calls = [];
   let activeMockMarketplace = 'AMAZON';
+  let authMeAuthenticated = true;
   const response = body => ({ ok: true, status: 200, json: async () => body });
   global.fetch = async (url, options = {}) => {
     calls.push({ url: String(url), options });
-    if (url === '/api/auth/me') return response({ user: { userId: 7, role: 'SELLER' } });
+    if (url === '/api/auth/me') return authMeAuthenticated
+      ? response({ user: { userId: 7, role: 'SELLER', workspaceId: 11, marketplace: activeMockMarketplace } })
+      : { ok: false, status: 401, json: async () => ({ error: 'INVALID_SESSION' }) };
     if (String(url).endsWith('/commerce-state')) return response({ success: true, heads: {
       productTruthRevisionId: null, researchSnapshotId: activeMockMarketplace === 'ETSY' ? 21 : null, intelligenceSnapshotId: null
     }, imports: activeMockMarketplace === 'ETSY'
@@ -159,6 +162,21 @@ const assert = require('assert');
   'Etsy file workflow must remain usable without a provider/evidence-gate prerequisite');
 
   await act(async () => root.unmount());
+
+  authMeAuthenticated = false;
+  let loginRequests = 0;
+  const { default: SinglePathWorkspace } = await vite.ssrLoadModule('/src/components/SinglePathMarketplaceWorkspace.jsx');
+  const root2 = createRoot(document.getElementById('root'));
+  await act(async () => { root2.render(React.createElement(AuthProvider, null,
+    React.createElement(SinglePathWorkspace, { marketplace: 'AMAZON', onRequireLogin: () => { loginRequests += 1; } }))); });
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+  check(Boolean(document.querySelector('[data-testid="project-login-required"]')),
+    'an invalid/restored session must render a login boundary instead of an active project form');
+  check(!document.querySelector('form'), 'unauthenticated staff must not be able to submit project creation');
+  const loginButton = [...document.querySelectorAll('button')].find(button => button.textContent.includes('Đăng nhập để bắt đầu'));
+  await act(async () => { loginButton.click(); });
+  check(loginRequests === 1, 'the project boundary must open the shared OmniSeller login flow');
+  await act(async () => root2.unmount());
   await vite.close(); dom.window.close();
   console.log(`G4 canonical commerce UI: ${measured}/${measured} PASS`);
 })().catch(error => { console.error(error); process.exit(1); });

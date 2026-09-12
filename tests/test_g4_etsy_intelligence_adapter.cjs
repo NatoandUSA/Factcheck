@@ -6,6 +6,10 @@ const adapter = require('../server/commerceIntelligence/etsyIntelligenceAdapter'
 const asserted = value => ({ disposition: 'ASSERTED', value, basis: 'SUPPLIER_SPEC' });
 let passed = 0;
 function check(value, message) { assert.ok(value, message); passed++; }
+const master = (phrases, id = 1) => ({ id, kind: 'ETSY_MASTER_KEYWORDS', artifactHash: String(id).padStart(64, 'a'),
+  revisionNumber: 1, payload: { keywords: phrases.map((phrase, index) => ({ keywordId: `ETSY-KW-${index + 1}`,
+    phrase, priorityRank: index + 1, score: 100 - index, tier: 'PRIMARY', intent: 'TEST',
+    semanticCluster: phrase.toLowerCase(), listingSpread: 1, provenance: [{ sourceType: 'TEST' }] })) } });
 
 async function main() {
   const result = await adapter.buildIntelligence({
@@ -21,14 +25,30 @@ async function main() {
       productType: asserted('Custom Necklace'), materials: asserted('stainless steel'),
       personalization: asserted('Custom name personalization'), recipient: asserted('hija'),
       occasion: asserted('cumpleanos')
-    } } }, configuration: { seedPhrase: 'para mi hija', listingLanguage: 'ES' }
+    } } }, configuration: { seedPhrase: 'para mi hija', listingLanguage: 'ES' }, masterKeywordArtifact: master([
+      'regalo para hija', 'collar de oro 18k', 'cumpleanos hija', 'Nike gift for daughter', 'para mi hija',
+      'regalo especial', 'Daughter Lamp', 'Regalo LunaCraft para hija', 'gift for daughter'
+    ])
   });
   check(/^[0-9a-f]{64}$/.test(result.engineBindingHash), 'engine binding returned');
   check(result.output.listingDraft.etsyTitle.length <= 140, 'Etsy title within limit');
-  check(result.output.listingDraft.etsyTitle === 'Custom Necklace',
-    'Etsy title remains a clear Product Truth identity instead of keyword stuffing');
+  check(/custom necklace/i.test(result.output.listingDraft.etsyTitle),
+    'Etsy title retains the Product Truth identity while allocating safe Master KW phrases');
+  check(result.output.listingDraft.etsyTitle.split(',').length <= 5,
+    'Etsy title uses a bounded set of readable clauses instead of keyword stuffing');
   check(result.output.listingDraft.etsyTags.length <= 13, 'Etsy tag count within limit');
   check(result.output.listingDraft.etsyTags.every(tag => Array.from(tag).length <= 20), 'every Etsy tag within limit');
+  check(result.output.listingDraft.etsyTagExplanations.length === result.output.listingDraft.etsyTags.length,
+    'every generated Etsy tag has an allocation explanation');
+  check(result.output.listingDraft.etsyTagExplanations.every(item => item.intent && item.reason
+    && Array.isArray(item.sources)), 'tag explanations retain intent, reason and provenance');
+  check(result.output.listingDraft.etsyTags.length === 13
+    ? result.output.listingDraft.etsyTagStatus.code === 'COMPLETE'
+    : result.output.listingDraft.etsyTagStatus.code === 'TAG_SHORTAGE'
+      && result.output.listingDraft.etsyTagStatus.missingCount === 13 - result.output.listingDraft.etsyTags.length,
+  'tag status reports a truthful shortage instead of padding unsafe tags');
+  check(new Set(result.output.listingDraft.etsyTagExplanations.map(item => item.semanticCluster)).size
+    === result.output.listingDraft.etsyTagExplanations.length, 'generated tags do not duplicate semantic clusters');
   const listingText = JSON.stringify(result.output.listingDraft).toLowerCase();
   check(!listingText.includes('18k') && !listingText.includes('oro'), 'unverified material excluded');
   check(!listingText.includes('nike'), 'canonical IP block excluded');
@@ -47,8 +67,8 @@ async function main() {
   check(result.output.listingDraft.imagePrompts.blockedCount > 0, 'missing visual facts stay visibly blocked');
   check(!/no tags found|favorites|₫|sewing accessories|\b233\b/i.test(JSON.stringify(result.output.listingDraft)),
     'source boilerplate, metrics and irrelevant phrases never enter Etsy listing');
-  check(result.accounting.sourceRejectedCount >= 4 && result.output.keywordAllocation.sourceRejected.length >= 4,
-    'source garbage is retained with explicit rejection accounting');
+  check(result.accounting.masterKeywordCount === 9 && result.output.masterKeywordArtifact.id === 1,
+    'intelligence consumes and reports the exact Etsy Master Keyword artifact');
   check(result.accounting.irrelevantCount >= 1 && result.output.keywordAllocation.irrelevant.length >= 1,
     'lexical but product-irrelevant phrases are retained with explicit disposition');
   check(result.output.keywordAllocation.irrelevant.some(item => item.phrase === 'Daughter Lamp'
@@ -61,7 +81,8 @@ async function main() {
     ] } }, productTruth: { snapshot: { asserted: {
       productType: asserted('Personalized Pillow'), personalization: asserted('Personalized name'),
       recipient: asserted('daughter')
-    } } }, configuration: { seedPhrase: 'gift for daughter', listingLanguage: 'EN' }
+    } } }, configuration: { seedPhrase: 'gift for daughter', listingLanguage: 'EN' },
+    masterKeywordArtifact: master(['Daughter Necklace', 'Floral Striped Pillow', 'Gift for Daughter'], 2)
   });
   const pillowListing = JSON.stringify(pillow.output.listingDraft).toLowerCase();
   check(!pillowListing.includes('necklace') && pillow.output.keywordAllocation.irrelevant
@@ -79,12 +100,13 @@ async function main() {
     ] } }, productTruth: { snapshot: { asserted: {
       productName: asserted('Collar personalizado para mi hija'), productType: asserted('Collar'),
       personalization: asserted('Nombre personalizado'), recipient: asserted('hija')
-    } } }, configuration: { seedPhrase: 'para mi hija' }
+    } } }, configuration: { seedPhrase: 'para mi hija' },
+    masterKeywordArtifact: master(['para mi hija', 'regalo para hija', 'collar personalizado'], 3)
   });
   check(automaticSpanish.output.language === 'ES', 'AUTO infers Spanish from the canonical project seed');
   check(automaticSpanish.accounting.languageTargetingCount === 0,
     'AUTO does not misroute Spanish source phrases into the other-language bucket');
-  console.log(`G4 Etsy intelligence adapter: ${passed}/28 PASS`);
+  console.log(`G4 Etsy intelligence adapter: ${passed}/${passed} PASS`);
 }
 
 main().catch(error => { console.error(error); process.exitCode = 1; });

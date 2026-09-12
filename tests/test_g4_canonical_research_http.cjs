@@ -309,10 +309,8 @@ async function main() {
     externalReference: 'AMZ-US-MANUAL-123', notes: 'Owner verified marketplace submission evidence',
     idempotencyKey: key(17)
   });
-  check(ownerSubmission.status === 409
-    && ['INCOMPLETE_POLICY_LIFECYCLE_SNAPSHOT','POLICY_APPROVAL_BLOCKED','POLICY_CONTRACT_NOT_FOUND']
-      .includes(ownerSubmission.body.error),
-  'Owner handoff independently revalidates policy before reading any historical request');
+  check(ownerSubmission.status === 410 && ownerSubmission.body.error === 'LEGACY_SUBMISSION_HANDOFF_RETIRED',
+    'wrong Owner-to-bare-SUBMITTED writer is permanently retired while historical rows stay readable');
   check((await get('SELECT COUNT(*) AS n FROM canonical_submission_requests')).n === 0
     && (await get('SELECT COUNT(*) AS n FROM canonical_submission_handoffs')).n === 0,
   'legacy fail-open state cannot create a submission request or handoff');

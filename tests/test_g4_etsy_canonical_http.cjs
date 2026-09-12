@@ -55,6 +55,27 @@ async function main() {
     idempotencyKey: key(2), changeReason: 'CONFIRM_ETSY_RESEARCH'
   });
   check(research.status === 201, JSON.stringify(research.body));
+  const winnerPreview = await json(`/api/projects/${projectId}/etsy/winners/preview`, 'POST', {
+    researchSnapshotId: research.body.researchSnapshotId
+  });
+  check(winnerPreview.status === 200 && winnerPreview.body.payload.selectedEntityIds.length === 2,
+    JSON.stringify(winnerPreview.body));
+  const winners = await json(`/api/projects/${projectId}/etsy/winners`, 'POST', {
+    researchSnapshotId: research.body.researchSnapshotId,
+    selectedEntityIds: winnerPreview.body.payload.selectedEntityIds,
+    expectedHeadArtifactId: null, idempotencyKey: key(20), changeReason: 'STAFF_ETSY_WINNERS'
+  });
+  check(winners.status === 201, JSON.stringify(winners.body));
+  const patterns = await json(`/api/projects/${projectId}/etsy/patterns`, 'POST', {
+    winnerArtifactId: winners.body.id, expectedHeadArtifactId: null,
+    idempotencyKey: key(21), changeReason: 'FREEZE_ETSY_PATTERNS'
+  });
+  check(patterns.status === 201, JSON.stringify(patterns.body));
+  const master = await json(`/api/projects/${projectId}/etsy/master-keywords`, 'POST', {
+    patternArtifactId: patterns.body.id, decisions: [], expectedHeadArtifactId: null,
+    idempotencyKey: key(22), changeReason: 'FREEZE_ETSY_MASTER_KEYWORDS'
+  });
+  check(master.status === 201 && master.body.accounting.droppedKeywordCount === 0, JSON.stringify(master.body));
   const truth = await json(`/api/projects/${projectId}/product-truth/revisions`, 'POST', {
     expectedHeadRevisionId: null, idempotencyKey: key(3), changeReason: 'STAFF_DRAFT', facts: {
       productType: { disposition: 'ASSERTED', value: 'Custom Necklace', basis: 'SUPPLIER_SPEC' },
@@ -64,9 +85,15 @@ async function main() {
     }
   });
   check(truth.status === 201, JSON.stringify(truth.body));
+  const bypass = await json(`/api/projects/${projectId}/intelligence-snapshots/preview`, 'POST', {
+    researchSnapshotId: research.body.researchSnapshotId, productTruthRevisionId: truth.body.productTruthRevisionId,
+    listingLanguage: 'AUTO'
+  });
+  check(bypass.status === 409 && bypass.body.error === 'MASTER_KEYWORD_ARTIFACT_REQUIRED',
+    'Etsy cannot bypass Winner/Pattern/MKL and compose directly from CSV');
   const intelligence = await json(`/api/projects/${projectId}/intelligence-snapshots`, 'POST', {
     expectedHeadIntelligenceSnapshotId: null, researchSnapshotId: research.body.researchSnapshotId,
-    productTruthRevisionId: truth.body.productTruthRevisionId, listingLanguage: 'AUTO',
+    productTruthRevisionId: truth.body.productTruthRevisionId, listingLanguage: 'AUTO', masterKeywordArtifactId: master.body.id,
     idempotencyKey: key(4), changeReason: 'SAVE_ETSY_INTELLIGENCE'
   });
   check(intelligence.status === 201, JSON.stringify(intelligence.body));
@@ -91,10 +118,23 @@ async function main() {
   const dependencies = JSON.parse(revision.dependency_manifest_json);
   check(dependencies.bindingState === 'BOUND', 'Etsy listing dependencies fully bound');
   check(dependencies.researchSnapshotId === research.body.researchSnapshotId, 'Etsy research snapshot bound');
+  check(dependencies.masterKeywordArtifactId === master.body.id
+    && dependencies.masterKeywordArtifactHash === master.body.artifactHash, 'Etsy Master Keyword artifact bound');
   check(dependencies.intelligenceSnapshotHash === intelligence.body.intelligenceSnapshotHash, 'Etsy intelligence hash bound');
   check(intelligence.body.output.keywordAllocation.unallocated.length === intelligence.body.accounting.unallocatedCount,
     'unused Etsy keywords retained with accounting');
-  console.log(`G4 Etsy canonical HTTP: ${passed}/22 PASS`);
+  const phrase = master.body.payload.keywords.find(item => item.tier !== 'EXCLUDED').phrase;
+  const newerMaster = await json(`/api/projects/${projectId}/etsy/master-keywords`, 'POST', {
+    patternArtifactId: patterns.body.id, decisions: [{ phrase, tier: 'REVIEW' }], expectedHeadArtifactId: master.body.id,
+    idempotencyKey: key(23), changeReason: 'REVISE_ETSY_MASTER_KEYWORDS'
+  });
+  check(newerMaster.status === 201, JSON.stringify(newerMaster.body));
+  const staleDraft = await json(`/api/projects/${projectId}/listings/commerce-preview`, 'POST', {
+    intelligenceSnapshotId: intelligence.body.intelligenceSnapshotId
+  });
+  check(staleDraft.status === 409 && staleDraft.body.error === 'STALE_MASTER_KEYWORD_ARTIFACT',
+    'old Etsy intelligence is stale after Master Keyword revision advances');
+  console.log(`G4 Etsy canonical HTTP: ${passed}/${passed} PASS`);
 }
 
 main().catch(error => { console.error(error); process.exitCode = 1; }).finally(async () => {

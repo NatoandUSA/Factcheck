@@ -10,6 +10,8 @@ const assert = require('assert');
     MutationObserver: dom.window.MutationObserver, File: dom.window.File, Blob: dom.window.Blob,
     FormData: dom.window.FormData, TextEncoder });
   Object.defineProperty(global, 'navigator', { value: dom.window.navigator, configurable: true });
+  let copiedLog = '';
+  Object.defineProperty(global.navigator, 'clipboard', { value: { writeText: async value => { copiedLog = value; } }, configurable: true });
   global.IS_REACT_ACT_ENVIRONMENT = true;
   const React = (await import('react')).default;
   const { act } = React;
@@ -63,10 +65,14 @@ const assert = require('assert');
   check(document.body.textContent.includes('Dùng ngay tài khoản, workspace và project đang mở'),
     'listing-assisted Product Truth must be integrated into the authenticated workflow');
   check(document.body.textContent.includes('Theo keyword đầu vào'), 'AUTO listing language must be visible');
-  check(document.body.textContent.includes('Luồng dừng ở NEEDS_QA'), 'workflow must stop at NEEDS_QA');
+  check(document.body.textContent.includes('OmniSeller không tự đăng')
+    && document.body.textContent.includes('OPERATOR_REPORTED_SUBMITTED'),
+  'workflow must expose the manual submission boundary and operator-reported terminal event');
   check(document.querySelector('[data-testid="canonical-next-action"]'), 'workflow must expose one concrete next action');
   check(document.body.textContent.includes('trạng thái này không chặn luồng R3'),
     'legacy EVIDENCE_INTAKE must be explained as non-blocking for canonical R3');
+  check(document.querySelector('[data-testid="canonical-execution-log"]')
+    && document.body.textContent.includes('Copy log JSON'), 'staff-visible execution log and copy action must render');
 
   const input = document.querySelector('input[type="file"]');
   check(input.multiple, 'research picker must accept multiple files in one selection');
@@ -85,6 +91,16 @@ const assert = require('assert');
   await act(async () => { confirm.click(); });
   check(calls.filter(call => call.url.endsWith('/research-imports') && !call.url.endsWith('/preview')).length === 2,
     'explicit confirm must persist each previewed file separately');
+  check(document.querySelector('textarea[aria-label="Nhật ký thực thi"]').value.includes('research-file-preview')
+    && document.querySelector('textarea[aria-label="Nhật ký thực thi"]').value.includes('SUCCESS'),
+  'execution log must record per-file action outcomes for copyable diagnostics');
+  await act(async () => { buttons().find(button => button.textContent.includes('Copy log JSON')).click(); });
+  const copiedPacket = JSON.parse(copiedLog);
+  check(copiedPacket.schemaVersion === 1 && copiedPacket.projectId === 3 && copiedPacket.marketplace === 'AMAZON'
+    && copiedPacket.entries.some(entry => entry.action === 'research-file-preview' && entry.status === 'SUCCESS'),
+  'Copy log JSON must produce a parseable, project-scoped diagnostic packet');
+  check(!/cookie|password|fixture-one|fixture-two/i.test(copiedLog),
+    'copied execution log must omit credentials and source file contents');
 
   const sameSource = [...document.querySelectorAll('input[type="checkbox"]')].find(item => item.parentElement.textContent.includes('cùng supplier'));
   await act(async () => { sameSource.click(); });

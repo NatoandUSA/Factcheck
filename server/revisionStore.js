@@ -320,7 +320,9 @@ async function appendListingRevisionUnlocked(db, rawScope, listingIdInput, input
     const root = await get(db, `SELECT * FROM listings WHERE id=? AND tenant_id=? AND workspace_id=? AND marketplace=? AND project_id=?`,
       [listingId, scope.tenantId, scope.workspaceId, scope.marketplace, projectId]);
     if (!root) throw new RevisionStoreError('LISTING_NOT_FOUND', 404);
-    if (root.status === 'SUBMITTED') throw new RevisionStoreError('SUBMITTED_LISTING_TERMINAL', 409);
+    if (['SUBMITTED','OPERATOR_REPORTED_SUBMITTED'].includes(root.status)) {
+      throw new RevisionStoreError('SUBMITTED_LISTING_TERMINAL', 409);
+    }
     await assertDependenciesCurrent(hooks, { operation: 'APPEND_LISTING_REVISION', scope, listingId, projectId }, dependencies);
     if (root.head_revision_id !== expectedHeadRevisionId) throw new RevisionStoreError('REVISION_CONFLICT', 409);
     const parent = await get(db, `SELECT id,revision_number,content_json,content_hash,
@@ -345,7 +347,7 @@ async function appendListingRevisionUnlocked(db, rawScope, listingIdInput, input
       amazonTitle=?,etsyTitle=?,categoryName=?,status='NEEDS_QA',approved_version=NULL,approved_hash=NULL,
       approved_by=NULL,approved_at=NULL
       WHERE id=? AND tenant_id=? AND workspace_id=? AND marketplace=? AND project_id=? AND head_revision_id=?
-        AND status<>'SUBMITTED'`,
+        AND status NOT IN ('SUBMITTED','OPERATOR_REPORTED_SUBMITTED')`,
     [inserted.lastID, revisionNumber, contentJson, String(content.amazonTitle || ''), String(content.etsyTitle || ''),
       String(content.categoryName || ''), listingId, scope.tenantId, scope.workspaceId, scope.marketplace, projectId, expectedHeadRevisionId]);
     if (update.changes !== 1) throw new RevisionStoreError('REVISION_CONFLICT', 409);

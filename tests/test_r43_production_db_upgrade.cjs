@@ -8,18 +8,13 @@ const crypto = require('node:crypto');
 const sqlite3 = require('sqlite3').verbose();
 const { runMigrations, COMMERCE_WORKFLOW_ARTIFACT_MIGRATION } = require('../server/database/migrations');
 const { canonicalJson, hashBytes } = require('../server/revisionStore');
-const { stateColumnSql } = require('../server/projectStateRegistry');
 
 const source = process.argv[2];
 const synthetic = !source || source === '--synthetic';
 if (!synthetic && (!source || !fs.existsSync(source))) throw new Error(
   'Usage: node tests/test_r43_production_db_upgrade.cjs <database-copy-source|--synthetic>');
 const probe = path.join(os.tmpdir(), `omniseller-r43-upgrade-${crypto.randomUUID()}.db`);
-const syntheticBase = path.resolve(__dirname, '../../../server/app.db');
-if (synthetic) {
-  if (!fs.existsSync(syntheticBase)) throw new Error(`Synthetic base database not found: ${syntheticBase}`);
-  fs.copyFileSync(syntheticBase, probe);
-} else fs.copyFileSync(source, probe);
+if (!synthetic) fs.copyFileSync(source, probe);
 const open = () => new sqlite3.Database(probe);
 const run = (db, sql, params = []) => new Promise((resolve, reject) => db.run(sql, params,
   error => error ? reject(error) : resolve()));
@@ -28,16 +23,19 @@ const all = (db, sql, params = []) => new Promise((resolve, reject) => db.all(sq
 const close = db => new Promise((resolve, reject) => db.close(error => error ? reject(error) : resolve()));
 
 (async () => {
-  let db = open();
+  let db;
   if (synthetic) {
+    // Build the synthetic production-like base through the same schema and
+    // migration bootstrap as the application. This keeps CI self-contained
+    // and prevents a developer's untracked server/app.db from becoming a
+    // hidden test prerequisite.
+    process.env.NODE_ENV = 'development';
+    process.env.OMNI_DB_PATH = probe;
+    const runtime = require('../server/server');
+    db = runtime.db;
+    await runtime.databaseReady;
     await run(db, "INSERT INTO users(id,email,role,name) VALUES (7,'migration@test.local','OWNER','Migration Owner')");
     await run(db, "INSERT INTO workspaces(id,tenant_id,marketplace,name) VALUES (2,'tenant-a','AMAZON','Migration Workspace')");
-    await run(db, `CREATE TABLE research_projects (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,tenant_id TEXT NOT NULL,workspace_id INTEGER NOT NULL,
-      marketplace TEXT NOT NULL,name TEXT NOT NULL,seed_phrase TEXT NOT NULL,${stateColumnSql},
-      reference_asin TEXT,batch_count INTEGER DEFAULT 0,product_truth_notes TEXT,validated_at DATETIME,
-      validated_by INTEGER,actor_id INTEGER NOT NULL,updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP)`);
     await run(db, `INSERT INTO research_projects(id,tenant_id,workspace_id,marketplace,name,seed_phrase,state,actor_id)
       VALUES (3,'tenant-a',2,'AMAZON','Migration Fixture','hija','EVIDENCE_INTAKE',7)`);
     await runMigrations(db);
@@ -75,7 +73,7 @@ const close = db => new Promise((resolve, reject) => db.close(error => error ? r
       component.payloadHash,accountingJson,component.accountingHash,component.engineBindingHash,
       hashBytes(canonicalJson(component)),user.id]);
     await run(db, "INSERT OR IGNORE INTO schema_migrations(id) VALUES ('016_marketplace_research_workflow_artifacts')");
-  }
+  } else db = open();
   const exists = await all(db, "SELECT name FROM sqlite_master WHERE type='table' AND name='commerce_workflow_artifacts'");
   assert.equal(exists.length, 1, 'fixture must contain the deployed donor artifact table');
   const before = await all(db, `SELECT id,artifact_hash,created_at,payload_json FROM commerce_workflow_artifacts ORDER BY id`);

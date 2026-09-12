@@ -30,9 +30,13 @@ function sourceRow(index) {
   };
 }
 
-const csv = [headers.join(','), ...Array.from({ length: 67 }, (_, index) => {
-  const row = sourceRow(index + 1);
-  return headers.map(header => escape(row[header])).join(',');
-})].join('\n');
+function buildCsv(indexes) {
+  return [headers.join(','), ...indexes.map(index => {
+    const row = sourceRow(index);
+    return headers.map(header => escape(row[header])).join(',');
+  })].join('\n');
+}
 
-module.exports = { headers, csv };
+const csv = buildCsv(Array.from({ length: 67 }, (_, index) => index + 1));
+
+module.exports = { headers, csv, buildCsv, sourceRow };

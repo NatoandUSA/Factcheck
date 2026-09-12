@@ -12,6 +12,7 @@ try { fs.unlinkSync(process.env.OMNI_DB_PATH); } catch (_) {}
 const { app, db, databaseReady } = require('../server/server');
 const { createSessionRecord } = require('../server/security/session');
 const { normalizeYtrendsSupplement } = require('../server/etsyResearchWorkflow');
+const { buildCsv } = require('./fixtures/etsy_search_rich_67_sanitized.cjs');
 const key = value => `84000000-0000-4000-8000-${String(value).padStart(12, '0')}`;
 const get = (sql, params = []) => new Promise((resolve, reject) => db.get(sql, params,
   (error, row) => error ? reject(error) : resolve(row || null)));
@@ -53,13 +54,23 @@ async function main() {
     locale: 'es-US', mediaClass: 'NON_MEDIA', productTypeId: 'CUSTOM_NECKLACE', categoryId: 'JEWELRY_NECKLACE',
     productFamilyVersion: 'custom-necklace-v1' });
   check(project.status === 200, JSON.stringify(project.body)); const projectId = project.body.projectId;
-  const root = 'D:/Claude/Factcheck/Inputdata08092026';
-  const names = ['para_mi_hija_search_20260908_222159.csv', 'para_mi_hija_search_20260908_222205.csv',
-    'para_mi_hija_search_20260908_222208.csv'];
-  check(names.every(name => fs.existsSync(`${root}/${name}`)), 'three real Etsy CSV fixtures exist');
+  // Three repository-owned, sanitized exports preserve the real multi-file
+  // accounting shape without coupling canonical CI to an operator Downloads
+  // directory: 195 observations, 176 entities and 19 repeated observations.
+  const fixtures = [
+    { name: 'etsy_search_page_1.csv', indexes: Array.from({ length: 65 }, (_, index) => index + 1) },
+    { name: 'etsy_search_page_2.csv', indexes: Array.from({ length: 65 }, (_, index) => index + 66) },
+    { name: 'etsy_search_page_3.csv', indexes: [
+      ...Array.from({ length: 46 }, (_, index) => index + 131),
+      ...Array.from({ length: 19 }, (_, index) => index + 1)
+    ] }
+  ];
+  check(fixtures.length === 3 && fixtures.every(item => item.indexes.length === 65),
+    'three deterministic Etsy CSV fixtures exist');
   const imports = [];
-  for (let index = 0; index < names.length; index++) {
-    const result = await upload(projectId, names[index], fs.readFileSync(`${root}/${names[index]}`), key(index + 1));
+  for (let index = 0; index < fixtures.length; index++) {
+    const fixture = fixtures[index];
+    const result = await upload(projectId, fixture.name, Buffer.from(buildCsv(fixture.indexes)), key(index + 1));
     check(result.status === 201, JSON.stringify(result.body)); imports.push(result.body.researchImportId);
   }
   const research = await json(`/api/projects/${projectId}/research-snapshots`, 'POST', {

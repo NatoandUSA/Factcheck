@@ -93,8 +93,11 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
   const [sameSourceConfirmed, setSameSourceConfirmed] = useState(false);
   const [listingFactPreview, setListingFactPreview] = useState(null);
   const [files, setFiles] = useState([]);
-  const [kind, setKind] = useState(marketplace === 'AMAZON' ? 'AMAZON_XRAY' : 'ETSY_SEARCH');
   const [filePreviews, setFilePreviews] = useState([]);
+  const [amazonXrayFiles, setAmazonXrayFiles] = useState([]);
+  const [amazonXrayPreviews, setAmazonXrayPreviews] = useState([]);
+  const [amazonCerebroFiles, setAmazonCerebroFiles] = useState([]);
+  const [amazonCerebroPreviews, setAmazonCerebroPreviews] = useState([]);
   const [selectedImports, setSelectedImports] = useState([]);
   const [asinPlanPreview, setAsinPlanPreview] = useState(null);
   const [selectedAsinText, setSelectedAsinText] = useState('');
@@ -183,12 +186,12 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
   };
 
   useEffect(() => {
-    setFiles([]); setFilePreviews([]); setIntelligencePreview(null); setDraft(null); setError('');
+    setFiles([]); setFilePreviews([]); setAmazonXrayFiles([]); setAmazonXrayPreviews([]);
+    setAmazonCerebroFiles([]); setAmazonCerebroPreviews([]); setIntelligencePreview(null); setDraft(null); setError('');
     setAsinPlanPreview(null); setSelectedAsinText(''); setMasterPreview(null); setKeywordDecisions({}); setKeywordQuery('');
     setEtsyWinnerPreview(null); setSelectedEtsyWinners([]); setEtsyPatternPreview(null);
     setSubmissionInputs({}); setExactExports({});
     setListingSource(''); setListingHtmlFile(null); setSameSourceConfirmed(false); setListingFactPreview(null);
-    setKind(marketplace === 'AMAZON' ? 'AMAZON_XRAY' : 'ETSY_SEARCH');
     setPolicyContext(activeProject ? {
       locale: activeProject.locale, media_class: activeProject.media_class,
       product_type_id: activeProject.product_type_id, category_id: activeProject.category_id,
@@ -213,21 +216,28 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
     } finally { setBusy(''); }
   };
 
-  const chooseFiles = selected => {
-    const chosen = Array.from(selected || []); setFiles(chosen);
-    setFilePreviews([]);
-    appendExecutionLog({ action: 'choose-files', status: 'SELECTED', files: chosen.map(file => ({ name: file.name, size: file.size, type: file.type })) });
+  const chooseFiles = (selected, lane = 'ETSY_SEARCH') => {
+    const chosen = Array.from(selected || []);
+    if (lane === 'AMAZON_XRAY') { setAmazonXrayFiles(chosen); setAmazonXrayPreviews([]); }
+    else if (lane === 'AMAZON_CEREBRO') { setAmazonCerebroFiles(chosen); setAmazonCerebroPreviews([]); }
+    else { setFiles(chosen); setFilePreviews([]); }
+    appendExecutionLog({ action: 'choose-files', status: 'SELECTED', researchKind: lane,
+      files: chosen.map(file => ({ name: file.name, size: file.size, type: file.type })) });
   };
 
-  const upload = async confirm => run(confirm ? 'import-group' : 'preview-group', async () => {
-    if (!files.length) throw new Error('Hãy chọn ít nhất một file trước.');
-    const eligible = confirm ? filePreviews.filter(item => item.result?.zeroWrite && !item.error) : files.map(file => ({ file }));
+  const upload = async (confirm, lane = 'ETSY_SEARCH') => {
+    const laneFiles = lane === 'AMAZON_XRAY' ? amazonXrayFiles : lane === 'AMAZON_CEREBRO' ? amazonCerebroFiles : files;
+    const lanePreviews = lane === 'AMAZON_XRAY' ? amazonXrayPreviews : lane === 'AMAZON_CEREBRO' ? amazonCerebroPreviews : filePreviews;
+    const setLanePreviews = lane === 'AMAZON_XRAY' ? setAmazonXrayPreviews : lane === 'AMAZON_CEREBRO' ? setAmazonCerebroPreviews : setFilePreviews;
+    return run(`${confirm ? 'import' : 'preview'}-${lane.toLowerCase()}`, async () => {
+    if (!laneFiles.length) throw new Error('Hãy chọn ít nhất một file trước.');
+    const eligible = confirm ? lanePreviews.filter(item => item.result?.zeroWrite && !item.error) : laneFiles.map(file => ({ file }));
     if (confirm && !eligible.length) throw new Error('Không có file preview hợp lệ để xác nhận.');
     const results = [];
     const committedIds = [];
     for (const entry of eligible) {
       const selectedFile = entry.file;
-      const form = new FormData(); form.append('kind', kind);
+      const form = new FormData(); form.append('kind', lane);
       if (confirm) form.append('idempotencyKey', uuid());
       form.append('researchFile', selectedFile);
       try {
@@ -239,7 +249,7 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
         results.push({ file: selectedFile, error: caught.message || 'FILE_PROCESSING_FAILED', code: caught.code });
       }
     }
-    setFilePreviews(results);
+    setLanePreviews(results);
     for (const entry of results) appendExecutionLog({ action: confirm ? 'research-file-import' : 'research-file-preview',
       status: entry.error ? 'FAILED' : 'SUCCESS', file: { name: entry.file.name, size: entry.file.size },
       ...(entry.error ? { error: { code: entry.code || null, message: entry.error } }
@@ -252,10 +262,11 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
         committedIds.length === eligible.length ? 'success' : 'error');
     } else {
       const valid = results.filter(item => item.result?.zeroWrite).length;
-      notify(`Preview zero-write: ${valid}/${files.length} file hợp lệ.`, valid === files.length ? 'success' : 'error');
+      notify(`Preview zero-write: ${valid}/${laneFiles.length} file hợp lệ.`, valid === laneFiles.length ? 'success' : 'error');
     }
     return results;
   });
+  };
 
   const createResearchSnapshot = () => run('snapshot', async () => {
     if (!selectedImports.length) throw new Error('Chọn ít nhất một file nguồn.');
@@ -630,6 +641,18 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
             ? 'Bước 4A: tạo draft zero-write'
             : 'Bước 4B: đọc/sửa draft rồi lưu ở NEEDS_QA';
 
+  const previewGrid = (entries, testId) => entries.length > 0 && <div data-testid={testId} style={{ display: 'grid', gap: 8, marginTop: 10 }}>
+    {entries.map((entry, index) => entry.error
+      ? <div key={`${entry.file.name}-${index}`} role="alert" style={{ border: '1px solid #fca5a5', background: '#fef2f2', color: '#991b1b', borderRadius: 8, padding: 9 }}>
+          <b>{entry.file.name}</b> — {entry.code ? `${entry.code}: ` : ''}{entry.error}
+        </div>
+      : <div key={`${entry.file.name}-${entry.result.rawHash || 'committed'}-${index}`} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 8 }}>
+          <Metric label="FILE" value={entry.result.fileName} /><Metric label="RAW SHA-256" value={entry.result.rawHash} />
+          <Metric label="ROWS" value={entry.result.accounting?.sourceRowCount ?? entry.result.accounting?.inputRowCount ?? entry.result.accounting?.inputRows} />
+          <Metric label="UNCONSUMED" value={entry.result.accounting?.unconsumedRowCount ?? 0} />
+        </div>)}
+  </div>;
+
   if (!activeProject) return null;
 
   return <div data-testid={`canonical-commerce-${marketplace.toLowerCase()}`} style={{ border: `2px solid ${accent}`, borderRadius: 16, padding: 18, background: '#f8fafc', display: 'grid', gap: 14 }}>
@@ -683,49 +706,28 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
         <b>Luồng chuẩn:</b> Seed → Etsy live/HeyEtsy → import đồng thời 1..N CSV/HTML → winner views → Pattern Miner → Master KW.
         YTrends là nguồn E3 bổ sung và không được chặn file staff. Product Truth chạy song song; dữ liệu đối thủ không tự trở thành fact sản phẩm.
       </div>}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
-        {marketplace === 'AMAZON' && <select aria-label="Loại file research" value={kind} onChange={event => { setKind(event.target.value); setFiles([]); setFilePreviews([]); }}>
-          <option value="AMAZON_CEREBRO">Cerebro keywords</option><option value="AMAZON_XRAY">Xray competitors</option>
-        </select>}
-        <input aria-label="File research" type="file" multiple
-          accept={marketplace === 'AMAZON' ? '.xlsx,.csv' : '.csv,.html,.htm,text/csv,text/html'}
-          onChange={event => chooseFiles(event.target.files)} />
-        <ActionButton accent={accent} disabled={!files.length || busy} onClick={() => upload(false)}>1A. Preview {files.length || ''} file zero-write</ActionButton>
-        <ActionButton accent={accent} disabled={!filePreviews.some(item => item.result?.zeroWrite) || busy} onClick={() => upload(true)}>
-          1B. Xác nhận {filePreviews.filter(item => item.result?.zeroWrite).length || ''} file hợp lệ
-        </ActionButton>
-      </div>
-      {filePreviews.length > 0 && <div data-testid="multi-file-preview-results" style={{ display: 'grid', gap: 8, marginTop: 10 }}>
-        {filePreviews.map((entry, index) => entry.error
-          ? <div key={`${entry.file.name}-${index}`} role="alert" style={{ border: '1px solid #fca5a5', background: '#fef2f2', color: '#991b1b', borderRadius: 8, padding: 9 }}>
-              <b>{entry.file.name}</b> — {entry.code ? `${entry.code}: ` : ''}{entry.error}
-            </div>
-          : <div key={`${entry.file.name}-${entry.result.rawHash || 'committed'}-${index}`} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 8 }}>
-              <Metric label="FILE" value={entry.result.fileName} /><Metric label="RAW SHA-256" value={entry.result.rawHash} />
-              <Metric label="ROWS" value={entry.result.accounting?.sourceRowCount ?? entry.result.accounting?.inputRowCount ?? entry.result.accounting?.inputRows} />
-              <Metric label="UNCONSUMED" value={entry.result.accounting?.unconsumedRowCount ?? 0} />
-            </div>)}
-      </div>}
-      {marketplace === 'AMAZON' && filePreviews.some(entry => entry.result?.asinSelection?.batches?.length > 0) && <div style={{ marginTop: 12, border: '1px solid #93c5fd', borderRadius: 9, padding: 10, background: '#fff' }}>
-        <b>Batch ASIN để dán vào Helium 10 Cerebro</b>
-        <div style={{ fontSize: '.76rem', color: '#475569', marginTop: 3 }}>Preview gợi ý theo từng Xray; đây không phải batch lock và nhân viên có thể chọn lại ở W2.</div>
-        {filePreviews.flatMap((entry, fileIndex) => (entry.result?.asinSelection?.batches || []).map(batch => <div key={`${fileIndex}-${batch.batchNumber}`} style={{ marginTop: 8, padding: 8, borderRadius: 7, background: '#f8fafc' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}><b>Batch {batch.batchNumber} ({batch.size})</b>
-            <button type="button" onClick={() => navigator.clipboard?.writeText(batch.cerebroInput)}>Copy ASIN</button></div>
-          <code style={{ display: 'block', marginTop: 4, overflowWrap: 'anywhere' }}>{batch.cerebroInput}</code>
-        </div>))}
-      </div>}
-      {imports.length > 0 && <div style={{ marginTop: 12 }}><b>File đã lưu — chọn nguồn cho snapshot:</b>
-        {imports.map(item => <label key={item.id} style={{ display: 'block', marginTop: 6 }}>
-          <input type="checkbox" checked={selectedImports.includes(item.id)} onChange={() => setSelectedImports(previous => previous.includes(item.id) ? previous.filter(id => id !== item.id) : [...previous, item.id])} />
-          {' '}#{item.id} {item.kind} · {item.file_name} · {item.byte_length} bytes · {item.raw_hash.slice(0, 12)}…
-        </label>)}
-        <div style={{ marginTop: 10 }}><ActionButton accent={accent} disabled={!selectedImports.length || busy} onClick={createResearchSnapshot}>1C. Khóa Research Snapshot</ActionButton></div>
-      </div>}
-      {marketplace === 'AMAZON' && imports.some(item => item.kind === 'AMAZON_XRAY') && <div data-testid="amazon-xray-cohort-planner" style={{ marginTop: 14, borderTop: '1px solid #bfdbfe', paddingTop: 12 }}>
-        <b>1D. Xray → nhóm ASIN gợi ý (không khóa thao tác)</b>
+      {marketplace === 'AMAZON' ? <div data-testid="amazon-xray-upload-lane" style={{ border: '1px solid #93c5fd', borderRadius: 10, padding: 11, background: '#fff' }}>
+        <b>1. Upload Xray từ seed</b>
+        <p style={{ margin: '4px 0 9px', color: '#475569', fontSize: '.77rem' }}>Chọn một hoặc nhiều Xray. Preview không ghi database; xác nhận import mới lưu từng file với hash/accounting riêng.</p>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
+          <input aria-label="Upload Xray" type="file" multiple accept=".xlsx,.csv" onChange={event => chooseFiles(event.target.files, 'AMAZON_XRAY')} />
+          <ActionButton accent={accent} disabled={!amazonXrayFiles.length || busy} onClick={() => upload(false, 'AMAZON_XRAY')}>Preview {amazonXrayFiles.length || ''} Xray zero-write</ActionButton>
+          <ActionButton accent={accent} disabled={!amazonXrayPreviews.some(item => item.result?.zeroWrite) || busy} onClick={() => upload(true, 'AMAZON_XRAY')}>Xác nhận import Xray</ActionButton>
+        </div>
+        {previewGrid(amazonXrayPreviews, 'amazon-xray-preview-results')}
+      </div> : <>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
+          <input aria-label="File research" type="file" multiple accept=".csv,.html,.htm,text/csv,text/html" onChange={event => chooseFiles(event.target.files, 'ETSY_SEARCH')} />
+          <ActionButton accent={accent} disabled={!files.length || busy} onClick={() => upload(false, 'ETSY_SEARCH')}>1A. Preview {files.length || ''} file zero-write</ActionButton>
+          <ActionButton accent={accent} disabled={!filePreviews.some(item => item.result?.zeroWrite) || busy} onClick={() => upload(true, 'ETSY_SEARCH')}>1B. Xác nhận {filePreviews.filter(item => item.result?.zeroWrite).length || ''} file hợp lệ</ActionButton>
+        </div>
+        {previewGrid(filePreviews, 'multi-file-preview-results')}
+      </>}
+      {marketplace === 'AMAZON' && <div data-testid="amazon-xray-cohort-planner" style={{ marginTop: 14, border: '1px solid #93c5fd', borderRadius: 10, padding: 11, background: '#eff6ff' }}>
+        <b>2. Quyết định ASIN batches</b>
         <p style={{ margin: '4px 0 9px', color: '#475569', fontSize: '.77rem' }}>Tool nhóm theo sales, revenue, BSR, review velocity, độ trẻ seller/listing và opportunity. Mỗi nhóm tối đa 10; có thể sửa danh sách trước khi copy sang Cerebro.</p>
-        <ActionButton accent={accent} disabled={!xrayImportIds().length || busy} onClick={previewAsinPlan}>Phân tích Xray và tạo nhóm</ActionButton>
+        <ActionButton accent={accent} disabled={!xrayImportIds().length || busy} onClick={previewAsinPlan}>Phân tích Xray đã import và tạo nhóm</ActionButton>
+        {!xrayImportIds().length && <small style={{ display: 'block', marginTop: 5 }}>Hãy hoàn tất bước 1 để mở phân tích batch. Kế hoạch batch là convenience artifact, không phải gate của file Cerebro.</small>}
         {asinPlanPreview && <div style={{ display: 'grid', gap: 8, marginTop: 10 }}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(240px,1fr))', gap: 8 }}>
             {(asinPlanPreview.payload?.cohorts || []).map(group => <button type="button" key={group.id} onClick={() => setSelectedAsinText(group.asins.join(', '))} style={{ textAlign: 'left', border: '1px solid #93c5fd', borderRadius: 8, background: '#fff', padding: 9, cursor: 'pointer' }}>
@@ -741,8 +743,32 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
           </div>
         </div>}
       </div>}
+      {marketplace === 'AMAZON' && <div data-testid="amazon-cerebro-upload-lane" style={{ marginTop: 14, border: '1px solid #93c5fd', borderRadius: 10, padding: 11, background: '#fff' }}>
+        <b>3. Upload Cerebro sau khi đã chạy các ASIN batch trên Helium 10</b>
+        <p style={{ margin: '4px 0 9px', color: '#475569', fontSize: '.77rem' }}>Cho phép một hoặc nhiều file. Staff có thể thay đổi batch hoặc import file Cerebro hợp lệ đã có; OmniSeller không khóa batch và không yêu cầu chứng minh file thuộc batch nào.</p>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
+          <input aria-label="Upload Cerebro" type="file" multiple accept=".xlsx,.csv" onChange={event => chooseFiles(event.target.files, 'AMAZON_CEREBRO')} />
+          <ActionButton accent={accent} disabled={!amazonCerebroFiles.length || busy} onClick={() => upload(false, 'AMAZON_CEREBRO')}>Preview {amazonCerebroFiles.length || ''} Cerebro zero-write</ActionButton>
+          <ActionButton accent={accent} disabled={!amazonCerebroPreviews.some(item => item.result?.zeroWrite) || busy} onClick={() => upload(true, 'AMAZON_CEREBRO')}>Xác nhận import Cerebro</ActionButton>
+        </div>
+        {previewGrid(amazonCerebroPreviews, 'amazon-cerebro-preview-results')}
+      </div>}
+      {imports.length > 0 && <div data-testid="research-snapshot-lane" style={{ marginTop: 14, border: `1px solid ${marketplace === 'AMAZON' ? '#93c5fd' : '#fed7aa'}`, borderRadius: 10, padding: 11, background: '#fff' }}>
+        <b>{marketplace === 'AMAZON' ? '4. Chọn file Cerebro để tạo Research Snapshot' : '1C. Chọn file nguồn để tạo Research Snapshot'}</b>
+        <p style={{ margin: '4px 0 7px', color: '#475569', fontSize: '.77rem' }}>{marketplace === 'AMAZON'
+          ? 'Cerebro là nguồn bắt buộc cho Master KW; Xray có thể giữ kèm làm provenance. Không có đối chiếu ancestry hoặc khóa batch.'
+          : 'Mỗi file vẫn giữ hash và accounting riêng trong snapshot.'}</p>
+        {imports.map(item => <label key={item.id} style={{ display: 'block', marginTop: 6 }}>
+          <input type="checkbox" checked={selectedImports.includes(item.id)} onChange={() => setSelectedImports(previous => previous.includes(item.id) ? previous.filter(id => id !== item.id) : [...previous, item.id])} />
+          {' '}#{item.id} {item.kind} · {item.file_name} · {item.byte_length} bytes · {item.raw_hash.slice(0, 12)}…
+        </label>)}
+        <div style={{ marginTop: 10 }}><ActionButton accent={accent} disabled={!selectedImports.length || busy
+          || (marketplace === 'AMAZON' && !selectedImports.some(id => imports.find(item => item.id === id)?.kind === 'AMAZON_CEREBRO'))} onClick={createResearchSnapshot}>
+          {marketplace === 'AMAZON' ? 'Tạo Research Snapshot từ Cerebro đã chọn' : 'Khóa Research Snapshot'}
+        </ActionButton></div>
+      </div>}
       {marketplace === 'AMAZON' && researchReady && <div data-testid="amazon-master-keyword-workspace" style={{ marginTop: 14, borderTop: '1px solid #bfdbfe', paddingTop: 12 }}>
-        <b>1E. Cerebro → Master Keyword List</b>
+        <b>5. Cerebro → Master Keyword List</b>
         <p style={{ margin: '4px 0 9px', color: '#475569', fontSize: '.77rem' }}>Nhận trực tiếp một hoặc nhiều Cerebro hợp lệ; không yêu cầu chứng minh ancestry. Mọi keyword được giữ cùng metrics/provenance; outlier và residue được tách để review, không âm thầm xóa.</p>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           <ActionButton accent={accent} disabled={busy} onClick={previewMasterKeywords}>Preview / làm mới Master KW</ActionButton>

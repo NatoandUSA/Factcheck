@@ -91,22 +91,18 @@ async function main() {
     let workflow;
     if (amazon) {
       const xray = imports.find((_, index) => files[index] === input.xray);
-      const cerebro = imports.find((_, index) => files[index] === input.cerebro);
-      const observedAsins = cerebro.headerSignature.map(value => String(value).trim().toUpperCase())
-        .filter(value => /^[A-Z0-9]{10}$/.test(value));
-      const plan = await api.json(`/api/projects/${project.projectId}/amazon/asin-batches`, 'POST', {
-        xrayImportId: xray.id, maxBatches: 2, selectedAsins: observedAsins, expectedHeadArtifactId: null,
-        idempotencyKey: crypto.randomUUID(), changeReason: 'REAL_INPUT_UAT_ASIN_BATCH_PLAN'
+      const preview = await api.json(`/api/projects/${project.projectId}/amazon/asin-plan/preview`, 'POST', {
+        xrayImportIds: [xray.id]
       });
-      const observed = new Set(observedAsins);
-      const batch = [...plan.payload.batches].sort((left, right) =>
-        right.asins.filter(asin => observed.has(asin)).length - left.asins.filter(asin => observed.has(asin)).length)[0];
-      const binding = await api.json(`/api/projects/${project.projectId}/amazon/cerebro-bindings`, 'POST', {
-        asinBatchArtifactId: plan.id, batchNumber: batch.batchNumber, cerebroImportId: cerebro.id,
-        expectedHeadArtifactId: null, idempotencyKey: crypto.randomUUID(), changeReason: 'REAL_INPUT_UAT_CEREBRO_BINDING'
+      assert.equal(preview.zeroWrite, true);
+      const selectedAsins = preview.payload.cohorts[0].asins.slice(0, 10);
+      assert.ok(selectedAsins.length > 0 && selectedAsins.length <= 10,
+        'Real Xray preview must offer an editable ASIN cohort of at most ten');
+      const plan = await api.json(`/api/projects/${project.projectId}/amazon/asin-plan`, 'POST', {
+        xrayImportIds: [xray.id], selectedAsins, expectedHeadArtifactId: null,
+        idempotencyKey: crypto.randomUUID(), changeReason: 'REAL_INPUT_UAT_STAFF_EDITABLE_ASIN_PLAN'
       });
-      assert.equal(binding.accounting.matchedAsinCount, 9, 'Real Cerebro must bind all 9 reported ASIN columns');
-      workflow = { plan, binding };
+      workflow = { plan };
     }
     const research = await api.json(`/api/projects/${project.projectId}/research-snapshots`, 'POST', {
       expectedHeadResearchSnapshotId: null, importIds: imports.map(item => item.id), idempotencyKey: crypto.randomUUID(),
@@ -114,27 +110,30 @@ async function main() {
     });
     if (amazon) {
       workflow.master = await api.json(`/api/projects/${project.projectId}/amazon/master-keywords`, 'POST', {
-        researchSnapshotId: research.researchSnapshotId, asinBatchArtifactId: workflow.plan.id,
-        cerebroBindingArtifactIds: [workflow.binding.id], expectedHeadArtifactId: null,
+        researchSnapshotId: research.researchSnapshotId, decisions: [], expectedHeadArtifactId: null,
         idempotencyKey: crypto.randomUUID(), changeReason: 'REAL_INPUT_UAT_AMAZON_MASTER_KW'
       });
     } else {
+      const winnerPreview = await api.json(`/api/projects/${project.projectId}/etsy/winners/preview`, 'POST', {
+        researchSnapshotId: research.researchSnapshotId
+      });
+      assert.equal(winnerPreview.zeroWrite, true);
+      const selectedEntityIds = winnerPreview.payload.selectedEntityIds;
       const winners = await api.json(`/api/projects/${project.projectId}/etsy/winners`, 'POST', {
-        researchSnapshotId: research.researchSnapshotId, winnerCount: 8, expectedHeadArtifactId: null,
+        researchSnapshotId: research.researchSnapshotId, selectedEntityIds, expectedHeadArtifactId: null,
         idempotencyKey: crypto.randomUUID(), changeReason: 'REAL_INPUT_UAT_ETSY_WINNERS'
       });
       const patterns = await api.json(`/api/projects/${project.projectId}/etsy/patterns`, 'POST', {
-        winnerSetArtifactId: winners.id, expectedHeadArtifactId: null,
+        winnerArtifactId: winners.id, expectedHeadArtifactId: null,
         idempotencyKey: crypto.randomUUID(), changeReason: 'REAL_INPUT_UAT_ETSY_PATTERNS'
       });
       const master = await api.json(`/api/projects/${project.projectId}/etsy/master-keywords`, 'POST', {
-        researchSnapshotId: research.researchSnapshotId, winnerSetArtifactId: winners.id,
-        patternArtifactId: patterns.id, expectedHeadArtifactId: null,
+        patternArtifactId: patterns.id, decisions: [], expectedHeadArtifactId: null,
         idempotencyKey: crypto.randomUUID(), changeReason: 'REAL_INPUT_UAT_ETSY_MASTER_KW'
       });
       workflow = { winners, patterns, master };
-      assert.equal(winners.accounting.observationCount, 195, 'All three Etsy CSV files must retain 195 observations');
-      assert.equal(winners.accounting.entityCount, 176, 'Cross-file Etsy entity projection must retain 176 unique listings');
+      assert.equal(winners.accounting.sourceObservationCount, 195, 'All three Etsy CSV files must retain 195 observations');
+      assert.equal(winners.accounting.normalizedEntityCount, 176, 'Cross-file Etsy entity projection must retain 176 unique listings');
     }
     const asserted = (value, basis = 'OTHER') => ({ disposition: 'ASSERTED', value, basis });
     const truth = await api.json(`/api/projects/${project.projectId}/product-truth/revisions`, 'POST', {
@@ -173,9 +172,14 @@ async function main() {
       assert.equal(intelligence.accounting.unallocatedCount, 0);
     } else {
       assert.equal(workflow.master.accounting.droppedKeywordCount, 0);
-      assert.ok(Array.from(draft.etsyTitle).length <= 140); assert.equal(draft.etsyTags.length, 13);
+      assert.ok(Array.from(draft.etsyTitle).length <= 140);
+      assert.ok(draft.etsyTags.length > 0 && draft.etsyTags.length <= 13);
       assert.ok(draft.etsyTags.every(tag => Array.from(tag).length <= 20));
-      assert.equal(draft.etsyTagExplanations.length, 13, 'Each Etsy tag must retain its explanation');
+      assert.equal(draft.etsyTagExplanations.length, draft.etsyTags.length, 'Each Etsy tag must retain its explanation');
+      assert.equal(draft.etsyTags.length === 13 ? draft.etsyTagStatus.code === 'COMPLETE'
+        : draft.etsyTagStatus.code === 'TAG_SHORTAGE'
+          && draft.etsyTagStatus.missingCount === 13 - draft.etsyTags.length, true,
+      'Safe tag shortage must be explicit instead of padded with invented tags');
       assert.equal(intelligence.accounting.corpusAccountingGap, 0);
     }
     return { marketplace, projectId: project.projectId, imports, workflow: {
@@ -183,13 +187,14 @@ async function main() {
       patternId: workflow.patterns?.id, masterKeywordId: workflow.master.id,
       masterKeywordCount: workflow.master.accounting.masterKeywordCount,
       sourceNoiseCount: workflow.master.accounting.rejectedSourceNoiseCount,
-      matchedAsinCount: workflow.binding?.accounting.matchedAsinCount,
-      entityCount: workflow.winners?.accounting.entityCount }, researchSnapshotId: research.researchSnapshotId,
+      selectedAsinCount: workflow.plan?.payload.selectedAsins.length,
+      entityCount: workflow.winners?.accounting.normalizedEntityCount }, researchSnapshotId: research.researchSnapshotId,
       researchSnapshotHash: research.researchSnapshotHash, intelligenceSnapshotId: intelligence.intelligenceSnapshotId,
       intelligenceSnapshotHash: intelligence.intelligenceSnapshotHash, listingId: listing.listingId,
       listingRevisionId: listing.revisionId, status: listing.status, accounting: intelligence.accounting,
       title: amazon ? draft.amazonTitle : draft.etsyTitle,
-      tags: amazon ? undefined : draft.etsyTags, imagePrompts: draft.imagePrompts,
+      tags: amazon ? undefined : draft.etsyTags, tagStatus: amazon ? undefined : draft.etsyTagStatus,
+      imagePrompts: draft.imagePrompts,
       policy: { contractId: listingPreview.dependencies.policyContractId,
         approvalEligible: listingPreview.policy?.policyContractApprovalEligible ?? false,
         blockers: listingPreview.guardAccounting?.approvalBlockers || [] } };

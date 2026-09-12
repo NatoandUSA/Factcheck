@@ -16,11 +16,18 @@ const TIERS = new Set(['PRIMARY', 'SECONDARY', 'LONG_TAIL', 'PATTERN_ONLY', 'REV
 const MODELED_FIELDS = new Set(['totalSold', 'sold24h', 'totalViews', 'avgViews', 'views24h', 'revenue',
   'conversionRate', 'favorites', 'favoriteRate', 'shopDailySold', 'ageDays']);
 const PUBLIC_FIELDS = new Set(['title', 'shopName', 'priceAmount', 'originalPriceAmount', 'reviewCount', 'rating',
-  'tags', 'categories', 'country', 'url', 'reportedRank', 'badges']);
+  'tags', 'tagDiagnostics', 'categories', 'country', 'url', 'reportedRank', 'badges']);
 const STOP = new Set(['gift', 'gifts', 'regalo', 'regalos', 'custom', 'personalized', 'personalised', 'personalizado',
   'personalizada', 'etsy', 'sale', 'new', 'best', 'para', 'with', 'from']);
 const PERSONALIZATION = new Set(['custom', 'personalized', 'personalised', 'personalizado', 'personalizada', 'name', 'nombre']);
 const GIFT = new Set(['gift', 'gifts', 'regalo', 'regalos', 'present']);
+const CONCEPT_GROUPS = Object.freeze([
+  ['daughter', 'hija', 'girl'], ['mother', 'madre', 'mom', 'mama'], ['father', 'padre', 'dad', 'papa'],
+  ['gift', 'gifts', 'regalo', 'regalos', 'present'], ['necklace', 'collar', 'pendant'],
+  ['hat', 'cap', 'gorra'], ['blanket', 'manta'], ['shirt', 'tshirt', 'tee', 'camiseta'],
+  ['custom', 'personalized', 'personalised', 'personalizado', 'personalizada'],
+  ['birthday', 'cumpleanos'], ['graduation', 'graduacion'], ['christmas', 'navidad']
+].map(group => Object.freeze(group)));
 
 class EtsyWorkflowError extends Error {
   constructor(code, status = 400, details = {}) { super(code); this.code = code; this.status = status; this.details = details; }
@@ -58,6 +65,11 @@ function entityKey(item) {
 }
 function entityId(key) { return `ETSY-${crypto.createHash('sha256').update(key).digest('hex').slice(0, 16).toUpperCase()}`; }
 function isPresent(value) { return Array.isArray(value) ? value.length > 0 : value !== null && value !== undefined && value !== ''; }
+function semanticTokens(value) {
+  const base = new Set(tokens(value));
+  for (const group of CONCEPT_GROUPS) if (group.some(token => base.has(token))) for (const token of group) base.add(token);
+  return base;
+}
 
 function evidenceTier(field, observation) {
   const provider = text(observation.evidenceProvider || observation.sourceLabel).toUpperCase();
@@ -100,14 +112,15 @@ function mergeEntities(observations) {
 }
 
 function relevance(entity, seedPhrase) {
-  const seed = new Set(tokens(seedPhrase));
-  const haystack = new Set(tokens([entity.title, ...(entity.tags || []), ...entity.queryContexts].join(' ')));
+  const seed = semanticTokens(seedPhrase);
+  const haystack = semanticTokens([entity.title, ...(entity.tags || [])].join(' '));
   const shared = [...seed].filter(token => haystack.has(token));
   const exactContext = entity.queryContexts.some(value => fold(value) === fold(seedPhrase));
-  const titleShared = tokens(entity.title).filter(token => seed.has(token));
-  const relevant = seed.size === 0 || titleShared.length > 0 || (exactContext && shared.length > 0);
+  const titleShared = [...semanticTokens(entity.title)].filter(token => seed.has(token));
+  const relevant = seed.size === 0 || shared.length > 0;
   return { relevant, sharedTokens: shared, titleSharedTokens: titleShared, exactContext,
-    reason: relevant ? (titleShared.length ? 'TITLE_SEED_OVERLAP' : 'CAPTURE_CONTEXT_MATCH') : 'NO_SEED_RELEVANCE' };
+    reason: relevant ? (titleShared.length ? 'TITLE_SEMANTIC_SEED_OVERLAP' : 'TAG_SEMANTIC_SEED_OVERLAP')
+      : exactContext ? 'CAPTURED_FOR_SEED_BUT_LISTING_NOT_RELEVANT' : 'NO_SEED_RELEVANCE' };
 }
 
 function rankEntities(entities, seedPhrase) {
@@ -257,6 +270,7 @@ function minePatterns(winner) {
     marketContext: { price: prices.length ? { median: prices[Math.floor(prices.length / 2)], low: prices[Math.floor(prices.length * .2)],
       high: prices[Math.min(prices.length - 1, Math.floor(prices.length * .8))], unit: 'SOURCE_DISPLAY_UNIT' } : null,
       uniqueShopCount: shops.size, largestShopShare: Number((Math.max(0, ...shops.values()) / entities.length).toFixed(3)) },
+    tagDiagnostics: { unparseableCellCount: entities.filter(item => item.tagDiagnostics?.status === 'UNPARSEABLE_CONCATENATED_SUGGESTIONS').length },
     evidenceTiers: { publicPattern: 'E1_OBSERVED_PUBLIC', modeledRanking: 'E2_MODELED_THIRD_PARTY',
       ytrendsSupplement: 'E3_SUPPLEMENTAL_INDEX', staffOverride: 'E4_STAFF_ASSERTED_UNVERIFIED' }
   };
@@ -268,7 +282,8 @@ async function previewPatterns(db, scope, projectId, input) {
     researchSnapshotId: winner.dependencies.researchSnapshotId, researchSnapshotHash: winner.dependencies.researchSnapshotHash };
   const accounting = { selectedWinnerCount: payload.sampleSize, titleHeadCount: payload.titleHeads.length,
     observedTagCount: payload.observedTags.length, repeatedPhraseCount: payload.repeatedPhrases.length,
-    topWordCount: payload.topWords.length, droppedWinnerCount: 0 };
+    topWordCount: payload.topWords.length, unparseableTagCellCount: payload.tagDiagnostics.unparseableCellCount,
+    droppedWinnerCount: 0 };
   return { zeroWrite: true, dependencies, payload, accounting, bindings: bindings(),
     previewHash: hashBytes(canonicalJson({ dependencies, payload, accounting, bindings: bindings() })) };
 }
@@ -344,21 +359,40 @@ function buildMaster(pattern, decisions = []) {
     { evidenceTier: 'E3_SUPPLEMENTAL_INDEX', sourceFields: item.sourceFields,
       responseHash: pattern.payload.ytrendsSupplement.responseHash });
   const decisionMap = new Map((decisions || []).map(item => [fold(item.phrase), item]));
+  const seedVocabulary = semanticTokens(pattern.payload.seedPhrase);
+  const sampleSize = Math.max(1, Number(pattern.payload.sampleSize) || 1);
   const scored = [...candidates.values()].map(item => {
-    const specificity = Math.min(1, tokens(item.phrase).length / 5); const diversity = Math.min(1, item.shopSpread / 3);
-    return { ...item, score: Number((100 * (.55 * item.confidence + .25 * specificity + .2 * diversity)).toFixed(2)) };
+    const phraseVocabulary = semanticTokens(item.phrase);
+    const seedOverlap = seedVocabulary.size ? [...seedVocabulary].filter(token => phraseVocabulary.has(token)).length / seedVocabulary.size : 0;
+    const specificity = Math.min(1, tokens(item.phrase).length / 5);
+    const evidenceSpread = Math.min(1, item.listingSpread / sampleSize);
+    const competitionProxy = Math.min(1, item.shopSpread / sampleSize);
+    const demandProxy = .65 * item.confidence + .35 * evidenceSpread;
+    const opportunityScore = demandProxy * (1 - .45 * competitionProxy);
+    return { ...item, seedOverlap, evidenceSpread, competitionProxy, demandProxy, opportunityScore,
+      score: Number((100 * (.5 * demandProxy + .2 * specificity + .2 * seedOverlap + .1 * (1 - competitionProxy))).toFixed(2)) };
   }).sort((a, b) => b.score - a.score || b.shopSpread - a.shopSpread || a.phrase.localeCompare(b.phrase));
   if (scored.length > MASTER_LIMIT) throw new EtsyWorkflowError('ETSY_MASTER_KEYWORD_LIMIT', 413, { count: scored.length, limit: MASTER_LIMIT });
   const keywords = scored.map((item, index) => {
     const decision = decisionMap.get(fold(item.phrase)); const ip = ipGuard.screenText(item.phrase);
-    const defaultTier = ip.verdict === 'BLOCK' ? 'EXCLUDED' : item.sourceTypes.has('OBSERVED_TAG') ? 'PRIMARY'
-      : item.sourceTypes.has('TITLE_HEAD') || item.score >= 70 ? 'SECONDARY' : tokens(item.phrase).length >= 3 ? 'LONG_TAIL' : 'PATTERN_ONLY';
+    const primaryEvidence = item.sourceTypes.has('PROJECT_SEED')
+      || (item.seedOverlap > 0 && item.sourceTypes.has('OBSERVED_TAG'))
+      || (item.seedOverlap > 0 && item.sourceTypes.has('REPEATED_TITLE_PHRASE') && item.listingSpread >= 2);
+    const defaultTier = ip.verdict === 'BLOCK' ? 'EXCLUDED' : primaryEvidence ? 'PRIMARY'
+      : item.seedOverlap === 0 && item.sourceTypes.has('TITLE_HEAD') ? 'REVIEW'
+        : item.sourceTypes.has('OBSERVED_TAG') || item.sourceTypes.has('TITLE_HEAD') || item.score >= 70 ? 'SECONDARY'
+          : tokens(item.phrase).length >= 3 ? 'LONG_TAIL' : 'PATTERN_ONLY';
     const tier = TIERS.has(decision?.tier) ? decision.tier : defaultTier;
     return { keywordId: `ETSY-KW-${String(index + 1).padStart(5, '0')}`, phrase: item.phrase, priorityRank: index + 1,
       score: item.score, tier, disposition: tier === 'EXCLUDED' ? (ip.verdict === 'BLOCK' ? 'IP_BLOCKED' : 'STAFF_EXCLUDED') : 'RESEARCH_CANDIDATE_REQUIRES_TRUTH_GATE',
       intent: intentOf(item.phrase), semanticCluster: [...new Set(tokens(item.phrase))].sort().join(' '),
       sourceTypes: [...item.sourceTypes], listingSpread: item.listingSpread, shopSpread: item.shopSpread,
-      confidence: item.confidence, provenance: item.provenance, ipHits: ip.verdict === 'BLOCK' ? ip.hits : [],
+      confidence: item.confidence, seedOverlap: Number(item.seedOverlap.toFixed(3)),
+      demandProxy: Number(item.demandProxy.toFixed(3)), competitionProxy: Number(item.competitionProxy.toFixed(3)),
+      opportunityScore: Number((item.opportunityScore * 100).toFixed(2)),
+      tierReason: ip.verdict === 'BLOCK' ? 'IP_BLOCKED' : primaryEvidence ? 'PRIMARY_SEED_OR_CROSS_LISTING_EVIDENCE'
+        : item.seedOverlap === 0 && item.sourceTypes.has('TITLE_HEAD') ? 'REVIEW_NO_SEED_RELEVANCE' : 'SECONDARY_PATTERN_EVIDENCE',
+      provenance: item.provenance, ipHits: ip.verdict === 'BLOCK' ? ip.hits : [],
       staffNote: text(decision?.note).slice(0, 500) };
   });
   const known = new Set(keywords.map(item => fold(item.phrase))); const unknown = [...decisionMap.keys()].filter(key => !known.has(key));
@@ -369,6 +403,8 @@ function buildMaster(pattern, decisions = []) {
     masterKeywordCount: keywords.length, availableForAllocation: keywords.filter(item => item.tier !== 'EXCLUDED').length,
     ipBlockedCount: keywords.filter(item => item.disposition === 'IP_BLOCKED').length,
     staffExcludedCount: keywords.filter(item => item.disposition === 'STAFF_EXCLUDED').length,
+    primaryCount: keywords.filter(item => item.tier === 'PRIMARY').length,
+    reviewCount: keywords.filter(item => item.tier === 'REVIEW').length,
     semanticClusterCount: new Set(keywords.map(item => item.semanticCluster)).size, droppedKeywordCount: 0 } };
 }
 

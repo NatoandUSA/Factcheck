@@ -435,6 +435,33 @@ function splitSuggestions(value) {
   return String(value).split(/[,;|]/).map(normalizeLine).filter(Boolean);
 }
 
+function parseEtsyTagSuggestions(value) {
+  const raw = normalizeLine(value);
+  if (isUnknown(raw) || /^no tags? found$/i.test(raw)) {
+    return { tags: [], diagnostics: { status: 'NO_TAGS_REPORTED', declaredCount: 0, rejectedSegments: 0 } };
+  }
+  const declared = raw.match(/^\??\s*(\d{1,2})\s+Check Sugg\s*\(\s*\d{1,2}\s*\)\s*Copy Suggestions\s*/i);
+  const body = declared ? raw.slice(declared[0].length).replace(/^\s*[,;|]\s*/, '') : raw;
+  const hasExplicitSeparators = /[,;|]/.test(body);
+  const segments = hasExplicitSeparators ? body.split(/[,;|]/).map(normalizeLine).filter(Boolean) : [body];
+  const rejected = [];
+  const tags = [];
+  for (const segment of segments) {
+    const noisy = /Check Sugg|Copy Suggestions|Add to cart|More like this|Sale Price|Original Price|Estimated (?:Total Sales|Revenue)|\bViews\b|\bSold\b/i.test(segment);
+    const validLength = Array.from(segment).length <= 20;
+    if (!segment || noisy || !validLength || !/[\p{L}\p{N}]/u.test(segment)) { rejected.push(segment); continue; }
+    tags.push(segment);
+  }
+  const cleanTags = [...new Set(tags)];
+  const concatenated = Boolean(declared) && !hasExplicitSeparators && body.length > 20;
+  return { tags: concatenated ? [] : cleanTags, diagnostics: {
+    status: concatenated ? 'UNPARSEABLE_CONCATENATED_SUGGESTIONS' : cleanTags.length ? 'PARSED_EXPLICIT_TAGS' : 'NO_USABLE_TAGS',
+    declaredCount: declared ? Number(declared[1]) : null,
+    acceptedCount: concatenated ? 0 : cleanTags.length,
+    rejectedSegments: rejected.length + (concatenated ? 1 : 0)
+  } };
+}
+
 function findCsvListingIdConflicts(sellers) {
   const byListingId = new Map();
   const conflicts = [];
@@ -553,6 +580,7 @@ function parseCsvListing(row, index) {
   const shopDailySold = parseCsvNumberEvidence(csvValue(row, 'shop_daily_sold'));
   const createdRaw = csvValue(row, 'he_created', 'created');
   const updatedRaw = csvValue(row, 'he_updated', 'updated');
+  const parsedTags = parseEtsyTagSuggestions(csvValue(row, 'he_tags', 'tags'));
   const seller = {
     id: `csv-${sourceRank}`,
     sourceRowId: `csv-row-${index + 1}`,
@@ -592,8 +620,11 @@ function parseCsvListing(row, index) {
     listingCreatedAt: normalizeIsoTimestamp(createdRaw),
     listingUpdatedAt: normalizeIsoTimestamp(updatedRaw),
     ageDays: parseCsvNumberEvidence(csvValue(row, 'age_days')).value,
-    tags: splitSuggestions(csvValue(row, 'he_tags', 'tags')),
-    tagSource: csvValue(row, 'he_tags', 'tags') ? 'STAFF_FILE_CSV_SUGGESTION' : 'NO_TAGS_REPORTED',
+    tags: parsedTags.tags,
+    tagDiagnostics: parsedTags.diagnostics,
+    tagSource: parsedTags.diagnostics.status === 'NO_TAGS_REPORTED' ? 'NO_TAGS_REPORTED'
+      : parsedTags.diagnostics.status === 'UNPARSEABLE_CONCATENATED_SUGGESTIONS'
+        ? 'STAFF_FILE_CSV_UNPARSEABLE_SUGGESTION' : 'STAFF_FILE_CSV_SUGGESTION',
     categories: splitSuggestions(csvValue(row, 'he_categories', 'categories')),
     country: csvValue(row, 'country'),
     shopCountry: csvValue(row, 'country'),
@@ -714,6 +745,7 @@ function parseEtsySearchHtml(rawText) {
     const sourceRank = Number.isFinite(rank) && rank > 0 ? rank : sellers.length + 1;
     const listingId = normalizeLine(item.sku || item.productID) || null;
     const shopName = normalizeLine(item.brand?.name || item.author?.name || item.seller?.name) || null;
+    const parsedTags = parseEtsyTagSuggestions(item.keywords);
     sellers.push({
       id: `html-${sourceRank}`,
       listingId,
@@ -735,7 +767,9 @@ function parseEtsySearchHtml(rawText) {
       favorites: null, favoriteRate: null, favoriteRateApproximate: false,
       conversionRate: null, conversionRateApproximate: false,
       createdDate: null, createdRaw: null, updatedRaw: null,
-      tags: splitSuggestions(item.keywords), tagSource: item.keywords ? 'ETSY_HTML_METADATA' : 'NO_TAGS_REPORTED',
+      tags: parsedTags.tags,
+      tagDiagnostics: parsedTags.diagnostics,
+      tagSource: item.keywords ? 'ETSY_HTML_METADATA' : 'NO_TAGS_REPORTED',
       categories: [], country: null, shopCountry: null,
       url: normalizeLine(item.url) || null,
       fieldProvenance: {

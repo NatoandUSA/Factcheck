@@ -3,7 +3,8 @@ import { useAuth } from '../context/AuthContext';
 
 const CORE_FACT_FIELDS = [
   ['productName', 'Tên sản phẩm', true], ['productType', 'Loại sản phẩm', true],
-  ['category', 'Danh mục'], ['materials', 'Chất liệu'], ['colors', 'Màu sắc'], ['sizes', 'Kích thước'],
+  ['category', 'Danh mục'], ['materials', 'Chất liệu'], ['gemstones', 'Đá / hạt / thành phần'],
+  ['colors', 'Màu sắc'], ['sizes', 'Kích thước'],
   ['personalization', 'Cá nhân hóa'], ['process', 'Cách sản xuất / cá nhân hóa'],
   ['includedItems', 'Vật phẩm đi kèm'], ['packaging', 'Đóng gói'], ['care', 'Bảo quản'],
   ['recipient', 'Người nhận'], ['occasion', 'Dịp'], ['audience', 'Đối tượng'],
@@ -74,6 +75,29 @@ function Metric({ label, value }) {
   return <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '8px 10px' }}>
     <div style={{ fontSize: '.68rem', color: '#64748b', fontWeight: 800 }}>{label}</div>
     <div style={{ fontSize: '.9rem', fontWeight: 800, overflowWrap: 'anywhere' }}>{value ?? '—'}</div>
+  </div>;
+}
+
+const fileIdentity = file => `${file.name}\u0000${file.size}\u0000${file.lastModified || 0}`;
+const mergeSelectedFiles = (current, selected) => {
+  const merged = new Map((current || []).map(file => [fileIdentity(file), file]));
+  for (const file of Array.from(selected || [])) merged.set(fileIdentity(file), file);
+  return [...merged.values()];
+};
+
+function SelectedFileQueue({ files, label, onRemove, onClear }) {
+  if (!files.length) return null;
+  return <div style={{ marginTop: 8, padding: 8, border: '1px solid #cbd5e1', borderRadius: 8, background: '#f8fafc' }}>
+    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'center' }}>
+      <b style={{ fontSize: '.75rem' }}>{label}: {files.length} file</b>
+      <button type="button" onClick={onClear}>Bỏ chọn tất cả</button>
+    </div>
+    <div style={{ display: 'grid', gap: 4, marginTop: 5 }}>
+      {files.map(file => <div key={fileIdentity(file)} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: '.72rem' }}>
+        <span style={{ overflowWrap: 'anywhere' }}>{file.name} · {file.size} bytes</span>
+        <button type="button" aria-label={`Bỏ file ${file.name}`} onClick={() => onRemove(file)}>Bỏ</button>
+      </div>)}
+    </div>
   </div>;
 }
 
@@ -218,11 +242,24 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
 
   const chooseFiles = (selected, lane = 'ETSY_SEARCH') => {
     const chosen = Array.from(selected || []);
-    if (lane === 'AMAZON_XRAY') { setAmazonXrayFiles(chosen); setAmazonXrayPreviews([]); }
-    else if (lane === 'AMAZON_CEREBRO') { setAmazonCerebroFiles(chosen); setAmazonCerebroPreviews([]); }
-    else { setFiles(chosen); setFilePreviews([]); }
+    if (lane === 'AMAZON_XRAY') { setAmazonXrayFiles(previous => mergeSelectedFiles(previous, chosen)); setAmazonXrayPreviews([]); }
+    else if (lane === 'AMAZON_CEREBRO') { setAmazonCerebroFiles(previous => mergeSelectedFiles(previous, chosen)); setAmazonCerebroPreviews([]); }
+    else { setFiles(previous => mergeSelectedFiles(previous, chosen)); setFilePreviews([]); }
     appendExecutionLog({ action: 'choose-files', status: 'SELECTED', researchKind: lane,
       files: chosen.map(file => ({ name: file.name, size: file.size, type: file.type })) });
+  };
+
+  const removeSelectedFile = (file, lane) => {
+    const remove = previous => previous.filter(item => fileIdentity(item) !== fileIdentity(file));
+    if (lane === 'AMAZON_XRAY') { setAmazonXrayFiles(remove); setAmazonXrayPreviews([]); }
+    else if (lane === 'AMAZON_CEREBRO') { setAmazonCerebroFiles(remove); setAmazonCerebroPreviews([]); }
+    else { setFiles(remove); setFilePreviews([]); }
+  };
+
+  const clearSelectedFiles = lane => {
+    if (lane === 'AMAZON_XRAY') { setAmazonXrayFiles([]); setAmazonXrayPreviews([]); }
+    else if (lane === 'AMAZON_CEREBRO') { setAmazonCerebroFiles([]); setAmazonCerebroPreviews([]); }
+    else { setFiles([]); setFilePreviews([]); }
   };
 
   const upload = async (confirm, lane = 'ETSY_SEARCH') => {
@@ -710,17 +747,19 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
         <b>1. Upload Xray từ seed</b>
         <p style={{ margin: '4px 0 9px', color: '#475569', fontSize: '.77rem' }}>Chọn một hoặc nhiều Xray. Preview không ghi database; xác nhận import mới lưu từng file với hash/accounting riêng.</p>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
-          <input aria-label="Upload Xray" type="file" multiple accept=".xlsx,.csv" onChange={event => chooseFiles(event.target.files, 'AMAZON_XRAY')} />
+          <input aria-label="Upload Xray" type="file" multiple accept=".xlsx,.csv" onChange={event => { chooseFiles(event.target.files, 'AMAZON_XRAY'); event.target.value = ''; }} />
           <ActionButton accent={accent} disabled={!amazonXrayFiles.length || busy} onClick={() => upload(false, 'AMAZON_XRAY')}>Preview {amazonXrayFiles.length || ''} Xray zero-write</ActionButton>
           <ActionButton accent={accent} disabled={!amazonXrayPreviews.some(item => item.result?.zeroWrite) || busy} onClick={() => upload(true, 'AMAZON_XRAY')}>Xác nhận import Xray</ActionButton>
         </div>
+        <SelectedFileQueue files={amazonXrayFiles} label="Xray đang chờ" onRemove={file => removeSelectedFile(file, 'AMAZON_XRAY')} onClear={() => clearSelectedFiles('AMAZON_XRAY')} />
         {previewGrid(amazonXrayPreviews, 'amazon-xray-preview-results')}
       </div> : <>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
-          <input aria-label="File research" type="file" multiple accept=".csv,.html,.htm,text/csv,text/html" onChange={event => chooseFiles(event.target.files, 'ETSY_SEARCH')} />
+          <input aria-label="File research" type="file" multiple accept=".csv,.html,.htm,text/csv,text/html" onChange={event => { chooseFiles(event.target.files, 'ETSY_SEARCH'); event.target.value = ''; }} />
           <ActionButton accent={accent} disabled={!files.length || busy} onClick={() => upload(false, 'ETSY_SEARCH')}>1A. Preview {files.length || ''} file zero-write</ActionButton>
           <ActionButton accent={accent} disabled={!filePreviews.some(item => item.result?.zeroWrite) || busy} onClick={() => upload(true, 'ETSY_SEARCH')}>1B. Xác nhận {filePreviews.filter(item => item.result?.zeroWrite).length || ''} file hợp lệ</ActionButton>
         </div>
+        <SelectedFileQueue files={files} label="Etsy CSV/HTML đang chờ" onRemove={file => removeSelectedFile(file, 'ETSY_SEARCH')} onClear={() => clearSelectedFiles('ETSY_SEARCH')} />
         {previewGrid(filePreviews, 'multi-file-preview-results')}
       </>}
       {marketplace === 'AMAZON' && <div data-testid="amazon-xray-cohort-planner" style={{ marginTop: 14, border: '1px solid #93c5fd', borderRadius: 10, padding: 11, background: '#eff6ff' }}>
@@ -747,10 +786,11 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
         <b>3. Upload Cerebro sau khi đã chạy các ASIN batch trên Helium 10</b>
         <p style={{ margin: '4px 0 9px', color: '#475569', fontSize: '.77rem' }}>Cho phép một hoặc nhiều file. Staff có thể thay đổi batch hoặc import file Cerebro hợp lệ đã có; OmniSeller không khóa batch và không yêu cầu chứng minh file thuộc batch nào.</p>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
-          <input aria-label="Upload Cerebro" type="file" multiple accept=".xlsx,.csv" onChange={event => chooseFiles(event.target.files, 'AMAZON_CEREBRO')} />
+          <input aria-label="Upload Cerebro" type="file" multiple accept=".xlsx,.csv" onChange={event => { chooseFiles(event.target.files, 'AMAZON_CEREBRO'); event.target.value = ''; }} />
           <ActionButton accent={accent} disabled={!amazonCerebroFiles.length || busy} onClick={() => upload(false, 'AMAZON_CEREBRO')}>Preview {amazonCerebroFiles.length || ''} Cerebro zero-write</ActionButton>
           <ActionButton accent={accent} disabled={!amazonCerebroPreviews.some(item => item.result?.zeroWrite) || busy} onClick={() => upload(true, 'AMAZON_CEREBRO')}>Xác nhận import Cerebro</ActionButton>
         </div>
+        <SelectedFileQueue files={amazonCerebroFiles} label="Cerebro đang chờ" onRemove={file => removeSelectedFile(file, 'AMAZON_CEREBRO')} onClear={() => clearSelectedFiles('AMAZON_CEREBRO')} />
         {previewGrid(amazonCerebroPreviews, 'amazon-cerebro-preview-results')}
       </div>}
       {imports.length > 0 && <div data-testid="research-snapshot-lane" style={{ marginTop: 14, border: `1px solid ${marketplace === 'AMAZON' ? '#93c5fd' : '#fed7aa'}`, borderRadius: 10, padding: 11, background: '#fff' }}>
@@ -769,7 +809,7 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
       </div>}
       {marketplace === 'AMAZON' && researchReady && <div data-testid="amazon-master-keyword-workspace" style={{ marginTop: 14, borderTop: '1px solid #bfdbfe', paddingTop: 12 }}>
         <b>5. Cerebro → Master Keyword List</b>
-        <p style={{ margin: '4px 0 9px', color: '#475569', fontSize: '.77rem' }}>Nhận trực tiếp một hoặc nhiều Cerebro hợp lệ; không yêu cầu chứng minh ancestry. Mọi keyword được giữ cùng metrics/provenance; outlier và residue được tách để review, không âm thầm xóa.</p>
+        <p style={{ margin: '4px 0 9px', color: '#475569', fontSize: '.77rem' }}>Nhận trực tiếp một hoặc nhiều Cerebro hợp lệ; không yêu cầu chứng minh ancestry. Điểm ưu tiên tách rõ nhu cầu (SV/Keyword Sales), độ phủ niche (Ranking Competitors), và cơ hội cạnh tranh (ít Competing Products + Title Density thấp). Outlier/residue được giữ để review, không âm thầm xóa.</p>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           <ActionButton accent={accent} disabled={busy} onClick={previewMasterKeywords}>Preview / làm mới Master KW</ActionButton>
           {masterPreview && <ActionButton accent="#166534" disabled={busy} onClick={saveMasterKeywords}>Lưu immutable Master KW</ActionButton>}
@@ -785,10 +825,11 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
           <input aria-label="Tìm trong Master Keyword" value={keywordQuery} onChange={event => setKeywordQuery(event.target.value)} placeholder="Tìm keyword…" style={{ width: '100%', marginTop: 8, padding: 8 }} />
           <div style={{ maxHeight: 430, overflow: 'auto', marginTop: 8, border: '1px solid #cbd5e1', borderRadius: 8, background: '#fff' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '.73rem' }}><thead><tr>
-              <th style={{ textAlign: 'left', padding: 7 }}>#</th><th style={{ textAlign: 'left' }}>Keyword</th><th>SV</th><th>Sales</th><th>Rank</th><th>Score</th><th>Tier</th><th>Nguồn</th>
+              <th style={{ textAlign: 'left', padding: 7 }}>#</th><th style={{ textAlign: 'left' }}>Keyword</th><th>SV</th><th>Sales</th><th>Niche</th><th>Opportunity</th><th>Score</th><th>Tier</th><th>Nguồn</th>
             </tr></thead><tbody>{visibleMasterKeywords.map(item => <tr key={item.keywordId} style={{ borderTop: '1px solid #e2e8f0' }}>
               <td style={{ padding: 7 }}>{item.priorityRank}</td><td>{item.phrase}</td><td style={{ textAlign: 'center' }}>{item.metrics.searchVolume ?? '—'}</td>
-              <td style={{ textAlign: 'center' }}>{item.metrics.keywordSales ?? '—'}</td><td style={{ textAlign: 'center' }}>{item.metrics.positionRank ?? '—'}</td>
+              <td style={{ textAlign: 'center' }}>{item.metrics.keywordSales ?? '—'}</td><td style={{ textAlign: 'center' }}>{item.competitorCoverageRatio ?? '—'}</td>
+              <td style={{ textAlign: 'center' }}>{item.opportunityScore ?? '—'}</td>
               <td style={{ textAlign: 'center' }}>{item.score}</td><td style={{ textAlign: 'center' }}><select aria-label={`Tier ${item.phrase}`} value={item.tier} disabled={!masterPreview} onChange={event => setKeywordTier(item.phrase, event.target.value)}>
                 {['PRIMARY','SECONDARY','LONG_TAIL','OUTLIER_REVIEW','RESIDUE','EXCLUDED'].map(tier => <option key={tier}>{tier}</option>)}
               </select></td><td style={{ textAlign: 'center' }}>{item.provenance?.length || 0}</td>
@@ -836,23 +877,31 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
           {etsyPatternPreview && <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(250px,1fr))', gap: 8, marginTop: 9 }}>
             <div><b>Leading words</b><div>{(etsyPatternPreview.payload?.leadingWords || []).map(item => `${item.phrase} (${Math.round(item.share * 100)}%)`).join(', ') || 'Chưa có'}</div></div>
             <div><b>Repeated phrases</b><div>{(etsyPatternPreview.payload?.repeatedPhrases || []).slice(0, 12).map(item => `${item.phrase} (${item.count})`).join(', ') || 'Chưa có'}</div></div>
-            <div><b>Observed tags</b><div>{(etsyPatternPreview.payload?.observedTags || []).slice(0, 13).map(item => item.phrase).join(', ') || 'Không có tag thực trong file'}</div></div>
+            <div><b>Observed tags sạch</b>{(etsyPatternPreview.payload?.observedTags || []).length
+              ? <div style={{ display: 'grid', gap: 4, marginTop: 4 }}>{etsyPatternPreview.payload.observedTags.slice(0, 20).map(item => <div key={item.phrase} style={{ border: '1px solid #fed7aa', borderRadius: 6, padding: '4px 6px', background: '#fff' }}>
+                <b>{item.phrase}</b> · {item.listingSpread} listing · {item.shopSpread} shop
+              </div>)}</div>
+              : <div>Không có tag có thể đọc chắc chắn trong file.</div>}
+              {etsyPatternPreview.accounting?.unparseableTagCellCount > 0 && <div style={{ marginTop: 5, color: '#9a3412', fontSize: '.72rem' }}>
+                Đã cách ly {etsyPatternPreview.accounting.unparseableTagCellCount} ô HeyEtsy bị nối chuỗi; raw data vẫn còn trong import, không đưa rác vào Master KW.
+              </div>}
+            </div>
             <div><b>Structure</b><div>Personalization {etsyPatternPreview.payload?.structure?.personalizationRate}% · Gift {etsyPatternPreview.payload?.structure?.giftRate}% · {etsyPatternPreview.payload?.structure?.averageWords} words/title</div></div>
           </div>}
         </div>}
 
         {workflowState?.heads?.ETSY_PATTERN_SNAPSHOT && <div style={{ marginTop: 14, borderTop: '1px solid #fed7aa', paddingTop: 12 }}>
           <b>1F. Pattern → Etsy Master Keyword List</b>
-          <p style={{ margin: '4px 0 9px', color: '#475569', fontSize: '.77rem' }}>Mỗi phrase giữ provenance, intent, semantic cluster và lý do loại. Không tạo tag giả để đủ 13.</p>
+          <p style={{ margin: '4px 0 9px', color: '#475569', fontSize: '.77rem' }}>Mỗi phrase giữ provenance, intent, semantic cluster và lý do loại. Etsy CSV không có keyword search volume chính thức, nên Demand/Competition dưới đây là proxy minh bạch từ winner spread; không giả mạo thành SV. Không tạo tag giả để đủ 13.</p>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}><ActionButton accent={accent} disabled={busy} onClick={previewEtsyMasterKeywords}>Preview / làm mới Etsy Master KW</ActionButton>
             {masterPreview && <ActionButton accent="#166534" disabled={busy} onClick={saveEtsyMasterKeywords}>Lưu immutable Etsy Master KW</ActionButton>}
             {masterKeywordHead && <span style={{ alignSelf: 'center', color: '#166534', fontWeight: 800 }}>Master v{masterKeywordHead.revisionNumber} · {masterKeywordHead.accounting?.masterKeywordCount} phrase</span>}
           </div>
           {displayedMaster && <div style={{ marginTop: 9 }}>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(130px,1fr))', gap: 7 }}><Metric label="MASTER KW" value={displayedMaster.accounting?.masterKeywordCount} /><Metric label="SEMANTIC CLUSTERS" value={displayedMaster.accounting?.semanticClusterCount} /><Metric label="IP BLOCKED" value={displayedMaster.accounting?.ipBlockedCount} /><Metric label="DROPPED" value={displayedMaster.accounting?.droppedKeywordCount} /></div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(130px,1fr))', gap: 7 }}><Metric label="MASTER KW" value={displayedMaster.accounting?.masterKeywordCount} /><Metric label="PRIMARY" value={displayedMaster.accounting?.primaryCount} /><Metric label="REVIEW" value={displayedMaster.accounting?.reviewCount} /><Metric label="SEMANTIC CLUSTERS" value={displayedMaster.accounting?.semanticClusterCount} /><Metric label="IP BLOCKED" value={displayedMaster.accounting?.ipBlockedCount} /><Metric label="DROPPED" value={displayedMaster.accounting?.droppedKeywordCount} /></div>
             <input aria-label="Tìm trong Etsy Master Keyword" value={keywordQuery} onChange={event => setKeywordQuery(event.target.value)} placeholder="Tìm phrase…" style={{ width: '100%', marginTop: 8, padding: 8 }} />
-            <div style={{ maxHeight: 420, overflow: 'auto', marginTop: 8, background: '#fff', border: '1px solid #fed7aa', borderRadius: 8 }}><table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '.72rem' }}><thead><tr><th>#</th><th style={{ textAlign: 'left' }}>Phrase</th><th>Intent</th><th>Score</th><th>Tier</th><th>Nguồn</th><th>Shop spread</th></tr></thead><tbody>
-              {visibleMasterKeywords.map(item => <tr key={item.keywordId} style={{ borderTop: '1px solid #ffedd5' }}><td style={{ padding: 6 }}>{item.priorityRank}</td><td>{item.phrase}</td><td>{item.intent}</td><td style={{ textAlign: 'center' }}>{item.score}</td><td><select aria-label={`Etsy tier ${item.phrase}`} value={item.tier} disabled={!masterPreview} onChange={event => setKeywordTier(item.phrase, event.target.value)}>{['PRIMARY','SECONDARY','LONG_TAIL','PATTERN_ONLY','REVIEW','EXCLUDED'].map(tier => <option key={tier}>{tier}</option>)}</select></td><td>{(item.sourceTypes || []).join(', ')}</td><td style={{ textAlign: 'center' }}>{item.shopSpread ?? 0}</td></tr>)}
+            <div style={{ maxHeight: 420, overflow: 'auto', marginTop: 8, background: '#fff', border: '1px solid #fed7aa', borderRadius: 8 }}><table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '.72rem' }}><thead><tr><th>#</th><th style={{ textAlign: 'left' }}>Phrase</th><th>Intent</th><th>Demand proxy</th><th>Competition proxy</th><th>Opportunity</th><th>Score</th><th>Tier</th><th>Nguồn</th></tr></thead><tbody>
+              {visibleMasterKeywords.map(item => <tr key={item.keywordId} style={{ borderTop: '1px solid #ffedd5' }}><td style={{ padding: 6 }}>{item.priorityRank}</td><td>{item.phrase}</td><td>{item.intent}</td><td style={{ textAlign: 'center' }}>{item.demandProxy ?? '—'}</td><td style={{ textAlign: 'center' }}>{item.competitionProxy ?? '—'}</td><td style={{ textAlign: 'center' }}>{item.opportunityScore ?? '—'}</td><td style={{ textAlign: 'center' }}>{item.score}</td><td><select aria-label={`Etsy tier ${item.phrase}`} value={item.tier} disabled={!masterPreview} onChange={event => setKeywordTier(item.phrase, event.target.value)}>{['PRIMARY','SECONDARY','LONG_TAIL','PATTERN_ONLY','REVIEW','EXCLUDED'].map(tier => <option key={tier}>{tier}</option>)}</select></td><td>{(item.sourceTypes || []).join(', ')}</td></tr>)}
             </tbody></table></div>
           </div>}
         </div>}
@@ -921,6 +970,16 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
     </Step>
 
     <Step number="3" title="Phân tích và phân bổ keyword" accent={accent} done={Boolean(head(state, 'intelligenceSnapshotId'))}>
+      {(() => {
+        const missing = [
+          !head(state, 'researchSnapshotId') && 'Research Snapshot chưa lưu',
+          !masterKeywordHead && 'Master Keyword List mới chỉ preview hoặc chưa lưu',
+          !head(state, 'productTruthRevisionId') && 'Product Truth chưa lưu'
+        ].filter(Boolean);
+        return missing.length > 0 && <div data-testid="intelligence-missing-dependencies" style={{ marginBottom: 9, padding: 9, borderRadius: 8, background: '#fff7ed', color: '#9a3412', fontSize: '.78rem' }}>
+          <b>Chưa thể phân bổ:</b> {missing.join(' · ')}. Product Truth chỉ chặn claim không được xác nhận; nó không yêu cầu điền đủ mọi trường.
+        </div>;
+      })()}
       <div style={{ display: 'flex', gap: 9, flexWrap: 'wrap', alignItems: 'center' }}>
         <label style={{ fontSize: '.8rem', fontWeight: 800 }}>Ngôn ngữ listing {' '}<select value={language} onChange={event => setLanguage(event.target.value)}><option value="AUTO">Theo keyword đầu vào</option><option value="EN">English</option><option value="ES">Español</option></select></label>
         <ActionButton accent={accent} disabled={!head(state, 'researchSnapshotId') || !head(state, 'productTruthRevisionId')

@@ -101,9 +101,13 @@ const assert = require('assert');
   check(xrayInput.multiple && input.multiple, 'both Amazon intake lanes must accept multiple files in one selection');
   const selected = new dom.window.File(['fixture-one'], 'Cerebro-one.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
   const selectedTwo = new dom.window.File(['fixture-two'], 'Cerebro-two.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-  Object.defineProperty(input, 'files', { value: [selected, selectedTwo], configurable: true });
+  Object.defineProperty(input, 'files', { value: [selected], configurable: true });
+  await act(async () => { input.dispatchEvent(new dom.window.Event('change', { bubbles: true })); });
+  Object.defineProperty(input, 'files', { value: [selectedTwo], configurable: true });
   await act(async () => { input.dispatchEvent(new dom.window.Event('change', { bubbles: true })); });
   const buttons = () => [...document.querySelectorAll('button')];
+  check(document.body.textContent.includes('Cerebro đang chờ: 2 file'),
+    'subsequent picker selections must append and visibly queue files instead of replacing the prior selection');
   await act(async () => { buttons().find(button => button.textContent.includes('Preview 2 Cerebro')).click(); });
   check(calls.filter(call => call.url.endsWith('/research-imports/preview')).length === 2,
     'one multi-file selection must preview every file through the zero-write route');

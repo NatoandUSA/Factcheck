@@ -106,6 +106,10 @@ async function main() {
   check(preview.body.accounting.masterKeywordCount > 0 && preview.body.accounting.droppedKeywordCount === 0,
     'direct Cerebro creates lossless MKL without Xray ancestry or Product Truth');
   check(preview.body.payload.keywords.every(item => item.provenance?.length), 'every MKL keyword retains provenance');
+  check(preview.body.payload.keywords.every(item => item.opportunityComponents
+    && Object.hasOwn(item.opportunityComponents, 'lowCompetingProducts')
+    && Object.hasOwn(item.opportunityComponents, 'lowTitleDensity')),
+  'Amazon MKL separates high demand, competing-product opportunity and title-density opportunity');
   check(preview.body.payload.roots.length > 0 && Array.isArray(preview.body.payload.residue), 'roots and residue exposed');
   check(!preview.body.dependencies.asinPlanArtifactId, 'ASIN plan is not mandatory ancestry');
   const phrase = preview.body.payload.keywords[0].phrase;

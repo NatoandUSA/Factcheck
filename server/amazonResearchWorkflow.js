@@ -99,7 +99,22 @@ function log(value) { return value == null ? 0 : Math.log10(Math.max(0, value) +
 function normalize(values, transform = value => value) {
   const mapped = values.map(value => value == null ? null : transform(value));
   const finite = mapped.filter(value => Number.isFinite(value)); const max = Math.max(1, ...finite);
-  return mapped.map(value => value == null ? 0 : value / max);
+  return mapped.map(value => value == null ? null : value / max);
+}
+function inverseNormalize(values, transform = value => value) {
+  const mapped = values.map(value => value == null ? null : transform(value));
+  const finite = mapped.filter(value => Number.isFinite(value));
+  if (!finite.length) return mapped.map(() => null);
+  const min = Math.min(...finite); const max = Math.max(...finite);
+  return mapped.map(value => value == null ? null : max === min ? .5 : 1 - ((value - min) / (max - min)));
+}
+function weighted(components) {
+  let total = 0; let active = 0;
+  for (const [value, weight] of components) {
+    if (!Number.isFinite(value)) continue;
+    total += value * weight; active += weight;
+  }
+  return active ? total / active : 0;
 }
 
 function buildRoots(keywords) {
@@ -123,6 +138,8 @@ function masterKeywordPayload(research, seedPhrase, decisions = []) {
   const keywordSales = normalize(source.map(item => number(item.keywordSales)), log);
   const iq = normalize(source.map(item => number(item.iq)), log);
   const coverage = normalize(source.map(item => number(item.rankingCompetitorsCount)), value => value);
+  const competingOpportunity = inverseNormalize(source.map(item => number(item.competingProducts)), log);
+  const titleOpportunity = inverseNormalize(source.map(item => number(item.titleDensity)), value => value);
   const rankQuality = source.map(item => {
     const rank = number(item.positionRank ?? item.competitorRankAverage);
     return rank == null ? 0 : 1 / Math.max(1, rank);
@@ -133,11 +150,18 @@ function masterKeywordPayload(research, seedPhrase, decisions = []) {
   const scored = source.map((item, index) => {
     const phraseTokens = contentTokens(item.phrase); const seedOverlap = seedTokens.size
       ? phraseTokens.filter(token => seedTokens.has(token)).length / seedTokens.size : 0;
-    const metricScore = 0.34 * searchVolume[index] + 0.2 * keywordSales[index] + 0.14 * iq[index]
-      + 0.12 * coverage[index] + 0.1 * (rankQuality[index] / maxRankQuality) + 0.1 * seedOverlap;
+    const metricScore = weighted([
+      [searchVolume[index], .28], [keywordSales[index], .16], [iq[index], .12],
+      [coverage[index], .18], [competingOpportunity[index], .12], [titleOpportunity[index], .08],
+      [rankQuality[index] / maxRankQuality, .03], [seedOverlap, .03]
+    ]);
+    const opportunityScore = weighted([[searchVolume[index], .55], [competingOpportunity[index], .25],
+      [titleOpportunity[index], .2]]);
     const missingCoreMetrics = ['searchVolume', 'keywordSales', 'positionRank', 'rankingCompetitorsCount']
       .filter(field => number(item[field]) == null);
-    return { source: item, seedOverlap, score: Number(metricScore.toFixed(6)), missingCoreMetrics };
+    return { source: item, seedOverlap, normalizedSearchDemand: searchVolume[index], competitorCoverage: coverage[index],
+      competingOpportunity: competingOpportunity[index], titleOpportunity: titleOpportunity[index],
+      opportunityScore: Number(opportunityScore.toFixed(6)), score: Number(metricScore.toFixed(6)), missingCoreMetrics };
   }).sort((a, b) => b.score - a.score || (number(b.source.searchVolume) || -1) - (number(a.source.searchVolume) || -1)
     || fold(a.source.phrase).localeCompare(fold(b.source.phrase)));
   const roots = buildRoots(source); const rootSet = new Set(roots.slice(0, 20).map(item => item.root));
@@ -145,7 +169,8 @@ function masterKeywordPayload(research, seedPhrase, decisions = []) {
     const key = fold(item.source.phrase).trim(); const decision = decisionMap.get(key);
     const rootOverlap = contentTokens(item.source.phrase).filter(token => rootSet.has(token));
     const residue = item.missingCoreMetrics.length >= 3;
-    const outlier = !residue && item.seedOverlap === 0 && rootOverlap.length === 0;
+    const nicheRelevant = item.seedOverlap > 0 || (item.competitorCoverage ?? 0) >= .3;
+    const outlier = !residue && !nicheRelevant;
     const defaultTier = residue ? 'RESIDUE' : outlier ? 'OUTLIER_REVIEW'
       : index < 15 ? 'PRIMARY' : index < 40 ? 'SECONDARY' : 'LONG_TAIL';
     const tier = TIERS.has(decision?.tier) ? decision.tier : defaultTier;
@@ -154,6 +179,15 @@ function masterKeywordPayload(research, seedPhrase, decisions = []) {
       priorityRank: index + 1, score: item.score, tier,
       disposition: tier === 'EXCLUDED' ? 'STAFF_EXCLUDED' : 'AVAILABLE_FOR_TRUTH_GATED_ALLOCATION',
       staffNote: String(decision?.note || '').slice(0, 500), seedOverlap: Number(item.seedOverlap.toFixed(3)),
+      competitorCoverageRatio: item.competitorCoverage == null ? null : Number(item.competitorCoverage.toFixed(3)),
+      opportunityScore: item.opportunityScore,
+      opportunityComponents: {
+        highSearchDemand: item.normalizedSearchDemand == null ? null : Number(item.normalizedSearchDemand.toFixed(3)),
+        lowCompetingProducts: item.competingOpportunity == null ? null : Number(item.competingOpportunity.toFixed(3)),
+        lowTitleDensity: item.titleOpportunity == null ? null : Number(item.titleOpportunity.toFixed(3))
+      },
+      tierReason: residue ? 'MISSING_CORE_METRICS' : outlier ? 'LOW_NICHE_COVERAGE_REVIEW'
+        : index < 15 ? 'HIGH_PRIORITY_NICHE_KEYWORD' : index < 40 ? 'SECONDARY_NICHE_KEYWORD' : 'LONG_TAIL_NICHE_KEYWORD',
       roots: rootOverlap, missingCoreMetrics: item.missingCoreMetrics,
       metrics: { searchVolume: item.source.searchVolume, keywordSales: item.source.keywordSales, iq: item.source.iq,
         trend: item.source.trend, competingProducts: item.source.competingProducts, cpr: item.source.cpr,
@@ -175,7 +209,9 @@ function masterKeywordPayload(research, seedPhrase, decisions = []) {
       residue: keywords.filter(item => item.tier === 'RESIDUE').map(item => item.keywordId),
       metricProvenance: {
         searchVolume: 'Cerebro Search Volume — scoring', keywordSales: 'Cerebro Keyword Sales — scoring',
-        iq: 'Cerebro IQ — scoring', rankingCompetitorsCount: 'Cerebro Ranking Competitors Count — scoring',
+        iq: 'Cerebro IQ — opportunity signal', rankingCompetitorsCount: 'Cerebro Ranking Competitors Count — niche coverage/relevancy',
+        competingProducts: 'Cerebro Competing Products — inverse competition opportunity when present',
+        titleDensity: 'Cerebro Title Density — inverse exact-title competition opportunity when present',
         positionRank: 'Cerebro Position/Competitor Rank — scoring', trend: 'Cerebro Search Volume Trend — diagnostic',
         cpr: 'Cerebro CPR — diagnostic', bid: 'H10 PPC suggested bid — later PPC planning only'
       }

@@ -132,6 +132,11 @@ async function main() {
     'every Etsy keyword has provenance, semantic cluster and intent');
   check(masterPreview.body.payload.keywords.some(item => item.sourceTypes.includes('PROJECT_SEED')),
     'project seed retained with explicit provenance');
+  check(masterPreview.body.payload.keywords.some(item => item.sourceTypes.includes('PROJECT_SEED') && item.tier === 'PRIMARY'),
+    'project seed is a PRIMARY keyword rather than leaving the Etsy MKL without a primary tier');
+  check(masterPreview.body.accounting.primaryCount > 0
+    && masterPreview.body.payload.keywords.every(item => Number.isFinite(item.opportunityScore)),
+  'Etsy MKL exposes primary accounting and explicit demand-versus-competition opportunity proxies');
   const changed = masterPreview.body.payload.keywords.find(item => item.tier !== 'EXCLUDED');
   const master = await json(`/api/projects/${projectId}/etsy/master-keywords`, 'POST', {
     patternArtifactId: patterns.body.id, decisions: [{ phrase: changed.phrase, tier: 'REVIEW', note: 'Staff kiểm lại' }],

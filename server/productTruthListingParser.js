@@ -113,6 +113,10 @@ function parseListingHtml(html, { marketplace, sourceReference = '' } = {}) {
   else if (clean(product.category)) extracted.productType = clean(product.category).split(/\s*[<>]\s*/).filter(Boolean).pop();
 
   const searchable = `${title}\n${bullets.join('\n')}\n${description}`;
+  if (!extracted.gemstones) {
+    const gemstoneMatches = searchable.match(/\b(cubic zirconia|zirconia|circonita|moissanite|diamond|diamante|sapphire|zafiro|ruby|emerald|esmeralda|opal|topaz|amethyst|garnet|pearl|perla|birthstone|rhinestone)\b/gi);
+    if (gemstoneMatches?.length) extracted.gemstones = unique(gemstoneMatches).join(', ');
+  }
   if (/\b(personali[sz]ed|customi[sz]able|custom made|personalizado|personalizada|personalizable)\b/i.test(searchable)) {
     extracted.personalization = 'Có — theo thông tin trên listing tham chiếu';
   }

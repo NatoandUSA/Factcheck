@@ -130,26 +130,49 @@ function canonicalContent(composed, facts, extraPpc, truthSnapshot) {
   };
 }
 
-async function buildIntelligence({ research, productTruth, configuration = {}, masterKeywords = null }) {
+function keywordsFromMasterArtifact(artifact) {
+  if (!artifact) return null;
+  if (artifact.kind !== 'AMAZON_MASTER_KEYWORDS' || !Array.isArray(artifact.payload?.keywords)) {
+    throw Object.assign(new Error('AMAZON_MASTER_KEYWORDS_REQUIRED'), {
+      code: 'AMAZON_MASTER_KEYWORDS_REQUIRED', status: 409
+    });
+  }
+  return artifact.payload.keywords.map(item => ({
+    phrase: item.phrase, ...item.metrics, masterTier: item.tier,
+    masterPriorityRank: item.priorityRank, masterKeywordId: item.keywordId
+  }));
+}
+
+async function buildIntelligence({ research, productTruth, configuration = {}, masterKeywordArtifact = null }) {
   const observations = research.observations || {};
   if (observations.marketplace !== 'AMAZON') throw Object.assign(new Error('AMAZON_RESEARCH_REQUIRED'), {
     code: 'AMAZON_RESEARCH_REQUIRED', status: 409
   });
   const facts = factsFromSnapshot(productTruth.snapshot);
-  const keywordRows = (Array.isArray(masterKeywords) ? masterKeywords : observations.cerebro?.keywords || []).map(scoreProjection);
+  const masterRows = keywordsFromMasterArtifact(masterKeywordArtifact);
+  const sourceRows = masterRows || observations.cerebro?.keywords || [];
+  const keywordRows = sourceRows.filter(item => item.masterTier !== 'EXCLUDED').map(item => ({
+    ...scoreProjection(item), masterTier: item.masterTier || null,
+    masterPriorityRank: item.masterPriorityRank || null, masterKeywordId: item.masterKeywordId || null
+  }));
   if (!keywordRows.length) throw Object.assign(new Error('CEREBRO_KEYWORDS_REQUIRED'), {
     code: 'CEREBRO_KEYWORDS_REQUIRED', status: 409
   });
-  if (configuration.masterKeywordCount != null && keywordRows.length !== configuration.masterKeywordCount) {
-    throw Object.assign(new Error('MASTER_KEYWORD_COUNT_MISMATCH'), { code: 'MASTER_KEYWORD_COUNT_MISMATCH', status: 409 });
-  }
   const anchors = [configuration.seedPhrase, facts.productType, facts.productName, facts.recipient, facts.occasion]
     .map(text).filter(Boolean);
   if (!anchors.length) throw Object.assign(new Error('INTELLIGENCE_ANCHOR_REQUIRED'), {
     code: 'INTELLIGENCE_ANCHOR_REQUIRED', status: 409
   });
-  const scored = scoreKeywords(keywordRows, { anchors, library: true,
+  const rawScored = scoreKeywords(keywordRows, { anchors, library: true,
     screen: value => ipGuard.screenText(value), minSearchVolume: 0, negativeKeywords: [] });
+  const masterByPhrase = new Map(keywordRows.map(item => [fold(item.phrase), item]));
+  const tierPriority = Object.freeze({ PRIMARY: 0, SECONDARY: 1, LONG_TAIL: 2, OUTLIER_REVIEW: 3, RESIDUE: 4 });
+  const scored = [...rawScored].map(item => ({ ...item, ...Object.fromEntries(Object.entries(
+    masterByPhrase.get(fold(item.phrase)) || {}).filter(([key]) => key.startsWith('master')))
+  })).sort((a, b) => (tierPriority[a.masterTier] ?? 2) - (tierPriority[b.masterTier] ?? 2)
+    || (a.masterPriorityRank ?? Number.MAX_SAFE_INTEGER) - (b.masterPriorityRank ?? Number.MAX_SAFE_INTEGER)
+    || b.score - a.score);
+  Object.defineProperty(scored, 'meta', { value: rawScored.meta, enumerable: false });
   const language = ['EN','ES'].includes(configuration.listingLanguage) ? configuration.listingLanguage
     : detectLanguage(keywordRows, configuration.seedPhrase);
   const xrayRows = observations.xray || [];
@@ -157,6 +180,11 @@ async function buildIntelligence({ research, productTruth, configuration = {}, m
   const competitorBrandBlocked = []; const lexicalReviewQueue = [];
   for (const keyword of scored) {
     if (keyword.ipVerdict === 'BLOCK') continue;
+    if (['OUTLIER_REVIEW', 'RESIDUE'].includes(keyword.masterTier)) {
+      lexicalReviewQueue.push({ phrase: keyword.phrase, masterTier: keyword.masterTier,
+        reason: 'MASTER_KEYWORD_REVIEW_TIER' });
+      continue;
+    }
     const competitor = containsCompetitorBrand(keyword.phrase, xrayRows);
     if (competitor) {
       competitorBrandBlocked.push({ phrase: keyword.phrase, brand: competitor.brand, sourceAsin: competitor.asin });
@@ -201,12 +229,23 @@ async function buildIntelligence({ research, productTruth, configuration = {}, m
     code: 'INTELLIGENCE_KEYWORD_ACCOUNTING_MISMATCH', scoredKeywordCount: scored.length,
     allocatedKeywordCount, unallocatedCount
   });
+  const staffExcludedCount = masterRows?.filter(item => item.masterTier === 'EXCLUDED').length ?? 0;
+  if (masterRows && allocatedKeywordCount + staffExcludedCount !== masterRows.length) {
+    throw Object.assign(new Error('MASTER_KEYWORD_ACCOUNTING_MISMATCH'), {
+      code: 'MASTER_KEYWORD_ACCOUNTING_MISMATCH', masterKeywordCount: masterRows.length,
+      allocatedKeywordCount, staffExcludedCount
+    });
+  }
   return Object.freeze({
     output: { marketplace: 'AMAZON', language, anchors, listingDraft: guarded.listing,
+      masterKeywordArtifact: masterKeywordArtifact ? { id: masterKeywordArtifact.id,
+        artifactHash: masterKeywordArtifact.artifactHash, revisionNumber: masterKeywordArtifact.revisionNumber } : null,
       commerce: composed, asinSelection: xray, claimTargeting, languageTargeting,
       competitorBrandBlocked, lexicalReviewQueue, factClaimReview,
       guardAccounting: { backendExcluded: guarded.backendExcluded, ppcFlagged: guarded.ppcFlagged } },
-    accounting: { inputKeywordCount: keywordRows.length, scoredKeywordCount: scored.length,
+    accounting: { inputKeywordCount: sourceRows.length, scoredKeywordCount: scored.length,
+      masterKeywordCount: masterRows?.length ?? null,
+      staffExcludedCount,
       copySafeKeywordCount: copySafe.length, claimTargetingCount: claimTargeting.length,
       languageTargetingCount: languageTargeting.length, competitorBrandBlockedCount: competitorBrandBlocked.length,
       lexicalReviewCount: lexicalReviewQueue.length, factClaimReviewCount: factClaimReview.length,
@@ -219,4 +258,4 @@ async function buildIntelligence({ research, productTruth, configuration = {}, m
 
 module.exports = Object.freeze({ ENGINE_ID, aPlusPointsFromTruth, buildIntelligence, detectLanguage,
   languageOfPhrase, languageCompatible, containsCompetitorBrand,
-  engineBindingHash, factsFromSnapshot });
+  engineBindingHash, factsFromSnapshot, keywordsFromMasterArtifact });

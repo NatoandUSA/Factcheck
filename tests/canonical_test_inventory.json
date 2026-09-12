@@ -70,6 +70,7 @@
   "tests/test_r43_w1_single_path.cjs",
   "tests/test_r43_w2_artifact_migration.cjs",
   "tests/test_r43_w2_amazon_mkl.cjs",
+  "tests/test_r43_w3_amazon_safe_output.cjs",
   "tests/test_research_consumer_runtime_wiring.cjs",
   "tests/test_real_child_asin_batcher.cjs",
   "tests/test_runner_accounting.cjs",

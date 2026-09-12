@@ -9,6 +9,7 @@ const { currentProductTruthRevision } = require('./productTruthStore');
 const { evaluateListingGuard } = require('./listingGuard');
 const ipGuard = require('./ipGuard');
 const { getIntelligenceSnapshot } = require('./commerceSnapshotStore');
+const { getArtifact, getArtifactState } = require('./commerceWorkflowArtifactStore');
 
 const fixtureDir = path.resolve(__dirname, '../contracts/omniseller-r3/v1/policy-fixtures');
 const draftPolicyRegistry = PolicyContractRegistry.fromDirectory(fixtureDir, {
@@ -103,6 +104,26 @@ async function projectPolicyContext(db, scope, projectId) {
   return row;
 }
 
+async function resolveCurrentMasterKeywordArtifact(db, scope, projectId, configuration) {
+  const artifactId = Number(configuration?.masterKeywordArtifactId);
+  const artifactHash = String(configuration?.masterKeywordArtifactHash || '');
+  if (!Number.isInteger(artifactId) || artifactId < 1 || !/^[a-f0-9]{64}$/.test(artifactHash)) {
+    throw new CanonicalDraftError('MASTER_KEYWORD_ARTIFACT_REQUIRED', 409);
+  }
+  let artifact;
+  try { artifact = await getArtifact(db, scope, projectId, artifactId, 'AMAZON_MASTER_KEYWORDS'); }
+  catch (error) {
+    throw new CanonicalDraftError(error.code === 'WORKFLOW_ARTIFACT_NOT_FOUND'
+      ? 'MASTER_KEYWORD_ARTIFACT_NOT_FOUND' : (error.code || 'MASTER_KEYWORD_ARTIFACT_UNAVAILABLE'),
+    error.status || 409, error.details);
+  }
+  const state = await getArtifactState(db, scope, projectId);
+  if (artifact.artifactHash !== artifactHash || state.heads.AMAZON_MASTER_KEYWORDS?.id !== artifact.id) {
+    throw new CanonicalDraftError('STALE_MASTER_KEYWORD_ARTIFACT', 409);
+  }
+  return artifact;
+}
+
 function policySurfaces(listing, marketplace) {
   return marketplace === 'AMAZON' ? {
     title: listing.amazonTitle,
@@ -126,6 +147,9 @@ async function resolveIntelligenceBinding(db, scope, projectId, selectedIntellig
   }
   if (!intelligence.output?.listingDraft || typeof intelligence.output.listingDraft !== 'object') {
     throw new CanonicalDraftError('INTELLIGENCE_DRAFT_UNAVAILABLE', 409);
+  }
+  if (scope.marketplace === 'AMAZON') {
+    await resolveCurrentMasterKeywordArtifact(db, scope, projectId, intelligence.configuration);
   }
   return intelligence;
 }
@@ -179,6 +203,8 @@ async function validateCanonicalDraft(db, scope, projectId, selectedTruthRevisio
       productTruthHash: truth.content_hash,
       researchSnapshotId: intelligence?.research_snapshot_id ?? null,
       researchSnapshotHash: intelligence?.research_snapshot_hash ?? null,
+      masterKeywordArtifactId: intelligence?.configuration?.masterKeywordArtifactId ?? null,
+      masterKeywordArtifactHash: intelligence?.configuration?.masterKeywordArtifactHash ?? null,
       intelligenceSnapshotId: intelligence?.id ?? null,
       intelligenceSnapshotHash: intelligence?.snapshot_hash ?? null,
       policyBindingHash: hashBytes(canonicalJson(policyBinding)),
@@ -239,6 +265,13 @@ async function assertCanonicalDependenciesCurrent(db, scope, projectId, dependen
       || intelligence.product_truth_revision_id !== selectedId
       || intelligence.product_truth_hash !== selectedHash) {
       throw new CanonicalDraftError('STALE_INTELLIGENCE_SNAPSHOT', 409);
+    }
+    if (scope.marketplace === 'AMAZON') {
+      const artifact = await resolveCurrentMasterKeywordArtifact(db, scope, projectId, intelligence.configuration);
+      if (Number(dependencies.masterKeywordArtifactId) !== artifact.id
+        || dependencies.masterKeywordArtifactHash !== artifact.artifactHash) {
+        throw new CanonicalDraftError('STALE_MASTER_KEYWORD_ARTIFACT', 409);
+      }
     }
   }
   const project = await projectPolicyContext(db, scope, projectId);

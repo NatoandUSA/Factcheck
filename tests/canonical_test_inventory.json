@@ -67,6 +67,7 @@
   "tests/test_project_scoped_evidence_workflow.test.cjs",
   "tests/test_project_scoped_reload_consumers.cjs",
   "tests/test_project_setup_and_stage_guidance.cjs",
+  "tests/test_r43_production_db_upgrade.cjs",
   "tests/test_r43_w1_single_path.cjs",
   "tests/test_r43_w2_artifact_migration.cjs",
   "tests/test_r43_w2_amazon_mkl.cjs",

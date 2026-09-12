@@ -12,9 +12,10 @@ const LISTING_REVISION_VALIDATION_ACCOUNTING_MIGRATION = '012_listing_revision_v
 const COMMERCE_SNAPSHOT_MIGRATION = '013_commerce_research_intelligence_snapshots';
 const CANONICAL_REVIEW_HANDOFF_MIGRATION = '014_canonical_review_submission_handoff';
 const OWNER_SUBMISSION_AUTHORIZATION_MIGRATION = '015_owner_submission_authorization';
-const COMMERCE_WORKFLOW_ARTIFACT_MIGRATION = '016_commerce_workflow_artifacts_v2';
+const COMMERCE_WORKFLOW_ARTIFACT_MIGRATION = '2026-09-12_commerce_workflow_artifacts_v2_upgrade';
 const OPERATOR_REPORTED_SUBMISSION_MIGRATION = '017_operator_reported_submission_lifecycle';
 const crypto = require('node:crypto');
+const { canonicalJson, hashBytes } = require('../revisionStore');
 
 function run(db, sql, params = []) {
   return new Promise((resolve, reject) => {
@@ -653,82 +654,66 @@ async function migrateOperatorReportedSubmissionLifecycle(db) {
   }
 }
 
-async function migrateCommerceWorkflowArtifacts(db) {
-  const existing = await all(db, "SELECT name FROM sqlite_master WHERE type='table' AND name='commerce_workflow_artifacts'");
-  if (existing.length) {
-    const columns = new Set((await all(db, 'PRAGMA table_info(commerce_workflow_artifacts)')).map(column => column.name));
-    const required = [
-      'id', 'tenant_id', 'workspace_id', 'marketplace', 'project_id', 'kind', 'revision_number',
-      'parent_revision_id', 'request_hash', 'idempotency_key', 'dependency_manifest_json',
-      'dependency_manifest_hash', 'payload_json', 'payload_hash', 'accounting_json', 'accounting_hash',
-      'integrity_version', 'engine_binding_hash', 'parser_binding_hash', 'normalization_binding_hash',
-      'scoring_binding_hash', 'policy_binding_hash', 'artifact_hash',
-      'change_reason', 'created_by', 'created_at'
-    ];
-    const missing = required.filter(column => !columns.has(column));
-    if (missing.length) {
-      const rowCount = (await all(db, 'SELECT COUNT(*) AS count FROM commerce_workflow_artifacts'))[0]?.count || 0;
-      if (rowCount === 0) {
-        await run(db, 'DROP TABLE commerce_workflow_artifacts');
-        return migrateCommerceWorkflowArtifacts(db);
-      }
-      const error = new Error(`COMMERCE_WORKFLOW_ARTIFACT_SCHEMA_INCOMPATIBLE:${missing.join(',')}`);
-      error.code = 'COMMERCE_WORKFLOW_ARTIFACT_SCHEMA_INCOMPATIBLE';
-      error.details = { classification: 'DONOR_V1_POPULATED', rowCount, missingColumns: missing };
-      throw error;
-    }
-    const expectedIndexes = ['idx_commerce_workflow_artifacts_scope'];
-    const expectedTriggers = [
-      'commerce_workflow_artifacts_immutable_update',
-      'commerce_workflow_artifacts_immutable_delete',
-      'commerce_workflow_artifacts_parent_guard'
-    ];
-    const schemaObjects = await all(db, `SELECT type,name FROM sqlite_master
-      WHERE tbl_name='commerce_workflow_artifacts' AND type IN ('index','trigger')`);
-    const objectNames = new Set(schemaObjects.map(object => object.name));
-    const missingObjects = [...expectedIndexes, ...expectedTriggers].filter(name => !objectNames.has(name));
-    if (missingObjects.length) {
-      const error = new Error(`COMMERCE_WORKFLOW_ARTIFACT_SCHEMA_INCOMPATIBLE:${missingObjects.join(',')}`);
-      error.code = 'COMMERCE_WORKFLOW_ARTIFACT_SCHEMA_INCOMPATIBLE';
-      error.details = { classification: 'V2_INCOMPLETE', missingObjects };
-      throw error;
-    }
-    return;
-  }
+const WORKFLOW_V1_COLUMNS = Object.freeze([
+  'id','tenant_id','workspace_id','marketplace','project_id','kind','revision_number','parent_revision_id',
+  'dependency_manifest_json','dependency_manifest_hash','payload_json','payload_hash','accounting_json','accounting_hash',
+  'engine_binding_hash','artifact_hash','change_reason','idempotency_key','created_by','created_at'
+]);
+const WORKFLOW_V2_COLUMNS = Object.freeze([
+  ...WORKFLOW_V1_COLUMNS, 'request_hash','integrity_version','parser_binding_hash','normalization_binding_hash',
+  'scoring_binding_hash','policy_binding_hash'
+]);
 
-  await run(db, `CREATE TABLE commerce_workflow_artifacts (
+function workflowSchemaError(classification, details = {}) {
+  const error = new Error(`COMMERCE_WORKFLOW_ARTIFACT_SCHEMA_INCOMPATIBLE:${classification}`);
+  error.code = 'COMMERCE_WORKFLOW_ARTIFACT_SCHEMA_INCOMPATIBLE';
+  error.details = { classification, ...details };
+  return error;
+}
+
+async function createCommerceWorkflowArtifactsV2Table(db, tableName = 'commerce_workflow_artifacts') {
+  await run(db, `CREATE TABLE ${tableName} (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     tenant_id TEXT NOT NULL,
     workspace_id INTEGER NOT NULL REFERENCES workspaces(id),
     marketplace TEXT NOT NULL CHECK(marketplace IN ('AMAZON','ETSY')),
     project_id INTEGER NOT NULL REFERENCES research_projects(id),
     kind TEXT NOT NULL CHECK(kind IN (
-      'AMAZON_ASIN_BATCH_PLAN','AMAZON_MASTER_KEYWORDS',
+      'AMAZON_ASIN_BATCH_PLAN','AMAZON_CEREBRO_BINDING','AMAZON_MASTER_KEYWORDS',
       'ETSY_WINNER_SET','ETSY_PATTERN_SNAPSHOT','ETSY_MASTER_KEYWORDS'
     )),
     revision_number INTEGER NOT NULL CHECK(revision_number >= 1),
-    parent_revision_id INTEGER NULL REFERENCES commerce_workflow_artifacts(id),
-    integrity_version INTEGER NOT NULL DEFAULT 2 CHECK(integrity_version=2),
+    parent_revision_id INTEGER NULL REFERENCES ${tableName}(id),
+    integrity_version INTEGER NOT NULL DEFAULT 2 CHECK(integrity_version IN (1,2)),
     request_hash TEXT NOT NULL CHECK(length(request_hash)=64),
     idempotency_key TEXT NOT NULL,
-    dependency_manifest_json TEXT NOT NULL CHECK(json_valid(dependency_manifest_json) AND length(CAST(dependency_manifest_json AS BLOB))<=262144),
+    dependency_manifest_json TEXT NOT NULL CHECK(json_valid(dependency_manifest_json)),
     dependency_manifest_hash TEXT NOT NULL CHECK(length(dependency_manifest_hash)=64),
-    payload_json TEXT NOT NULL CHECK(json_valid(payload_json) AND length(CAST(payload_json AS BLOB))<=2097152),
+    payload_json TEXT NOT NULL CHECK(json_valid(payload_json)),
     payload_hash TEXT NOT NULL CHECK(length(payload_hash)=64),
-    accounting_json TEXT NOT NULL CHECK(json_valid(accounting_json) AND length(CAST(accounting_json AS BLOB))<=262144),
+    accounting_json TEXT NOT NULL CHECK(json_valid(accounting_json)),
     accounting_hash TEXT NOT NULL CHECK(length(accounting_hash)=64),
     engine_binding_hash TEXT NOT NULL CHECK(length(engine_binding_hash)=64),
-    parser_binding_hash TEXT NOT NULL CHECK(length(parser_binding_hash)=64),
-    normalization_binding_hash TEXT NOT NULL CHECK(length(normalization_binding_hash)=64),
-    scoring_binding_hash TEXT NOT NULL CHECK(length(scoring_binding_hash)=64),
+    parser_binding_hash TEXT NULL CHECK(parser_binding_hash IS NULL OR length(parser_binding_hash)=64),
+    normalization_binding_hash TEXT NULL CHECK(normalization_binding_hash IS NULL OR length(normalization_binding_hash)=64),
+    scoring_binding_hash TEXT NULL CHECK(scoring_binding_hash IS NULL OR length(scoring_binding_hash)=64),
     policy_binding_hash TEXT NULL CHECK(policy_binding_hash IS NULL OR length(policy_binding_hash)=64),
     artifact_hash TEXT NOT NULL CHECK(length(artifact_hash)=64),
     change_reason TEXT NOT NULL,
     created_by INTEGER NOT NULL REFERENCES users(id),
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK((integrity_version=1 AND parser_binding_hash IS NULL AND normalization_binding_hash IS NULL
+      AND scoring_binding_hash IS NULL AND policy_binding_hash IS NULL)
+      OR (integrity_version=2 AND length(parser_binding_hash)=64 AND length(normalization_binding_hash)=64
+        AND length(scoring_binding_hash)=64)),
+    CHECK(integrity_version=1 OR (length(CAST(dependency_manifest_json AS BLOB))<=262144
+      AND length(CAST(payload_json AS BLOB))<=2097152 AND length(CAST(accounting_json AS BLOB))<=262144)),
     UNIQUE(tenant_id,workspace_id,marketplace,project_id,kind,revision_number),
     UNIQUE(tenant_id,workspace_id,marketplace,project_id,kind,idempotency_key)
   )`);
+}
+
+async function createCommerceWorkflowArtifactsV2Objects(db) {
   await run(db, `CREATE INDEX idx_commerce_workflow_artifacts_scope
     ON commerce_workflow_artifacts(tenant_id,workspace_id,marketplace,project_id,kind,revision_number DESC)`);
   await run(db, `CREATE TRIGGER commerce_workflow_artifacts_immutable_update
@@ -746,6 +731,124 @@ async function migrateCommerceWorkflowArtifacts(db) {
           AND parent.kind=NEW.kind AND NEW.revision_number=parent.revision_number+1
       ))
     BEGIN SELECT RAISE(ABORT,'WORKFLOW_ARTIFACT_PARENT_INVALID'); END`);
+}
+
+function donorArtifactHash(row) {
+  return hashBytes(canonicalJson({ accountingHash: row.accounting_hash,
+    dependencyManifestHash: row.dependency_manifest_hash, engineBindingHash: row.engine_binding_hash,
+    payloadHash: row.payload_hash }));
+}
+
+function migratedRequestHash(row) {
+  return hashBytes(canonicalJson({ migration: 'DONOR_V1_TO_DUAL_INTEGRITY_V2', legacy: {
+    id: row.id, tenantId: row.tenant_id, workspaceId: row.workspace_id, marketplace: row.marketplace,
+    projectId: row.project_id, kind: row.kind, revisionNumber: row.revision_number,
+    parentRevisionId: row.parent_revision_id, dependencyManifestHash: row.dependency_manifest_hash,
+    payloadHash: row.payload_hash, accountingHash: row.accounting_hash, engineBindingHash: row.engine_binding_hash,
+    artifactHash: row.artifact_hash, changeReason: row.change_reason, idempotencyKey: row.idempotency_key,
+    createdBy: row.created_by, createdAt: row.created_at
+  } }));
+}
+
+async function validateDonorWorkflowRows(db, rows) {
+  const projects = new Map((await all(db, 'SELECT id,tenant_id,workspace_id,marketplace FROM research_projects'))
+    .map(row => [Number(row.id), row]));
+  const workspaces = new Set((await all(db, 'SELECT id FROM workspaces')).map(row => Number(row.id)));
+  const users = new Set((await all(db, 'SELECT id FROM users')).map(row => Number(row.id)));
+  const byId = new Map(rows.map(row => [Number(row.id), row]));
+  for (const row of rows) {
+    try { JSON.parse(row.dependency_manifest_json); JSON.parse(row.payload_json); JSON.parse(row.accounting_json); }
+    catch (_) { throw workflowSchemaError('DONOR_V1_INVALID_JSON', { artifactId: row.id }); }
+    if (sha256Bytes(row.dependency_manifest_json) !== row.dependency_manifest_hash
+      || sha256Bytes(row.payload_json) !== row.payload_hash || sha256Bytes(row.accounting_json) !== row.accounting_hash
+      || donorArtifactHash(row) !== row.artifact_hash) {
+      throw workflowSchemaError('DONOR_V1_INTEGRITY_FAILURE', { artifactId: row.id });
+    }
+    const project = projects.get(Number(row.project_id));
+    if (!project || project.tenant_id !== row.tenant_id || Number(project.workspace_id) !== Number(row.workspace_id)
+      || project.marketplace !== row.marketplace || !workspaces.has(Number(row.workspace_id))
+      || !users.has(Number(row.created_by))) throw workflowSchemaError('DONOR_V1_SCOPE_ORPHAN', { artifactId: row.id });
+    const parent = row.parent_revision_id == null ? null : byId.get(Number(row.parent_revision_id));
+    if ((Number(row.revision_number) === 1 && parent) || (Number(row.revision_number) > 1
+      && (!parent || parent.tenant_id !== row.tenant_id || Number(parent.workspace_id) !== Number(row.workspace_id)
+        || parent.marketplace !== row.marketplace || Number(parent.project_id) !== Number(row.project_id)
+        || parent.kind !== row.kind || Number(parent.revision_number) + 1 !== Number(row.revision_number)))) {
+      throw workflowSchemaError('DONOR_V1_PARENT_INVALID', { artifactId: row.id });
+    }
+  }
+  const externalReferences = await all(db, `SELECT name FROM sqlite_master WHERE type='table'
+    AND name<>'commerce_workflow_artifacts' AND lower(COALESCE(sql,'')) LIKE '%references commerce_workflow_artifacts%'`);
+  if (externalReferences.length) throw workflowSchemaError('DONOR_V1_EXTERNAL_REFERENCE', { tables: externalReferences.map(row => row.name) });
+}
+
+async function upgradeDonorWorkflowArtifacts(db) {
+  const rows = await all(db, 'SELECT * FROM commerce_workflow_artifacts ORDER BY revision_number,id');
+  await validateDonorWorkflowRows(db, rows);
+  await run(db, 'DROP TRIGGER IF EXISTS commerce_workflow_artifacts_immutable_update');
+  await run(db, 'DROP TRIGGER IF EXISTS commerce_workflow_artifacts_immutable_delete');
+  await run(db, 'DROP INDEX IF EXISTS idx_commerce_workflow_artifacts_scope');
+  await createCommerceWorkflowArtifactsV2Table(db, 'commerce_workflow_artifacts_v2_upgrade');
+  for (const row of rows) await run(db, `INSERT INTO commerce_workflow_artifacts_v2_upgrade
+    (id,tenant_id,workspace_id,marketplace,project_id,kind,revision_number,parent_revision_id,integrity_version,
+     request_hash,idempotency_key,dependency_manifest_json,dependency_manifest_hash,payload_json,payload_hash,
+     accounting_json,accounting_hash,engine_binding_hash,parser_binding_hash,normalization_binding_hash,
+     scoring_binding_hash,policy_binding_hash,artifact_hash,change_reason,created_by,created_at)
+    VALUES (?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?,?,NULL,NULL,NULL,NULL,?,?,?,?)`, [row.id,row.tenant_id,row.workspace_id,
+      row.marketplace,row.project_id,row.kind,row.revision_number,row.parent_revision_id,migratedRequestHash(row),
+      row.idempotency_key,row.dependency_manifest_json,row.dependency_manifest_hash,row.payload_json,row.payload_hash,
+      row.accounting_json,row.accounting_hash,row.engine_binding_hash,row.artifact_hash,row.change_reason,row.created_by,row.created_at]);
+  const copied = (await all(db, 'SELECT COUNT(*) AS count FROM commerce_workflow_artifacts_v2_upgrade'))[0]?.count || 0;
+  if (copied !== rows.length) throw workflowSchemaError('DONOR_V1_COPY_COUNT_MISMATCH', { expected: rows.length, copied });
+  await run(db, 'DROP TABLE commerce_workflow_artifacts');
+  await run(db, 'ALTER TABLE commerce_workflow_artifacts_v2_upgrade RENAME TO commerce_workflow_artifacts');
+  await createCommerceWorkflowArtifactsV2Objects(db);
+  const sequence = await all(db, "SELECT name FROM sqlite_master WHERE type='table' AND name='sqlite_sequence'");
+  if (sequence.length && rows.length) {
+    await run(db, "DELETE FROM sqlite_sequence WHERE name='commerce_workflow_artifacts'");
+    await run(db, "INSERT INTO sqlite_sequence(name,seq) VALUES ('commerce_workflow_artifacts',?)",
+      [Math.max(...rows.map(row => Number(row.id)))]);
+  }
+  const fkErrors = await all(db, 'PRAGMA foreign_key_check(commerce_workflow_artifacts)');
+  const integrity = await all(db, 'PRAGMA integrity_check');
+  if (fkErrors.length || integrity.some(row => row.integrity_check !== 'ok')) {
+    throw workflowSchemaError('DONOR_V1_POST_UPGRADE_CHECK_FAILED', { foreignKeyErrors: fkErrors.length });
+  }
+}
+
+async function migrateCommerceWorkflowArtifacts(db) {
+  const existing = await all(db, "SELECT name FROM sqlite_master WHERE type='table' AND name='commerce_workflow_artifacts'");
+  if (!existing.length) {
+    await createCommerceWorkflowArtifactsV2Table(db);
+    await createCommerceWorkflowArtifactsV2Objects(db);
+    return;
+  }
+  const columns = (await all(db, 'PRAGMA table_info(commerce_workflow_artifacts)')).map(column => column.name);
+  const columnSet = new Set(columns);
+  if (WORKFLOW_V2_COLUMNS.every(column => columnSet.has(column))) {
+    const expectedObjects = ['idx_commerce_workflow_artifacts_scope','commerce_workflow_artifacts_immutable_update',
+      'commerce_workflow_artifacts_immutable_delete','commerce_workflow_artifacts_parent_guard'];
+    const objectNames = new Set((await all(db, `SELECT name FROM sqlite_master WHERE tbl_name='commerce_workflow_artifacts'
+      AND type IN ('index','trigger')`)).map(row => row.name));
+    const missingObjects = expectedObjects.filter(name => !objectNames.has(name));
+    if (missingObjects.length) throw workflowSchemaError('V2_INCOMPLETE', { missingObjects });
+    return;
+  }
+  const exactDonorV1 = columns.length === WORKFLOW_V1_COLUMNS.length && WORKFLOW_V1_COLUMNS.every(column => columnSet.has(column));
+  if (!exactDonorV1) throw workflowSchemaError('UNKNOWN_SCHEMA', { columns });
+  const donorObjects = new Set((await all(db, `SELECT name FROM sqlite_master WHERE tbl_name='commerce_workflow_artifacts'
+    AND type IN ('index','trigger')`)).map(row => row.name));
+  const missingDonorObjects = ['idx_commerce_workflow_artifacts_scope','commerce_workflow_artifacts_immutable_update',
+    'commerce_workflow_artifacts_immutable_delete'].filter(name => !donorObjects.has(name));
+  if (missingDonorObjects.length) throw workflowSchemaError('DONOR_V1_OBJECTS_UNKNOWN', { missingObjects: missingDonorObjects });
+  const rowCount = (await all(db, 'SELECT COUNT(*) AS count FROM commerce_workflow_artifacts'))[0]?.count || 0;
+  if (!rowCount) {
+    await run(db, 'DROP TRIGGER IF EXISTS commerce_workflow_artifacts_immutable_update');
+    await run(db, 'DROP TRIGGER IF EXISTS commerce_workflow_artifacts_immutable_delete');
+    await run(db, 'DROP INDEX IF EXISTS idx_commerce_workflow_artifacts_scope');
+    await run(db, 'DROP TABLE commerce_workflow_artifacts');
+    await createCommerceWorkflowArtifactsV2Table(db); await createCommerceWorkflowArtifactsV2Objects(db); return;
+  }
+  await upgradeDonorWorkflowArtifacts(db);
 }
 
 async function runMigrations(db) {

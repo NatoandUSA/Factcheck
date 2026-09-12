@@ -29,7 +29,13 @@ assert.ok(amazon.includes('Omni Research &amp; DNA Lab — module kế thừa đ
 assert.ok(etsy.includes('Omni Etsy Research &amp; DNA Lab — module kế thừa đang nối vào canonical'), 'Etsy must explain inherited Omni modules');
 assert.ok(canonical.includes('type="file" multiple'), 'canonical workflow must support selecting multiple research files in one operation');
 assert.ok(canonical.includes('.csv,.html,.htm,text/csv,text/html'), 'canonical Etsy evidence must accept saved HTML as well as CSV');
-assert.ok(canonical.includes('Chọn file Cerebro cho batch'), 'Amazon binding must select the exact Cerebro file for each batch');
+assert.ok(canonical.includes('aria-label="Upload Xray"') && canonical.includes('aria-label="Upload Cerebro"'),
+  'Amazon must expose separate multi-file Xray and Cerebro lanes');
+assert.ok(canonical.indexOf('1. Upload Xray từ seed') < canonical.indexOf('2. Quyết định ASIN batches')
+  && canonical.indexOf('2. Quyết định ASIN batches') < canonical.indexOf('3. Upload Cerebro'),
+  'Amazon source order must remain Xray -> editable ASIN plan -> Cerebro');
+assert.strictEqual(canonical.includes('Chứng minh file Cerebro thuộc batch nào'), false,
+  'Cerebro ancestry proof must not return to the active staff workflow');
 
 assert.strictEqual(etsy.includes("const transitioned = await handleTransition('RESEARCH_ACCEPTED')"), false, 'Opening Etsy research must not attempt a legacy server transition');
 assert.ok(etsy.includes("await handleTransition('DNA_ACCEPTED')"), 'Etsy DNA acceptance must call the server transition');

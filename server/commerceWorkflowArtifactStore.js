@@ -103,8 +103,14 @@ function assertIntegrity(row) {
     dependencyManifestHash: hashBytes(row.dependency_manifest_json), payloadHash: hashBytes(row.payload_json),
     accountingHash: hashBytes(row.accounting_json)
   };
-  if (actual.dependencyManifestHash !== row.dependency_manifest_hash || actual.payloadHash !== row.payload_hash
-    || actual.accountingHash !== row.accounting_hash || hashBytes(canonicalJson(immutableEnvelope(row))) !== row.artifact_hash) {
+  const envelopeHash = Number(row.integrity_version) === 1
+    ? hashBytes(canonicalJson({ accountingHash: row.accounting_hash,
+      dependencyManifestHash: row.dependency_manifest_hash, engineBindingHash: row.engine_binding_hash,
+      payloadHash: row.payload_hash }))
+    : hashBytes(canonicalJson(immutableEnvelope(row)));
+  if (![1, 2].includes(Number(row.integrity_version)) || actual.dependencyManifestHash !== row.dependency_manifest_hash
+    || actual.payloadHash !== row.payload_hash || actual.accountingHash !== row.accounting_hash
+    || envelopeHash !== row.artifact_hash) {
     throw new WorkflowArtifactError('WORKFLOW_ARTIFACT_INTEGRITY_FAILURE', 500, { artifactId: row.id });
   }
 }
@@ -118,7 +124,8 @@ function present(row) {
     accounting: JSON.parse(row.accounting_json), bindings: { engine: row.engine_binding_hash,
       parser: row.parser_binding_hash, normalization: row.normalization_binding_hash,
       scoring: row.scoring_binding_hash, policy: row.policy_binding_hash }, changeReason: row.change_reason,
-    createdBy: row.created_by, createdAt: row.created_at
+    createdBy: row.created_by, createdAt: row.created_at, integrityVersion: Number(row.integrity_version),
+    canonicalDependencyEligible: Number(row.integrity_version) === 2
   };
 }
 
@@ -143,6 +150,7 @@ async function appendUnlocked(db, rawScope, projectIdInput, input) {
     const parent = await get(db, `SELECT * FROM commerce_workflow_artifacts WHERE tenant_id=? AND workspace_id=?
       AND marketplace=? AND project_id=? AND kind=? ORDER BY revision_number DESC LIMIT 1`,
     [scope.tenantId, scope.workspaceId, scope.marketplace, projectId, kind]);
+    if (parent) assertIntegrity(parent);
     if ((parent?.id ?? null) !== normalized.expectedHeadArtifactId) throw new WorkflowArtifactError(
       'WORKFLOW_ARTIFACT_CONFLICT', 409, { expectedHeadArtifactId: normalized.expectedHeadArtifactId,
         currentHeadArtifactId: parent?.id ?? null, kind });
@@ -191,6 +199,8 @@ async function getArtifact(db, rawScope, projectIdInput, artifactIdInput, kind =
   const row = await get(db, `SELECT * FROM commerce_workflow_artifacts WHERE id=? AND tenant_id=? AND workspace_id=?
     AND marketplace=? AND project_id=?`, [artifactId, scope.tenantId, scope.workspaceId, scope.marketplace, projectId]);
   if (!row || (kind && row.kind !== kind)) throw new WorkflowArtifactError('WORKFLOW_ARTIFACT_NOT_FOUND', 404);
+  if (Number(row.integrity_version) !== 2) throw new WorkflowArtifactError('LEGACY_WORKFLOW_ARTIFACT_REFREEZE_REQUIRED', 409,
+    { artifactId: row.id, integrityVersion: Number(row.integrity_version), kind: row.kind });
   return present(row);
 }
 

@@ -124,6 +124,17 @@ const truth = { productType: 'Embroidered Crewneck Sweatshirt', productName: 'Em
   sizes: ['S','M','L'], colors: ['Black'], features: ['Machine embroidered'],
   personalization: 'Up to 3 names', care: 'Machine wash cold', packaging: 'Poly bag', shipFrom: 'Vietnam' };
 const draft = amazon.compose(scoredMany, truth, { searchTermBytes: 999 });
+const identityScored = keyword.scoreKeywords([
+  { phrase: 'regalo de madre para hija', searchVolume: 9000, keywordSales: 300, positionRank: 1 },
+  { phrase: 'collar para hija', searchVolume: 1200, keywordSales: 40, positionRank: 5 }
+], { anchors: ['collar para mi hija', 'custom necklace'], library, screen: ip.screen });
+const identityDraft = amazon.compose(identityScored, {
+  productType: 'Custom Necklace', productName: 'Collar Para Mi Hija', recipient: 'hija', occasion: 'graduacion',
+  materials: ['stainless steel'], sizes: ['18 inch'], colors: ['gold'], packaging: 'gift box'
+}, { labelLanguage: 'ES' });
+test('Amazon title names the product rather than matching only recipient or occasion', () => {
+  assert.match(identityDraft.title.text.toLowerCase(), /collar|necklace/);
+});
 test('rare frequency is review metadata, not an automatic rival-brand block', () => {
   const row = scoredMany.find(k => k.phrase === 'mama sweatshirt auroraword');
   assert.equal(row.suspectedBrand, null);

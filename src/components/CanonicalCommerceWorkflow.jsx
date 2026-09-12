@@ -331,7 +331,12 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
     const researchSnapshotId = head(state, 'researchSnapshotId');
     const productTruthRevisionId = head(state, 'productTruthRevisionId');
     if (!researchSnapshotId || !productTruthRevisionId) throw new Error('Cần Research Snapshot và Product Truth trước.');
-    const body = { researchSnapshotId, productTruthRevisionId, listingLanguage: language };
+    const masterKeywordArtifactId = workflowState?.heads?.AMAZON_MASTER_KEYWORDS?.id;
+    if (marketplace === 'AMAZON' && !masterKeywordArtifactId) {
+      throw new Error('Hãy lưu Master Keyword List trước khi phân bổ keyword vào listing.');
+    }
+    const body = { researchSnapshotId, productTruthRevisionId, listingLanguage: language,
+      ...(masterKeywordArtifactId ? { masterKeywordArtifactId } : {}) };
     if (confirm) Object.assign(body, { expectedHeadIntelligenceSnapshotId: head(state, 'intelligenceSnapshotId'), idempotencyKey: uuid(), changeReason: 'STAFF_COMMERCE_ANALYSIS' });
     const result = await api(`/api/projects/${projectId}/intelligence-snapshots${confirm ? '' : '/preview'}`, jsonOptions(body));
     setIntelligencePreview(result);
@@ -610,7 +615,8 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
     <Step number="3" title="Phân tích và phân bổ keyword" accent={accent} done={Boolean(head(state, 'intelligenceSnapshotId'))}>
       <div style={{ display: 'flex', gap: 9, flexWrap: 'wrap', alignItems: 'center' }}>
         <label style={{ fontSize: '.8rem', fontWeight: 800 }}>Ngôn ngữ listing {' '}<select value={language} onChange={event => setLanguage(event.target.value)}><option value="AUTO">Theo keyword đầu vào</option><option value="EN">English</option><option value="ES">Español</option></select></label>
-        <ActionButton accent={accent} disabled={!head(state, 'researchSnapshotId') || !head(state, 'productTruthRevisionId') || busy} onClick={() => analyze(false)}>3A. Preview zero-write</ActionButton>
+        <ActionButton accent={accent} disabled={!head(state, 'researchSnapshotId') || !head(state, 'productTruthRevisionId')
+          || (marketplace === 'AMAZON' && !masterKeywordHead) || busy} onClick={() => analyze(false)}>3A. Preview zero-write</ActionButton>
         <ActionButton accent={accent} disabled={!intelligencePreview?.zeroWrite || busy} onClick={() => analyze(true)}>3B. Khóa Intelligence Snapshot</ActionButton>
       </div>
       {previewOutput && <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 8, marginTop: 10 }}>

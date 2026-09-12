@@ -142,9 +142,15 @@ async function main() {
   });
   check(truth.status === 201, JSON.stringify(truth.body));
   const truthId = truth.body.productTruthRevisionId;
+  const master = await json(`/api/projects/${projectId}/amazon/master-keywords`, 'POST', {
+    researchSnapshotId: snapshot.body.researchSnapshotId, decisions: [], expectedHeadArtifactId: null,
+    idempotencyKey: key(23), changeReason: 'FREEZE_MASTER_KEYWORDS_FOR_DRAFT'
+  });
+  check(master.status === 201 && master.body.kind === 'AMAZON_MASTER_KEYWORDS', JSON.stringify(master.body));
   const beforeIntelligence = (await get('SELECT COUNT(*) AS n FROM intelligence_snapshots')).n;
   const intelligencePreview = await json(`/api/projects/${projectId}/intelligence-snapshots/preview`, 'POST', {
-    researchSnapshotId: snapshot.body.researchSnapshotId, productTruthRevisionId: truthId, listingLanguage: 'EN'
+    researchSnapshotId: snapshot.body.researchSnapshotId, productTruthRevisionId: truthId, listingLanguage: 'EN',
+    masterKeywordArtifactId: master.body.id
   });
   check(intelligencePreview.status === 200, JSON.stringify(intelligencePreview.body));
   check(intelligencePreview.body.zeroWrite === true, 'intelligence preview is zero write');
@@ -152,7 +158,7 @@ async function main() {
   check((await get('SELECT COUNT(*) AS n FROM intelligence_snapshots')).n === beforeIntelligence, 'preview creates no intelligence snapshot');
   const intelligence = await json(`/api/projects/${projectId}/intelligence-snapshots`, 'POST', {
     expectedHeadIntelligenceSnapshotId: null, researchSnapshotId: snapshot.body.researchSnapshotId,
-    productTruthRevisionId: truthId, listingLanguage: 'EN', idempotencyKey: key(4),
+    productTruthRevisionId: truthId, listingLanguage: 'EN', masterKeywordArtifactId: master.body.id, idempotencyKey: key(4),
     changeReason: 'SAVE_COMMERCE_INTELLIGENCE'
   });
   check(intelligence.status === 201, JSON.stringify(intelligence.body));
@@ -188,6 +194,9 @@ async function main() {
   check(dependencies.researchSnapshotHash === snapshot.body.researchSnapshotHash
     && dependencies.intelligenceSnapshotHash === intelligence.body.intelligenceSnapshotHash,
   'listing binds exact research and intelligence hashes');
+  check(dependencies.masterKeywordArtifactId === master.body.id
+    && dependencies.masterKeywordArtifactHash === master.body.artifactHash,
+  'listing binds exact immutable Master Keyword artifact');
   check(Boolean(dependencies.policyContractId) && /^[0-9a-f]{64}$/.test(dependencies.policyContractArtifactHash)
     && /^[0-9a-f]{64}$/.test(dependencies.policyContextHash)
     && /^[0-9a-f]{64}$/.test(dependencies.policyLifecycleSnapshotDigest)

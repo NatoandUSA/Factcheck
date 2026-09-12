@@ -63,7 +63,7 @@ const amazonIntelligenceAdapter = require('./commerceIntelligence/amazonIntellig
 const { selectAsinBatches } = require('./commerceIntelligence/asinSelector');
 const etsyResearchAdapter = require('./commerceIntelligence/etsyResearchAdapter');
 const etsyIntelligenceAdapter = require('./commerceIntelligence/etsyIntelligenceAdapter');
-const { getArtifactState } = require('./commerceWorkflowArtifactStore');
+const { getArtifact, getArtifactState } = require('./commerceWorkflowArtifactStore');
 const { previewAsinPlan, saveAsinPlan, previewMasterKeywords,
   saveMasterKeywords } = require('./amazonResearchWorkflow');
 
@@ -1774,28 +1774,49 @@ app.post('/api/projects/:id/amazon/master-keywords', requireAuth(db), requireRol
   } catch (error) { rejectRevisionStore(res, error); }
 });
 
-function intelligenceConfiguration(project, body) {
+function intelligenceConfiguration(project, body, masterKeywordArtifact = null) {
   const requested = String(body.listingLanguage || 'AUTO').trim().toUpperCase();
   if (!['AUTO','EN','ES'].includes(requested)) throw Object.assign(new Error('LISTING_LANGUAGE_UNSUPPORTED'), {
     code: 'LISTING_LANGUAGE_UNSUPPORTED', status: 400
   });
   return Object.freeze({ seedPhrase: String(project.seed_phrase || '').trim(),
+    ...(masterKeywordArtifact ? { masterKeywordArtifactId: masterKeywordArtifact.id,
+      masterKeywordArtifactHash: masterKeywordArtifact.artifactHash } : {}),
     ...(requested === 'AUTO' ? {} : { listingLanguage: requested }) });
 }
 
-function intelligenceAdapterFor(project) {
-  return project.marketplace === 'AMAZON' ? amazonIntelligenceAdapter : etsyIntelligenceAdapter;
+async function selectedMasterKeywordArtifact(project, scope, artifactIdInput) {
+  if (project.marketplace !== 'AMAZON') return null;
+  const artifactId = Number(artifactIdInput);
+  if (!Number.isInteger(artifactId) || artifactId < 1) throw Object.assign(
+    new Error('MASTER_KEYWORD_ARTIFACT_REQUIRED'), { code: 'MASTER_KEYWORD_ARTIFACT_REQUIRED', status: 409 });
+  const artifact = await getArtifact(db, scope, project.id, artifactId, 'AMAZON_MASTER_KEYWORDS');
+  const state = await getArtifactState(db, scope, project.id);
+  if (state.heads.AMAZON_MASTER_KEYWORDS?.id !== artifact.id) throw Object.assign(
+    new Error('STALE_MASTER_KEYWORD_ARTIFACT'), { code: 'STALE_MASTER_KEYWORD_ARTIFACT', status: 409 });
+  return artifact;
+}
+
+function intelligenceAdapterFor(project, masterKeywordArtifact = null, beforeCommit = null) {
+  const adapter = project.marketplace === 'AMAZON' ? amazonIntelligenceAdapter : etsyIntelligenceAdapter;
+  return Object.freeze({ ...adapter,
+    buildIntelligence: context => adapter.buildIntelligence(Object.freeze({ ...context, masterKeywordArtifact })),
+    ...(beforeCommit ? { beforeCommit } : {}) });
 }
 
 app.post('/api/projects/:id/intelligence-snapshots/preview', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
   try {
     const project = await requireCommerceProject(req);
-    const body = requireExactDto(req.body, new Set(['researchSnapshotId', 'productTruthRevisionId', 'listingLanguage']));
+    const body = requireExactDto(req.body, new Set(['researchSnapshotId', 'productTruthRevisionId', 'listingLanguage',
+      'masterKeywordArtifactId']));
     assertNoClientPolicyOverrides(body);
+    const scope = revisionScope(req.user);
+    const masterKeywordArtifact = await selectedMasterKeywordArtifact(project, scope, body.masterKeywordArtifactId);
     const result = await previewIntelligence(db, revisionScope(req.user), project.id, {
       researchSnapshotId: body.researchSnapshotId, productTruthRevisionId: body.productTruthRevisionId,
-      configuration: intelligenceConfiguration(project, body)
-    }, intelligenceAdapterFor(project));
+      configuration: intelligenceConfiguration(project, body, masterKeywordArtifact)
+    }, intelligenceAdapterFor(project, masterKeywordArtifact));
+    if (masterKeywordArtifact) await selectedMasterKeywordArtifact(project, scope, masterKeywordArtifact.id);
     res.json({ success: true, ...result });
   } catch (error) { rejectRevisionStore(res, error); }
 });
@@ -1804,15 +1825,20 @@ app.post('/api/projects/:id/intelligence-snapshots', requireAuth(db), requireRol
   try {
     const project = await requireCommerceProject(req);
     const body = requireExactDto(req.body, new Set(['expectedHeadIntelligenceSnapshotId', 'researchSnapshotId',
-      'productTruthRevisionId', 'listingLanguage', 'idempotencyKey', 'changeReason']));
+      'productTruthRevisionId', 'listingLanguage', 'masterKeywordArtifactId', 'idempotencyKey', 'changeReason']));
     assertNoClientPolicyOverrides(body);
-    const result = await appendIntelligenceSnapshot(db, revisionScope(req.user), project.id, {
+    const scope = revisionScope(req.user);
+    const masterKeywordArtifact = await selectedMasterKeywordArtifact(project, scope, body.masterKeywordArtifactId);
+    const assertMasterCurrent = masterKeywordArtifact
+      ? async () => { await selectedMasterKeywordArtifact(project, scope, masterKeywordArtifact.id); }
+      : null;
+    const result = await appendIntelligenceSnapshot(db, scope, project.id, {
       expectedHeadIntelligenceSnapshotId: body.expectedHeadIntelligenceSnapshotId,
       researchSnapshotId: body.researchSnapshotId, productTruthRevisionId: body.productTruthRevisionId,
       idempotencyKey: body.idempotencyKey, changeReason: body.changeReason,
-      configuration: intelligenceConfiguration(project, body)
-    }, intelligenceAdapterFor(project));
-    const persisted = await getIntelligenceSnapshot(db, revisionScope(req.user), project.id, result.intelligenceSnapshotId);
+      configuration: intelligenceConfiguration(project, body, masterKeywordArtifact)
+    }, intelligenceAdapterFor(project, masterKeywordArtifact, assertMasterCurrent));
+    const persisted = await getIntelligenceSnapshot(db, scope, project.id, result.intelligenceSnapshotId);
     res.status(result.revisionNumber === 1 ? 201 : 200).json({ success: true, ...result,
       output: persisted.output, accounting: persisted.accounting, configuration: persisted.configuration });
   } catch (error) { rejectRevisionStore(res, error); }

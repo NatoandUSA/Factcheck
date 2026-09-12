@@ -9,7 +9,7 @@
 //      generated from a hard-coded phrase list.
 const { fold, contentTokens, tokens, bytes, titleCase, packTokens } = require('./text');
 const { partition, buildLadder } = require('./allocation');
-const { allowedRecipientFamilies } = require('./semantic');
+const { allowedProductFamilies, allowedRecipientFamilies, matchesProductFamily } = require('./semantic');
 
 const GAP = label => `[THIẾU DỮ LIỆU: ${label}]`;
 
@@ -203,10 +203,20 @@ function compose(scoredKeywords, truthInput, options = {}) {
     allowedRecipients
   });
 
-  const anchorNouns = new Set(opt.mustContainAny
+  // A recipient or occasion match does not name the product. Without this
+  // separation, a high-volume phrase such as "gift for daughter" can occupy
+  // the whole title while never saying necklace, blanket, mug, etc.
+  const contextTokens = new Set(contentTokens(`${truth.recipient} ${truth.occasion}`));
+  const identityTokens = new Set(contentTokens(`${truth.productType} ${truth.productName}`)
+    .filter(token => !contextTokens.has(token)));
+  const productFamilies = allowedProductFamilies([truth.productType, truth.productName]);
+  const fallbackTokens = opt.mustContainAny
     ? contentTokens(Array.isArray(opt.mustContainAny) ? opt.mustContainAny.join(' ') : opt.mustContainAny)
-    : contentTokens(`${truth.productType} ${truth.productName} ${truth.recipient}`));
-  const namesProduct = phrase => !anchorNouns.size || contentTokens(phrase).some(token => anchorNouns.has(token));
+    : [];
+  const anchorNouns = identityTokens.size ? identityTokens : new Set(fallbackTokens);
+  const namesProduct = phrase => productFamilies.size
+    ? matchesProductFamily(phrase, productFamilies)
+    : (!anchorNouns.size || contentTokens(phrase).some(token => anchorNouns.has(token)));
   const forCopy = usable.filter(k => !k.suspectedBrand
     && k.relevance >= opt.minRelevanceCopy
     && namesProduct(k.phrase)

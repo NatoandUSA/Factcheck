@@ -7,6 +7,7 @@ const IDEMPOTENCY_KEY = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f
 const DEPENDENCY_KEYS = Object.freeze([
   'productTruthRevisionId', 'productTruthHash',
   'researchSnapshotId', 'researchSnapshotHash',
+  'masterKeywordArtifactId', 'masterKeywordArtifactHash',
   'intelligenceSnapshotId', 'intelligenceSnapshotHash',
   'policyBindingHash', 'policyContractId', 'policyContractArtifactHash', 'policyContextHash',
   'policyLifecycleSnapshotDigest', 'claimIpBindingHash', 'validatorHash',
@@ -136,7 +137,7 @@ function dependencyManifest(input = {}, overrides = {}) {
   for (const key of Object.keys(manifest).filter(key => /Hash$/.test(key))) {
     if (manifest[key] !== null && !HASH.test(String(manifest[key]))) throw new RevisionStoreError('INVALID_DEPENDENCY_HASH', 400, { key });
   }
-  for (const key of Object.keys(manifest).filter(key => /RevisionId$|SnapshotId$/.test(key))) {
+  for (const key of Object.keys(manifest).filter(key => /RevisionId$|SnapshotId$|ArtifactId$/.test(key))) {
     if (manifest[key] !== null && (!Number.isInteger(Number(manifest[key])) || Number(manifest[key]) < 1)) {
       throw new RevisionStoreError('INVALID_DEPENDENCY_ID', 400, { key });
     }
@@ -145,6 +146,7 @@ function dependencyManifest(input = {}, overrides = {}) {
   for (const [idKey, hashKey] of [
     ['productTruthRevisionId', 'productTruthHash'],
     ['researchSnapshotId', 'researchSnapshotHash'],
+    ['masterKeywordArtifactId', 'masterKeywordArtifactHash'],
     ['intelligenceSnapshotId', 'intelligenceSnapshotHash'],
     ['listingRevisionId', 'listingRevisionHash']
   ]) {

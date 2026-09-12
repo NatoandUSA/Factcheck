@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import CanonicalCommerceWorkflow from './CanonicalCommerceWorkflow';
 import ProjectSetupCard from './ProjectSetupCard';
+import { useAuth } from '../context/AuthContext';
 
 const CATEGORIES = Object.freeze([
   'Jewelry', 'Embroidery', 'Acrylic', 'Blanket', 'Apparel: Sweatshirt',
@@ -15,6 +16,7 @@ async function loadProjects() {
 }
 
 export default function SinglePathMarketplaceWorkspace({ marketplace, onSelectListing, onShowToast }) {
+  const { user } = useAuth();
   const accent = marketplace === 'AMAZON' ? '#0369a1' : '#c2410c';
   const [projects, setProjects] = useState([]);
   const [activeProjectId, setActiveProjectId] = useState('');
@@ -42,7 +44,10 @@ export default function SinglePathMarketplaceWorkspace({ marketplace, onSelectLi
     } finally { setLoading(false); }
   }, []);
 
-  useEffect(() => { refreshProjects(); }, [marketplace, refreshProjects]);
+  useEffect(() => {
+    if (user?.workspaceId) refreshProjects();
+    else { setProjects([]); setActiveProjectId(''); setLoading(false); setError(''); }
+  }, [marketplace, user?.id, user?.workspaceId, refreshProjects]);
 
   const activeProject = useMemo(() => projects.find(item => String(item.id) === String(activeProjectId)) || null,
     [projects, activeProjectId]);

@@ -22,6 +22,7 @@ const assert = require('assert');
     if (String(url).endsWith('/commerce-state')) return response({ success: true, heads: {
       productTruthRevisionId: null, researchSnapshotId: null, intelligenceSnapshotId: null
     }, imports: [], researchSnapshots: [], intelligenceSnapshots: [] });
+    if (String(url).endsWith('/marketplace-workflow')) return response({ success: true, heads: {}, artifacts: [] });
     if (String(url).endsWith('/product-truth/revisions')) return response({ success: true, revisions: [] });
     if (String(url).endsWith('/product-truth-listing/preview')) return response({ success: true, zeroWrite: true,
       sourceReference: 'https://www.amazon.com/dp/B0D5XS64LH', rawHash: 'b'.repeat(64),

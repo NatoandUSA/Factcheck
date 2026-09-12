@@ -432,6 +432,17 @@ async function getIntelligenceSnapshot(db, rawScope, projectIdInput, snapshotIdI
     accounting: JSON.parse(row.accounting_json) });
 }
 
+async function getResearchSnapshot(db, rawScope, projectIdInput, snapshotIdInput) {
+  const scope = scopeOf(rawScope); const projectId = Number(projectIdInput); const snapshotId = Number(snapshotIdInput);
+  const row = await get(db, `SELECT * FROM research_snapshots WHERE id=? AND project_id=?
+    AND tenant_id=? AND workspace_id=? AND marketplace=?`,
+  [snapshotId, projectId, scope.tenantId, scope.workspaceId, scope.marketplace]);
+  if (!row) throw new CommerceSnapshotError('RESEARCH_SNAPSHOT_NOT_FOUND', 404);
+  assertResearchIntegrity(row);
+  return Object.freeze({ ...row, importManifest: JSON.parse(row.import_manifest_json),
+    observations: JSON.parse(row.observations_json), accounting: JSON.parse(row.accounting_json) });
+}
+
 async function getCommerceState(db, rawScope, projectIdInput) {
   const scope = scopeOf(rawScope); const projectId = Number(projectIdInput);
   const project = await get(db, `SELECT id,head_product_truth_revision_id,head_research_snapshot_id,head_intelligence_snapshot_id
@@ -479,4 +490,5 @@ async function getResearchImport(db, rawScope, projectIdInput, importIdInput, { 
 }
 
 module.exports = Object.freeze({ CommerceSnapshotError, appendIntelligenceSnapshot, appendResearchImport,
-  appendResearchSnapshot, previewIntelligence, getCommerceState, getIntelligenceSnapshot, getResearchImport, snapshotJson });
+  appendResearchSnapshot, previewIntelligence, getCommerceState, getIntelligenceSnapshot, getResearchSnapshot,
+  getResearchImport, snapshotJson });

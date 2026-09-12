@@ -34,6 +34,7 @@ const COLUMNS = {
   bestSeller: ['best seller'],
   category: ['category'],
   creationDate: ['creation date', 'date first available'],
+  sellerAgeMonths: ['seller age (mo)', 'seller age months'],
   images: ['images']
 };
 
@@ -92,6 +93,7 @@ function extractXray(sheets) {
         activeSellers: num(pick('activeSellers')),
         category: text('category'),
         creationDate: text('creationDate'),
+        sellerAgeMonths: num(pick('sellerAgeMonths')),
         images: num(pick('images'))
       });
     }
@@ -126,6 +128,59 @@ function median(values) {
   if (!sorted.length) return null;
   const mid = Math.floor(sorted.length / 2);
   return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+function finite(value) { return value !== null && value !== undefined && Number.isFinite(Number(value)); }
+
+function diverseTop(rows, compare, limit, maxPerBrand) {
+  const counts = new Map(); const picked = [];
+  for (const row of [...rows].sort(compare)) {
+    const sellerKey = fold(row.brand || row.seller || row.asin);
+    const used = counts.get(sellerKey) || 0;
+    if (used >= maxPerBrand) continue;
+    counts.set(sellerKey, used + 1); picked.push(row);
+    if (picked.length >= limit) break;
+  }
+  return picked;
+}
+
+function cohortItem(row) {
+  return {
+    asin: row.asin, title: row.title, brand: row.brand, seller: row.seller, price: row.price,
+    asinSales: row.asinSales, asinRevenue: row.asinRevenue, bsr: row.bsr, reviews: row.reviews,
+    reviewVelocity: row.reviewVelocity, sellerAgeMonths: row.sellerAgeMonths, creationDate: row.creationDate,
+    relevance: Number(row.relevance.toFixed(3)), compositeScore: Number(row.score.toFixed(4)),
+    opportunityScore: finite(row.asinSales) ? Number((row.asinSales / Math.max(25, Number(row.reviews || 0) + 25)).toFixed(4)) : null
+  };
+}
+
+function buildCohorts(rows, batchSize, maxPerBrand) {
+  const desc = field => (a, b) => finite(b[field]) - finite(a[field]) || Number(b[field] || 0) - Number(a[field] || 0) || b.score - a.score;
+  const asc = field => (a, b) => finite(b[field]) - finite(a[field]) || Number(a[field] || Infinity) - Number(b[field] || Infinity) || b.score - a.score;
+  const newest = (a, b) => {
+    const left = Date.parse(a.creationDate || '') || 0; const right = Date.parse(b.creationDate || '') || 0;
+    return Boolean(right) - Boolean(left) || right - left || b.score - a.score;
+  };
+  const opportunity = (a, b) => {
+    const left = finite(a.asinSales) ? a.asinSales / Math.max(25, Number(a.reviews || 0) + 25) : -1;
+    const right = finite(b.asinSales) ? b.asinSales / Math.max(25, Number(b.reviews || 0) + 25) : -1;
+    return right - left || b.score - a.score;
+  };
+  const definitions = [
+    ['COMPOSITE_RELEVANCE', 'Phù hợp seed + hiệu suất tổng hợp', (a, b) => b.score - a.score],
+    ['TOP_ASIN_SALES', 'ASIN Sales cao nhất', desc('asinSales')],
+    ['TOP_ASIN_REVENUE', 'ASIN Revenue cao nhất', desc('asinRevenue')],
+    ['BEST_BSR', 'BSR tốt nhất (số nhỏ hơn)', asc('bsr')],
+    ['REVIEW_VELOCITY', 'Review Velocity cao nhất', desc('reviewVelocity')],
+    ['YOUNGEST_SELLERS', 'Seller trẻ nhất theo Seller Age (mo)', asc('sellerAgeMonths')],
+    ['NEWEST_LISTINGS', 'Listing mới nhất theo Creation Date', newest],
+    ['LOW_REVIEW_OPPORTUNITY', 'Sales tốt so với lượng review', opportunity]
+  ];
+  return definitions.map(([id, label, compare]) => {
+    const items = diverseTop(rows, compare, batchSize, maxPerBrand).map(cohortItem);
+    return { id, label, size: items.length, partial: items.length < batchSize,
+      asins: items.map(item => item.asin), cerebroInput: items.map(item => item.asin).join(', '), items };
+  });
 }
 
 // Reverse-ASIN research is only as good as the ASINs fed into it. Ten ASINs
@@ -254,6 +309,7 @@ function selectAsinBatches(xrayRows, {
     rejectedCount: rejected.length,
     rejected,
     rejectedPreview: rejected.slice(0, 40),
+    cohorts: buildCohorts(accepted, batchSize, maxPerBrand),
     batches: batches.map((rows, index) => ({
       batchNumber: index + 1,
       size: rows.length,
@@ -265,9 +321,10 @@ function selectAsinBatches(xrayRows, {
         asin: r.asin, seed: itemIndex === 0, title: r.title, brand: r.brand, price: r.price,
         asinSales: r.asinSales, parentSales: r.parentSales,
         asinRevenue: r.asinRevenue, parentRevenue: r.parentRevenue,
-        reviews: r.reviews, rating: r.rating, bsr: r.bsr, titleChars: r.titleChars,
+        reviews: r.reviews, rating: r.rating, reviewVelocity: r.reviewVelocity,
+        bsr: r.bsr, titleChars: r.titleChars,
         fulfillment: r.fulfillment, seller: r.seller, sellerCountry: r.sellerCountry,
-        activeSellers: r.activeSellers, creationDate: r.creationDate,
+        activeSellers: r.activeSellers, creationDate: r.creationDate, sellerAgeMonths: r.sellerAgeMonths,
         relevance: Number(r.relevance.toFixed(3)), score: Number(r.score.toFixed(4)),
         scoreParts: r.scoreParts, clusters: r.clusters,
         url: `https://www.amazon.com/dp/${r.asin}`

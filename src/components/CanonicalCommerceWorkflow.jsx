@@ -70,6 +70,7 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
   const accent = marketplace === 'AMAZON' ? '#0369a1' : '#c2410c';
   const projectId = activeProject?.id;
   const [state, setState] = useState(null);
+  const [workflowState, setWorkflowState] = useState(null);
   const [truthRevisions, setTruthRevisions] = useState([]);
   const [facts, setFacts] = useState(emptyFacts);
   const [truthNotes, setTruthNotes] = useState('');
@@ -83,6 +84,11 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
   const [kind, setKind] = useState(marketplace === 'AMAZON' ? 'AMAZON_XRAY' : 'ETSY_SEARCH');
   const [filePreviews, setFilePreviews] = useState([]);
   const [selectedImports, setSelectedImports] = useState([]);
+  const [asinPlanPreview, setAsinPlanPreview] = useState(null);
+  const [selectedAsinText, setSelectedAsinText] = useState('');
+  const [masterPreview, setMasterPreview] = useState(null);
+  const [keywordDecisions, setKeywordDecisions] = useState({});
+  const [keywordQuery, setKeywordQuery] = useState('');
   const [language, setLanguage] = useState('AUTO');
   const [intelligencePreview, setIntelligencePreview] = useState(null);
   const [draft, setDraft] = useState(null);
@@ -115,12 +121,14 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
 
   const refresh = async () => {
     if (!projectId) return;
-    const [commerce, truth, listings] = await Promise.all([
+    const [commerce, truth, listings, workflow] = await Promise.all([
       api(`/api/projects/${projectId}/commerce-state`),
       api(`/api/projects/${projectId}/product-truth/revisions`),
-      api(`/api/projects/${projectId}/listings`)
+      api(`/api/projects/${projectId}/listings`),
+      api(`/api/projects/${projectId}/marketplace-workflow`)
     ]);
     setState(commerce);
+    setWorkflowState(workflow);
     setTruthRevisions(truth.revisions || []);
     setListingQueue(listings.listings || []);
     const refreshedImports = Array.isArray(commerce.imports) ? commerce.imports : [];
@@ -147,6 +155,7 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
 
   useEffect(() => {
     setFiles([]); setFilePreviews([]); setIntelligencePreview(null); setDraft(null); setError('');
+    setAsinPlanPreview(null); setSelectedAsinText(''); setMasterPreview(null); setKeywordDecisions({}); setKeywordQuery('');
     setListingSource(''); setListingHtmlFile(null); setSameSourceConfirmed(false); setListingFactPreview(null);
     setKind(marketplace === 'AMAZON' ? 'AMAZON_XRAY' : 'ETSY_SEARCH');
     setPolicyContext(activeProject ? {
@@ -155,7 +164,7 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
       product_family_version: activeProject.product_family_version
     } : null);
     setPolicyLocale(activeProject?.locale || (/\b(para|hija|regalo|collar)\b/i.test(activeProject?.seed_phrase || '') ? 'es-US' : 'en-US'));
-    if (projectId) refresh().catch(reportError); else { setState(null); setTruthRevisions([]); setListingQueue([]); }
+    if (projectId) refresh().catch(reportError); else { setState(null); setWorkflowState(null); setTruthRevisions([]); setListingQueue([]); }
   }, [projectId, marketplace]);
 
   const run = async (label, operation) => {
@@ -208,6 +217,61 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
       idempotencyKey: uuid(), changeReason: 'STAFF_SELECTED_RESEARCH_INPUTS'
     }));
     notify(`Đã khóa Research Snapshot #${result.researchSnapshotId}.`); await refresh();
+  });
+
+  const xrayImportIds = () => selectedImports.filter(id => imports.find(item => item.id === id)?.kind === 'AMAZON_XRAY');
+  const previewAsinPlan = () => run('asin-plan-preview', async () => {
+    const ids = xrayImportIds();
+    if (!ids.length) throw new Error('Chọn ít nhất một file Xray đã lưu.');
+    const result = await api(`/api/projects/${projectId}/amazon/asin-plan/preview`, jsonOptions({ xrayImportIds: ids }));
+    setAsinPlanPreview(result);
+    const suggested = result.payload?.cohorts?.[0]?.asins || [];
+    setSelectedAsinText(suggested.join(', '));
+    notify(`Đã tạo ${result.payload?.cohorts?.length || 0} nhóm ASIN gợi ý; staff có thể sửa tự do.`);
+  });
+
+  const saveAsinPlan = () => run('asin-plan-save', async () => {
+    const ids = xrayImportIds();
+    const selectedAsins = [...new Set(selectedAsinText.split(/[\s,;]+/).map(value => value.trim().toUpperCase()).filter(Boolean))];
+    if (!ids.length || !selectedAsins.length) throw new Error('Cần file Xray và ít nhất một ASIN đã chọn.');
+    const current = workflowState?.heads?.AMAZON_ASIN_BATCH_PLAN;
+    const result = await api(`/api/projects/${projectId}/amazon/asin-plan`, jsonOptions({
+      xrayImportIds: ids, selectedAsins, expectedHeadArtifactId: current?.id || null,
+      idempotencyKey: uuid(), changeReason: 'STAFF_EDITED_ASIN_RUN_SET'
+    }));
+    notify(`Đã lưu kế hoạch ASIN #${result.id}; đây là convenience artifact, không khóa Cerebro.`); await refresh();
+  });
+
+  const previewMasterKeywords = () => run('master-preview', async () => {
+    const researchSnapshotId = head(state, 'researchSnapshotId');
+    if (!researchSnapshotId) throw new Error('Hãy khóa Research Snapshot có Cerebro trước.');
+    const decisions = Object.entries(keywordDecisions).map(([phrase, value]) => ({ phrase, ...value }));
+    const result = await api(`/api/projects/${projectId}/amazon/master-keywords/preview`, jsonOptions({
+      researchSnapshotId, decisions,
+      ...(workflowState?.heads?.AMAZON_ASIN_BATCH_PLAN ? { asinPlanArtifactId: workflowState.heads.AMAZON_ASIN_BATCH_PLAN.id } : {})
+    }));
+    setMasterPreview(result); notify(`Master KW preview: ${result.accounting?.masterKeywordCount || 0} keyword, không drop.`);
+  });
+
+  const setKeywordTier = (phrase, tier) => {
+    setKeywordDecisions(previous => ({ ...previous, [phrase]: { ...(previous[phrase] || {}), tier } }));
+    setMasterPreview(previous => previous ? { ...previous, payload: { ...previous.payload,
+      keywords: previous.payload.keywords.map(item => item.phrase === phrase ? { ...item, tier,
+        disposition: tier === 'EXCLUDED' ? 'STAFF_EXCLUDED' : 'AVAILABLE_FOR_TRUTH_GATED_ALLOCATION' } : item) } } : previous);
+  };
+
+  const saveMasterKeywords = () => run('master-save', async () => {
+    const researchSnapshotId = head(state, 'researchSnapshotId');
+    if (!researchSnapshotId || !masterPreview) throw new Error('Hãy preview Master KW trước.');
+    const current = workflowState?.heads?.AMAZON_MASTER_KEYWORDS;
+    const decisions = Object.entries(keywordDecisions).map(([phrase, value]) => ({ phrase, ...value }));
+    const result = await api(`/api/projects/${projectId}/amazon/master-keywords`, jsonOptions({
+      researchSnapshotId, decisions, expectedHeadArtifactId: current?.id || null,
+      ...(workflowState?.heads?.AMAZON_ASIN_BATCH_PLAN ? { asinPlanArtifactId: workflowState.heads.AMAZON_ASIN_BATCH_PLAN.id } : {}),
+      idempotencyKey: uuid(), changeReason: 'STAFF_FREEZE_AMAZON_MASTER_KEYWORDS'
+    }));
+    notify(`Đã lưu Master KW v${result.revisionNumber} — artifact ${result.artifactHash.slice(0, 12)}…`);
+    setMasterPreview(null); setKeywordDecisions({}); await refresh();
   });
 
   const previewReferenceListing = htmlFile => run('listing-preview', async () => {
@@ -329,6 +393,10 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
   const importedKinds = new Set(imports.map(item => item.kind));
   const importCoverageReady = requiredKinds.every(required => importedKinds.has(required));
   const researchReady = Boolean(head(state, 'researchSnapshotId'));
+  const masterKeywordHead = workflowState?.heads?.AMAZON_MASTER_KEYWORDS;
+  const displayedMaster = masterPreview || masterKeywordHead;
+  const visibleMasterKeywords = (displayedMaster?.payload?.keywords || []).filter(item => !keywordQuery.trim()
+    || item.phrase.toLowerCase().includes(keywordQuery.trim().toLowerCase())).slice(0, 200);
   const truthReady = Boolean(head(state, 'productTruthRevisionId'));
   const intelligenceReady = Boolean(head(state, 'intelligenceSnapshotId'));
   const policyReady = ['locale', 'media_class', 'product_type_id', 'category_id', 'product_family_version']
@@ -339,6 +407,8 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
     ? `Bước 1A: chọn và preview ${marketplace === 'AMAZON' ? 'Xray hoặc Cerebro đang có' : 'CSV/HTML Etsy'}`
     : !researchReady
       ? 'Bước 1C: chọn nguồn đã import và khóa Research Snapshot'
+      : marketplace === 'AMAZON' && !masterKeywordHead
+        ? (masterPreview ? 'Bước 1E: kiểm tra/chỉnh tier rồi lưu Master Keyword List' : 'Bước 1D: tạo Master Keyword List từ Cerebro')
       : !truthReady
         ? 'Bước 2: nhập tối thiểu tên/loại sản phẩm rồi lưu Product Truth'
         : !intelligenceReady
@@ -424,6 +494,55 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
           {' '}#{item.id} {item.kind} · {item.file_name} · {item.byte_length} bytes · {item.raw_hash.slice(0, 12)}…
         </label>)}
         <div style={{ marginTop: 10 }}><ActionButton accent={accent} disabled={!selectedImports.length || busy} onClick={createResearchSnapshot}>1C. Khóa Research Snapshot</ActionButton></div>
+      </div>}
+      {marketplace === 'AMAZON' && imports.some(item => item.kind === 'AMAZON_XRAY') && <div data-testid="amazon-xray-cohort-planner" style={{ marginTop: 14, borderTop: '1px solid #bfdbfe', paddingTop: 12 }}>
+        <b>1D. Xray → nhóm ASIN gợi ý (không khóa thao tác)</b>
+        <p style={{ margin: '4px 0 9px', color: '#475569', fontSize: '.77rem' }}>Tool nhóm theo sales, revenue, BSR, review velocity, độ trẻ seller/listing và opportunity. Mỗi nhóm tối đa 10; có thể sửa danh sách trước khi copy sang Cerebro.</p>
+        <ActionButton accent={accent} disabled={!xrayImportIds().length || busy} onClick={previewAsinPlan}>Phân tích Xray và tạo nhóm</ActionButton>
+        {asinPlanPreview && <div style={{ display: 'grid', gap: 8, marginTop: 10 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(240px,1fr))', gap: 8 }}>
+            {(asinPlanPreview.payload?.cohorts || []).map(group => <button type="button" key={group.id} onClick={() => setSelectedAsinText(group.asins.join(', '))} style={{ textAlign: 'left', border: '1px solid #93c5fd', borderRadius: 8, background: '#fff', padding: 9, cursor: 'pointer' }}>
+              <b>{group.label}</b><div style={{ fontSize: '.72rem', color: '#475569' }}>{group.size} ASIN · bấm để dùng nhóm này</div>
+            </button>)}
+          </div>
+          <label style={{ display: 'grid', gap: 4, fontWeight: 800, fontSize: '.78rem' }}>ASIN staff chọn — sửa tự do, tối đa 30
+            <textarea aria-label="ASIN staff chọn" rows={3} value={selectedAsinText} onChange={event => setSelectedAsinText(event.target.value)} />
+          </label>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <button type="button" onClick={() => navigator.clipboard?.writeText(selectedAsinText)}>Copy ASIN chạy Cerebro</button>
+            <ActionButton accent="#334155" disabled={!selectedAsinText.trim() || busy} onClick={saveAsinPlan}>Lưu kế hoạch ASIN tùy chọn</ActionButton>
+          </div>
+        </div>}
+      </div>}
+      {marketplace === 'AMAZON' && researchReady && <div data-testid="amazon-master-keyword-workspace" style={{ marginTop: 14, borderTop: '1px solid #bfdbfe', paddingTop: 12 }}>
+        <b>1E. Cerebro → Master Keyword List</b>
+        <p style={{ margin: '4px 0 9px', color: '#475569', fontSize: '.77rem' }}>Nhận trực tiếp một hoặc nhiều Cerebro hợp lệ; không yêu cầu chứng minh ancestry. Mọi keyword được giữ cùng metrics/provenance; outlier và residue được tách để review, không âm thầm xóa.</p>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <ActionButton accent={accent} disabled={busy} onClick={previewMasterKeywords}>Preview / làm mới Master KW</ActionButton>
+          {masterPreview && <ActionButton accent="#166534" disabled={busy} onClick={saveMasterKeywords}>Lưu immutable Master KW</ActionButton>}
+          {masterKeywordHead && <span style={{ color: '#166534', fontWeight: 800 }}>Đã lưu v{masterKeywordHead.revisionNumber} · {masterKeywordHead.accounting?.masterKeywordCount} KW</span>}
+        </div>
+        {displayedMaster && <div style={{ marginTop: 10 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(130px,1fr))', gap: 7 }}>
+            <Metric label="MASTER KW" value={displayedMaster.accounting?.masterKeywordCount} />
+            <Metric label="OUTLIER" value={displayedMaster.accounting?.outlierCount} />
+            <Metric label="RESIDUE" value={displayedMaster.accounting?.residueCount} />
+            <Metric label="DROPPED" value={displayedMaster.accounting?.droppedKeywordCount} />
+          </div>
+          <input aria-label="Tìm trong Master Keyword" value={keywordQuery} onChange={event => setKeywordQuery(event.target.value)} placeholder="Tìm keyword…" style={{ width: '100%', marginTop: 8, padding: 8 }} />
+          <div style={{ maxHeight: 430, overflow: 'auto', marginTop: 8, border: '1px solid #cbd5e1', borderRadius: 8, background: '#fff' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '.73rem' }}><thead><tr>
+              <th style={{ textAlign: 'left', padding: 7 }}>#</th><th style={{ textAlign: 'left' }}>Keyword</th><th>SV</th><th>Sales</th><th>Rank</th><th>Score</th><th>Tier</th><th>Nguồn</th>
+            </tr></thead><tbody>{visibleMasterKeywords.map(item => <tr key={item.keywordId} style={{ borderTop: '1px solid #e2e8f0' }}>
+              <td style={{ padding: 7 }}>{item.priorityRank}</td><td>{item.phrase}</td><td style={{ textAlign: 'center' }}>{item.metrics.searchVolume ?? '—'}</td>
+              <td style={{ textAlign: 'center' }}>{item.metrics.keywordSales ?? '—'}</td><td style={{ textAlign: 'center' }}>{item.metrics.positionRank ?? '—'}</td>
+              <td style={{ textAlign: 'center' }}>{item.score}</td><td style={{ textAlign: 'center' }}><select aria-label={`Tier ${item.phrase}`} value={item.tier} disabled={!masterPreview} onChange={event => setKeywordTier(item.phrase, event.target.value)}>
+                {['PRIMARY','SECONDARY','LONG_TAIL','OUTLIER_REVIEW','RESIDUE','EXCLUDED'].map(tier => <option key={tier}>{tier}</option>)}
+              </select></td><td style={{ textAlign: 'center' }}>{item.provenance?.length || 0}</td>
+            </tr>)}</tbody></table>
+          </div>
+          {(displayedMaster.payload?.keywords || []).length > 200 && !keywordQuery && <small>Hiển thị 200 keyword đầu; dùng ô tìm kiếm để xem keyword khác. Artifact vẫn giữ toàn bộ.</small>}
+        </div>}
       </div>}
     </Step>
 

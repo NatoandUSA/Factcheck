@@ -63,6 +63,9 @@ const amazonIntelligenceAdapter = require('./commerceIntelligence/amazonIntellig
 const { selectAsinBatches } = require('./commerceIntelligence/asinSelector');
 const etsyResearchAdapter = require('./commerceIntelligence/etsyResearchAdapter');
 const etsyIntelligenceAdapter = require('./commerceIntelligence/etsyIntelligenceAdapter');
+const { getArtifactState } = require('./commerceWorkflowArtifactStore');
+const { previewAsinPlan, saveAsinPlan, previewMasterKeywords,
+  saveMasterKeywords } = require('./amazonResearchWorkflow');
 
 const PROJECT_POLICY_CLASSIFICATIONS = Object.freeze({
   CUSTOM_SWEATSHIRT: Object.freeze({ mediaClass: 'NON_MEDIA', productTypeId: 'CUSTOM_SWEATSHIRT', categoryId: 'APPAREL_SWEATSHIRT', productFamilyVersion: 'custom-sweatshirt-v1' }),
@@ -1714,6 +1717,60 @@ app.post('/api/projects/:id/research-snapshots', requireAuth(db), requireRole(['
     assertNoClientPolicyOverrides(body);
     const result = await appendResearchSnapshot(db, revisionScope(req.user), projectId, body, researchAdapterFor(project));
     res.status(result.revisionNumber === 1 ? 201 : 200).json({ success: true, ...result });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+app.get('/api/projects/:id/marketplace-workflow', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    await requireCommerceProject(req);
+    const state = await getArtifactState(db, revisionScope(req.user), req.params.id);
+    res.json({ success: true, ...state });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+app.post('/api/projects/:id/amazon/asin-plan/preview', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    const project = await requireCommerceProject(req);
+    const body = requireExactDto(req.body, new Set(['xrayImportIds', 'selectedAsins']));
+    assertNoClientPolicyOverrides(body);
+    const result = await previewAsinPlan(db, revisionScope(req.user), project.id,
+      { ...body, seedPhrase: project.seed_phrase }, value => ipGuard.screenText(value));
+    res.json({ success: true, ...result });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+app.post('/api/projects/:id/amazon/asin-plan', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    const project = await requireCommerceProject(req);
+    const body = requireExactDto(req.body, new Set(['xrayImportIds', 'selectedAsins', 'expectedHeadArtifactId',
+      'idempotencyKey', 'changeReason']));
+    assertNoClientPolicyOverrides(body);
+    const result = await saveAsinPlan(db, revisionScope(req.user), project.id,
+      { ...body, seedPhrase: project.seed_phrase }, value => ipGuard.screenText(value));
+    res.status(result.duplicate ? 200 : 201).json({ success: true, ...result });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+app.post('/api/projects/:id/amazon/master-keywords/preview', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    const project = await requireCommerceProject(req);
+    const body = requireExactDto(req.body, new Set(['researchSnapshotId', 'asinPlanArtifactId', 'decisions']));
+    assertNoClientPolicyOverrides(body);
+    const result = await previewMasterKeywords(db, revisionScope(req.user), project.id,
+      { ...body, seedPhrase: project.seed_phrase });
+    res.json({ success: true, ...result });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+app.post('/api/projects/:id/amazon/master-keywords', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    const project = await requireCommerceProject(req);
+    const body = requireExactDto(req.body, new Set(['researchSnapshotId', 'asinPlanArtifactId', 'decisions',
+      'expectedHeadArtifactId', 'idempotencyKey', 'changeReason']));
+    assertNoClientPolicyOverrides(body);
+    const result = await saveMasterKeywords(db, revisionScope(req.user), project.id,
+      { ...body, seedPhrase: project.seed_phrase });
+    res.status(result.duplicate ? 200 : 201).json({ success: true, ...result });
   } catch (error) { rejectRevisionStore(res, error); }
 });
 

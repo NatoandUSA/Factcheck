@@ -195,6 +195,22 @@ function candidateCorpus(observations) {
   return candidates;
 }
 
+function corpusFromMasterArtifact(artifact) {
+  if (artifact?.kind !== 'ETSY_MASTER_KEYWORDS' || !Array.isArray(artifact.payload?.keywords)) {
+    throw Object.assign(new Error('ETSY_MASTER_KEYWORDS_REQUIRED'), { code: 'ETSY_MASTER_KEYWORDS_REQUIRED', status: 409 });
+  }
+  const eligible = new Set(['PRIMARY', 'SECONDARY', 'LONG_TAIL']);
+  const corpus = artifact.payload.keywords.filter(item => eligible.has(item.tier)).map(item => ({
+    phrase: item.phrase, occurrences: Math.max(1, Number(item.listingSpread) || 1), score: Number(item.score) || 0,
+    sources: item.provenance || [], masterKeywordId: item.keywordId, masterPriorityRank: item.priorityRank,
+    masterTier: item.tier, intent: item.intent, semanticCluster: item.semanticCluster
+  })).sort((a, b) => a.masterPriorityRank - b.masterPriorityRank);
+  Object.defineProperty(corpus, 'sourceRejected', { value: Object.freeze([]), enumerable: false });
+  return { corpus, excluded: artifact.payload.keywords.filter(item => item.tier === 'EXCLUDED'),
+    review: artifact.payload.keywords.filter(item => ['PATTERN_ONLY', 'REVIEW'].includes(item.tier)),
+    total: artifact.payload.keywords.length };
+}
+
 function descriptionFromTruth(facts, title) {
   const lines = [title];
   for (const [label, value] of [
@@ -206,16 +222,86 @@ function descriptionFromTruth(facts, title) {
   return lines.join('\n\n');
 }
 
-async function buildIntelligence({ research, productTruth, configuration = {}, masterKeywords = null }) {
+function candidateIntent(candidate) {
+  if (candidate.intent) return candidate.intent;
+  const value = fold(candidate.phrase);
+  if (/\b(personalized|personalised|personalizado|personalizada|custom|nombre|name)\b/.test(value)) return 'PERSONALIZATION';
+  if (/\b(daughter|hija|mother|madre|mom|mama|dad|papa|wife|esposa|son|hijo)\b/.test(value)) return 'RECIPIENT';
+  if (/\b(birthday|cumpleanos|christmas|navidad|graduation|graduacion|wedding|anniversary)\b/.test(value)) return 'OCCASION';
+  if (/\b(gift|gifts|regalo|regalos|present)\b/.test(value)) return 'GIFT_INTENT';
+  return 'PRODUCT_OR_STYLE';
+}
+
+function semanticKey(value) { return [...tokens(value)].sort().join(' '); }
+
+function composeEtsyTitle(safe, facts) {
+  const identity = text(facts.productName || facts.productType);
+  const identityGroups = productGroups(identity);
+  const productPhrases = safe.filter(candidate => {
+    const groups = productGroups(candidate.phrase);
+    return groups.size && [...groups].some(group => identityGroups.has(group));
+  });
+  const ordered = [...productPhrases, ...safe]; const clauses = []; const used = new Set();
+  const add = value => {
+    const phrase = titleCase(text(value)); const key = semanticKey(phrase);
+    if (!phrase || used.has(key)) return false;
+    const next = [...clauses, phrase].join(', ');
+    if (Array.from(next).length > 140) return false;
+    clauses.push(phrase); used.add(key); return true;
+  };
+  if (!productPhrases.length) add(identity); else add(productPhrases[0].phrase);
+  for (const candidate of ordered) {
+    if (clauses.length >= 5) break;
+    const gain = [...tokens(candidate.phrase)].filter(token => ![...used].some(key => key.split(' ').includes(token)));
+    if (gain.length >= 2) add(candidate.phrase);
+  }
+  if (![...productGroups(clauses.join(' '))].some(group => identityGroups.has(group))) add(identity);
+  return clauses.join(', ').slice(0, 140).trim();
+}
+
+function selectExplainedTags(safe, facts) {
+  const pool = [];
+  for (const candidate of safe) for (const value of tagVariants(candidate.phrase)) pool.push({ value,
+    intent: candidateIntent(candidate), semanticCluster: semanticKey(value), corpusKey: fold(candidate.phrase),
+    masterKeywordId: candidate.masterKeywordId || null, masterPriorityRank: candidate.masterPriorityRank || null,
+    masterTier: candidate.masterTier || null, sources: candidate.sources || [], reason: 'SAFE_MASTER_KEYWORD_VARIANT' });
+  for (const [field, raw] of [['productIdentity', facts.productName || facts.productType], ['recipient', facts.recipient], ['occasion', facts.occasion]]) {
+    for (const value of tagVariants(text(raw))) pool.push({ value, intent: field === 'recipient' ? 'RECIPIENT' : field === 'occasion' ? 'OCCASION' : 'PRODUCT_OR_STYLE',
+      semanticCluster: semanticKey(value), corpusKey: null, masterKeywordId: null, masterPriorityRank: null,
+      masterTier: null, sources: [{ sourceType: 'PRODUCT_TRUTH', field }], reason: `PRODUCT_TRUTH_${field.toUpperCase()}` });
+  }
+  const chosen = []; const values = new Set(); const clusters = new Set(); const intents = new Set();
+  const add = item => {
+    const key = fold(item.value); if (!key || values.has(key) || clusters.has(item.semanticCluster) || Array.from(item.value).length > 20) return false;
+    chosen.push(item); values.add(key); clusters.add(item.semanticCluster); intents.add(item.intent); return true;
+  };
+  for (const item of pool) if (!intents.has(item.intent)) add(item);
+  for (const item of pool) { if (chosen.length >= 13) break; add(item); }
+  return chosen.slice(0, 13);
+}
+
+function naturalDescription(facts, title, language) {
+  const identity = text(facts.productName || facts.productType); const recipient = text(facts.recipient || facts.audience);
+  const occasion = text(facts.occasion); const intro = language === 'ES'
+    ? `${identity}${recipient ? ` para ${recipient}` : ''}${occasion ? `, pensado para ${occasion}` : ''}.`
+    : `${identity}${recipient ? ` for ${recipient}` : ''}${occasion ? `, designed for ${occasion}` : ''}.`;
+  const details = [];
+  for (const [label, value] of [['Materials', facts.materials || facts.composition], ['Personalization', facts.personalization],
+    ['Size', facts.sizes || facts.dimensions], ['Included', facts.includedItems], ['Format', facts.fileFormat],
+    ['Players', facts.playerCount], ['Age', facts.minimumAge], ['Duration', facts.duration], ['Packaging', facts.packaging], ['Care', facts.care]]) {
+    if (text(value)) details.push(`${label}: ${text(value)}`);
+  }
+  return [title, intro, ...details].filter(Boolean).join('\n\n');
+}
+
+async function buildIntelligence({ research, productTruth, configuration = {}, masterKeywordArtifact = null }) {
   const observations = research.observations || {};
   if (observations.marketplace !== 'ETSY') throw Object.assign(new Error('ETSY_RESEARCH_REQUIRED'), { code: 'ETSY_RESEARCH_REQUIRED' });
   const facts = factsFromSnapshot(productTruth.snapshot);
   const identity = text(facts.productName || facts.productType);
   if (!identity) throw Object.assign(new Error('PRODUCT_IDENTITY_REQUIRED'), { code: 'PRODUCT_IDENTITY_REQUIRED' });
-  const corpus = Array.isArray(masterKeywords) ? masterKeywords : candidateCorpus(observations);
-  if (configuration.masterKeywordCount != null && corpus.length !== configuration.masterKeywordCount) {
-    throw Object.assign(new Error('MASTER_KEYWORD_COUNT_MISMATCH'), { code: 'MASTER_KEYWORD_COUNT_MISMATCH', status: 409 });
-  }
+  const master = corpusFromMasterArtifact(masterKeywordArtifact);
+  const corpus = master.corpus;
   const language = resolveListingLanguage(configuration, corpus);
   const recipientFamilies = allowedRecipientFamilies([facts.recipient, facts.audience, facts.productName, facts.productType]);
   const safe = []; const claimBlocked = []; const ipBlocked = []; const irrelevant = [];
@@ -248,59 +334,42 @@ async function buildIntelligence({ research, productTruth, configuration = {}, m
       irrelevant.push({ ...candidate, reason: 'IRRELEVANT_TO_PRODUCT_TRUTH_ANCHORS' });
     } else safe.push(candidate);
   }
-  // Etsy's current title guidance favors one clear product identity and moves
-  // gifting/search variants to tags. Product Truth owns this visible claim;
-  // observed competitor phrases must not turn the title into keyword stuffing.
-  const etsyTitle = titleCase(identity).slice(0, 140).trim();
-  const used = new Set(); const usedCorpusKeys = new Set();
-  const tagPool = []; const candidateVariants = safe.map(candidate => ({ candidate, variants: tagVariants(candidate.phrase) }));
-  const maxVariants = Math.max(0, ...candidateVariants.map(item => item.variants.length));
-  for (let variantIndex = 0; variantIndex < maxVariants; variantIndex++) {
-    for (const item of candidateVariants) {
-      const value = item.variants[variantIndex];
-      if (value) tagPool.push({ value, corpusKey: fold(item.candidate.phrase) });
-    }
-  }
-  for (const fact of [identity, text(facts.recipient), text(facts.occasion)]) {
-    for (const value of tagVariants(fact)) tagPool.push({ value, corpusKey: null });
-  }
-  const etsyTags = []; const etsyTagExplanations = [];
-  for (const item of tagPool) {
-    const key = fold(item.value); if (etsyTags.some(existing => fold(existing) === key)) continue;
-    etsyTags.push(item.value); etsyTagExplanations.push({ tag: item.value,
-      source: item.corpusKey ? 'MASTER_KEYWORD_CORPUS' : 'PRODUCT_TRUTH_FALLBACK',
-      sourcePhrase: item.corpusKey || item.value,
-      reason: item.corpusKey ? 'Selected for relevant winner/search coverage after IP, language and claim screening'
-        : 'Filled from verified Product Truth because fewer than 13 safe research tags were available' });
-    used.add(key); if (item.corpusKey) usedCorpusKeys.add(item.corpusKey);
-    if (etsyTags.length === 13) break;
-  }
-  const content = { etsyTitle, etsyTags, etsyTagExplanations, etsyDescription: descriptionFromTruth(facts, etsyTitle),
+  const etsyTitle = composeEtsyTitle(safe, facts); const explainedTags = selectExplainedTags(safe, facts);
+  const etsyTags = explainedTags.map(item => item.value); const used = new Set(etsyTags.map(fold));
+  const usedCorpusKeys = new Set(explainedTags.map(item => item.corpusKey).filter(Boolean));
+  const tagCapacityGap = 13 - etsyTags.length;
+  const content = { etsyTitle, etsyTags, etsyTagExplanations: explainedTags.map(({ corpusKey, ...item }) => item),
+    etsyTagStatus: tagCapacityGap ? { code: 'TAG_SHORTAGE', missingCount: tagCapacityGap } : { code: 'COMPLETE', missingCount: 0 },
+    etsyDescription: naturalDescription(facts, etsyTitle, language),
     itemHighlights: identity, categoryName: text(facts.category), ppcKeywords: [],
     imagePrompts: generateImagePromptSuite(productTruth.snapshot, 'ETSY') };
   const guarded = evaluateListingGuard({ listing: content, verifiedFacts: facts });
   const unallocated = safe.filter(item => !usedCorpusKeys.has(fold(item.phrase)));
   const allocatedCorpusCount = safe.length + claimBlocked.length + ipBlocked.length + irrelevant.length
-    + languageTargeting.length + competitorShopBlocked.length;
-  const corpusAccountingGap = corpus.length - allocatedCorpusCount;
+    + languageTargeting.length + competitorShopBlocked.length + master.excluded.length + master.review.length;
+  const corpusAccountingGap = master.total - allocatedCorpusCount;
   if (corpusAccountingGap !== 0) throw Object.assign(new Error('ETSY_KEYWORD_ACCOUNTING_MISMATCH'), {
     code: 'ETSY_KEYWORD_ACCOUNTING_MISMATCH', corpusCount: corpus.length, allocatedCorpusCount, corpusAccountingGap
   });
   return Object.freeze({
     output: { marketplace: 'ETSY', language, listingDraft: guarded.listing,
-      keywordAllocation: { corpusCount: corpus.length, titleAndTagUsed: [...used], unallocated,
+      masterKeywordArtifact: { id: masterKeywordArtifact.id, artifactHash: masterKeywordArtifact.artifactHash,
+        revisionNumber: masterKeywordArtifact.revisionNumber },
+      keywordAllocation: { corpusCount: master.total, titleAndTagUsed: [...used], unallocated,
         claimBlocked, ipBlocked, irrelevant, languageTargeting, competitorShopBlocked,
-        sourceRejected: corpus.sourceRejected || [],
+        masterExcluded: master.excluded, masterReview: master.review, sourceRejected: corpus.sourceRejected,
         reason: 'ETSY_HAS_NO_SELLER-SELECTED_PPC_KEYWORD_SURFACE' },
       competitorSummary: { observations: (observations.sellers || []).length,
         uniqueListingIds: new Set((observations.sellers || []).map(item => item.listingId).filter(Boolean)).size },
       guardAccounting: { backendExcluded: guarded.backendExcluded, ppcFlagged: guarded.ppcFlagged } },
-    accounting: { sellerObservationCount: (observations.sellers || []).length, keywordCandidateCount: corpus.length,
+    accounting: { sellerObservationCount: (observations.sellers || []).length, masterKeywordCount: master.total,
+      keywordCandidateCount: corpus.length,
       titleAndTagCandidateCount: used.size, unallocatedCount: unallocated.length,
       claimBlockedCount: claimBlocked.length, ipBlockedCount: ipBlocked.length,
       irrelevantCount: irrelevant.length, languageTargetingCount: languageTargeting.length,
       competitorShopBlockedCount: competitorShopBlocked.length, allocatedCorpusCount, corpusAccountingGap,
-      sourceRejectedCount: (corpus.sourceRejected || []).length,
+      masterExcludedCount: master.excluded.length, masterReviewCount: master.review.length,
+      sourceRejectedCount: corpus.sourceRejected.length,
       tagCount: guarded.listing.etsyTags.length, tagCapacityGap: 13 - guarded.listing.etsyTags.length },
     engineBindingHash: engineBindingHash()
   });
@@ -308,4 +377,4 @@ async function buildIntelligence({ research, productTruth, configuration = {}, m
 
 module.exports = Object.freeze({ ENGINE_ID, buildIntelligence, candidateCorpus, engineBindingHash, factsFromSnapshot,
   productTypeConflict, unverifiedAppearanceTokens, unverifiedProductDescriptors, languageOfPhrase,
-  languageCompatible, resolveListingLanguage, containsCompetitorShop, tagVariants });
+  languageCompatible, resolveListingLanguage, containsCompetitorShop, tagVariants, corpusFromMasterArtifact });

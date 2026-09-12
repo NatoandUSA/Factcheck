@@ -56,10 +56,11 @@ function bounded(value, code, maximum, required = true) {
 
 async function rollback(db, error) { try { await run(db, 'ROLLBACK'); } catch (_) {} throw error; }
 
-async function replay(db, scope, operation, key, requestHash) {
+async function replay(db, scope, projectId, listingId, operation, key, requestHash) {
   const row = await get(db, `SELECT request_hash,response_json,created_by FROM canonical_handoff_write_receipts
-    WHERE tenant_id=? AND workspace_id=? AND marketplace=? AND operation=? AND idempotency_key=?`,
-  [scope.tenantId, scope.workspaceId, scope.marketplace, operation, key]);
+    WHERE tenant_id=? AND workspace_id=? AND marketplace=? AND project_id=? AND listing_id=?
+      AND operation=? AND idempotency_key=?`,
+  [scope.tenantId, scope.workspaceId, scope.marketplace, projectId, listingId, operation, key]);
   if (!row) return null;
   if (row.created_by !== scope.actorId) throw new CanonicalHandoffError('IDEMPOTENCY_KEY_ACTOR_MISMATCH', 409);
   if (row.request_hash !== requestHash) throw new CanonicalHandoffError('IDEMPOTENCY_KEY_REUSE', 409);
@@ -101,16 +102,21 @@ async function reviewUnlocked(db, rawScope, listingIdInput, input = {}, hooks = 
   const expectedContentHash = sha256(input.expectedContentHash, 'EXPECTED_CONTENT_HASH_REQUIRED');
   const expectedDependencyHash = sha256(input.expectedDependencyHash, 'EXPECTED_DEPENDENCY_HASH_REQUIRED');
   const idempotencyKey = keyOf(input.idempotencyKey);
-  const requestHash = hashBytes(canonicalJson({ operation: 'CANONICAL_LISTING_REVIEW', listingId, decision, reason,
-    expectedListingRevisionId, expectedContentHash, expectedDependencyHash }));
-  const existing = await replay(db, scope, 'CANONICAL_LISTING_REVIEW', idempotencyKey, requestHash);
+  const observed = await currentListing(db, scope, listingId);
+  const requestHash = hashBytes(canonicalJson({ operation: 'CANONICAL_LISTING_REVIEW', scope: {
+    tenantId: scope.tenantId, workspaceId: scope.workspaceId, marketplace: scope.marketplace
+  }, projectId: observed.project_id, listingId, decision, reason, expectedListingRevisionId,
+    expectedContentHash, expectedDependencyHash }));
+  const existing = await replay(db, scope, observed.project_id, listingId, 'CANONICAL_LISTING_REVIEW', idempotencyKey, requestHash);
   if (existing) return existing;
   await run(db, 'BEGIN IMMEDIATE');
   try {
-    const inside = await replay(db, scope, 'CANONICAL_LISTING_REVIEW', idempotencyKey, requestHash);
+    const inside = await replay(db, scope, observed.project_id, listingId, 'CANONICAL_LISTING_REVIEW', idempotencyKey, requestHash);
     if (inside) { await run(db, 'COMMIT'); return inside; }
     const listing = await currentListing(db, scope, listingId);
-    if (listing.status === 'SUBMITTED') throw new CanonicalHandoffError('SUBMITTED_LISTING_TERMINAL', 409);
+    if (['SUBMITTED','OPERATOR_REPORTED_SUBMITTED'].includes(listing.status)) {
+      throw new CanonicalHandoffError('SUBMITTED_LISTING_TERMINAL', 409);
+    }
     if (listing.head_revision_id !== expectedListingRevisionId || listing.content_hash !== expectedContentHash
       || listing.dependency_manifest_hash !== expectedDependencyHash) {
       throw new CanonicalHandoffError('REVIEW_PACKAGE_STALE', 409, { currentListingRevisionId: listing.head_revision_id });
@@ -170,14 +176,28 @@ async function requestSubmissionUnlocked(db, rawScope, listingIdInput, input = {
   if (scope.role !== 'SELLER') throw new CanonicalHandoffError('SELLER_SUBMISSION_REQUEST_REQUIRED', 403);
   const notes = bounded(input.notes, 'SUBMISSION_REQUEST_NOTES_REQUIRED', 2000);
   const idempotencyKey = keyOf(input.idempotencyKey);
-  const requestHash = hashBytes(canonicalJson({ operation: 'CANONICAL_SUBMISSION_REQUEST', listingId, notes }));
-  const existing = await replay(db, scope, 'CANONICAL_SUBMISSION_REQUEST', idempotencyKey, requestHash);
+  const observed = await currentListing(db, scope, listingId);
+  if (!['MANAGER_APPROVED','SUBMITTED','OPERATOR_REPORTED_SUBMITTED'].includes(observed.status)) {
+    throw new CanonicalHandoffError('MANAGER_APPROVAL_REQUIRED', 409);
+  }
+  const observedReview = await approvedReview(db, scope, observed);
+  const observedPackageHash = submissionPackageHash(observed, observedReview);
+  const requestHash = hashBytes(canonicalJson({ operation: 'CANONICAL_SUBMISSION_REQUEST', scope: {
+    tenantId: scope.tenantId, workspaceId: scope.workspaceId, marketplace: scope.marketplace
+  }, projectId: observed.project_id, listingId, listingRevisionId: observed.head_revision_id,
+    contentHash: observed.content_hash, dependencyHash: observed.dependency_manifest_hash,
+    reviewId: observedReview.id, packageHash: observedPackageHash, notes }));
+  const existing = await replay(db, scope, observed.project_id, listingId, 'CANONICAL_SUBMISSION_REQUEST', idempotencyKey, requestHash);
   if (existing) return existing;
   await run(db, 'BEGIN IMMEDIATE');
   try {
-    const inside = await replay(db, scope, 'CANONICAL_SUBMISSION_REQUEST', idempotencyKey, requestHash);
+    const inside = await replay(db, scope, observed.project_id, listingId, 'CANONICAL_SUBMISSION_REQUEST', idempotencyKey, requestHash);
     if (inside) { await run(db, 'COMMIT'); return inside; }
     const listing = await currentListing(db, scope, listingId);
+    if (listing.head_revision_id !== observed.head_revision_id || listing.content_hash !== observed.content_hash
+      || listing.dependency_manifest_hash !== observed.dependency_manifest_hash) {
+      throw new CanonicalHandoffError('SUBMISSION_PACKAGE_STALE', 409);
+    }
     if (listing.status !== 'MANAGER_APPROVED') throw new CanonicalHandoffError('MANAGER_APPROVAL_REQUIRED', 409);
     if (typeof hooks.assertDependenciesCurrent === 'function') await hooks.assertDependenciesCurrent(listing);
     if (typeof hooks.assertApprovalEligible !== 'function') {
@@ -210,13 +230,15 @@ async function submitUnlocked(db, rawScope, listingIdInput, input = {}, hooks = 
   const externalReference = bounded(input.externalReference, 'EXTERNAL_SUBMISSION_EVIDENCE_REQUIRED', 500);
   const submissionRequestId = positive(input.submissionRequestId, 'SUBMISSION_REQUEST_REQUIRED');
   const idempotencyKey = keyOf(input.idempotencyKey);
+  const observed = await currentListing(db, scope, listingId);
   const requestHash = hashBytes(canonicalJson({ operation: 'CANONICAL_SUBMISSION_HANDOFF', listingId,
-    submissionRequestId, confirmedExternalSubmission: true, notes, externalReference }));
-  const existing = await replay(db, scope, 'CANONICAL_SUBMISSION_HANDOFF', idempotencyKey, requestHash);
+    projectId: observed.project_id, listingRevisionId: observed.head_revision_id, submissionRequestId,
+    confirmedExternalSubmission: true, notes, externalReference }));
+  const existing = await replay(db, scope, observed.project_id, listingId, 'CANONICAL_SUBMISSION_HANDOFF', idempotencyKey, requestHash);
   if (existing) return existing;
   await run(db, 'BEGIN IMMEDIATE');
   try {
-    const inside = await replay(db, scope, 'CANONICAL_SUBMISSION_HANDOFF', idempotencyKey, requestHash);
+    const inside = await replay(db, scope, observed.project_id, listingId, 'CANONICAL_SUBMISSION_HANDOFF', idempotencyKey, requestHash);
     if (inside) { await run(db, 'COMMIT'); return inside; }
     const listing = await currentListing(db, scope, listingId);
     if (listing.status !== 'MANAGER_APPROVED') throw new CanonicalHandoffError('MANAGER_APPROVAL_REQUIRED', 409);
@@ -255,12 +277,199 @@ async function submitUnlocked(db, rawScope, listingIdInput, input = {}, hooks = 
   }
 }
 
+async function hydrateExportReplay(db, scope, response) {
+  const row = await get(db, `SELECT export_json,export_hash FROM canonical_submission_exports
+    WHERE id=? AND tenant_id=? AND workspace_id=? AND marketplace=? AND project_id=? AND listing_id=?`,
+  [response.submissionExportId, scope.tenantId, scope.workspaceId, scope.marketplace, response.projectId, response.listingId]);
+  if (!row || hashBytes(row.export_json) !== row.export_hash || row.export_hash !== response.exportHash) {
+    throw new CanonicalHandoffError('EXACT_EXPORT_INTEGRITY_FAILURE', 500);
+  }
+  return Object.freeze({ ...response, exportJson: row.export_json });
+}
+
+async function authorizeSubmissionUnlocked(db, rawScope, listingIdInput, input = {}, hooks = {}) {
+  const scope = scopeOf(rawScope); const listingId = positive(listingIdInput, 'LISTING_NOT_FOUND');
+  if (scope.role !== 'OWNER') throw new CanonicalHandoffError('OWNER_SUBMISSION_AUTHORIZATION_REQUIRED', 403);
+  const submissionRequestId = positive(input.submissionRequestId, 'SUBMISSION_REQUEST_REQUIRED');
+  const notes = bounded(input.notes, 'SUBMISSION_AUTHORIZATION_NOTES_REQUIRED', 2000);
+  const idempotencyKey = keyOf(input.idempotencyKey);
+  const observed = await currentListing(db, scope, listingId); const observedReview = await approvedReview(db, scope, observed);
+  const observedPackageHash = submissionPackageHash(observed, observedReview);
+  const requestHash = hashBytes(canonicalJson({ operation: 'CANONICAL_SUBMISSION_AUTHORIZATION', scope: {
+    tenantId: scope.tenantId, workspaceId: scope.workspaceId, marketplace: scope.marketplace
+  }, projectId: observed.project_id, listingId, listingRevisionId: observed.head_revision_id,
+    contentHash: observed.content_hash, dependencyHash: observed.dependency_manifest_hash,
+    reviewId: observedReview.id, packageHash: observedPackageHash, submissionRequestId, notes }));
+  const existing = await replay(db, scope, observed.project_id, listingId, 'CANONICAL_SUBMISSION_AUTHORIZATION', idempotencyKey, requestHash);
+  if (existing) return existing;
+  await run(db, 'BEGIN IMMEDIATE');
+  try {
+    const inside = await replay(db, scope, observed.project_id, listingId, 'CANONICAL_SUBMISSION_AUTHORIZATION', idempotencyKey, requestHash);
+    if (inside) { await run(db, 'COMMIT'); return inside; }
+    const listing = await currentListing(db, scope, listingId);
+    if (listing.status !== 'MANAGER_APPROVED') throw new CanonicalHandoffError('MANAGER_APPROVAL_REQUIRED', 409);
+    if (typeof hooks.assertDependenciesCurrent === 'function') await hooks.assertDependenciesCurrent(listing);
+    if (typeof hooks.assertApprovalEligible !== 'function') throw new CanonicalHandoffError('SERVER_APPROVAL_POLICY_HOOK_REQUIRED', 500);
+    await hooks.assertApprovalEligible(listing);
+    const review = await approvedReview(db, scope, listing);
+    const request = await get(db, `SELECT * FROM canonical_submission_requests WHERE id=? AND listing_id=?
+      AND listing_revision_id=? AND review_id=? AND tenant_id=? AND workspace_id=? AND marketplace=?`,
+    [submissionRequestId, listingId, listing.head_revision_id, review.id, scope.tenantId, scope.workspaceId, scope.marketplace]);
+    const packageHash = submissionPackageHash(listing, review);
+    if (!request || request.package_hash !== packageHash) throw new CanonicalHandoffError('CURRENT_SUBMISSION_REQUEST_REQUIRED', 409);
+    const inserted = await run(db, `INSERT INTO canonical_submission_authorizations
+      (tenant_id,workspace_id,marketplace,project_id,listing_id,listing_revision_id,review_id,submission_request_id,
+       package_hash,notes,authorized_by) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+    [scope.tenantId, scope.workspaceId, scope.marketplace, listing.project_id, listingId, listing.head_revision_id,
+      review.id, request.id, packageHash, notes, scope.actorId]);
+    const response = Object.freeze({ listingId, projectId: listing.project_id, listingRevisionId: listing.head_revision_id,
+      submissionAuthorizationId: inserted.lastID, submissionRequestId: request.id, reviewId: review.id,
+      packageHash, status: 'SUBMISSION_AUTHORIZED', marketplacePublishingPerformed: false });
+    await receipt(db, scope, listing.project_id, listingId, 'CANONICAL_SUBMISSION_AUTHORIZATION', idempotencyKey,
+      requestHash, response);
+    await run(db, 'COMMIT'); return response;
+  } catch (error) {
+    if (String(error?.message || '').includes('UNIQUE constraint failed')) {
+      return rollback(db, new CanonicalHandoffError('REVISION_ALREADY_AUTHORIZED_FOR_SUBMISSION', 409));
+    }
+    return rollback(db, error);
+  }
+}
+
+async function exportSubmissionUnlocked(db, rawScope, listingIdInput, input = {}, hooks = {}) {
+  const scope = scopeOf(rawScope); const listingId = positive(listingIdInput, 'LISTING_NOT_FOUND');
+  if (scope.role !== 'SELLER') throw new CanonicalHandoffError('SELLER_OPERATOR_EXPORT_REQUIRED', 403);
+  const authorizationId = positive(input.submissionAuthorizationId, 'SUBMISSION_AUTHORIZATION_REQUIRED');
+  const idempotencyKey = keyOf(input.idempotencyKey);
+  const observed = await currentListing(db, scope, listingId); const observedReview = await approvedReview(db, scope, observed);
+  const observedPackageHash = submissionPackageHash(observed, observedReview);
+  const requestHash = hashBytes(canonicalJson({ operation: 'CANONICAL_EXACT_SUBMISSION_EXPORT', scope: {
+    tenantId: scope.tenantId, workspaceId: scope.workspaceId, marketplace: scope.marketplace
+  }, projectId: observed.project_id, listingId, listingRevisionId: observed.head_revision_id,
+    contentHash: observed.content_hash, dependencyHash: observed.dependency_manifest_hash,
+    reviewId: observedReview.id, packageHash: observedPackageHash, authorizationId }));
+  const existing = await replay(db, scope, observed.project_id, listingId, 'CANONICAL_EXACT_SUBMISSION_EXPORT', idempotencyKey, requestHash);
+  if (existing) return hydrateExportReplay(db, scope, existing);
+  await run(db, 'BEGIN IMMEDIATE');
+  try {
+    const inside = await replay(db, scope, observed.project_id, listingId, 'CANONICAL_EXACT_SUBMISSION_EXPORT', idempotencyKey, requestHash);
+    if (inside) { await run(db, 'COMMIT'); return hydrateExportReplay(db, scope, inside); }
+    const listing = await currentListing(db, scope, listingId);
+    if (listing.status !== 'MANAGER_APPROVED') throw new CanonicalHandoffError('MANAGER_APPROVAL_REQUIRED', 409);
+    if (typeof hooks.assertDependenciesCurrent === 'function') await hooks.assertDependenciesCurrent(listing);
+    if (typeof hooks.assertApprovalEligible !== 'function') throw new CanonicalHandoffError('SERVER_APPROVAL_POLICY_HOOK_REQUIRED', 500);
+    await hooks.assertApprovalEligible(listing);
+    const review = await approvedReview(db, scope, listing); const packageHash = submissionPackageHash(listing, review);
+    const authorization = await get(db, `SELECT * FROM canonical_submission_authorizations WHERE id=? AND listing_id=?
+      AND listing_revision_id=? AND review_id=? AND package_hash=? AND tenant_id=? AND workspace_id=? AND marketplace=?`,
+    [authorizationId, listingId, listing.head_revision_id, review.id, packageHash,
+      scope.tenantId, scope.workspaceId, scope.marketplace]);
+    if (!authorization) throw new CanonicalHandoffError('CURRENT_SUBMISSION_AUTHORIZATION_REQUIRED', 409);
+    const exportPacket = Object.freeze({ schemaVersion: 1, event: 'EXACT_SUBMISSION_EXPORT', marketplace: scope.marketplace,
+      projectId: listing.project_id, listingId, listingRevisionId: listing.head_revision_id,
+      revisionNumber: listing.revision_number, reviewId: review.id, submissionAuthorizationId: authorization.id,
+      packageHash, contentHash: listing.content_hash, dependencyHash: listing.dependency_manifest_hash,
+      content: listing.content, dependencies: listing.dependencies });
+    const exportJson = canonicalJson(exportPacket); const exportHash = hashBytes(exportJson);
+    const inserted = await run(db, `INSERT INTO canonical_submission_exports
+      (tenant_id,workspace_id,marketplace,project_id,listing_id,listing_revision_id,authorization_id,
+       package_hash,export_json,export_hash,exported_by) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+    [scope.tenantId, scope.workspaceId, scope.marketplace, listing.project_id, listingId, listing.head_revision_id,
+      authorization.id, packageHash, exportJson, exportHash, scope.actorId]);
+    const response = Object.freeze({ listingId, projectId: listing.project_id, listingRevisionId: listing.head_revision_id,
+      submissionExportId: inserted.lastID, submissionAuthorizationId: authorization.id, packageHash, exportHash,
+      status: 'EXACT_EXPORT_READY', exportJson, marketplacePublishingPerformed: false });
+    const replayResponse = Object.freeze({ listingId, projectId: listing.project_id, listingRevisionId: listing.head_revision_id,
+      submissionExportId: inserted.lastID, submissionAuthorizationId: authorization.id, packageHash, exportHash,
+      status: 'EXACT_EXPORT_READY', marketplacePublishingPerformed: false });
+    await receipt(db, scope, listing.project_id, listingId, 'CANONICAL_EXACT_SUBMISSION_EXPORT', idempotencyKey,
+      requestHash, replayResponse);
+    await run(db, 'COMMIT'); return response;
+  } catch (error) {
+    if (String(error?.message || '').includes('UNIQUE constraint failed')) {
+      return rollback(db, new CanonicalHandoffError('AUTHORIZATION_ALREADY_EXPORTED', 409));
+    }
+    return rollback(db, error);
+  }
+}
+
+async function reportOperatorSubmissionUnlocked(db, rawScope, listingIdInput, input = {}, hooks = {}) {
+  const scope = scopeOf(rawScope); const listingId = positive(listingIdInput, 'LISTING_NOT_FOUND');
+  if (scope.role !== 'SELLER') throw new CanonicalHandoffError('SELLER_OPERATOR_REPORT_REQUIRED', 403);
+  if (input.manualSubmissionConfirmed !== true) throw new CanonicalHandoffError('MANUAL_SUBMISSION_CONFIRMATION_REQUIRED', 400);
+  const authorizationId = positive(input.submissionAuthorizationId, 'SUBMISSION_AUTHORIZATION_REQUIRED');
+  const exportId = positive(input.submissionExportId, 'SUBMISSION_EXPORT_REQUIRED');
+  const notes = bounded(input.notes, 'OPERATOR_SUBMISSION_NOTES_REQUIRED', 2000);
+  const externalReference = bounded(input.externalReference, 'EXTERNAL_SUBMISSION_REFERENCE_REQUIRED', 500);
+  const idempotencyKey = keyOf(input.idempotencyKey);
+  const observed = await currentListing(db, scope, listingId); const observedReview = await approvedReview(db, scope, observed);
+  const observedPackageHash = submissionPackageHash(observed, observedReview);
+  const requestHash = hashBytes(canonicalJson({ operation: 'CANONICAL_OPERATOR_SUBMISSION_REPORT', scope: {
+    tenantId: scope.tenantId, workspaceId: scope.workspaceId, marketplace: scope.marketplace
+  }, projectId: observed.project_id, listingId, listingRevisionId: observed.head_revision_id,
+    contentHash: observed.content_hash, dependencyHash: observed.dependency_manifest_hash,
+    reviewId: observedReview.id, packageHash: observedPackageHash, authorizationId, exportId,
+    manualSubmissionConfirmed: true, externalReference, notes }));
+  const existing = await replay(db, scope, observed.project_id, listingId, 'CANONICAL_OPERATOR_SUBMISSION_REPORT', idempotencyKey, requestHash);
+  if (existing) return existing;
+  await run(db, 'BEGIN IMMEDIATE');
+  try {
+    const inside = await replay(db, scope, observed.project_id, listingId, 'CANONICAL_OPERATOR_SUBMISSION_REPORT', idempotencyKey, requestHash);
+    if (inside) { await run(db, 'COMMIT'); return inside; }
+    const listing = await currentListing(db, scope, listingId);
+    if (listing.status !== 'MANAGER_APPROVED') throw new CanonicalHandoffError('MANAGER_APPROVAL_REQUIRED', 409);
+    if (typeof hooks.assertDependenciesCurrent === 'function') await hooks.assertDependenciesCurrent(listing);
+    if (typeof hooks.assertApprovalEligible !== 'function') throw new CanonicalHandoffError('SERVER_APPROVAL_POLICY_HOOK_REQUIRED', 500);
+    await hooks.assertApprovalEligible(listing);
+    const review = await approvedReview(db, scope, listing); const packageHash = submissionPackageHash(listing, review);
+    const authorization = await get(db, `SELECT * FROM canonical_submission_authorizations WHERE id=? AND listing_id=?
+      AND listing_revision_id=? AND review_id=? AND package_hash=? AND tenant_id=? AND workspace_id=? AND marketplace=?`,
+    [authorizationId, listingId, listing.head_revision_id, review.id, packageHash,
+      scope.tenantId, scope.workspaceId, scope.marketplace]);
+    if (!authorization) throw new CanonicalHandoffError('CURRENT_SUBMISSION_AUTHORIZATION_REQUIRED', 409);
+    const exported = await get(db, `SELECT * FROM canonical_submission_exports WHERE id=? AND authorization_id=?
+      AND listing_id=? AND listing_revision_id=? AND package_hash=? AND tenant_id=? AND workspace_id=? AND marketplace=?`,
+    [exportId, authorization.id, listingId, listing.head_revision_id, packageHash,
+      scope.tenantId, scope.workspaceId, scope.marketplace]);
+    if (!exported || hashBytes(exported.export_json) !== exported.export_hash) {
+      throw new CanonicalHandoffError('CURRENT_EXACT_SUBMISSION_EXPORT_REQUIRED', 409);
+    }
+    const inserted = await run(db, `INSERT INTO canonical_operator_submission_reports
+      (tenant_id,workspace_id,marketplace,project_id,listing_id,listing_revision_id,authorization_id,export_id,
+       package_hash,external_reference,notes,reported_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+    [scope.tenantId, scope.workspaceId, scope.marketplace, listing.project_id, listingId, listing.head_revision_id,
+      authorization.id, exported.id, packageHash, externalReference, notes, scope.actorId]);
+    const updated = await run(db, `UPDATE listings SET status='OPERATOR_REPORTED_SUBMITTED'
+      WHERE id=? AND tenant_id=? AND workspace_id=? AND marketplace=? AND head_revision_id=? AND status='MANAGER_APPROVED'`,
+    [listingId, scope.tenantId, scope.workspaceId, scope.marketplace, listing.head_revision_id]);
+    if (updated.changes !== 1) throw new CanonicalHandoffError('SUBMISSION_STATE_CONFLICT', 409);
+    const response = Object.freeze({ listingId, projectId: listing.project_id, listingRevisionId: listing.head_revision_id,
+      operatorSubmissionReportId: inserted.lastID, submissionAuthorizationId: authorization.id,
+      submissionExportId: exported.id, packageHash, externalReference, status: 'OPERATOR_REPORTED_SUBMITTED',
+      marketplacePublishingPerformed: false, marketplaceAcceptanceConfirmed: false });
+    await receipt(db, scope, listing.project_id, listingId, 'CANONICAL_OPERATOR_SUBMISSION_REPORT', idempotencyKey,
+      requestHash, response);
+    await run(db, 'COMMIT'); return response;
+  } catch (error) {
+    if (String(error?.message || '').includes('UNIQUE constraint failed')) {
+      return rollback(db, new CanonicalHandoffError('REVISION_ALREADY_OPERATOR_REPORTED', 409));
+    }
+    return rollback(db, error);
+  }
+}
+
 const reviewCanonicalListing = (db, scope, listingId, input, hooks) => lock(db,
   () => reviewUnlocked(db, scope, listingId, input, hooks));
 const requestCanonicalSubmission = (db, scope, listingId, input, hooks) => lock(db,
   () => requestSubmissionUnlocked(db, scope, listingId, input, hooks));
 const recordCanonicalSubmission = (db, scope, listingId, input, hooks) => lock(db,
   () => submitUnlocked(db, scope, listingId, input, hooks));
+const authorizeCanonicalSubmission = (db, scope, listingId, input, hooks) => lock(db,
+  () => authorizeSubmissionUnlocked(db, scope, listingId, input, hooks));
+const exportCanonicalSubmission = (db, scope, listingId, input, hooks) => lock(db,
+  () => exportSubmissionUnlocked(db, scope, listingId, input, hooks));
+const reportCanonicalOperatorSubmission = (db, scope, listingId, input, hooks) => lock(db,
+  () => reportOperatorSubmissionUnlocked(db, scope, listingId, input, hooks));
 
 module.exports = Object.freeze({ CanonicalHandoffError, recordCanonicalSubmission, requestCanonicalSubmission,
-  reviewCanonicalListing });
+  reviewCanonicalListing, authorizeCanonicalSubmission, exportCanonicalSubmission, reportCanonicalOperatorSubmission });

@@ -50,7 +50,7 @@ const get = (db, sql, params = []) => new Promise((resolve, reject) => db.get(sq
 
 const COMMON_FIELDS = new Set(['categoryName', 'itemHighlights', 'imagePrompts', 'creativeAssets', 'ppcKeywords']);
 const AMAZON_FIELDS = new Set([...COMMON_FIELDS, 'amazonTitle', 'amazonBullets', 'amazonSearchTerms', 'amazonDescription', 'amazonAPlusPoints']);
-const ETSY_FIELDS = new Set([...COMMON_FIELDS, 'etsyTitle', 'etsyTags', 'etsyTagExplanations', 'etsyDescription']);
+const ETSY_FIELDS = new Set([...COMMON_FIELDS, 'etsyTitle', 'etsyTags', 'etsyDescription', 'etsyTagExplanations', 'etsyTagStatus']);
 
 function exactContent(content, marketplace) {
   if (!content || typeof content !== 'object' || Array.isArray(content)) throw new CanonicalDraftError('INVALID_LISTING_PAYLOAD');
@@ -111,14 +111,15 @@ async function resolveCurrentMasterKeywordArtifact(db, scope, projectId, configu
     throw new CanonicalDraftError('MASTER_KEYWORD_ARTIFACT_REQUIRED', 409);
   }
   let artifact;
-  try { artifact = await getArtifact(db, scope, projectId, artifactId, 'AMAZON_MASTER_KEYWORDS'); }
+  const kind = scope.marketplace === 'AMAZON' ? 'AMAZON_MASTER_KEYWORDS' : 'ETSY_MASTER_KEYWORDS';
+  try { artifact = await getArtifact(db, scope, projectId, artifactId, kind); }
   catch (error) {
     throw new CanonicalDraftError(error.code === 'WORKFLOW_ARTIFACT_NOT_FOUND'
       ? 'MASTER_KEYWORD_ARTIFACT_NOT_FOUND' : (error.code || 'MASTER_KEYWORD_ARTIFACT_UNAVAILABLE'),
     error.status || 409, error.details);
   }
   const state = await getArtifactState(db, scope, projectId);
-  if (artifact.artifactHash !== artifactHash || state.heads.AMAZON_MASTER_KEYWORDS?.id !== artifact.id) {
+  if (artifact.artifactHash !== artifactHash || state.heads[kind]?.id !== artifact.id) {
     throw new CanonicalDraftError('STALE_MASTER_KEYWORD_ARTIFACT', 409);
   }
   return artifact;
@@ -148,9 +149,7 @@ async function resolveIntelligenceBinding(db, scope, projectId, selectedIntellig
   if (!intelligence.output?.listingDraft || typeof intelligence.output.listingDraft !== 'object') {
     throw new CanonicalDraftError('INTELLIGENCE_DRAFT_UNAVAILABLE', 409);
   }
-  if (scope.marketplace === 'AMAZON') {
-    await resolveCurrentMasterKeywordArtifact(db, scope, projectId, intelligence.configuration);
-  }
+  await resolveCurrentMasterKeywordArtifact(db, scope, projectId, intelligence.configuration);
   return intelligence;
 }
 
@@ -266,12 +265,10 @@ async function assertCanonicalDependenciesCurrent(db, scope, projectId, dependen
       || intelligence.product_truth_hash !== selectedHash) {
       throw new CanonicalDraftError('STALE_INTELLIGENCE_SNAPSHOT', 409);
     }
-    if (scope.marketplace === 'AMAZON') {
-      const artifact = await resolveCurrentMasterKeywordArtifact(db, scope, projectId, intelligence.configuration);
-      if (Number(dependencies.masterKeywordArtifactId) !== artifact.id
-        || dependencies.masterKeywordArtifactHash !== artifact.artifactHash) {
-        throw new CanonicalDraftError('STALE_MASTER_KEYWORD_ARTIFACT', 409);
-      }
+    const artifact = await resolveCurrentMasterKeywordArtifact(db, scope, projectId, intelligence.configuration);
+    if (Number(dependencies.masterKeywordArtifactId) !== artifact.id
+      || dependencies.masterKeywordArtifactHash !== artifact.artifactHash) {
+      throw new CanonicalDraftError('STALE_MASTER_KEYWORD_ARTIFACT', 409);
     }
   }
   const project = await projectPolicyContext(db, scope, projectId);

@@ -40,6 +40,18 @@ async function api(url, options = {}) {
 const jsonOptions = body => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 const text = value => value == null ? '' : String(value);
 const head = (state, name) => state?.heads?.[name] ?? null;
+const safeErrorDetails = error => ({
+  code: error?.code || error?.payload?.error || null,
+  message: error?.message || null,
+  details: error?.payload?.details || null,
+  blocking: Array.isArray(error?.payload?.blocking) ? error.payload.blocking.slice(0, 20) : []
+});
+const resultSummary = result => !result || typeof result !== 'object' ? null : Object.fromEntries(Object.entries({
+  id: result.id, researchImportId: result.researchImportId, researchSnapshotId: result.researchSnapshotId,
+  intelligenceSnapshotId: result.intelligenceSnapshotId, listingId: result.listingId,
+  revisionNumber: result.revisionNumber, artifactHash: result.artifactHash,
+  previewHash: result.previewHash, accounting: result.accounting
+}).filter(([, value]) => value !== undefined));
 
 function Step({ number, title, children, accent, done }) {
   return <section style={{ border: `1px solid ${done ? '#86efac' : '#cbd5e1'}`, borderRadius: 12, padding: 16, background: done ? '#f0fdf4' : '#fff' }}>
@@ -89,22 +101,39 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
   const [masterPreview, setMasterPreview] = useState(null);
   const [keywordDecisions, setKeywordDecisions] = useState({});
   const [keywordQuery, setKeywordQuery] = useState('');
+  const [etsyWinnerPreview, setEtsyWinnerPreview] = useState(null);
+  const [selectedEtsyWinners, setSelectedEtsyWinners] = useState([]);
+  const [etsyPatternPreview, setEtsyPatternPreview] = useState(null);
   const [language, setLanguage] = useState('AUTO');
   const [intelligencePreview, setIntelligencePreview] = useState(null);
   const [draft, setDraft] = useState(null);
   const [listingQueue, setListingQueue] = useState([]);
   const [reviewReason, setReviewReason] = useState('');
   const [reviewPackages, setReviewPackages] = useState({});
+  const [submissionInputs, setSubmissionInputs] = useState({});
+  const [exactExports, setExactExports] = useState({});
   const [policyContext, setPolicyContext] = useState(null);
   const [policyClassification, setPolicyClassification] = useState('CUSTOM_NECKLACE');
   const [policyLocale, setPolicyLocale] = useState('en-US');
+  const [executionLog, setExecutionLog] = useState([]);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
 
   const currentTruth = truthRevisions.find(item => Number(item.id) === Number(head(state, 'productTruthRevisionId'))) || truthRevisions[0];
   const isManager = ['OWNER', 'MANAGER'].includes(user?.role);
+  const isOwner = user?.role === 'OWNER';
+  const isSeller = user?.role === 'SELLER';
   const imports = state?.imports || [];
   const latestIntelligence = state?.intelligenceSnapshots?.[0];
+
+  const appendExecutionLog = entry => setExecutionLog(previous => {
+    const workflowHeads = Object.fromEntries(Object.entries(workflowState?.heads || {}).map(([name, value]) =>
+      [name, { id: value.id, revisionNumber: value.revisionNumber, artifactHash: value.artifactHash }]));
+    const next = [...previous, { timestamp: new Date().toISOString(), marketplace, projectId,
+      workspaceId: user?.workspaceId || null, ...entry, commerceHeads: state?.heads || {}, workflowHeads }].slice(-250);
+    try { sessionStorage.setItem(`omni-execution-log:${marketplace}:${projectId}`, JSON.stringify(next)); } catch (_) {}
+    return next;
+  });
 
   const notify = (message, type = 'success') => onShowToast?.(message, type);
   const reportError = errorValue => {
@@ -156,6 +185,8 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
   useEffect(() => {
     setFiles([]); setFilePreviews([]); setIntelligencePreview(null); setDraft(null); setError('');
     setAsinPlanPreview(null); setSelectedAsinText(''); setMasterPreview(null); setKeywordDecisions({}); setKeywordQuery('');
+    setEtsyWinnerPreview(null); setSelectedEtsyWinners([]); setEtsyPatternPreview(null);
+    setSubmissionInputs({}); setExactExports({});
     setListingSource(''); setListingHtmlFile(null); setSameSourceConfirmed(false); setListingFactPreview(null);
     setKind(marketplace === 'AMAZON' ? 'AMAZON_XRAY' : 'ETSY_SEARCH');
     setPolicyContext(activeProject ? {
@@ -164,17 +195,28 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
       product_family_version: activeProject.product_family_version
     } : null);
     setPolicyLocale(activeProject?.locale || (/\b(para|hija|regalo|collar)\b/i.test(activeProject?.seed_phrase || '') ? 'es-US' : 'en-US'));
+    try { setExecutionLog(JSON.parse(sessionStorage.getItem(`omni-execution-log:${marketplace}:${projectId}`) || '[]')); }
+    catch (_) { setExecutionLog([]); }
     if (projectId) refresh().catch(reportError); else { setState(null); setWorkflowState(null); setTruthRevisions([]); setListingQueue([]); }
   }, [projectId, marketplace]);
 
   const run = async (label, operation) => {
     setBusy(label); setError('');
-    try { return await operation(); } catch (caught) { reportError(caught); return null; } finally { setBusy(''); }
+    appendExecutionLog({ action: label, status: 'STARTED' });
+    try {
+      const result = await operation();
+      appendExecutionLog({ action: label, status: 'SUCCESS', result: resultSummary(result) });
+      return result;
+    } catch (caught) {
+      appendExecutionLog({ action: label, status: 'FAILED', error: safeErrorDetails(caught) });
+      reportError(caught); return null;
+    } finally { setBusy(''); }
   };
 
   const chooseFiles = selected => {
-    setFiles(Array.from(selected || []));
+    const chosen = Array.from(selected || []); setFiles(chosen);
     setFilePreviews([]);
+    appendExecutionLog({ action: 'choose-files', status: 'SELECTED', files: chosen.map(file => ({ name: file.name, size: file.size, type: file.type })) });
   };
 
   const upload = async confirm => run(confirm ? 'import-group' : 'preview-group', async () => {
@@ -198,6 +240,11 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
       }
     }
     setFilePreviews(results);
+    for (const entry of results) appendExecutionLog({ action: confirm ? 'research-file-import' : 'research-file-preview',
+      status: entry.error ? 'FAILED' : 'SUCCESS', file: { name: entry.file.name, size: entry.file.size },
+      ...(entry.error ? { error: { code: entry.code || null, message: entry.error } }
+        : { result: { rawHash: entry.result.rawHash, researchImportId: entry.result.researchImportId,
+          accounting: entry.result.accounting } }) });
     if (confirm) {
       await refresh();
       setSelectedImports(previous => [...new Set([...previous, ...committedIds])]);
@@ -274,6 +321,79 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
     setMasterPreview(null); setKeywordDecisions({}); await refresh();
   });
 
+  const previewEtsyWinners = () => run('etsy-winners-preview', async () => {
+    const researchSnapshotId = head(state, 'researchSnapshotId');
+    if (!researchSnapshotId) throw new Error('Hãy khóa Research Snapshot từ các file Etsy trước.');
+    const result = await api(`/api/projects/${projectId}/etsy/winners/preview`, jsonOptions({ researchSnapshotId,
+      ...(selectedEtsyWinners.length ? { selectedEntityIds: selectedEtsyWinners } : {}) }));
+    setEtsyWinnerPreview(result); setSelectedEtsyWinners(result.payload?.selectedEntityIds || []);
+    notify(`Đã chuẩn hóa ${result.accounting?.sourceObservationCount} observation thành ${result.accounting?.normalizedEntityCount} listing; chọn ${result.accounting?.selectedWinnerCount} winner.`);
+    return result;
+  });
+
+  const saveEtsyWinners = () => run('etsy-winners-save', async () => {
+    if (!etsyWinnerPreview || !selectedEtsyWinners.length) throw new Error('Hãy preview và chọn winner trước.');
+    const current = workflowState?.heads?.ETSY_WINNER_SET;
+    const result = await api(`/api/projects/${projectId}/etsy/winners`, jsonOptions({
+      researchSnapshotId: head(state, 'researchSnapshotId'), selectedEntityIds: selectedEtsyWinners,
+      expectedHeadArtifactId: current?.id || null, idempotencyKey: uuid(), changeReason: 'STAFF_EDITED_ETSY_WINNERS'
+    }));
+    notify(`Đã lưu Winner Set v${result.revisionNumber} với ${result.accounting?.selectedWinnerCount} listing.`);
+    setEtsyWinnerPreview(null); setEtsyPatternPreview(null); await refresh(); return result;
+  });
+
+  const toggleEtsyWinner = entityId => setSelectedEtsyWinners(previous => previous.includes(entityId)
+    ? previous.filter(id => id !== entityId) : previous.length >= 60 ? previous : [...previous, entityId]);
+
+  const previewEtsyPatterns = () => run('etsy-pattern-preview', async () => {
+    const winnerArtifactId = workflowState?.heads?.ETSY_WINNER_SET?.id;
+    if (!winnerArtifactId) throw new Error('Hãy lưu Winner Set trước.');
+    const result = await api(`/api/projects/${projectId}/etsy/patterns/preview`, jsonOptions({ winnerArtifactId }));
+    setEtsyPatternPreview(result);
+    notify(`Pattern Miner đã đọc ${result.accounting?.selectedWinnerCount} winner và tìm ${result.accounting?.repeatedPhraseCount} phrase lặp.`);
+    return result;
+  });
+
+  const saveEtsyPatterns = () => run('etsy-pattern-save', async () => {
+    if (!etsyPatternPreview) throw new Error('Hãy preview Pattern Miner trước.');
+    const winnerArtifactId = workflowState?.heads?.ETSY_WINNER_SET?.id;
+    const current = workflowState?.heads?.ETSY_PATTERN_SNAPSHOT;
+    const result = await api(`/api/projects/${projectId}/etsy/patterns`, jsonOptions({ winnerArtifactId,
+      expectedHeadArtifactId: current?.id || null, idempotencyKey: uuid(), changeReason: 'FREEZE_ETSY_PATTERN_SNAPSHOT' }));
+    notify(`Đã lưu Pattern Snapshot v${result.revisionNumber}.`);
+    setEtsyPatternPreview(null); setMasterPreview(null); await refresh(); return result;
+  });
+
+  const supplementEtsyPatterns = () => run('etsy-ytrends-supplement', async () => {
+    const pattern = workflowState?.heads?.ETSY_PATTERN_SNAPSHOT;
+    if (!pattern) throw new Error('Hãy lưu Pattern Snapshot trước.');
+    const result = await api(`/api/projects/${projectId}/etsy/patterns/ytrends`, jsonOptions({
+      patternArtifactId: pattern.id, idempotencyKey: uuid(), changeReason: 'ADD_OPTIONAL_YTRENDS_SUPPLEMENT'
+    }));
+    notify(`Đã thêm ${result.accounting?.ytrendsSupplementPhraseCount} phrase YTrends E3. File live/HeyEtsy vẫn là nguồn chính.`);
+    setMasterPreview(null); await refresh(); return result;
+  });
+
+  const previewEtsyMasterKeywords = () => run('etsy-master-preview', async () => {
+    const patternArtifactId = workflowState?.heads?.ETSY_PATTERN_SNAPSHOT?.id;
+    if (!patternArtifactId) throw new Error('Hãy lưu Pattern Snapshot trước.');
+    const decisions = Object.entries(keywordDecisions).map(([phrase, value]) => ({ phrase, ...value }));
+    const result = await api(`/api/projects/${projectId}/etsy/master-keywords/preview`, jsonOptions({ patternArtifactId, decisions }));
+    setMasterPreview(result);
+    notify(`Etsy Master KW preview: ${result.accounting?.masterKeywordCount} phrase, không drop.`); return result;
+  });
+
+  const saveEtsyMasterKeywords = () => run('etsy-master-save', async () => {
+    if (!masterPreview) throw new Error('Hãy preview Etsy Master KW trước.');
+    const patternArtifactId = workflowState?.heads?.ETSY_PATTERN_SNAPSHOT?.id;
+    const current = workflowState?.heads?.ETSY_MASTER_KEYWORDS;
+    const decisions = Object.entries(keywordDecisions).map(([phrase, value]) => ({ phrase, ...value }));
+    const result = await api(`/api/projects/${projectId}/etsy/master-keywords`, jsonOptions({ patternArtifactId, decisions,
+      expectedHeadArtifactId: current?.id || null, idempotencyKey: uuid(), changeReason: 'FREEZE_ETSY_MASTER_KEYWORDS' }));
+    notify(`Đã lưu Etsy Master KW v${result.revisionNumber} — ${result.accounting?.masterKeywordCount} phrase.`);
+    setMasterPreview(null); setKeywordDecisions({}); await refresh(); return result;
+  });
+
   const previewReferenceListing = htmlFile => run('listing-preview', async () => {
     if (!sameSourceConfirmed) throw new Error('Hãy xác nhận listing cùng supplier/cùng nguồn hàng.');
     if (!htmlFile && !listingSource.trim()) throw new Error('Nhập ASIN, Etsy listing ID, URL hoặc chọn file HTML.');
@@ -331,8 +451,8 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
     const researchSnapshotId = head(state, 'researchSnapshotId');
     const productTruthRevisionId = head(state, 'productTruthRevisionId');
     if (!researchSnapshotId || !productTruthRevisionId) throw new Error('Cần Research Snapshot và Product Truth trước.');
-    const masterKeywordArtifactId = workflowState?.heads?.AMAZON_MASTER_KEYWORDS?.id;
-    if (marketplace === 'AMAZON' && !masterKeywordArtifactId) {
+    const masterKeywordArtifactId = workflowState?.heads?.[marketplace === 'AMAZON' ? 'AMAZON_MASTER_KEYWORDS' : 'ETSY_MASTER_KEYWORDS']?.id;
+    if (!masterKeywordArtifactId) {
       throw new Error('Hãy lưu Master Keyword List trước khi phân bổ keyword vào listing.');
     }
     const body = { researchSnapshotId, productTruthRevisionId, listingLanguage: language,
@@ -360,6 +480,17 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
   });
 
   const updateDraft = (key, value) => setDraft(previous => ({ ...previous, content: { ...previous.content, [key]: value } }));
+  const updateEtsyTags = value => setDraft(previous => {
+    const etsyTags = value.split('\n').map(item => item.trim()).filter(Boolean).slice(0, 13);
+    const generated = new Map((previous.content.etsyTagExplanations || []).map(item => [String(item.value || '').toLowerCase(), item]));
+    const etsyTagExplanations = etsyTags.map(tag => generated.get(tag.toLowerCase()) || {
+      value: tag, intent: 'STAFF_EDIT', semanticCluster: null, sources: [{ sourceType: 'STAFF_MANUAL_EDIT' }],
+      reason: 'STAFF_MANUAL_EDIT_REQUIRES_MANAGER_QA'
+    });
+    const missingCount = Math.max(0, 13 - etsyTags.length);
+    return { ...previous, content: { ...previous.content, etsyTags, etsyTagExplanations,
+      etsyTagStatus: missingCount ? { code: 'TAG_SHORTAGE', missingCount } : { code: 'COMPLETE', missingCount: 0 } } };
+  });
   const saveDraft = () => run('save-draft', async () => {
     if (!draft?.content) throw new Error('Chưa có draft để lưu.');
     const result = await api(`/api/projects/${projectId}/listings`, jsonOptions({
@@ -391,6 +522,64 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
     notify(`Đã tải exact review package của listing #${listingId}.`); return result;
   });
 
+  const submissionInput = listingId => submissionInputs[listingId] || {};
+  const setSubmissionInput = (listingId, key, value) => setSubmissionInputs(previous => ({ ...previous,
+    [listingId]: { ...(previous[listingId] || {}), [key]: value } }));
+
+  const requestSubmission = item => run('request-submission-authorization', async () => {
+    const notes = String(submissionInput(item.id).requestNotes || '').trim();
+    if (!notes) throw new Error('Seller cần ghi chú phạm vi submission trước khi gửi Owner.');
+    const result = await api(`/api/listings/${item.id}/submission-requests`, jsonOptions({ notes, idempotencyKey: uuid() }));
+    notify(`Đã gửi yêu cầu cho exact package ${result.packageHash}.`); await refresh(); return result;
+  });
+
+  const authorizeSubmission = item => run('authorize-exact-submission-package', async () => {
+    const notes = String(submissionInput(item.id).authorizationNotes || '').trim();
+    if (!notes) throw new Error('Owner cần ghi lý do authorization.');
+    const result = await api(`/api/listings/${item.id}/submission-authorizations`, jsonOptions({
+      submissionRequestId: Number(item.submissionRequestId), notes, idempotencyKey: uuid()
+    }));
+    notify(`Owner đã authorize exact package ${result.packageHash}; chưa đăng sàn.`); await refresh(); return result;
+  });
+
+  const exportExactPackage = item => run('export-exact-submission-package', async () => {
+    const result = await api(`/api/listings/${item.id}/submission-exports`, jsonOptions({
+      submissionAuthorizationId: Number(item.submissionAuthorizationId), idempotencyKey: uuid()
+    }));
+    setExactExports(previous => ({ ...previous, [item.id]: result }));
+    const blob = new Blob([result.exportJson], { type: 'application/json' });
+    const url = URL.createObjectURL(blob); const anchor = document.createElement('a');
+    anchor.href = url; anchor.download = `omniseller-${marketplace.toLowerCase()}-listing-${item.id}-${result.exportHash.slice(0, 12)}.json`;
+    document.body.appendChild(anchor); anchor.click(); anchor.remove(); URL.revokeObjectURL(url);
+    notify(`Đã tải exact export ${result.exportHash}; hãy submit thủ công ngoài OmniSeller.`); await refresh(); return result;
+  });
+
+  const reportOperatorSubmission = item => run('report-manual-submission', async () => {
+    const input = submissionInput(item.id); const notes = String(input.operatorNotes || '').trim();
+    const externalReference = String(input.externalReference || '').trim();
+    if (!input.manualSubmissionConfirmed) throw new Error('Seller/operator phải xác nhận đã submit thủ công ngoài OmniSeller.');
+    if (!externalReference || !notes) throw new Error('Cần external reference và ghi chú thao tác thủ công.');
+    const result = await api(`/api/listings/${item.id}/operator-submission-reports`, jsonOptions({
+      submissionAuthorizationId: Number(item.submissionAuthorizationId),
+      submissionExportId: Number(item.submissionExportId || exactExports[item.id]?.submissionExportId),
+      manualSubmissionConfirmed: true, externalReference, notes, idempotencyKey: uuid()
+    }));
+    notify('Đã ghi OPERATOR_REPORTED_SUBMITTED; đây không phải xác nhận marketplace accept/live.'); await refresh(); return result;
+  });
+
+  const copyExecutionLog = async () => {
+    const packet = { schemaVersion: 1, generatedAt: new Date().toISOString(), marketplace, projectId,
+      projectName: activeProject?.name || null, entries: executionLog };
+    await navigator.clipboard.writeText(JSON.stringify(packet, null, 2));
+    notify(`Đã copy ${executionLog.length} dòng nhật ký; không bao gồm cookie hoặc nội dung file.`);
+  };
+
+  const clearExecutionLog = () => {
+    setExecutionLog([]);
+    try { sessionStorage.removeItem(`omni-execution-log:${marketplace}:${projectId}`); } catch (_) {}
+    notify('Đã xóa nhật ký thực thi của project trong tab này.');
+  };
+
   const previewOutput = intelligencePreview?.output;
   const listing = draft?.content;
   const prompts = listing?.imagePrompts?.prompts || listing?.imagePrompts || [];
@@ -398,7 +587,7 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
   const importedKinds = new Set(imports.map(item => item.kind));
   const importCoverageReady = requiredKinds.every(required => importedKinds.has(required));
   const researchReady = Boolean(head(state, 'researchSnapshotId'));
-  const masterKeywordHead = workflowState?.heads?.AMAZON_MASTER_KEYWORDS;
+  const masterKeywordHead = workflowState?.heads?.[marketplace === 'AMAZON' ? 'AMAZON_MASTER_KEYWORDS' : 'ETSY_MASTER_KEYWORDS'];
   const displayedMaster = masterPreview || masterKeywordHead;
   const visibleMasterKeywords = (displayedMaster?.payload?.keywords || []).filter(item => !keywordQuery.trim()
     || item.phrase.toLowerCase().includes(keywordQuery.trim().toLowerCase())).slice(0, 200);
@@ -406,6 +595,7 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
   const intelligenceReady = Boolean(head(state, 'intelligenceSnapshotId'));
   const policyReady = ['locale', 'media_class', 'product_type_id', 'category_id', 'product_family_version']
     .every(field => String(policyContext?.[field] || '').trim());
+  const latestListing = listingQueue[0];
   const nextAction = !policyReady
     ? 'Bước 0B: xác nhận loại sản phẩm và ngôn ngữ cho project cũ'
     : !importCoverageReady
@@ -414,10 +604,28 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
       ? 'Bước 1C: chọn nguồn đã import và khóa Research Snapshot'
       : marketplace === 'AMAZON' && !masterKeywordHead
         ? (masterPreview ? 'Bước 1E: kiểm tra/chỉnh tier rồi lưu Master Keyword List' : 'Bước 1D: tạo Master Keyword List từ Cerebro')
+      : marketplace === 'ETSY' && !workflowState?.heads?.ETSY_WINNER_SET
+        ? (etsyWinnerPreview ? 'Bước 1D: kiểm tra/chọn winner rồi lưu Winner Set' : 'Bước 1D: tạo các view winner từ dữ liệu Etsy')
+      : marketplace === 'ETSY' && !workflowState?.heads?.ETSY_PATTERN_SNAPSHOT
+        ? (etsyPatternPreview ? 'Bước 1E: xem pattern rồi lưu snapshot' : 'Bước 1E: chạy Pattern Miner trên Winner Set')
+      : marketplace === 'ETSY' && !masterKeywordHead
+        ? (masterPreview ? 'Bước 1F: kiểm tra/chỉnh tier rồi lưu Etsy Master KW' : 'Bước 1F: tạo Etsy Master KW từ pattern')
       : !truthReady
         ? 'Bước 2: nhập tối thiểu tên/loại sản phẩm rồi lưu Product Truth'
-        : !intelligenceReady
+      : !intelligenceReady
           ? (intelligencePreview?.zeroWrite ? 'Bước 3B: khóa Intelligence Snapshot' : 'Bước 3A: chạy preview phân bổ keyword')
+          : latestListing?.status === 'OPERATOR_REPORTED_SUBMITTED'
+            ? 'Đã ghi nhận operator submit thủ công; theo dõi marketplace live ở phase sau'
+          : latestListing?.status === 'MANAGER_APPROVED' && latestListing.submissionExportId
+            ? (isSeller ? 'Bước 5D: submit thủ công ngoài OmniSeller rồi ghi OPERATOR_REPORTED_SUBMITTED' : 'Chờ Seller/operator submit thủ công exact export')
+          : latestListing?.status === 'MANAGER_APPROVED' && latestListing.submissionAuthorizationId
+            ? (isSeller ? 'Bước 5C: tải exact export' : 'Chờ Seller tải exact export')
+          : latestListing?.status === 'MANAGER_APPROVED' && latestListing.submissionRequestId
+            ? (isOwner ? 'Bước 5B: Owner authorize exact package' : 'Chờ Owner authorize exact package')
+          : latestListing?.status === 'MANAGER_APPROVED'
+            ? (isSeller ? 'Bước 5A: Seller yêu cầu authorization' : 'Chờ Seller yêu cầu authorization')
+          : latestListing?.status === 'NEEDS_QA'
+            ? (isManager ? 'Bước 5: mở exact review package và Manager QA' : 'Chờ Manager QA exact package')
           : !draft?.content
             ? 'Bước 4A: tạo draft zero-write'
             : 'Bước 4B: đọc/sửa draft rồi lưu ở NEEDS_QA';
@@ -427,7 +635,7 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
   return <div data-testid={`canonical-commerce-${marketplace.toLowerCase()}`} style={{ border: `2px solid ${accent}`, borderRadius: 16, padding: 18, background: '#f8fafc', display: 'grid', gap: 14 }}>
     <div>
       <h2 style={{ margin: 0, color: accent }}>Luồng Staff Canonical — {marketplace} US</h2>
-      <p style={{ margin: '6px 0 0', color: '#475569' }}>Research/Master KW và Product Truth chạy song song → safe compose → draft + prompt ảnh. Luồng dừng ở <b>NEEDS_QA</b> trong W1, không tự đăng.</p>
+      <p style={{ margin: '6px 0 0', color: '#475569' }}>Research/Master KW và Product Truth chạy song song → safe compose → QA → exact export. OmniSeller không tự đăng và chỉ ghi nhận thao tác submit thủ công.</p>
       <div data-testid="canonical-next-action" style={{ marginTop: 10, padding: '10px 12px', borderRadius: 9, background: '#ecfeff', border: '1px solid #67e8f9', color: '#164e63', fontWeight: 800 }}>
         Việc cần làm tiếp: {nextAction}
         <div style={{ marginTop: 4, fontSize: '.72rem', fontWeight: 600 }}>
@@ -437,6 +645,16 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
       {activeProject?.state === 'EVIDENCE_INTAKE' && <div style={{ marginTop: 8, padding: 9, borderRadius: 8, background: '#dcfce7', color: '#166534', fontSize: '.8rem', fontWeight: 800 }}>
         Project đang mang trạng thái legacy EVIDENCE_INTAKE, nhưng trạng thái này không chặn luồng R3 bên dưới. Staff có thể nhập Product Truth và import research ngay trong project hiện tại.
       </div>}
+      <details data-testid="canonical-execution-log" style={{ marginTop: 9, border: '1px solid #94a3b8', borderRadius: 9, padding: 9, background: '#fff' }}>
+        <summary style={{ cursor: 'pointer', fontWeight: 800 }}>Nhật ký thực thi để gửi Codex ({executionLog.length})</summary>
+        <p style={{ margin: '7px 0', fontSize: '.75rem', color: '#475569' }}>Ghi thao tác, mã lỗi, project và artifact heads. Không ghi cookie, mật khẩu hoặc nội dung file.</p>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 7 }}>
+          <button type="button" disabled={!executionLog.length} onClick={() => copyExecutionLog().catch(errorValue => notify(errorValue.message, 'error'))}>Copy log JSON</button>
+          <button type="button" disabled={!executionLog.length} onClick={clearExecutionLog}>Xóa log tab này</button>
+        </div>
+        <textarea aria-label="Nhật ký thực thi" readOnly rows={8} value={executionLog.map(entry =>
+          `${entry.timestamp} | ${entry.status} | ${entry.action}${entry.error?.code ? ` | ${entry.error.code}` : ''}${entry.error?.message ? ` | ${entry.error.message}` : ''}`).join('\n')} style={{ width: '100%', fontFamily: 'monospace', fontSize: '.7rem' }} />
+      </details>
     </div>
     {error && <div role="alert" style={{ background: '#fef2f2', border: '1px solid #fca5a5', color: '#991b1b', padding: 10, borderRadius: 8 }}>{error}</div>}
 
@@ -461,6 +679,10 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
         <b>Luồng chuẩn:</b> Seed → Xray → các nhóm ASIN gợi ý (tối đa 10 ASIN/nhóm, được sửa tự do) → Helium 10 Cerebro → Master KW.
         Nếu staff đã có file Cerebro hợp lệ thì được import trực tiếp, không cần chứng minh file thuộc batch nào. Product Truth chạy song song và chỉ bắt buộc tại ranh giới tạo copy.
       </div>}
+      {marketplace === 'ETSY' && <div style={{ marginBottom: 10, padding: 10, borderRadius: 8, background: '#fff7ed', color: '#7c2d12', fontSize: '.8rem' }}>
+        <b>Luồng chuẩn:</b> Seed → Etsy live/HeyEtsy → import đồng thời 1..N CSV/HTML → winner views → Pattern Miner → Master KW.
+        YTrends là nguồn E3 bổ sung và không được chặn file staff. Product Truth chạy song song; dữ liệu đối thủ không tự trở thành fact sản phẩm.
+      </div>}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
         {marketplace === 'AMAZON' && <select aria-label="Loại file research" value={kind} onChange={event => { setKind(event.target.value); setFiles([]); setFilePreviews([]); }}>
           <option value="AMAZON_CEREBRO">Cerebro keywords</option><option value="AMAZON_XRAY">Xray competitors</option>
@@ -480,7 +702,7 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
             </div>
           : <div key={`${entry.file.name}-${entry.result.rawHash || 'committed'}-${index}`} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 8 }}>
               <Metric label="FILE" value={entry.result.fileName} /><Metric label="RAW SHA-256" value={entry.result.rawHash} />
-              <Metric label="ROWS" value={entry.result.accounting?.sourceRowCount ?? entry.result.accounting?.inputRowCount} />
+              <Metric label="ROWS" value={entry.result.accounting?.sourceRowCount ?? entry.result.accounting?.inputRowCount ?? entry.result.accounting?.inputRows} />
               <Metric label="UNCONSUMED" value={entry.result.accounting?.unconsumedRowCount ?? 0} />
             </div>)}
       </div>}
@@ -547,6 +769,66 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
             </tr>)}</tbody></table>
           </div>
           {(displayedMaster.payload?.keywords || []).length > 200 && !keywordQuery && <small>Hiển thị 200 keyword đầu; dùng ô tìm kiếm để xem keyword khác. Artifact vẫn giữ toàn bộ.</small>}
+        </div>}
+      </div>}
+      {marketplace === 'ETSY' && researchReady && <div data-testid="etsy-master-keyword-workspace" style={{ marginTop: 14, borderTop: '1px solid #fed7aa', paddingTop: 12 }}>
+        <b>1D. Dữ liệu live → Winner Set có thể sửa tự do</b>
+        <p style={{ margin: '4px 0 9px', color: '#475569', fontSize: '.77rem' }}>Relevance được xét trước metrics. Listing lặp giữa các file vẫn giữ đủ observation rồi mới hợp nhất entity. Sales/views/revenue của HeyEtsy luôn ghi E2 estimate.</p>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <ActionButton accent={accent} disabled={busy} onClick={previewEtsyWinners}>Phân tích / làm mới winner views</ActionButton>
+          {etsyWinnerPreview && <ActionButton accent="#166534" disabled={!selectedEtsyWinners.length || busy} onClick={saveEtsyWinners}>Lưu {selectedEtsyWinners.length} winner</ActionButton>}
+          {workflowState?.heads?.ETSY_WINNER_SET && <span style={{ alignSelf: 'center', color: '#166534', fontWeight: 800 }}>Winner Set v{workflowState.heads.ETSY_WINNER_SET.revisionNumber} · {workflowState.heads.ETSY_WINNER_SET.accounting?.selectedWinnerCount} listing</span>}
+        </div>
+        {etsyWinnerPreview && <div style={{ marginTop: 10 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(120px,1fr))', gap: 7 }}>
+            <Metric label="OBSERVATIONS" value={etsyWinnerPreview.accounting?.sourceObservationCount} /><Metric label="ENTITIES" value={etsyWinnerPreview.accounting?.normalizedEntityCount} />
+            <Metric label="REPEATS" value={etsyWinnerPreview.accounting?.duplicateObservationCount} /><Metric label="RELEVANT" value={etsyWinnerPreview.accounting?.relevantEntityCount} />
+            <Metric label="IRRELEVANT" value={etsyWinnerPreview.accounting?.irrelevantEntityCount} /><Metric label="DROPPED" value={etsyWinnerPreview.accounting?.droppedObservationCount} />
+          </div>
+          <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', marginTop: 8 }}>
+            {(etsyWinnerPreview.payload?.cohorts || []).map(cohort => <button key={cohort.name} type="button" onClick={() => setSelectedEtsyWinners(cohort.members)}>{cohort.name} ({cohort.members.length})</button>)}
+          </div>
+          <div style={{ maxHeight: 420, overflow: 'auto', marginTop: 8, background: '#fff', border: '1px solid #fed7aa', borderRadius: 8 }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '.72rem' }}><thead><tr><th>Chọn</th><th style={{ textAlign: 'left' }}>Listing</th><th>Shop</th><th>Rank</th><th>Sold</th><th>Views</th><th>Age</th><th>Score</th><th>Obs</th></tr></thead><tbody>
+              {(etsyWinnerPreview.payload?.entities || []).filter(item => item.relevance?.relevant).sort((a, b) => (b.winnerScore ?? -1) - (a.winnerScore ?? -1)).slice(0, 100).map(item => <tr key={item.entityId} style={{ borderTop: '1px solid #ffedd5' }}>
+                <td style={{ textAlign: 'center' }}><input aria-label={`Winner ${item.listingId || item.entityId}`} type="checkbox" checked={selectedEtsyWinners.includes(item.entityId)} onChange={() => toggleEtsyWinner(item.entityId)} /></td>
+                <td style={{ padding: 6 }}>{item.title}</td><td>{item.shopName || '—'}</td><td style={{ textAlign: 'center' }}>{item.bestObservedRank ?? '—'}</td>
+                <td style={{ textAlign: 'center' }}>{item.totalSold ?? '—'}</td><td style={{ textAlign: 'center' }}>{item.totalViews ?? '—'}</td><td style={{ textAlign: 'center' }}>{item.ageDays ?? '—'}</td>
+                <td style={{ textAlign: 'center' }}>{item.winnerScore ?? 'UNSCORED'}</td><td style={{ textAlign: 'center' }}>{item.observationCount}</td>
+              </tr>)}</tbody></table>
+          </div>
+        </div>}
+
+        {workflowState?.heads?.ETSY_WINNER_SET && <div style={{ marginTop: 14, borderTop: '1px solid #fed7aa', paddingTop: 12 }}>
+          <b>1E. Pattern Miner</b>
+          <p style={{ margin: '4px 0 9px', color: '#475569', fontSize: '.77rem' }}>Học title head, 40 ký tự đầu, phrase lặp, tag thực, personalization/gift và shop concentration. Pattern không phải Product Truth.</p>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}><ActionButton accent={accent} disabled={busy} onClick={previewEtsyPatterns}>Chạy Pattern Miner</ActionButton>
+            {etsyPatternPreview && <ActionButton accent="#166534" disabled={busy} onClick={saveEtsyPatterns}>Lưu Pattern Snapshot</ActionButton>}
+            {workflowState?.heads?.ETSY_PATTERN_SNAPSHOT && <ActionButton accent="#475569" disabled={busy} onClick={supplementEtsyPatterns}>Bổ sung YTrends E3 (tùy chọn)</ActionButton>}
+            {workflowState?.heads?.ETSY_PATTERN_SNAPSHOT && <span style={{ alignSelf: 'center', color: '#166534', fontWeight: 800 }}>Pattern v{workflowState.heads.ETSY_PATTERN_SNAPSHOT.revisionNumber}</span>}
+          </div>
+          {etsyPatternPreview && <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(250px,1fr))', gap: 8, marginTop: 9 }}>
+            <div><b>Leading words</b><div>{(etsyPatternPreview.payload?.leadingWords || []).map(item => `${item.phrase} (${Math.round(item.share * 100)}%)`).join(', ') || 'Chưa có'}</div></div>
+            <div><b>Repeated phrases</b><div>{(etsyPatternPreview.payload?.repeatedPhrases || []).slice(0, 12).map(item => `${item.phrase} (${item.count})`).join(', ') || 'Chưa có'}</div></div>
+            <div><b>Observed tags</b><div>{(etsyPatternPreview.payload?.observedTags || []).slice(0, 13).map(item => item.phrase).join(', ') || 'Không có tag thực trong file'}</div></div>
+            <div><b>Structure</b><div>Personalization {etsyPatternPreview.payload?.structure?.personalizationRate}% · Gift {etsyPatternPreview.payload?.structure?.giftRate}% · {etsyPatternPreview.payload?.structure?.averageWords} words/title</div></div>
+          </div>}
+        </div>}
+
+        {workflowState?.heads?.ETSY_PATTERN_SNAPSHOT && <div style={{ marginTop: 14, borderTop: '1px solid #fed7aa', paddingTop: 12 }}>
+          <b>1F. Pattern → Etsy Master Keyword List</b>
+          <p style={{ margin: '4px 0 9px', color: '#475569', fontSize: '.77rem' }}>Mỗi phrase giữ provenance, intent, semantic cluster và lý do loại. Không tạo tag giả để đủ 13.</p>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}><ActionButton accent={accent} disabled={busy} onClick={previewEtsyMasterKeywords}>Preview / làm mới Etsy Master KW</ActionButton>
+            {masterPreview && <ActionButton accent="#166534" disabled={busy} onClick={saveEtsyMasterKeywords}>Lưu immutable Etsy Master KW</ActionButton>}
+            {masterKeywordHead && <span style={{ alignSelf: 'center', color: '#166534', fontWeight: 800 }}>Master v{masterKeywordHead.revisionNumber} · {masterKeywordHead.accounting?.masterKeywordCount} phrase</span>}
+          </div>
+          {displayedMaster && <div style={{ marginTop: 9 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(130px,1fr))', gap: 7 }}><Metric label="MASTER KW" value={displayedMaster.accounting?.masterKeywordCount} /><Metric label="SEMANTIC CLUSTERS" value={displayedMaster.accounting?.semanticClusterCount} /><Metric label="IP BLOCKED" value={displayedMaster.accounting?.ipBlockedCount} /><Metric label="DROPPED" value={displayedMaster.accounting?.droppedKeywordCount} /></div>
+            <input aria-label="Tìm trong Etsy Master Keyword" value={keywordQuery} onChange={event => setKeywordQuery(event.target.value)} placeholder="Tìm phrase…" style={{ width: '100%', marginTop: 8, padding: 8 }} />
+            <div style={{ maxHeight: 420, overflow: 'auto', marginTop: 8, background: '#fff', border: '1px solid #fed7aa', borderRadius: 8 }}><table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '.72rem' }}><thead><tr><th>#</th><th style={{ textAlign: 'left' }}>Phrase</th><th>Intent</th><th>Score</th><th>Tier</th><th>Nguồn</th><th>Shop spread</th></tr></thead><tbody>
+              {visibleMasterKeywords.map(item => <tr key={item.keywordId} style={{ borderTop: '1px solid #ffedd5' }}><td style={{ padding: 6 }}>{item.priorityRank}</td><td>{item.phrase}</td><td>{item.intent}</td><td style={{ textAlign: 'center' }}>{item.score}</td><td><select aria-label={`Etsy tier ${item.phrase}`} value={item.tier} disabled={!masterPreview} onChange={event => setKeywordTier(item.phrase, event.target.value)}>{['PRIMARY','SECONDARY','LONG_TAIL','PATTERN_ONLY','REVIEW','EXCLUDED'].map(tier => <option key={tier}>{tier}</option>)}</select></td><td>{(item.sourceTypes || []).join(', ')}</td><td style={{ textAlign: 'center' }}>{item.shopSpread ?? 0}</td></tr>)}
+            </tbody></table></div>
+          </div>}
         </div>}
       </div>}
     </Step>
@@ -616,7 +898,7 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
       <div style={{ display: 'flex', gap: 9, flexWrap: 'wrap', alignItems: 'center' }}>
         <label style={{ fontSize: '.8rem', fontWeight: 800 }}>Ngôn ngữ listing {' '}<select value={language} onChange={event => setLanguage(event.target.value)}><option value="AUTO">Theo keyword đầu vào</option><option value="EN">English</option><option value="ES">Español</option></select></label>
         <ActionButton accent={accent} disabled={!head(state, 'researchSnapshotId') || !head(state, 'productTruthRevisionId')
-          || (marketplace === 'AMAZON' && !masterKeywordHead) || busy} onClick={() => analyze(false)}>3A. Preview zero-write</ActionButton>
+          || !masterKeywordHead || busy} onClick={() => analyze(false)}>3A. Preview zero-write</ActionButton>
         <ActionButton accent={accent} disabled={!intelligencePreview?.zeroWrite || busy} onClick={() => analyze(true)}>3B. Khóa Intelligence Snapshot</ActionButton>
       </div>
       {previewOutput && <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 8, marginTop: 10 }}>
@@ -647,7 +929,17 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
           <label><b>PPC targeting — có thể chứa keyword claim chưa xác minh, không phải copy hiển thị</b><textarea value={(listing.ppcKeywords || []).map(item => typeof item === 'string' ? item : item.phrase || '').join('\n')} onChange={event => updateDraft('ppcKeywords', event.target.value.split('\n').map(phrase => phrase.trim()).filter(Boolean))} rows={6} style={{ width: '100%' }} /></label>
         </> : <>
           <label><b>Etsy Title ({Array.from(listing.etsyTitle || '').length}/140)</b><textarea value={listing.etsyTitle || ''} onChange={event => updateDraft('etsyTitle', event.target.value)} rows={2} style={{ width: '100%' }} /></label>
-          <label><b>Tối đa 13 Tags an toàn — mỗi dòng một tag</b><textarea value={(listing.etsyTags || []).join('\n')} onChange={event => updateDraft('etsyTags', event.target.value.split('\n').map(item => item.trim()).filter(Boolean).slice(0, 13))} rows={7} style={{ width: '100%' }} /></label>
+          <label><b>Tối đa 13 Tags an toàn — mỗi dòng một tag</b><textarea value={(listing.etsyTags || []).join('\n')} onChange={event => updateEtsyTags(event.target.value)} rows={7} style={{ width: '100%' }} /></label>
+          <div style={{ border: '1px solid #fed7aa', borderRadius: 8, padding: 9, background: '#fff7ed' }}>
+            <b>Phân bổ tag do engine tạo: {listing.etsyTagStatus?.code === 'TAG_SHORTAGE'
+              ? `TAG_SHORTAGE — còn thiếu ${listing.etsyTagStatus.missingCount} tag an toàn`
+              : 'COMPLETE'}</b>
+            <div style={{ fontSize: '.76rem', color: '#7c2d12', marginTop: 3 }}>Không thêm tag giả chỉ để đủ 13. Tag staff sửa được đánh dấu STAFF_MANUAL_EDIT và phải qua Manager QA cùng exact draft đã lưu.</div>
+            {Array.isArray(listing.etsyTagExplanations) && listing.etsyTagExplanations.length > 0
+              ? <div style={{ overflowX: 'auto', marginTop: 7 }}><table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '.75rem' }}><thead><tr><th style={{ textAlign: 'left' }}>Tag</th><th style={{ textAlign: 'left' }}>Intent</th><th style={{ textAlign: 'left' }}>Lý do / nguồn</th></tr></thead><tbody>
+                {listing.etsyTagExplanations.map((item, index) => <tr key={`${item.value}-${index}`}><td>{item.value}</td><td>{item.intent}</td><td>{item.reason} · {(item.sources || []).map(source => source.sourceType).filter(Boolean).join(', ') || 'n/a'}</td></tr>)}
+              </tbody></table></div> : <div style={{ fontSize: '.76rem', marginTop: 5 }}>Chưa có tag an toàn từ Master KW/Product Truth.</div>}
+          </div>
           <label><b>Description</b><textarea value={listing.etsyDescription || ''} onChange={event => updateDraft('etsyDescription', event.target.value)} rows={7} style={{ width: '100%' }} /></label>
           <label><b>Item Highlights</b><textarea value={listing.itemHighlights || ''} onChange={event => updateDraft('itemHighlights', event.target.value)} rows={3} style={{ width: '100%' }} /></label>
           <label><b>Category</b><input value={listing.categoryName || ''} onChange={event => updateDraft('categoryName', event.target.value)} style={{ width: '100%' }} /></label>
@@ -663,8 +955,8 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
       </div>}
     </Step>
 
-    <Step number="5" title="Manager QA — submission authority triển khai ở W5" accent={accent} done={listingQueue.some(item => item.status === 'MANAGER_APPROVED')}>
-      <p style={{ marginTop: 0, color: '#475569' }}>Manager phải mở và đọc exact package trước khi duyệt. W1 không hiển thị writer submission cũ. Chuỗi W5 đã khóa là: Seller yêu cầu → Owner authorize exact package → exact export → Seller/operator submit thủ công → <b>OPERATOR_REPORTED_SUBMITTED</b>.</p>
+    <Step number="5" title="Manager QA → Owner authorization → exact export → báo cáo submit thủ công" accent={accent} done={listingQueue.some(item => item.status === 'OPERATOR_REPORTED_SUBMITTED')}>
+      <p style={{ marginTop: 0, color: '#475569' }}>Manager phải mở và đọc exact package trước khi duyệt. Chuỗi bắt buộc: Seller yêu cầu → Owner authorize exact package → Seller tải exact export → Seller/operator submit thủ công ngoài OmniSeller → <b>OPERATOR_REPORTED_SUBMITTED</b>. Trạng thái cuối không có nghĩa marketplace đã accept/live.</p>
       {isManager && <label style={{ display: 'grid', gap: 4, marginBottom: 10, fontWeight: 800, fontSize: '.78rem' }}>Lý do review
         <textarea rows={2} value={reviewReason} onChange={event => setReviewReason(event.target.value)} placeholder="Đã kiểm Product Truth, claim, IP, policy và chất lượng copy..." />
       </label>}
@@ -685,8 +977,31 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
           <ActionButton accent="#166534" disabled={!reviewReason.trim() || busy || !reviewPackages[item.id]?.approvalReadiness?.ready} onClick={() => reviewListing(item.id, 'APPROVED')}>Manager duyệt exact package</ActionButton>
           <ActionButton accent="#b45309" disabled={!reviewReason.trim() || busy || !reviewPackages[item.id]} onClick={() => reviewListing(item.id, 'CHANGES_REQUESTED')}>Yêu cầu sửa exact package</ActionButton>
         </div>}
-        {item.status === 'MANAGER_APPROVED' && <div style={{ marginTop: 9, color: '#7c3aed', fontWeight: 800 }}>
-          Exact package đã được Manager duyệt. W1 dừng tại đây; không có nút submit hoặc writer trạng thái ngoài marketplace.
+        {item.status === 'MANAGER_APPROVED' && isSeller && !item.submissionRequestId && <div style={{ marginTop: 9, display: 'grid', gap: 6 }}>
+          <label><b>Ghi chú gửi Owner</b><textarea rows={2} value={submissionInput(item.id).requestNotes || ''} onChange={event => setSubmissionInput(item.id, 'requestNotes', event.target.value)} /></label>
+          <ActionButton accent="#7c3aed" disabled={busy || !String(submissionInput(item.id).requestNotes || '').trim()} onClick={() => requestSubmission(item)}>Seller yêu cầu authorization</ActionButton>
+        </div>}
+        {item.status === 'MANAGER_APPROVED' && item.submissionRequestId && !item.submissionAuthorizationId && <div style={{ marginTop: 9, display: 'grid', gap: 6 }}>
+          <div><b>SUBMISSION_REQUESTED</b> · package {item.submissionPackageHash}</div>
+          {isOwner ? <><label><b>Lý do Owner authorize</b><textarea rows={2} value={submissionInput(item.id).authorizationNotes || ''} onChange={event => setSubmissionInput(item.id, 'authorizationNotes', event.target.value)} /></label>
+            <ActionButton accent="#7c3aed" disabled={busy || !String(submissionInput(item.id).authorizationNotes || '').trim()} onClick={() => authorizeSubmission(item)}>Owner authorize exact package</ActionButton></>
+            : <small>Đang chờ Owner authorize exact package. Không được submit trước bước này.</small>}
+        </div>}
+        {item.status === 'MANAGER_APPROVED' && item.submissionAuthorizationId && !item.submissionExportId && <div style={{ marginTop: 9, display: 'grid', gap: 6 }}>
+          <div><b>SUBMISSION_AUTHORIZED</b> · authorization #{item.submissionAuthorizationId}</div>
+          {isSeller ? <ActionButton accent="#0369a1" disabled={busy} onClick={() => exportExactPackage(item)}>Tải exact JSON để submit thủ công</ActionButton>
+            : <small>Owner đã authorize. Seller đăng nhập để tải exact export.</small>}
+        </div>}
+        {item.status === 'MANAGER_APPROVED' && item.submissionExportId && <div style={{ marginTop: 9, display: 'grid', gap: 6 }}>
+          <div><b>EXACT_EXPORT_READY</b> · export #{item.submissionExportId} · hash {item.submissionExportHash}</div>
+          {isSeller ? <><label><b>External reference / mã thao tác trên sàn</b><input value={submissionInput(item.id).externalReference || ''} onChange={event => setSubmissionInput(item.id, 'externalReference', event.target.value)} /></label>
+            <label><b>Ghi chú thao tác</b><textarea rows={2} value={submissionInput(item.id).operatorNotes || ''} onChange={event => setSubmissionInput(item.id, 'operatorNotes', event.target.value)} /></label>
+            <label><input type="checkbox" checked={Boolean(submissionInput(item.id).manualSubmissionConfirmed)} onChange={event => setSubmissionInput(item.id, 'manualSubmissionConfirmed', event.target.checked)} /> Tôi xác nhận đã submit thủ công exact package ngoài OmniSeller.</label>
+            <ActionButton accent="#166534" disabled={busy || !submissionInput(item.id).manualSubmissionConfirmed || !String(submissionInput(item.id).externalReference || '').trim() || !String(submissionInput(item.id).operatorNotes || '').trim()} onClick={() => reportOperatorSubmission(item)}>Ghi OPERATOR_REPORTED_SUBMITTED</ActionButton></>
+            : <small>Seller/operator thực hiện submit thủ công và ghi nhận kết quả.</small>}
+        </div>}
+        {item.status === 'OPERATOR_REPORTED_SUBMITTED' && <div style={{ marginTop: 9, padding: 8, background: '#dcfce7', color: '#166534', borderRadius: 8 }}>
+          <b>OPERATOR_REPORTED_SUBMITTED</b> · {item.operatorExternalReference} · {item.operatorReportedAt}<br />Chỉ là báo cáo của operator; chưa xác nhận listing đã accept/live.
         </div>}
       </div>)}
     </Step>

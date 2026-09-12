@@ -13,6 +13,7 @@ const COMMERCE_SNAPSHOT_MIGRATION = '013_commerce_research_intelligence_snapshot
 const CANONICAL_REVIEW_HANDOFF_MIGRATION = '014_canonical_review_submission_handoff';
 const OWNER_SUBMISSION_AUTHORIZATION_MIGRATION = '015_owner_submission_authorization';
 const COMMERCE_WORKFLOW_ARTIFACT_MIGRATION = '016_commerce_workflow_artifacts_v2';
+const OPERATOR_REPORTED_SUBMISSION_MIGRATION = '017_operator_reported_submission_lifecycle';
 const crypto = require('node:crypto');
 
 function run(db, sql, params = []) {
@@ -516,6 +517,142 @@ async function migrateOwnerSubmissionAuthorization(db) {
     BEFORE DELETE ON canonical_submission_requests BEGIN SELECT RAISE(ABORT,'IMMUTABLE_CANONICAL_HANDOFF'); END`);
 }
 
+async function migrateOperatorReportedSubmissionLifecycle(db) {
+  // Migration 014 keyed receipts only by workspace + operation + key. Rebuild
+  // without rewriting response bytes so the same UUID can safely be used in
+  // different projects/listings and replay lookup is fully object-scoped.
+  await run(db, 'DROP TABLE IF EXISTS canonical_handoff_write_receipts_v017');
+  await run(db, `CREATE TABLE canonical_handoff_write_receipts_v017 (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id TEXT NOT NULL, workspace_id INTEGER NOT NULL,
+    marketplace TEXT NOT NULL CHECK(marketplace IN ('AMAZON','ETSY')),
+    project_id INTEGER NOT NULL REFERENCES research_projects(id),
+    listing_id INTEGER NOT NULL REFERENCES listings(id),
+    operation TEXT NOT NULL, idempotency_key TEXT NOT NULL,
+    request_hash TEXT NOT NULL CHECK(length(request_hash)=64), response_json TEXT NOT NULL,
+    created_by INTEGER NOT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id,workspace_id,marketplace,project_id,listing_id,operation,idempotency_key)
+  )`);
+  await run(db, `INSERT INTO canonical_handoff_write_receipts_v017
+    (id,tenant_id,workspace_id,marketplace,project_id,listing_id,operation,idempotency_key,
+     request_hash,response_json,created_by,created_at)
+    SELECT id,tenant_id,workspace_id,marketplace,project_id,listing_id,operation,idempotency_key,
+     request_hash,response_json,created_by,created_at FROM canonical_handoff_write_receipts`);
+  await run(db, 'DROP TABLE canonical_handoff_write_receipts');
+  await run(db, 'ALTER TABLE canonical_handoff_write_receipts_v017 RENAME TO canonical_handoff_write_receipts');
+  await run(db, `CREATE INDEX idx_canonical_handoff_receipts_scope
+    ON canonical_handoff_write_receipts(tenant_id,workspace_id,marketplace,project_id,listing_id,operation,id)`);
+  await run(db, `CREATE TRIGGER canonical_handoff_write_receipts_immutable_update
+    BEFORE UPDATE ON canonical_handoff_write_receipts BEGIN SELECT RAISE(ABORT,'IMMUTABLE_CANONICAL_HANDOFF'); END`);
+  await run(db, `CREATE TRIGGER canonical_handoff_write_receipts_immutable_delete
+    BEFORE DELETE ON canonical_handoff_write_receipts BEGIN SELECT RAISE(ABORT,'IMMUTABLE_CANONICAL_HANDOFF'); END`);
+  await run(db, `CREATE TABLE IF NOT EXISTS canonical_submission_authorizations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id TEXT NOT NULL, workspace_id INTEGER NOT NULL,
+    marketplace TEXT NOT NULL CHECK(marketplace IN ('AMAZON','ETSY')),
+    project_id INTEGER NOT NULL REFERENCES research_projects(id),
+    listing_id INTEGER NOT NULL REFERENCES listings(id),
+    listing_revision_id INTEGER NOT NULL REFERENCES listing_revisions(id),
+    review_id INTEGER NOT NULL REFERENCES canonical_listing_reviews(id),
+    submission_request_id INTEGER NOT NULL REFERENCES canonical_submission_requests(id),
+    package_hash TEXT NOT NULL CHECK(length(package_hash)=64),
+    notes TEXT NOT NULL, authorized_by INTEGER NOT NULL,
+    authorized_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(listing_revision_id), UNIQUE(submission_request_id)
+  )`);
+  await run(db, `CREATE INDEX IF NOT EXISTS idx_canonical_submission_authorizations_scope
+    ON canonical_submission_authorizations(tenant_id,workspace_id,marketplace,project_id,listing_id,id)`);
+  await run(db, `CREATE TABLE IF NOT EXISTS canonical_submission_exports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id TEXT NOT NULL, workspace_id INTEGER NOT NULL,
+    marketplace TEXT NOT NULL CHECK(marketplace IN ('AMAZON','ETSY')),
+    project_id INTEGER NOT NULL REFERENCES research_projects(id),
+    listing_id INTEGER NOT NULL REFERENCES listings(id),
+    listing_revision_id INTEGER NOT NULL REFERENCES listing_revisions(id),
+    authorization_id INTEGER NOT NULL REFERENCES canonical_submission_authorizations(id),
+    package_hash TEXT NOT NULL CHECK(length(package_hash)=64),
+    export_json TEXT NOT NULL CHECK(json_valid(export_json) AND length(CAST(export_json AS BLOB))<=4194304),
+    export_hash TEXT NOT NULL CHECK(length(export_hash)=64),
+    exported_by INTEGER NOT NULL, exported_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(authorization_id)
+  )`);
+  await run(db, `CREATE INDEX IF NOT EXISTS idx_canonical_submission_exports_scope
+    ON canonical_submission_exports(tenant_id,workspace_id,marketplace,project_id,listing_id,id)`);
+  await run(db, `CREATE TABLE IF NOT EXISTS canonical_operator_submission_reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id TEXT NOT NULL, workspace_id INTEGER NOT NULL,
+    marketplace TEXT NOT NULL CHECK(marketplace IN ('AMAZON','ETSY')),
+    project_id INTEGER NOT NULL REFERENCES research_projects(id),
+    listing_id INTEGER NOT NULL REFERENCES listings(id),
+    listing_revision_id INTEGER NOT NULL REFERENCES listing_revisions(id),
+    authorization_id INTEGER NOT NULL REFERENCES canonical_submission_authorizations(id),
+    export_id INTEGER NOT NULL REFERENCES canonical_submission_exports(id),
+    package_hash TEXT NOT NULL CHECK(length(package_hash)=64),
+    external_reference TEXT NOT NULL, notes TEXT NOT NULL,
+    reported_by INTEGER NOT NULL, reported_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(listing_revision_id), UNIQUE(export_id)
+  )`);
+  await run(db, `CREATE INDEX IF NOT EXISTS idx_canonical_operator_submission_reports_scope
+    ON canonical_operator_submission_reports(tenant_id,workspace_id,marketplace,project_id,listing_id,id)`);
+  for (const table of ['canonical_submission_authorizations','canonical_submission_exports','canonical_operator_submission_reports']) {
+    await run(db, `CREATE TRIGGER IF NOT EXISTS ${table}_immutable_update
+      BEFORE UPDATE ON ${table} BEGIN SELECT RAISE(ABORT,'IMMUTABLE_CANONICAL_SUBMISSION_EVENT'); END`);
+    await run(db, `CREATE TRIGGER IF NOT EXISTS ${table}_immutable_delete
+      BEFORE DELETE ON ${table} BEGIN SELECT RAISE(ABORT,'IMMUTABLE_CANONICAL_SUBMISSION_EVENT'); END`);
+  }
+  // This database invariant survives a rollback to pre-W5 application code,
+  // whose JavaScript knew only the historical bare SUBMITTED terminal state.
+  await run(db, `CREATE TRIGGER IF NOT EXISTS listings_operator_reported_terminal_update
+    BEFORE UPDATE ON listings WHEN OLD.status='OPERATOR_REPORTED_SUBMITTED'
+      AND (NEW.status<>OLD.status OR NEW.head_revision_id<>OLD.head_revision_id)
+    BEGIN SELECT RAISE(ABORT,'OPERATOR_REPORTED_SUBMITTED_TERMINAL'); END`);
+
+  const requiredColumns = {
+    canonical_submission_authorizations: ['id','tenant_id','workspace_id','marketplace','project_id','listing_id',
+      'listing_revision_id','review_id','submission_request_id','package_hash','notes','authorized_by','authorized_at'],
+    canonical_submission_exports: ['id','tenant_id','workspace_id','marketplace','project_id','listing_id',
+      'listing_revision_id','authorization_id','package_hash','export_json','export_hash','exported_by','exported_at'],
+    canonical_operator_submission_reports: ['id','tenant_id','workspace_id','marketplace','project_id','listing_id',
+      'listing_revision_id','authorization_id','export_id','package_hash','external_reference','notes','reported_by','reported_at'],
+    canonical_handoff_write_receipts: ['id','tenant_id','workspace_id','marketplace','project_id','listing_id',
+      'operation','idempotency_key','request_hash','response_json','created_by','created_at']
+  };
+  for (const [table, required] of Object.entries(requiredColumns)) {
+    const present = new Set((await all(db, `PRAGMA table_info(${table})`)).map(column => column.name));
+    const missing = required.filter(column => !present.has(column));
+    if (missing.length) {
+      const error = new Error(`OPERATOR_SUBMISSION_SCHEMA_INCOMPATIBLE:${table}:${missing.join(',')}`);
+      error.code = 'OPERATOR_SUBMISSION_SCHEMA_INCOMPATIBLE'; throw error;
+    }
+  }
+  const requiredObjects = ['idx_canonical_handoff_receipts_scope','idx_canonical_submission_authorizations_scope',
+    'idx_canonical_submission_exports_scope','idx_canonical_operator_submission_reports_scope',
+    'canonical_submission_authorizations_immutable_update','canonical_submission_authorizations_immutable_delete',
+    'canonical_submission_exports_immutable_update','canonical_submission_exports_immutable_delete',
+    'canonical_operator_submission_reports_immutable_update','canonical_operator_submission_reports_immutable_delete',
+    'listings_operator_reported_terminal_update'];
+  const objects = new Set((await all(db, `SELECT name FROM sqlite_master WHERE type IN ('index','trigger')`))
+    .map(object => object.name));
+  const missingObjects = requiredObjects.filter(name => !objects.has(name));
+  if (missingObjects.length) {
+    const error = new Error(`OPERATOR_SUBMISSION_SCHEMA_INCOMPATIBLE:${missingObjects.join(',')}`);
+    error.code = 'OPERATOR_SUBMISSION_SCHEMA_INCOMPATIBLE'; throw error;
+  }
+  const receiptUniqueColumns = ['tenant_id','workspace_id','marketplace','project_id','listing_id','operation','idempotency_key'];
+  const receiptIndexes = await all(db, 'PRAGMA index_list(canonical_handoff_write_receipts)');
+  let scopedUnique = false;
+  for (const index of receiptIndexes.filter(item => item.unique === 1)) {
+    const columns = (await all(db, `PRAGMA index_info(${index.name})`)).sort((a, b) => a.seqno - b.seqno).map(item => item.name);
+    if (columns.length === receiptUniqueColumns.length && columns.every((column, position) => column === receiptUniqueColumns[position])) {
+      scopedUnique = true; break;
+    }
+  }
+  if (!scopedUnique) {
+    const error = new Error('OPERATOR_SUBMISSION_SCHEMA_INCOMPATIBLE:receipt_unique_scope');
+    error.code = 'OPERATOR_SUBMISSION_SCHEMA_INCOMPATIBLE'; throw error;
+  }
+}
+
 async function migrateCommerceWorkflowArtifacts(db) {
   const existing = await all(db, "SELECT name FROM sqlite_master WHERE type='table' AND name='commerce_workflow_artifacts'");
   if (existing.length) {
@@ -848,6 +985,18 @@ async function runMigrations(db) {
       throw error;
     }
   }
+  const operatorSubmissionApplied = await all(db, 'SELECT id FROM schema_migrations WHERE id=?', [OPERATOR_REPORTED_SUBMISSION_MIGRATION]);
+  if (operatorSubmissionApplied.length === 0) {
+    await run(db, 'BEGIN IMMEDIATE');
+    try {
+      await migrateOperatorReportedSubmissionLifecycle(db);
+      await run(db, 'INSERT INTO schema_migrations(id) VALUES (?)', [OPERATOR_REPORTED_SUBMISSION_MIGRATION]);
+      await run(db, 'COMMIT');
+    } catch (error) {
+      try { await run(db, 'ROLLBACK'); } catch (_) {}
+      throw error;
+    }
+  }
 }
 
 async function migrateAgentWorkspaceScope(db) {
@@ -943,8 +1092,10 @@ module.exports = {
   CANONICAL_REVIEW_HANDOFF_MIGRATION,
   OWNER_SUBMISSION_AUTHORIZATION_MIGRATION,
   COMMERCE_WORKFLOW_ARTIFACT_MIGRATION,
+  OPERATOR_REPORTED_SUBMISSION_MIGRATION,
   migrateOwnerSubmissionAuthorization,
   migrateCommerceWorkflowArtifacts,
+  migrateOperatorReportedSubmissionLifecycle,
   AGENT_WORKSPACE_SCOPE_MIGRATION,
   PROJECT_SCOPED_EVIDENCE_MIGRATION,
   CANONICAL_DAG_MIGRATION,

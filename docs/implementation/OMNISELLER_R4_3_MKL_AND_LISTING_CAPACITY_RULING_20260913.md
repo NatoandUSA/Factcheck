@@ -56,6 +56,10 @@ Amazon announced the 2026 modular-title split as 75 characters for Item Name and
 - expose character/byte utilization and corpus-token coverage separately;
 - finish below the maximum when the only remaining candidates are duplicate, irrelevant, unsafe or unreadable.
 
+The operating target for fixed, resolved Amazon fields is **90–99%**, measured against the real policy limit. A percentage below 90 is a visible capacity gap, not an automatic failure: the receipt must state whether the cause is missing Product Truth, no additional unique relevant roots, a language/claim/IP exclusion, or an unresolved Product Type Definition. OmniSeller must never make a weak phrase stronger merely because it fills more characters.
+
+Alternate-language Cerebro phrases for Amazon US are treated asymmetrically: they cannot enter the selected listing-language Title, Item Highlights, Bullets or Description, but their non-branded, non-claim, semantically relevant, non-redundant roots may enter Generic Keywords. This preserves readable customer copy while using the single 249-byte backend budget efficiently.
+
 ## Etsy workflow and scoring
 
 ```text
@@ -105,6 +109,38 @@ When Step 3 rejects a claim, the UI must identify exact field/token and offer th
 - if false or unknown, leave Product Truth unchanged and do not use the claim.
 
 The observed Etsy failure for `zirconia` / `cubic zirconia` was this boundary operating correctly, not a missing MKL. The later Product Truth revision allowed intelligence preview to succeed. OmniSeller now presents this diagnosis inline instead of appearing silently locked.
+
+### Marketplace-page capture is evidence, not complete truth
+
+Neither “Save page as HTML” nor a server-side URL fetch is guaranteed to contain the complete rendered listing. Amazon may block automated fetch/save and both marketplaces load sections, variants and seller metrics dynamically. The 2026-09-13 active-browser inspection of the supplied pages found materially richer rendered evidence than a minimal saved-page parser can assume:
+
+- Amazon exposed title, category breadcrumb, material, metal, clasp, chain, gem, item type, six bullets, detailed dimensions, variants, package type and product metadata.
+- Etsy exposed title, price, live-view signal, material, made-to-order state, variants, shipping origin and shop/listing metrics, while description/tags were not consistently present in the currently rendered DOM.
+
+Product Truth intake therefore uses this authority order:
+
+1. supplier/production specification or the company's own canonical listing record;
+2. active rendered-page capture for a staff-confirmed same-source product;
+3. saved HTML/TXT capture as a fallback;
+4. direct URL fetch only when the marketplace returns usable content;
+5. staff manual correction and explicit unknowns for anything not evidenced.
+
+OmniSeller now accepts pasted rendered page text as well as HTML/TXT. It extracts component attributes such as metal type, clasp, chain, gem, dimensions, weight and package data into editable Product Truth fields. The preview is still zero-write. A competitor listing remains research/style evidence unless staff explicitly confirms the same supplier/source and corrects every variant difference before saving a Product Truth revision.
+
+When Product Truth advances, any old Intelligence Snapshot is stale by definition. The UI clears the old claim warning and requires only `3A preview → 3B save` against the new Truth revision; it must not reuse the stale snapshot or appear permanently blocked.
+
+## Real Hija composition receipt — 2026-09-13
+
+The canonical API was rerun against the existing Hija project with Product Truth revision `8`, Research Snapshot `5` and Amazon Master Keyword Artifact `9` (1,084 accounted keywords). The result after the no-mid-phrase truncation fix was:
+
+- Title: `74/75` characters.
+- Item Highlights: `122/125` characters.
+- Bullets: `220/230`, `207/230`, `216/230`, `213/230`, `209/230` characters. All five are at least 90% of the temporary composition ceiling and none ends in a truncation ellipsis. The `230` value is visibly labeled as a working ceiling pending the category/product-type PTD response; it is not represented as universal Amazon policy.
+- Generic Keywords: `246/249` UTF-8 bytes, with visible-copy roots removed before packing.
+- Description: `506` characters; its hard ceiling remains unresolved until PTD supplies it.
+- A+ source points: 9 facts, counted individually; final limits remain module/field-specific.
+
+This receipt proves field utilization for the Hija fixture, not automatic marketplace acceptance. Staff still reviews readability, Product Truth support and the exact category schema before submission authorization.
 
 ## Sources
 

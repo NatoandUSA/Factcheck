@@ -3,10 +3,14 @@ import { useAuth } from '../context/AuthContext';
 
 const CORE_FACT_FIELDS = [
   ['productName', 'Tên sản phẩm', true], ['productType', 'Loại sản phẩm', true],
-  ['category', 'Danh mục'], ['materials', 'Chất liệu'], ['gemstones', 'Đá / hạt / thành phần'],
-  ['colors', 'Màu sắc'], ['sizes', 'Kích thước'],
+  ['category', 'Danh mục'], ['materials', 'Vật liệu nền'], ['purity', 'Độ tinh khiết / lớp mạ'],
+  ['finish', 'Hoàn thiện / màu kim loại'], ['gemstones', 'Đá / hạt'], ['components', 'Cấu kiện / khóa / dây'],
+  ['colors', 'Màu sắc'], ['sizes', 'Kích thước lựa chọn'], ['dimensions', 'Kích thước thực'],
+  ['weight', 'Trọng lượng'], ['quantity', 'Số lượng trong gói'],
   ['personalization', 'Cá nhân hóa'], ['process', 'Cách sản xuất / cá nhân hóa'],
   ['includedItems', 'Vật phẩm đi kèm'], ['packaging', 'Đóng gói'], ['care', 'Bảo quản'],
+  ['style', 'Phong cách'], ['design', 'Thiết kế'], ['theme', 'Chủ đề'],
+  ['origin', 'Xuất xứ'], ['shipFrom', 'Nơi gửi hàng'],
   ['recipient', 'Người nhận'], ['occasion', 'Dịp'], ['audience', 'Đối tượng'],
 ];
 const DIGITAL_FACT_FIELDS = [
@@ -83,7 +87,8 @@ const characterCount = value => Array.from(String(value || '')).length;
 const utf8ByteCount = value => new TextEncoder().encode(String(value || '')).length;
 function CapacityLabel({ label, used, limit, unit = 'ký tự', authority = '' }) {
   const utilization = Number.isFinite(limit) && limit > 0 ? Math.round((used / limit) * 100) : null;
-  return <b>{label} ({used}/{Number.isFinite(limit) ? limit : 'PTD'} {unit}{utilization == null ? '' : ` · ${utilization}%`}){authority ? ` — ${authority}` : ''}</b>;
+  const targetState = utilization == null ? '' : utilization < 90 ? ' · CẦN BỔ SUNG' : utilization <= 99 ? ' · ĐẠT MỤC TIÊU' : ' · SÁT/TRÊN TRẦN';
+  return <b style={{ color: utilization != null && utilization < 90 ? '#b91c1c' : 'inherit' }}>{label} ({used}/{Number.isFinite(limit) ? limit : 'PTD'} {unit}{utilization == null ? '' : ` · ${utilization}%${targetState}`}){authority ? ` — ${authority}` : ''}</b>;
 }
 
 const fileIdentity = file => `${file.name}\u0000${file.size}\u0000${file.lastModified || 0}`;
@@ -122,6 +127,7 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
   const [truthBasisNote, setTruthBasisNote] = useState('Nhân viên nhập từ supplier hoặc hồ sơ listing nội bộ');
   const [listingSource, setListingSource] = useState('');
   const [listingHtmlFile, setListingHtmlFile] = useState(null);
+  const [listingPageText, setListingPageText] = useState('');
   const [sameSourceConfirmed, setSameSourceConfirmed] = useState(false);
   const [listingFactPreview, setListingFactPreview] = useState(null);
   const [files, setFiles] = useState([]);
@@ -161,6 +167,10 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
   const isSeller = user?.role === 'SELLER';
   const imports = state?.imports || [];
   const latestIntelligence = state?.intelligenceSnapshots?.[0];
+  const currentIntelligence = latestIntelligence
+    && Number(latestIntelligence.id) === Number(head(state, 'intelligenceSnapshotId'))
+    && Number(latestIntelligence.productTruthRevisionId) === Number(head(state, 'productTruthRevisionId'))
+    ? latestIntelligence : null;
 
   const appendExecutionLog = entry => setExecutionLog(previous => {
     const workflowHeads = Object.fromEntries(Object.entries(workflowState?.heads || {}).map(([name, value]) =>
@@ -452,13 +462,14 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
     setMasterPreview(null); setKeywordDecisions({}); await refresh(); return result;
   });
 
-  const previewReferenceListing = htmlFile => run('listing-preview', async () => {
+  const previewReferenceListing = (htmlFile, pastedText = '') => run('listing-preview', async () => {
     if (!sameSourceConfirmed) throw new Error('Hãy xác nhận listing cùng supplier/cùng nguồn hàng.');
-    if (!htmlFile && !listingSource.trim()) throw new Error('Nhập ASIN, Etsy listing ID, URL hoặc chọn file HTML.');
+    if (!htmlFile && !pastedText.trim() && !listingSource.trim()) throw new Error('Nhập URL, chọn HTML/TXT hoặc dán nội dung trang đã render.');
     const form = new FormData();
     form.append('confirmSameSource', 'true');
     if (listingSource.trim()) form.append('source', listingSource.trim());
     if (htmlFile) form.append('file', htmlFile);
+    else if (pastedText.trim()) form.append('file', new Blob([pastedText], { type: 'text/plain' }), 'rendered-listing.txt');
     let result;
     try {
       result = await api(`/api/projects/${projectId}/product-truth-listing/preview`, { method: 'POST', body: form });
@@ -476,7 +487,7 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
       return merged;
     });
     setTruthBasis('REFERENCE_LISTING_SAME_SOURCE');
-    setTruthBasisNote(`Listing cùng nguồn: ${result.sourceReference || listingSource.trim() || htmlFile?.name}`);
+    setTruthBasisNote(`Listing cùng nguồn: ${result.sourceReference || listingSource.trim() || htmlFile?.name || 'rendered page text'}`);
     setListingFactPreview(result);
     notify(`Đã điền ${result.accounting?.extractedFactCount || 0} trường từ listing; hãy sửa khác biệt của biến thể trước khi lưu.`);
   });
@@ -494,6 +505,7 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
       expectedHeadRevisionId: head(state, 'productTruthRevisionId'), idempotencyKey: uuid(),
       changeReason: 'STAFF_PRODUCT_TRUTH_UPDATE', facts: truthFacts, notes: truthNotes
     }));
+    setClaimBlockers([]); setIntelligencePreview(null); setDraft(null);
     notify(`Đã lưu Product Truth v${result.revisionNumber}; chưa tự coi là Manager duyệt.`); await refresh();
   });
 
@@ -526,7 +538,9 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
     const intelligenceSnapshotId = head(state, 'intelligenceSnapshotId');
     if (!intelligenceSnapshotId) throw new Error('Hãy lưu Intelligence Snapshot trước.');
     const result = await api(`/api/projects/${projectId}/listings/commerce-preview`, jsonOptions({ intelligenceSnapshotId }));
-    setDraft(result); notify('Đã tạo draft zero-write; hãy đọc và sửa trước khi lưu.');
+    setClaimBlockers([]);
+    setDraft({ ...result, capacityTargets: intelligencePreview?.output?.commerce?.capacityTargets || null });
+    notify('Đã tạo draft zero-write; hãy đọc và sửa trước khi lưu.');
   });
 
   const savePolicyContext = () => run('policy-context', async () => {
@@ -942,9 +956,13 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
           <ActionButton accent={accent} disabled={!sameSourceConfirmed || !listingSource.trim() || busy} onClick={() => previewReferenceListing(null)}>Quét link và điền</ActionButton>
         </div>
         <div style={{ display: 'flex', gap: 9, flexWrap: 'wrap', alignItems: 'center', marginTop: 9 }}>
-          <input aria-label="Upload HTML listing" type="file" accept=".html,.htm,text/html" onChange={event => { setListingHtmlFile(event.target.files?.[0] || null); setListingFactPreview(null); }} />
-          <ActionButton accent="#475569" disabled={!sameSourceConfirmed || !listingHtmlFile || busy} onClick={() => previewReferenceListing(listingHtmlFile)}>Upload HTML và điền</ActionButton>
+          <input aria-label="Upload HTML listing" type="file" accept=".html,.htm,.txt,text/html,text/plain" onChange={event => { setListingHtmlFile(event.target.files?.[0] || null); setListingFactPreview(null); }} />
+          <ActionButton accent="#475569" disabled={!sameSourceConfirmed || !listingHtmlFile || busy} onClick={() => previewReferenceListing(listingHtmlFile)}>Upload HTML và điền (TXT cũng được)</ActionButton>
         </div>
+        <label style={{ display: 'grid', gap: 4, marginTop: 9, fontSize: '.75rem', fontWeight: 800 }}>Hoặc dán nội dung trang đã render (dòng đầu là title)
+          <textarea aria-label="Dán nội dung listing đã render" value={listingPageText} onChange={event => { setListingPageText(event.target.value); setListingFactPreview(null); }} rows={4} placeholder="Copy phần thông tin sản phẩm trong tab Amazon/Etsy rồi dán vào đây. Giữ các dòng Material, Gem type, Size, About this item, Description…" />
+        </label>
+        <ActionButton accent="#475569" disabled={!sameSourceConfirmed || !listingPageText.trim() || busy} onClick={() => previewReferenceListing(null, listingPageText)}>Phân tích nội dung đã dán</ActionButton>
         <label style={{ display: 'block', marginTop: 9, fontSize: '.78rem', fontWeight: 700 }}><input type="checkbox" checked={sameSourceConfirmed} onChange={event => setSameSourceConfirmed(event.target.checked)} /> Tôi xác nhận đây là sản phẩm cùng supplier/cùng nguồn hàng và sẽ sửa mọi khác biệt của biến thể.</label>
         {listingFactPreview && <div style={{ marginTop: 10, padding: 9, borderRadius: 8, background: '#fff', border: '1px solid #bfdbfe' }}>
           <div><b>{listingFactPreview.observations?.title}</b></div>
@@ -1032,15 +1050,20 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
     </Step>
 
     <Step number="4" title="Draft hoàn chỉnh và bộ prompt ảnh" accent={accent} done={Boolean(listing)}>
-      <ActionButton accent={accent} disabled={!latestIntelligence || !policyReady || busy} onClick={previewDraft}>4A. Tạo / làm mới draft zero-write</ActionButton>
-      {(!latestIntelligence || !policyReady) && <div style={{ marginTop: 7, color: '#9a3412', fontSize: '.76rem' }}>Chưa mở Bước 4: {!latestIntelligence ? 'chưa có Intelligence Snapshot đã lưu' : 'project chưa liên kết policy context'}. Không cần chạy lại Bước 3 nếu banner xanh phía trên đã xác nhận hoàn tất.</div>}
+      <ActionButton accent={accent} disabled={!currentIntelligence || !policyReady || busy} onClick={previewDraft}>4A. Tạo / làm mới draft zero-write</ActionButton>
+      {(!currentIntelligence || !policyReady) && <div style={{ marginTop: 7, color: '#9a3412', fontSize: '.76rem' }}>Chưa mở Bước 4: {!currentIntelligence
+        ? (latestIntelligence ? 'Product Truth đã đổi; Intelligence cũ không còn hợp lệ — chỉ cần chạy lại 3A rồi lưu 3B' : 'chưa có Intelligence Snapshot đã lưu')
+        : 'project chưa liên kết policy context'}. Không dùng snapshot cũ để tránh lỗi STALE_PRODUCT_TRUTH_REVISION.</div>}
       {listing && <div style={{ display: 'grid', gap: 9, marginTop: 12 }}>
         {marketplace === 'AMAZON' ? <>
-          <div style={{ padding: 9, borderRadius: 8, background: '#eff6ff', color: '#1e3a8a', fontSize: '.76rem' }}><b>Amazon Modular Titles 2026:</b> Title và Item Highlights đều là search inputs. Engine lấp đầy bằng keyword liên quan/truth-safe đến khi không còn phrase phù hợp; không padding, không lặp vô ích.</div>
+          <div style={{ padding: 9, borderRadius: 8, background: '#eff6ff', color: '#1e3a8a', fontSize: '.76rem' }}><b>Amazon Modular Titles 2026:</b> Title, Item Highlights và Generic Keywords cố gắng đạt 90–99% trần cố định bằng root/phrase liên quan, truth-safe. Nếu chưa đạt, xem coverage gap; không lặp hoặc chèn từ rác chỉ để tăng phần trăm.</div>
           <label><CapacityLabel label="Amazon Title" used={characterCount(listing.amazonTitle)} limit={AMAZON_SURFACE_LIMITS.title} /><textarea value={listing.amazonTitle || ''} onChange={event => updateDraft('amazonTitle', event.target.value)} rows={2} style={{ width: '100%' }} /></label>
           <label><CapacityLabel label="Item Highlights" used={characterCount(listing.itemHighlights)} limit={AMAZON_SURFACE_LIMITS.itemHighlights} /><textarea value={listing.itemHighlights || ''} onChange={event => updateDraft('itemHighlights', event.target.value)} rows={3} style={{ width: '100%' }} /></label>
           <div><CapacityLabel label="5 Bullet Points" used={(listing.amazonBullets || []).length} limit={5} unit="mục" authority="giới hạn ký tự lấy theo Product Type Definition" />
-            {(listing.amazonBullets || []).map((bullet, index) => <label key={index} style={{ display: 'grid', gap: 3, marginTop: 6 }}><span>Bullet {index + 1} ({characterCount(bullet)}/PTD ký tự)</span><textarea value={bullet} onChange={event => { const next = [...(listing.amazonBullets || [])]; next[index] = event.target.value; updateDraft('amazonBullets', next); }} rows={3} /></label>)}
+            {(listing.amazonBullets || []).map((bullet, index) => {
+              const target = draft?.capacityTargets?.bullets?.[index];
+              return <label key={index} style={{ display: 'grid', gap: 3, marginTop: 6 }}><span>Bullet {index + 1} ({characterCount(bullet)}/{target?.workingLimit || 'PTD'} ký tự{target?.authority ? ' · trần làm việc, chờ PTD xác nhận' : ''})</span><textarea value={bullet} onChange={event => { const next = [...(listing.amazonBullets || [])]; next[index] = event.target.value; updateDraft('amazonBullets', next); }} rows={3} /></label>;
+            })}
           </div>
           <label><CapacityLabel label="Backend Search Terms" used={utf8ByteCount(listing.amazonSearchTerms)} limit={AMAZON_SURFACE_LIMITS.backendBytes} unit="bytes" /><textarea value={listing.amazonSearchTerms || ''} onChange={event => updateDraft('amazonSearchTerms', event.target.value)} rows={3} style={{ width: '100%' }} /></label>
           <label><CapacityLabel label="Description" used={characterCount(listing.amazonDescription)} limit={null} authority="max theo Product Type Definition" /><textarea value={listing.amazonDescription || ''} onChange={event => updateDraft('amazonDescription', event.target.value)} rows={7} style={{ width: '100%' }} /></label>

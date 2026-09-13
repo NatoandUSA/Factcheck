@@ -14,6 +14,7 @@ class ProductTruthListingError extends Error {
 }
 
 const clean = value => String(value || '').replace(/\s+/g, ' ').trim();
+const foldText = value => clean(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 const unique = values => [...new Set(values.map(clean).filter(Boolean))];
 
 function jsonLdProducts($) {
@@ -68,6 +69,47 @@ const FIELD_LABELS = Object.freeze({
   language: [/^language$/, /idioma/]
 });
 
+function collectMatchingAttributes(attributes, patterns) {
+  const values = [];
+  for (const [label, value] of attributes) {
+    if (patterns.some(pattern => pattern.test(label))) values.push(`${titleLabel(label)}: ${value}`);
+  }
+  return unique(values).join('; ');
+}
+
+function collectRenderedTextAttributes(lines) {
+  const attributes = new Map();
+  const knownLabels = /^(material|materials|metal type|clasp type|chain type|gem type|item type name|product type|color|size|item dimensions|product dimensions|item weight|number of items|unit count|included components|care instructions|finish type|metal stamp|country of origin|ships from|made in)$/i;
+  const add = (label, value) => {
+    const key = clean(label).replace(/:+$/g, '').toLowerCase();
+    const val = clean(value);
+    if (key && val && !attributes.has(key)) attributes.set(key, val);
+  };
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index];
+    const colon = line.indexOf(':');
+    if (colon > 0 && knownLabels.test(line.slice(0, colon).trim())) add(line.slice(0, colon), line.slice(colon + 1));
+    else if (knownLabels.test(line) && lines[index + 1]) add(line, lines[index + 1]);
+  }
+  return attributes;
+}
+
+function sectionLines(lines, labels, stopLabels) {
+  const start = lines.findIndex(line => labels.some(label => foldText(line) === foldText(label)));
+  if (start < 0) return [];
+  const values = [];
+  for (let index = start + 1; index < lines.length; index++) {
+    if (stopLabels.some(label => foldText(lines[index]) === foldText(label))) break;
+    if (values.length >= 12) break;
+    if (lines[index].length > 3) values.push(lines[index]);
+  }
+  return values;
+}
+
+function titleLabel(value) {
+  return clean(value).replace(/\b\w/g, letter => letter.toUpperCase());
+}
+
 function findAttribute(attributes, patterns) {
   for (const [label, value] of attributes) {
     if (patterns.some(pattern => pattern.test(label))) return value;
@@ -78,7 +120,9 @@ function findAttribute(attributes, patterns) {
 function parseListingHtml(html, { marketplace, sourceReference = '' } = {}) {
   if (!html || typeof html !== 'string') throw new ProductTruthListingError('LISTING_HTML_REQUIRED');
   if (!['AMAZON', 'ETSY'].includes(marketplace)) throw new ProductTruthListingError('LISTING_MARKETPLACE_REQUIRED');
-  const $ = cheerio.load(html);
+  const isRenderedText = !/<(?:html|body|head|h1|div|script|meta)\b/i.test(html);
+  const renderedLines = isRenderedText ? String(html).split(/\r?\n/).map(clean).filter(Boolean) : [];
+  const $ = cheerio.load(isRenderedText ? `<body><h1>${String(renderedLines[0] || '').replace(/[&<>]/g, value => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[value]))}</h1></body>` : html);
   $('script:not([type="application/ld+json"]),style,noscript').remove();
   const products = jsonLdProducts($);
   const product = products[0] || {};
@@ -89,17 +133,22 @@ function parseListingHtml(html, { marketplace, sourceReference = '' } = {}) {
   const bulletNodes = marketplace === 'AMAZON'
     ? $('#feature-bullets li span.a-list-item, #productFactsDesktopExpander li')
     : $('[data-id="description-text"] li, [data-product-details] li');
-  const bullets = unique(bulletNodes.map((_, element) => $(element).text()).get())
+  const textBullets = isRenderedText ? sectionLines(renderedLines, ['About this item'],
+    ['Product Description', 'Product information', 'Additional Information', 'Customer reviews']) : [];
+  const bullets = unique([...bulletNodes.map((_, element) => $(element).text()).get(), ...textBullets])
     .filter(item => item.length > 3).slice(0, 12);
+  const textDescription = isRenderedText ? sectionLines(renderedLines, ['Product Description', 'Description'],
+    ['Product information', 'Additional Information', 'Shipping and return policies', 'Meet your sellers']).join(' ') : '';
   const description = clean(
     (marketplace === 'AMAZON'
       ? $('#productDescription, #aplus').first().text()
       : $('[data-id="description-text"], [data-product-details-description]').first().text())
-    || product.description || $('meta[property="og:description"]').attr('content')
+    || product.description || $('meta[property="og:description"]').attr('content') || textDescription
   ).slice(0, 12000);
   const breadcrumb = unique($('#wayfinding-breadcrumbs_container a, nav[aria-label*="breadcrumb" i] a, [data-breadcrumb] a')
     .map((_, element) => $(element).text()).get()).join(' > ');
   const attributes = collectAttributes($);
+  for (const [label, value] of collectRenderedTextAttributes(renderedLines)) if (!attributes.has(label)) attributes.set(label, value);
   const jsonMaterials = unique([].concat(product.material || [], product.materials || [])).join(', ');
   const extracted = { productName: title };
   for (const [fact, patterns] of Object.entries(FIELD_LABELS)) {
@@ -111,6 +160,13 @@ function parseListingHtml(html, { marketplace, sourceReference = '' } = {}) {
   const productType = findAttribute(attributes, [/^item type name$/, /^product type$/, /^tipo de producto$/]);
   if (productType) extracted.productType = productType;
   else if (clean(product.category)) extracted.productType = clean(product.category).split(/\s*[<>]\s*/).filter(Boolean).pop();
+  const componentDetails = collectMatchingAttributes(attributes, [
+    /^metal type$/, /^clasp type$/, /^chain type$/, /^setting type$/, /^back finding$/,
+    /^closure type$/, /^number of stones$/, /^componentes?$/, /^tipo de cadena$/, /^tipo de cierre$/
+  ]);
+  if (componentDetails) extracted.components = componentDetails;
+  const shipFrom = findAttribute(attributes, [/^ships from$/]);
+  if (shipFrom) extracted.shipFrom = shipFrom;
 
   const searchable = `${title}\n${bullets.join('\n')}\n${description}`;
   if (!extracted.gemstones) {
@@ -149,7 +205,7 @@ function parseListingHtml(html, { marketplace, sourceReference = '' } = {}) {
       descriptionLength: Array.from(description).length, observedSections: Object.freeze(['title', bullets.length ? 'bullets' : null,
         description ? 'description' : null, attributes.size ? 'attributes' : null].filter(Boolean)) }),
     accounting: Object.freeze({ extractedFactCount: Object.keys(facts).length, observedAttributeCount: attributes.size,
-      observedBulletCount: bullets.length })
+      observedBulletCount: bullets.length, renderedTextInput: isRenderedText })
   });
 }
 

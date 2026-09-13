@@ -211,6 +211,33 @@ async function tick(window) {
     && amazonPreview.facts.packaging.value.includes('Gift box'),
   'Amazon saved HTML must extract product facts, bullet DNA and packaging signals');
 
+  const renderedTextPreview = parseListingHtml(`Collar Para Mi Hija en Español
+Material
+Stainless Steel
+Metal type
+Stainless Steel
+Clasp type
+Lobster
+Chain type
+Cable
+Gem type
+Cubic Zirconia
+Item type name
+Necklace
+About this item
+Regalo especial para hija
+Gift box with message card
+Product Description
+Adjustable 18 to 22 inch chain.`, { marketplace: 'AMAZON', sourceReference: 'rendered-page-text' });
+  check(renderedTextPreview.accounting.renderedTextInput === true
+    && renderedTextPreview.facts.productName.value === 'Collar Para Mi Hija en Español'
+    && renderedTextPreview.facts.components.value.includes('Clasp Type: Lobster')
+    && renderedTextPreview.facts.gemstones.value === 'Cubic Zirconia',
+  'rendered page text fallback must recover title, components and gemstones when marketplace HTML saving is blocked');
+  check(renderedTextPreview.observations.bullets.length === 2
+    && renderedTextPreview.facts.packaging.value.includes('Gift box'),
+  'rendered page text fallback must preserve About-this-item and packaging evidence');
+
   project.value = '';
   document.getElementById('sameSource').checked = true;
   const offlineInput = document.getElementById('htmlFile');

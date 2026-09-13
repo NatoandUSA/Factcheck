@@ -367,8 +367,8 @@ const productTruthListingUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024, files: 1, fields: 4 },
   fileFilter(req, file, cb) {
-    const allowed = /\.html?$/i.test(file.originalname || '');
-    cb(allowed ? null : new Error('UNSUPPORTED_LISTING_HTML'), allowed);
+    const allowed = /\.(?:html?|txt)$/i.test(file.originalname || '');
+    cb(allowed ? null : new Error('UNSUPPORTED_LISTING_PAGE_CAPTURE'), allowed);
   }
 });
 

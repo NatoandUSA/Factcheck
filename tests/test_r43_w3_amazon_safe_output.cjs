@@ -110,6 +110,9 @@ async function main() {
   check(draft.amazonTitle.length > 0 && draft.amazonBullets.length === 5
     && Buffer.byteLength(draft.amazonSearchTerms, 'utf8') <= 249 && draft.amazonDescription.length > 0,
   'complete Amazon title, five bullets, byte-safe search terms and description generated');
+  check(draft.amazonBullets.every((bullet, index) => bullet.length <= 230
+    && preview.body.output.commerce.capacityTargets.bullets[index].actual === bullet.length
+    && !bullet.endsWith('…')), 'bullet counters are exact and composition never ends with a truncation ellipsis');
   check(draft.amazonAPlusPoints.length >= 5, 'A+ factual content points generated');
   check(draft.imagePrompts.prompts.length === 8 && draft.imagePrompts.readyCount === 8
     && draft.imagePrompts.blockedCount === 0, 'complete eight-prompt physical image suite generated from Product Truth');

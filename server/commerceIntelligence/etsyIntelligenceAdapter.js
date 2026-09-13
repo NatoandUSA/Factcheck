@@ -234,6 +234,10 @@ function candidateIntent(candidate) {
 
 function semanticKey(value) { return [...tokens(value)].sort().join(' '); }
 
+const ETSY_TITLE_LIMIT = 140;
+const ETSY_TITLE_WORKING_MAX = 138;
+const ETSY_TITLE_TARGET_MIN = 126;
+
 function composeEtsyTitle(safe, facts) {
   const identity = text(facts.productName || facts.productType);
   const identityGroups = productGroups(identity);
@@ -242,21 +246,33 @@ function composeEtsyTitle(safe, facts) {
     return groups.size && [...groups].some(group => identityGroups.has(group));
   });
   const ordered = [...productPhrases, ...safe]; const clauses = []; const used = new Set();
+  const usedTokens = new Set();
   const add = value => {
     const phrase = titleCase(text(value)); const key = semanticKey(phrase);
     if (!phrase || used.has(key)) return false;
     const next = [...clauses, phrase].join(', ');
-    if (Array.from(next).length > 140) return false;
-    clauses.push(phrase); used.add(key); return true;
+    if (Array.from(next).length > ETSY_TITLE_WORKING_MAX) return false;
+    clauses.push(phrase); used.add(key);
+    for (const token of tokens(phrase)) usedTokens.add(token);
+    return true;
   };
   if (!productPhrases.length) add(identity); else add(productPhrases[0].phrase);
   for (const candidate of ordered) {
-    if (clauses.length >= 5) break;
-    const gain = [...tokens(candidate.phrase)].filter(token => ![...used].some(key => key.split(' ').includes(token)));
+    if (Array.from(clauses.join(', ')).length >= ETSY_TITLE_TARGET_MIN) break;
+    const gain = [...tokens(candidate.phrase)].filter(token => !usedTokens.has(token));
     if (gain.length >= 2) add(candidate.phrase);
   }
   if (![...productGroups(clauses.join(' '))].some(group => identityGroups.has(group))) add(identity);
-  return clauses.join(', ').slice(0, 140).trim();
+  // A second pass fills safe remaining capacity without inventing adjectives
+  // or truncating a phrase. Repeated semantic clauses are still rejected.
+  if (Array.from(clauses.join(', ')).length < ETSY_TITLE_TARGET_MIN) {
+    for (const candidate of ordered) {
+      if (Array.from(clauses.join(', ')).length >= ETSY_TITLE_TARGET_MIN) break;
+      const gain = [...tokens(candidate.phrase)].filter(token => !usedTokens.has(token));
+      if (gain.length >= 1) add(candidate.phrase);
+    }
+  }
+  return clauses.join(', ').slice(0, ETSY_TITLE_LIMIT).trim();
 }
 
 function selectExplainedTags(safe, facts) {

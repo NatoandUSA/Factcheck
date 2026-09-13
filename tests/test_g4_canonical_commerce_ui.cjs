@@ -150,7 +150,8 @@ const assert = require('assert');
   'execution log must record per-file action outcomes for copyable diagnostics');
   await act(async () => { buttons().find(button => button.textContent.includes('Copy log JSON')).click(); });
   const copiedPacket = JSON.parse(copiedLog);
-  check(copiedPacket.schemaVersion === 1 && copiedPacket.projectId === 3 && copiedPacket.marketplace === 'AMAZON'
+  check(copiedPacket.schemaVersion === 2 && copiedPacket.captureState === 'IDLE' && copiedPacket.inFlightAction === null
+    && copiedPacket.projectId === 3 && copiedPacket.marketplace === 'AMAZON'
     && copiedPacket.entries.some(entry => entry.action === 'research-file-preview' && entry.status === 'SUCCESS'),
   'Copy log JSON must produce a parseable, project-scoped diagnostic packet');
   check(!/cookie|password|fixture-one|fixture-two/i.test(copiedLog),

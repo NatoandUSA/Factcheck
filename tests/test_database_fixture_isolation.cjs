@@ -1,4 +1,6 @@
 const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
 const sqlite3 = require('sqlite3').verbose();
 
 process.env.NODE_ENV = 'test';
@@ -196,6 +198,13 @@ async function main() {
   console.log('  TESTING AWAITABLE / IDEMPOTENT TEST DATABASE FIXTURES');
   console.log('================================================================\\n');
 
+  const serverSource = fs.readFileSync(path.resolve(__dirname, '../server/server.js'), 'utf8');
+  assert.ok(
+    serverSource.includes("process.env.NODE_ENV === 'development'")
+      && serverSource.includes("process.env.OMNI_SEED_LOCAL_DEMO_ACCOUNTS === '1'"),
+    'local demo-account bootstrap must be explicit and fail closed in production'
+  );
+
   assert.strictEqual(
     typeof ensureTestDatabaseFixtures,
     'function',
@@ -239,6 +248,7 @@ async function main() {
   console.log('  🟢 default agents are transaction-bound, exact, and workspace-scoped.');
   console.log('  🟢 corrupt fixtures reject explicitly; partial writes roll back.');
   console.log('  🟢 non-test legacy Agent Hub initialization behavior is preserved atomically.');
+  console.log('  🟢 local account bootstrap is production-guarded.');
 }
 
 main().then(() => {

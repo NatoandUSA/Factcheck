@@ -32,7 +32,10 @@ const { createRateLimiter } = require('./security/rateLimiter');
 const { COOKIE_NAME, SESSION_TTL_MS, createSessionRecord, verifySessionRecord, revokeSessionRecord } = require('./security/session');
 const { parseCookies, extractRawToken, requireAuth, requireRole, requireCsrfOrigin, corsOptionsDelegate } = require('./middleware/auth');
 const { runMigrations } = require('./database/migrations');
-const { ensureTestDatabaseFixtures: ensureFixturesForDb } = require('./database/testFixtures');
+const {
+  ensureTestDatabaseFixtures: ensureFixturesForDb,
+  ensureDevelopmentDatabaseFixtures
+} = require('./database/testFixtures');
 const { ensureLegacyDefaultAgents } = require('./database/defaultAgents');
 const { encryptSecret, decryptSecret, maskSecret } = require('./security/secretBox');
 const { approvalHash } = require('./security/approval');
@@ -641,6 +644,12 @@ const ensureTestDatabaseFixtures = () => {
 };
 const databaseReady = runMigrations(db).then(() => {
   if (process.env.NODE_ENV === 'test') return ensureTestDatabaseFixtures();
+  if (process.env.NODE_ENV === 'development' && process.env.OMNI_SEED_LOCAL_DEMO_ACCOUNTS === '1') {
+    // The development UI advertises these local-only accounts. Keep the
+    // persistent development database aligned with that promise on every
+    // restart; production never enters this branch.
+    return ensureDevelopmentDatabaseFixtures(db).then(() => ensureLegacyDefaultAgents(db));
+  }
   return ensureLegacyDefaultAgents(db);
 });
 

@@ -88,16 +88,20 @@ export default function LoginModal({ isOpen, onClose }) {
 
           {error && <div style={{ color: 'var(--danger)', fontSize: '0.8rem', marginBottom: '16px' }}>{error}</div>}
 
-          <div style={{ background: 'var(--bg-subtle)', padding: '12px', borderRadius: '8px', marginBottom: '20px', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-            <ShieldCheck size={14} style={{ display: 'inline', marginBottom: '-2px', color: 'var(--success)' }} /> 
-            <strong> Demo Accounts Available:</strong>
-            <ul style={{ paddingLeft: '20px', marginTop: '6px' }}>
-              <li>owner@omniseller.local (Owner)</li>
-              <li>manager@omniseller.local (Manager)</li>
-              <li>seller@omniseller.local (Seller)</li>
-              <li>Mật khẩu fixture kiểm thử không được sử dụng trong production</li>
-            </ul>
-          </div>
+          {import.meta.env.DEV && (
+            <div style={{ background: 'var(--bg-subtle)', padding: '12px', borderRadius: '8px', marginBottom: '20px', fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+              <ShieldCheck size={14} style={{ display: 'inline', marginBottom: '-2px', color: 'var(--success)' }} />
+              <strong> Local UAT accounts:</strong>
+              <ul style={{ paddingLeft: '20px', marginTop: '6px' }}>
+                <li>owner@omniseller.local (Owner)</li>
+                <li>manager@omniseller.local (Manager)</li>
+                <li>seller@omniseller.local (Seller)</li>
+                <li>Mật khẩu local: <code>password123</code></li>
+                <li>Khởi động API bằng <code>npm run dev:server</code>.</li>
+                <li>Chỉ dùng tại localhost; production không tạo các tài khoản này.</li>
+              </ul>
+            </div>
+          )}
 
           <button type="submit" className="btn btn-primary" style={{ width: '100%' }} disabled={loading}>
             {loading ? 'Signing in...' : 'Sign In'}

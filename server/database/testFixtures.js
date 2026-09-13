@@ -68,7 +68,7 @@ async function requireAgent(db, { tenantId, workspaceId, name, role, status }) {
      VALUES (?, ?, ?, ?, ?)`, [tenantId, workspaceId, name, role, status])).lastID;
 }
 
-async function seedFixtures(db) {
+async function seedFixtures(db, { includeAgents = true } = {}) {
   // Hash before the transaction so an expensive asynchronous operation never
   // creates a CHECK/await/INSERT TOCTOU window inside fixture setup.
   const defaultPasswordHash = await hashPassword('password123');
@@ -124,14 +124,16 @@ async function seedFixtures(db) {
     // Agents share the same transaction/readiness barrier as every other
     // server fixture. This prevents a second CHECK/INSERT race after users
     // and workspaces have already become observable to a test.
-    await requireAgent(db, {
-      tenantId: 'tenant-alpha-uuid', workspaceId: alphaAmazonId,
-      name: 'Trend Scout', role: 'RESEARCHER', status: 'OFFLINE'
-    });
-    await requireAgent(db, {
-      tenantId: 'tenant-alpha-uuid', workspaceId: alphaAmazonId,
-      name: 'AI Drafter', role: 'DRAFTER', status: 'OFFLINE'
-    });
+    if (includeAgents) {
+      await requireAgent(db, {
+        tenantId: 'tenant-alpha-uuid', workspaceId: alphaAmazonId,
+        name: 'Trend Scout', role: 'RESEARCHER', status: 'OFFLINE'
+      });
+      await requireAgent(db, {
+        tenantId: 'tenant-alpha-uuid', workspaceId: alphaAmazonId,
+        name: 'AI Drafter', role: 'DRAFTER', status: 'OFFLINE'
+      });
+    }
     await run(db, 'COMMIT');
   } catch (error) {
     try {
@@ -154,4 +156,11 @@ function ensureTestDatabaseFixtures(db) {
   return current;
 }
 
-module.exports = { ensureTestDatabaseFixtures };
+// Persistent development databases may already contain the legacy Agent Hub
+// rows. Seed only login/workspace fixtures there; the test initializer remains
+// strict and continues to validate its exact agent fixtures.
+function ensureDevelopmentDatabaseFixtures(db) {
+  return seedFixtures(db, { includeAgents: false });
+}
+
+module.exports = { ensureTestDatabaseFixtures, ensureDevelopmentDatabaseFixtures };

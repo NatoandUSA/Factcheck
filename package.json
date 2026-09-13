@@ -12,6 +12,7 @@
   ],
   "scripts": {
     "dev": "vite",
+    "dev:server": "node scripts/startLocalServer.cjs",
     "build": "vite build",
     "preview": "vite preview",
     "test": "node tests/run_all_tests.cjs",

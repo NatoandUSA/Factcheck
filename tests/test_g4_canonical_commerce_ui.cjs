@@ -34,7 +34,12 @@ const assert = require('assert');
     if (String(url).endsWith('/marketplace-workflow')) return response({ success: true,
       heads: activeMockMarketplace === 'ETSY' ? {
         ETSY_WINNER_SET: { revisionNumber: 1, accounting: { selectedWinnerCount: 12 } },
-        ETSY_PATTERN_SNAPSHOT: { revisionNumber: 1 }
+        ETSY_PATTERN_SNAPSHOT: { revisionNumber: 1, accounting: { unparseableTagCellCount: 1 }, payload: {
+          sampleSize: 2, leadingWords: [{ phrase: 'collar', count: 2, share: 1 }],
+          repeatedPhrases: [{ phrase: 'collar hija', count: 2, share: 1 }],
+          observedTags: [{ phrase: 'regalo hija', listingSpread: 2, shopSpread: 2, evidenceTier: 'E1_OBSERVED_PUBLIC' }],
+          structure: { personalizationRate: 0, giftRate: 100, averageWords: 4 }, marketContext: { uniqueShopCount: 2 }
+        } }
       } : {}, artifacts: [] });
     if (String(url).endsWith('/product-truth/revisions')) return response({ success: true, revisions: [] });
     if (String(url).endsWith('/product-truth-listing/preview')) return response({ success: true, zeroWrite: true,
@@ -46,6 +51,25 @@ const assert = require('assert');
       },
       observations: { title: 'Para Mi Hija Necklace', bullets: ['Message card in gift box'] },
       accounting: { extractedFactCount: 3, observedBulletCount: 1 }
+    });
+    if (String(url).endsWith('/etsy/winners/preview')) return response({ zeroWrite: true,
+      accounting: { sourceObservationCount: 3, normalizedEntityCount: 3, duplicateObservationCount: 0,
+        relevantEntityCount: 3, irrelevantEntityCount: 0, droppedObservationCount: 0, selectedWinnerCount: 2 },
+      payload: { selectedEntityIds: ['e1', 'e2'], cohorts: [
+        { name: 'CURRENT_ORGANIC_LEADERS', members: ['e1', 'e2'] },
+        { name: 'EMERGING_WINNERS', members: ['e2', 'e3'] }
+      ], entities: [
+        { entityId: 'e1', listingId: '1', title: 'Collar hija', shopName: 'One', relevance: { relevant: true }, winnerScore: 90, observationCount: 1 },
+        { entityId: 'e2', listingId: '2', title: 'Regalo hija', shopName: 'Two', relevance: { relevant: true }, winnerScore: 80, observationCount: 1 },
+        { entityId: 'e3', listingId: '3', title: 'Collar regalo', shopName: 'Three', relevance: { relevant: true }, winnerScore: 70, observationCount: 1 }
+      ] }
+    });
+    if (String(url).endsWith('/etsy/patterns/preview')) return response({ zeroWrite: true,
+      accounting: { selectedWinnerCount: 2, repeatedPhraseCount: 1, unparseableTagCellCount: 1 },
+      payload: { sampleSize: 2, leadingWords: [{ phrase: 'collar', count: 2, share: 1 }],
+        repeatedPhrases: [{ phrase: 'collar hija', count: 2, share: 1 }],
+        observedTags: [{ phrase: 'regalo hija', listingSpread: 2, shopSpread: 2, evidenceTier: 'E1_OBSERVED_PUBLIC' }],
+        structure: { personalizationRate: 0, giftRate: 100, averageWords: 4 }, marketContext: { uniqueShopCount: 2 } }
     });
     if (String(url).endsWith('/listings')) return response({ success: true, listings: [] });
     if (String(url).endsWith('/research-imports/preview')) return response({ success: true, zeroWrite: true,
@@ -160,6 +184,17 @@ const assert = require('assert');
   check(document.body.textContent.includes('YTrends là nguồn E3 bổ sung')
     && !document.body.textContent.includes('MISSING_QUALIFYING_EVIDENCE_PRECONDITION'),
   'Etsy file workflow must remain usable without a provider/evidence-gate prerequisite');
+  await act(async () => { [...document.querySelectorAll('button')].find(button => button.textContent.includes('Phân tích / làm mới winner views')).click(); });
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 25)); });
+  check(document.body.textContent.includes('Chọn hợp nhất mọi cohort')
+    && document.body.textContent.includes('CURRENT_ORGANIC_LEADERS (2/2)'),
+  'Etsy winner cohorts must support additive multi-cohort selection');
+  await act(async () => { [...document.querySelectorAll('button')].find(button => button.textContent.includes('Chọn hợp nhất mọi cohort')).click(); });
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 25)); });
+  check(document.body.textContent.includes('Lưu 3 winner'), 'cohort union must deduplicate shared listings');
+  check(document.querySelector('[data-testid="etsy-pattern-table"]')
+    && document.body.textContent.includes('OBSERVED_TAG') && document.body.textContent.includes('E1_OBSERVED_PUBLIC'),
+  'Pattern Miner must render structured phrase, coverage, shop and evidence columns');
 
   await act(async () => root.unmount());
 

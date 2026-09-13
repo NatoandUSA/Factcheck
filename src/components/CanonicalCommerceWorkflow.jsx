@@ -16,6 +16,7 @@ const DIGITAL_FACT_FIELDS = [
   ['language', 'Ngôn ngữ sản phẩm']
 ];
 const FACT_FIELDS = [...CORE_FACT_FIELDS, ...DIGITAL_FACT_FIELDS];
+const AMAZON_SURFACE_LIMITS = Object.freeze({ title: 75, itemHighlights: 125, backendBytes: 249 });
 const POLICY_CHOICES = Object.freeze([
   ['CUSTOM_NECKLACE', 'Custom Jewelry / Necklace'], ['CUSTOM_EMBROIDERY', 'Custom Embroidery'],
   ['CUSTOM_ACRYLIC', 'Custom Acrylic'], ['CUSTOM_BLANKET', 'Custom Blanket'],
@@ -76,6 +77,13 @@ function Metric({ label, value }) {
     <div style={{ fontSize: '.68rem', color: '#64748b', fontWeight: 800 }}>{label}</div>
     <div style={{ fontSize: '.9rem', fontWeight: 800, overflowWrap: 'anywhere' }}>{value ?? '—'}</div>
   </div>;
+}
+
+const characterCount = value => Array.from(String(value || '')).length;
+const utf8ByteCount = value => new TextEncoder().encode(String(value || '')).length;
+function CapacityLabel({ label, used, limit, unit = 'ký tự', authority = '' }) {
+  const utilization = Number.isFinite(limit) && limit > 0 ? Math.round((used / limit) * 100) : null;
+  return <b>{label} ({used}/{Number.isFinite(limit) ? limit : 'PTD'} {unit}{utilization == null ? '' : ` · ${utilization}%`}){authority ? ` — ${authority}` : ''}</b>;
 }
 
 const fileIdentity = file => `${file.name}\u0000${file.size}\u0000${file.lastModified || 0}`;
@@ -145,6 +153,7 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
   const [executionLog, setExecutionLog] = useState([]);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
+  const [claimBlockers, setClaimBlockers] = useState([]);
 
   const currentTruth = truthRevisions.find(item => Number(item.id) === Number(head(state, 'productTruthRevisionId'))) || truthRevisions[0];
   const isManager = ['OWNER', 'MANAGER'].includes(user?.role);
@@ -165,6 +174,7 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
   const notify = (message, type = 'success') => onShowToast?.(message, type);
   const reportError = errorValue => {
     const blocking = Array.isArray(errorValue?.payload?.blocking) ? errorValue.payload.blocking : [];
+    setClaimBlockers(errorValue?.code === 'UNVERIFIED_OUTPUT_CLAIM' ? blocking : []);
     const claimSummary = [...new Set(blocking.map(item => `${item.field}: “${item.token}”`))].slice(0, 6).join('; ');
     const message = errorValue?.code === 'UNVERIFIED_OUTPUT_CLAIM' && claimSummary
       ? `Draft có claim chưa được Product Truth chứng thực — ${claimSummary}`
@@ -507,6 +517,7 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
       ...(masterKeywordArtifactId ? { masterKeywordArtifactId } : {}) };
     if (confirm) Object.assign(body, { expectedHeadIntelligenceSnapshotId: head(state, 'intelligenceSnapshotId'), idempotencyKey: uuid(), changeReason: 'STAFF_COMMERCE_ANALYSIS' });
     const result = await api(`/api/projects/${projectId}/intelligence-snapshots${confirm ? '' : '/preview'}`, jsonOptions(body));
+    setClaimBlockers([]);
     setIntelligencePreview(result);
     if (confirm) { notify(`Đã lưu Intelligence Snapshot #${result.intelligenceSnapshotId}.`); await refresh(); }
   });
@@ -637,6 +648,7 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
   const researchReady = Boolean(head(state, 'researchSnapshotId'));
   const masterKeywordHead = workflowState?.heads?.[marketplace === 'AMAZON' ? 'AMAZON_MASTER_KEYWORDS' : 'ETSY_MASTER_KEYWORDS'];
   const displayedMaster = masterPreview || masterKeywordHead;
+  const displayedEtsyPattern = etsyPatternPreview || workflowState?.heads?.ETSY_PATTERN_SNAPSHOT;
   const visibleMasterKeywords = (displayedMaster?.payload?.keywords || []).filter(item => !keywordQuery.trim()
     || item.phrase.toLowerCase().includes(keywordQuery.trim().toLowerCase())).slice(0, 200);
   const truthReady = Boolean(head(state, 'productTruthRevisionId'));
@@ -853,8 +865,19 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
             <Metric label="IRRELEVANT" value={etsyWinnerPreview.accounting?.irrelevantEntityCount} /><Metric label="DROPPED" value={etsyWinnerPreview.accounting?.droppedObservationCount} />
           </div>
           <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', marginTop: 8 }}>
-            {(etsyWinnerPreview.payload?.cohorts || []).map(cohort => <button key={cohort.name} type="button" onClick={() => setSelectedEtsyWinners(cohort.members)}>{cohort.name} ({cohort.members.length})</button>)}
+            {(etsyWinnerPreview.payload?.cohorts || []).map(cohort => {
+              const selectedCount = cohort.members.filter(id => selectedEtsyWinners.includes(id)).length;
+              return <button key={cohort.name} type="button" aria-pressed={selectedCount === cohort.members.length}
+                onClick={() => setSelectedEtsyWinners(previous => {
+                  const current = new Set(previous); const fullySelected = cohort.members.every(id => current.has(id));
+                  for (const id of cohort.members) fullySelected ? current.delete(id) : current.add(id);
+                  return [...current].slice(0, 60);
+                })}>{selectedCount === cohort.members.length ? '✓ ' : ''}{cohort.name} ({selectedCount}/{cohort.members.length})</button>;
+            })}
+            <button type="button" onClick={() => setSelectedEtsyWinners([...new Set((etsyWinnerPreview.payload?.cohorts || []).flatMap(cohort => cohort.members))].slice(0, 60))}>Chọn hợp nhất mọi cohort</button>
+            <button type="button" onClick={() => setSelectedEtsyWinners([])}>Bỏ chọn tất cả</button>
           </div>
+          <div style={{ marginTop: 6, color: '#7c2d12', fontSize: '.74rem' }}>Có thể bật đồng thời nhiều cohort rồi sửa từng listing. Nhiều winner chỉ tốt hơn khi vẫn đúng niche, đã dedupe và không bị một shop chi phối; listing lệch niche sẽ làm loãng pattern.</div>
           <div style={{ maxHeight: 420, overflow: 'auto', marginTop: 8, background: '#fff', border: '1px solid #fed7aa', borderRadius: 8 }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '.72rem' }}><thead><tr><th>Chọn</th><th style={{ textAlign: 'left' }}>Listing</th><th>Shop</th><th>Rank</th><th>Sold</th><th>Views</th><th>Age</th><th>Score</th><th>Obs</th></tr></thead><tbody>
               {(etsyWinnerPreview.payload?.entities || []).filter(item => item.relevance?.relevant).sort((a, b) => (b.winnerScore ?? -1) - (a.winnerScore ?? -1)).slice(0, 100).map(item => <tr key={item.entityId} style={{ borderTop: '1px solid #ffedd5' }}>
@@ -874,19 +897,19 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
             {workflowState?.heads?.ETSY_PATTERN_SNAPSHOT && <ActionButton accent="#475569" disabled={busy} onClick={supplementEtsyPatterns}>Bổ sung YTrends E3 (tùy chọn)</ActionButton>}
             {workflowState?.heads?.ETSY_PATTERN_SNAPSHOT && <span style={{ alignSelf: 'center', color: '#166534', fontWeight: 800 }}>Pattern v{workflowState.heads.ETSY_PATTERN_SNAPSHOT.revisionNumber}</span>}
           </div>
-          {etsyPatternPreview && <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(250px,1fr))', gap: 8, marginTop: 9 }}>
-            <div><b>Leading words</b><div>{(etsyPatternPreview.payload?.leadingWords || []).map(item => `${item.phrase} (${Math.round(item.share * 100)}%)`).join(', ') || 'Chưa có'}</div></div>
-            <div><b>Repeated phrases</b><div>{(etsyPatternPreview.payload?.repeatedPhrases || []).slice(0, 12).map(item => `${item.phrase} (${item.count})`).join(', ') || 'Chưa có'}</div></div>
-            <div><b>Observed tags sạch</b>{(etsyPatternPreview.payload?.observedTags || []).length
-              ? <div style={{ display: 'grid', gap: 4, marginTop: 4 }}>{etsyPatternPreview.payload.observedTags.slice(0, 20).map(item => <div key={item.phrase} style={{ border: '1px solid #fed7aa', borderRadius: 6, padding: '4px 6px', background: '#fff' }}>
-                <b>{item.phrase}</b> · {item.listingSpread} listing · {item.shopSpread} shop
-              </div>)}</div>
-              : <div>Không có tag có thể đọc chắc chắn trong file.</div>}
-              {etsyPatternPreview.accounting?.unparseableTagCellCount > 0 && <div style={{ marginTop: 5, color: '#9a3412', fontSize: '.72rem' }}>
-                Đã cách ly {etsyPatternPreview.accounting.unparseableTagCellCount} ô HeyEtsy bị nối chuỗi; raw data vẫn còn trong import, không đưa rác vào Master KW.
-              </div>}
-            </div>
-            <div><b>Structure</b><div>Personalization {etsyPatternPreview.payload?.structure?.personalizationRate}% · Gift {etsyPatternPreview.payload?.structure?.giftRate}% · {etsyPatternPreview.payload?.structure?.averageWords} words/title</div></div>
+          {displayedEtsyPattern && <div style={{ marginTop: 9 }}>
+            <div style={{ overflowX: 'auto', maxHeight: 430, border: '1px solid #fed7aa', borderRadius: 8, background: '#fff' }}><table data-testid="etsy-pattern-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '.73rem' }}>
+              <thead><tr><th style={{ textAlign: 'left', padding: 7 }}>Pattern / phrase</th><th>Loại</th><th>Listing</th><th>Độ phủ</th><th>Shop</th><th>Evidence</th></tr></thead>
+              <tbody>{[
+                ...(displayedEtsyPattern.payload?.leadingWords || []).map(item => ({ ...item, type: 'TITLE_HEAD', listings: item.count })),
+                ...(displayedEtsyPattern.payload?.repeatedPhrases || []).map(item => ({ ...item, type: 'REPEATED_PHRASE', listings: item.count })),
+                ...(displayedEtsyPattern.payload?.observedTags || []).map(item => ({ ...item, type: 'OBSERVED_TAG', listings: item.listingSpread, share: item.listingSpread / Math.max(1, displayedEtsyPattern.payload?.sampleSize || 1), shops: item.shopSpread }))
+              ].sort((a, b) => (b.share || 0) - (a.share || 0) || (b.listings || 0) - (a.listings || 0)).slice(0, 100).map((item, index) => <tr key={`${item.type}-${item.phrase}-${index}`} style={{ borderTop: '1px solid #ffedd5' }}>
+                <td style={{ padding: 6 }}>{item.phrase}</td><td style={{ textAlign: 'center' }}>{item.type}</td><td style={{ textAlign: 'center' }}>{item.listings ?? '—'}</td><td style={{ textAlign: 'center' }}>{item.share == null ? '—' : `${Math.round(item.share * 100)}%`}</td><td style={{ textAlign: 'center' }}>{item.shops ?? '—'}</td><td style={{ textAlign: 'center' }}>{item.evidenceTier || 'E1_OBSERVED_PUBLIC'}</td>
+              </tr>)}</tbody>
+            </table></div>
+            <div style={{ marginTop: 7, fontSize: '.74rem' }}><b>Structure:</b> Personalization {displayedEtsyPattern.payload?.structure?.personalizationRate}% · Gift {displayedEtsyPattern.payload?.structure?.giftRate}% · {displayedEtsyPattern.payload?.structure?.averageWords} words/title · {displayedEtsyPattern.payload?.marketContext?.uniqueShopCount} shop.</div>
+            {displayedEtsyPattern.accounting?.unparseableTagCellCount > 0 && <div style={{ marginTop: 5, color: '#9a3412', fontSize: '.72rem' }}>Đã cách ly {displayedEtsyPattern.accounting.unparseableTagCellCount} ô HeyEtsy bị nối chuỗi; raw data vẫn còn trong import, không đưa rác vào Master KW.</div>}
           </div>}
         </div>}
 
@@ -970,6 +993,9 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
     </Step>
 
     <Step number="3" title="Phân tích và phân bổ keyword" accent={accent} done={Boolean(head(state, 'intelligenceSnapshotId'))}>
+      {intelligenceReady && <div data-testid="intelligence-complete" style={{ marginBottom: 9, padding: 9, borderRadius: 8, background: '#dcfce7', color: '#166534', fontSize: '.78rem', fontWeight: 800 }}>
+        Đã lưu Intelligence Snapshot #{head(state, 'intelligenceSnapshotId')} — Bước 3 hoàn tất. Đi tiếp Bước 4; chỉ dùng 3A/3B khi muốn phân tích lại.
+      </div>}
       {(() => {
         const missing = [
           !head(state, 'researchSnapshotId') && 'Research Snapshot chưa lưu',
@@ -983,9 +1009,14 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
       <div style={{ display: 'flex', gap: 9, flexWrap: 'wrap', alignItems: 'center' }}>
         <label style={{ fontSize: '.8rem', fontWeight: 800 }}>Ngôn ngữ listing {' '}<select value={language} onChange={event => setLanguage(event.target.value)}><option value="AUTO">Theo keyword đầu vào</option><option value="EN">English</option><option value="ES">Español</option></select></label>
         <ActionButton accent={accent} disabled={!head(state, 'researchSnapshotId') || !head(state, 'productTruthRevisionId')
-          || !masterKeywordHead || busy} onClick={() => analyze(false)}>3A. Preview zero-write</ActionButton>
-        <ActionButton accent={accent} disabled={!intelligencePreview?.zeroWrite || busy} onClick={() => analyze(true)}>3B. Khóa Intelligence Snapshot</ActionButton>
+          || !masterKeywordHead || busy} onClick={() => analyze(false)}>{intelligenceReady ? '3A. Preview phân tích lại' : '3A. Preview zero-write'}</ActionButton>
+        <ActionButton accent={accent} disabled={!intelligencePreview?.zeroWrite || busy} onClick={() => analyze(true)}>{intelligenceReady ? '3B. Lưu revision Intelligence mới' : '3B. Khóa Intelligence Snapshot'}</ActionButton>
       </div>
+      {claimBlockers.length > 0 && <div data-testid="truth-claim-remediation" style={{ marginTop: 9, padding: 10, border: '1px solid #f97316', borderRadius: 8, background: '#fff7ed', color: '#7c2d12' }}>
+        <b>Không phải lỗi Master KW. Composer đã dừng vì Product Truth hiện tại không xác nhận claim sau:</b>
+        <ul style={{ margin: '6px 0' }}>{claimBlockers.slice(0, 12).map((item, index) => <li key={`${item.field}-${item.token}-${index}`}>{item.field}: “{item.token}”</li>)}</ul>
+        <span style={{ fontSize: '.76rem' }}>Nếu sản phẩm thật có thuộc tính này, bổ sung vào Product Truth và lưu revision mới. Nếu không có, giữ nguyên Product Truth: Omni sẽ không được phép đưa claim của đối thủ vào listing.</span>
+      </div>}
       {previewOutput && <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 8, marginTop: 10 }}>
         <Metric label="LANGUAGE" value={previewOutput.language || language} />
         <Metric label="COPY-SAFE" value={intelligencePreview.accounting?.copySafeKeywordCount ?? intelligencePreview.accounting?.titleAndTagCandidateCount} />
@@ -1002,15 +1033,20 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
 
     <Step number="4" title="Draft hoàn chỉnh và bộ prompt ảnh" accent={accent} done={Boolean(listing)}>
       <ActionButton accent={accent} disabled={!latestIntelligence || !policyReady || busy} onClick={previewDraft}>4A. Tạo / làm mới draft zero-write</ActionButton>
+      {(!latestIntelligence || !policyReady) && <div style={{ marginTop: 7, color: '#9a3412', fontSize: '.76rem' }}>Chưa mở Bước 4: {!latestIntelligence ? 'chưa có Intelligence Snapshot đã lưu' : 'project chưa liên kết policy context'}. Không cần chạy lại Bước 3 nếu banner xanh phía trên đã xác nhận hoàn tất.</div>}
       {listing && <div style={{ display: 'grid', gap: 9, marginTop: 12 }}>
         {marketplace === 'AMAZON' ? <>
-          <label><b>Amazon Title</b><textarea value={listing.amazonTitle || ''} onChange={event => updateDraft('amazonTitle', event.target.value)} rows={2} style={{ width: '100%' }} /></label>
-          <label><b>5 Bullet Points</b><textarea value={(listing.amazonBullets || []).join('\n')} onChange={event => updateDraft('amazonBullets', event.target.value.split('\n').filter(Boolean))} rows={7} style={{ width: '100%' }} /></label>
-          <label><b>Backend Search Terms ({new TextEncoder().encode(listing.amazonSearchTerms || '').length}/249 bytes)</b><textarea value={listing.amazonSearchTerms || ''} onChange={event => updateDraft('amazonSearchTerms', event.target.value)} rows={3} style={{ width: '100%' }} /></label>
-          <label><b>Description</b><textarea value={listing.amazonDescription || ''} onChange={event => updateDraft('amazonDescription', event.target.value)} rows={7} style={{ width: '100%' }} /></label>
-          <label><b>Item Highlights</b><textarea value={listing.itemHighlights || ''} onChange={event => updateDraft('itemHighlights', event.target.value)} rows={3} style={{ width: '100%' }} /></label>
+          <div style={{ padding: 9, borderRadius: 8, background: '#eff6ff', color: '#1e3a8a', fontSize: '.76rem' }}><b>Amazon Modular Titles 2026:</b> Title và Item Highlights đều là search inputs. Engine lấp đầy bằng keyword liên quan/truth-safe đến khi không còn phrase phù hợp; không padding, không lặp vô ích.</div>
+          <label><CapacityLabel label="Amazon Title" used={characterCount(listing.amazonTitle)} limit={AMAZON_SURFACE_LIMITS.title} /><textarea value={listing.amazonTitle || ''} onChange={event => updateDraft('amazonTitle', event.target.value)} rows={2} style={{ width: '100%' }} /></label>
+          <label><CapacityLabel label="Item Highlights" used={characterCount(listing.itemHighlights)} limit={AMAZON_SURFACE_LIMITS.itemHighlights} /><textarea value={listing.itemHighlights || ''} onChange={event => updateDraft('itemHighlights', event.target.value)} rows={3} style={{ width: '100%' }} /></label>
+          <div><CapacityLabel label="5 Bullet Points" used={(listing.amazonBullets || []).length} limit={5} unit="mục" authority="giới hạn ký tự lấy theo Product Type Definition" />
+            {(listing.amazonBullets || []).map((bullet, index) => <label key={index} style={{ display: 'grid', gap: 3, marginTop: 6 }}><span>Bullet {index + 1} ({characterCount(bullet)}/PTD ký tự)</span><textarea value={bullet} onChange={event => { const next = [...(listing.amazonBullets || [])]; next[index] = event.target.value; updateDraft('amazonBullets', next); }} rows={3} /></label>)}
+          </div>
+          <label><CapacityLabel label="Backend Search Terms" used={utf8ByteCount(listing.amazonSearchTerms)} limit={AMAZON_SURFACE_LIMITS.backendBytes} unit="bytes" /><textarea value={listing.amazonSearchTerms || ''} onChange={event => updateDraft('amazonSearchTerms', event.target.value)} rows={3} style={{ width: '100%' }} /></label>
+          <label><CapacityLabel label="Description" used={characterCount(listing.amazonDescription)} limit={null} authority="max theo Product Type Definition" /><textarea value={listing.amazonDescription || ''} onChange={event => updateDraft('amazonDescription', event.target.value)} rows={7} style={{ width: '100%' }} /></label>
           <label><b>Category</b><input value={listing.categoryName || ''} onChange={event => updateDraft('categoryName', event.target.value)} style={{ width: '100%' }} /></label>
-          <label><b>Amazon A+ copy points — mỗi dòng một điểm</b><textarea value={(listing.amazonAPlusPoints || []).join('\n')} onChange={event => updateDraft('amazonAPlusPoints', event.target.value.split('\n').map(item => item.trim()).filter(Boolean))} rows={5} style={{ width: '100%' }} /></label>
+          <label><b>Amazon A+ source points — giới hạn cuối được đếm riêng theo từng module/headline/body/alt-text</b><textarea value={(listing.amazonAPlusPoints || []).join('\n')} onChange={event => updateDraft('amazonAPlusPoints', event.target.value.split('\n').map(item => item.trim()).filter(Boolean))} rows={5} style={{ width: '100%' }} />
+            <small>{(listing.amazonAPlusPoints || []).map((point, index) => `Point ${index + 1}: ${characterCount(point)} ký tự`).join(' · ') || 'Chưa có point'}</small></label>
           <label><b>PPC targeting — có thể chứa keyword claim chưa xác minh, không phải copy hiển thị</b><textarea value={(listing.ppcKeywords || []).map(item => typeof item === 'string' ? item : item.phrase || '').join('\n')} onChange={event => updateDraft('ppcKeywords', event.target.value.split('\n').map(phrase => phrase.trim()).filter(Boolean))} rows={6} style={{ width: '100%' }} /></label>
         </> : <>
           <label><b>Etsy Title ({Array.from(listing.etsyTitle || '').length}/140)</b><textarea value={listing.etsyTitle || ''} onChange={event => updateDraft('etsyTitle', event.target.value)} rows={2} style={{ width: '100%' }} /></label>

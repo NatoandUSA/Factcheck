@@ -49,8 +49,10 @@ async function main() {
   check(result.output.listingDraft.ppcKeywords.includes('collar de oro para mujer 18k'), 'unverified claim retained for PPC targeting');
   check(result.output.guardAccounting.ppcFlagged.some(item => JSON.stringify(item).includes('18k')), 'PPC claim explicitly flagged');
   check(!JSON.stringify(result.output.listingDraft).toLowerCase().includes('nike'), 'IP-blocked phrase absent from every listing surface');
-  check(!visible.includes('english necklace') && !result.output.listingDraft.amazonSearchTerms.includes('english'),
-    'language mismatch absent from visible and backend copy');
+  check(!visible.includes('english necklace') && result.output.listingDraft.amazonSearchTerms.includes('english'),
+    'alternate-language phrase stays out of visible copy but contributes safe Amazon-US backend roots');
+  check(result.accounting.backendLanguageCandidateCount === 1,
+    'backend-only alternate-language disposition is explicitly accounted');
   check(result.output.listingDraft.ppcKeywords.includes('english necklace for daughter'),
     'language mismatch remains accounted in PPC targeting');
   check(!JSON.stringify(result.output.listingDraft).toLowerCase().includes('example collar'),

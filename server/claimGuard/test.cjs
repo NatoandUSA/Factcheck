@@ -67,6 +67,12 @@ test('dedicated truth fields corroborate matching material and size claims', () 
   assert.equal(audit.clean, true);
 });
 
+test('confirmed gemstone truth corroborates the exact observed stone but not a different stone', () => {
+  const truth = { gemstones: 'Cubic Zirconia' };
+  assert.equal(guard.auditComposedOutput({ description: 'Cubic zirconia necklace' }, truth).clean, true);
+  assert.equal(guard.auditComposedOutput({ description: 'Diamond necklace' }, truth).claimSurfaceBlockingFree, false);
+});
+
 test('verified included items corroborate message cards without making identity authoritative', () => {
   const truth = { productName: 'Necklace Message Card', includedItems: 'Message card' };
   assert.equal(guard.auditComposedOutput({ title: 'Necklace with message card' }, truth).clean, true);

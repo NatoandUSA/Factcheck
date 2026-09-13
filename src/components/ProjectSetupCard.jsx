@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { FolderPlus, LoaderCircle } from 'lucide-react';
 import { parseJsonResponse } from '../utils/apiResponse';
+import { useAuth } from '../context/AuthContext';
 
 const CLASSIFICATIONS = Object.freeze({
   'Apparel: Sweatshirt': ['CUSTOM_SWEATSHIRT', 'APPAREL_SWEATSHIRT', 'custom-sweatshirt-v1'],
@@ -19,7 +20,9 @@ export function canonicalProjectClassification(category) {
   return Object.freeze({ mediaClass: 'NON_MEDIA', productTypeId, categoryId, productFamilyVersion });
 }
 
-export default function ProjectSetupCard({ marketplace, category, seedPhrase = '', onCreated, onShowToast, accent = '#0284c7' }) {
+export default function ProjectSetupCard({ marketplace, category, seedPhrase = '', onCreated, onShowToast,
+  onRequireLogin, accent = '#0284c7' }) {
+  const { user, authLoading, invalidateSession } = useAuth();
   const [name, setName] = useState('');
   const [seed, setSeed] = useState(seedPhrase);
   const [referenceAsin, setReferenceAsin] = useState('');
@@ -32,6 +35,11 @@ export default function ProjectSetupCard({ marketplace, category, seedPhrase = '
 
   const createProject = async (event) => {
     event.preventDefault();
+    if (!user) {
+      onShowToast?.('Hãy đăng nhập trước khi tạo project.', 'error');
+      onRequireLogin?.();
+      return;
+    }
     if (!name.trim() || !seed.trim()) {
       onShowToast?.('Nhập tên project và seed phrase trước khi tạo project.');
       return;
@@ -47,7 +55,15 @@ export default function ProjectSetupCard({ marketplace, category, seedPhrase = '
           locale, ...classification })
       });
       const data = await parseJsonResponse(response);
-      if (!response.ok) throw new Error(data.message || data.error || 'PROJECT_CREATE_FAILED');
+      if (!response.ok) {
+        if (response.status === 401) {
+          invalidateSession();
+          onRequireLogin?.();
+        }
+        throw new Error(response.status === 401
+          ? 'Phiên đăng nhập đã hết hạn. Hãy đăng nhập lại.'
+          : data.message || data.error || 'PROJECT_CREATE_FAILED');
+      }
       onShowToast?.(`Đã tạo project #${data.projectId} ở trạng thái EVIDENCE_INTAKE.`);
       setName('');
       setReferenceAsin('');
@@ -58,6 +74,19 @@ export default function ProjectSetupCard({ marketplace, category, seedPhrase = '
       setCreating(false);
     }
   };
+
+  if (authLoading) return <section className="studio-panel" style={{ padding: '16px 20px', borderLeft: `4px solid ${accent}` }}>
+    Đang kiểm tra phiên đăng nhập…
+  </section>;
+
+  if (!user) return <section data-testid="project-login-required" className="studio-panel"
+    style={{ padding: '16px 20px', borderLeft: `4px solid ${accent}`, background: '#fffbeb' }}>
+    <div style={{ fontWeight: 800, color: '#92400e' }}>Cần đăng nhập trước khi tạo project</div>
+    <p style={{ margin: '6px 0 12px', color: '#78350f', fontSize: '.82rem' }}>
+      Project luôn thuộc một tài khoản và workspace. Dữ liệu nhập ở đây sẽ được giữ qua lần khởi động lại backend.
+    </p>
+    <button type="button" className="btn btn-primary" onClick={onRequireLogin}>Đăng nhập để bắt đầu</button>
+  </section>;
 
   return (
     <section className="studio-panel" style={{ padding: '16px 20px', borderLeft: `4px solid ${accent}`, background: '#f8fafc' }}>

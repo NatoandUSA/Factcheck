@@ -435,6 +435,33 @@ function splitSuggestions(value) {
   return String(value).split(/[,;|]/).map(normalizeLine).filter(Boolean);
 }
 
+function parseEtsyTagSuggestions(value) {
+  const raw = normalizeLine(value);
+  if (isUnknown(raw) || /^no tags? found$/i.test(raw)) {
+    return { tags: [], diagnostics: { status: 'NO_TAGS_REPORTED', declaredCount: 0, rejectedSegments: 0 } };
+  }
+  const declared = raw.match(/^\??\s*(\d{1,2})\s+Check Sugg\s*\(\s*\d{1,2}\s*\)\s*Copy Suggestions\s*/i);
+  const body = declared ? raw.slice(declared[0].length).replace(/^\s*[,;|]\s*/, '') : raw;
+  const hasExplicitSeparators = /[,;|]/.test(body);
+  const segments = hasExplicitSeparators ? body.split(/[,;|]/).map(normalizeLine).filter(Boolean) : [body];
+  const rejected = [];
+  const tags = [];
+  for (const segment of segments) {
+    const noisy = /Check Sugg|Copy Suggestions|Add to cart|More like this|Sale Price|Original Price|Estimated (?:Total Sales|Revenue)|\bViews\b|\bSold\b/i.test(segment);
+    const validLength = Array.from(segment).length <= 20;
+    if (!segment || noisy || !validLength || !/[\p{L}\p{N}]/u.test(segment)) { rejected.push(segment); continue; }
+    tags.push(segment);
+  }
+  const cleanTags = [...new Set(tags)];
+  const concatenated = Boolean(declared) && !hasExplicitSeparators && body.length > 20;
+  return { tags: concatenated ? [] : cleanTags, diagnostics: {
+    status: concatenated ? 'UNPARSEABLE_CONCATENATED_SUGGESTIONS' : cleanTags.length ? 'PARSED_EXPLICIT_TAGS' : 'NO_USABLE_TAGS',
+    declaredCount: declared ? Number(declared[1]) : null,
+    acceptedCount: concatenated ? 0 : cleanTags.length,
+    rejectedSegments: rejected.length + (concatenated ? 1 : 0)
+  } };
+}
+
 function findCsvListingIdConflicts(sellers) {
   const byListingId = new Map();
   const conflicts = [];
@@ -553,6 +580,7 @@ function parseCsvListing(row, index) {
   const shopDailySold = parseCsvNumberEvidence(csvValue(row, 'shop_daily_sold'));
   const createdRaw = csvValue(row, 'he_created', 'created');
   const updatedRaw = csvValue(row, 'he_updated', 'updated');
+  const parsedTags = parseEtsyTagSuggestions(csvValue(row, 'he_tags', 'tags'));
   const seller = {
     id: `csv-${sourceRank}`,
     sourceRowId: `csv-row-${index + 1}`,
@@ -592,8 +620,11 @@ function parseCsvListing(row, index) {
     listingCreatedAt: normalizeIsoTimestamp(createdRaw),
     listingUpdatedAt: normalizeIsoTimestamp(updatedRaw),
     ageDays: parseCsvNumberEvidence(csvValue(row, 'age_days')).value,
-    tags: splitSuggestions(csvValue(row, 'he_tags', 'tags')),
-    tagSource: csvValue(row, 'he_tags', 'tags') ? 'STAFF_FILE_CSV_SUGGESTION' : 'NO_TAGS_REPORTED',
+    tags: parsedTags.tags,
+    tagDiagnostics: parsedTags.diagnostics,
+    tagSource: parsedTags.diagnostics.status === 'NO_TAGS_REPORTED' ? 'NO_TAGS_REPORTED'
+      : parsedTags.diagnostics.status === 'UNPARSEABLE_CONCATENATED_SUGGESTIONS'
+        ? 'STAFF_FILE_CSV_UNPARSEABLE_SUGGESTION' : 'STAFF_FILE_CSV_SUGGESTION',
     categories: splitSuggestions(csvValue(row, 'he_categories', 'categories')),
     country: csvValue(row, 'country'),
     shopCountry: csvValue(row, 'country'),
@@ -700,58 +731,92 @@ function parseEtsySearchCsv(rawText) {
 }
 
 function parseEtsySearchHtml(rawText) {
-  const normalizedRaw = decodeEntities(rawText).replace(/\r\n?/g, '\n');
+  // Do not decode the whole document before JSON.parse: Etsy descriptions can
+  // legitimately contain `&quot;` inside JSON strings, and global decoding would
+  // turn those entities into unescaped quotes and corrupt valid JSON-LD.
+  const normalizedRaw = String(rawText ?? '').replace(/\r\n?/g, '\n');
   const $ = cheerio.load(normalizedRaw);
   const sellers = [];
+  const appendProduct = (item, position, rawBlock) => {
+    if (!item?.name) return;
+    const offers = Array.isArray(item.offers) ? item.offers[0] : (item.offers || {});
+    const aggregateRating = item.aggregateRating || {};
+    const rank = Number(position);
+    const sourceRank = Number.isFinite(rank) && rank > 0 ? rank : sellers.length + 1;
+    const listingId = normalizeLine(item.sku || item.productID) || null;
+    const shopName = normalizeLine(item.brand?.name || item.author?.name || item.seller?.name) || null;
+    const parsedTags = parseEtsyTagSuggestions(item.keywords);
+    sellers.push({
+      id: `html-${sourceRank}`,
+      listingId,
+      sourceRank,
+      title: normalizeLine(item.name),
+      shopName,
+      shopNameEvidenceState: shopName ? 'STAFF_FILE_HTML' : 'UNKNOWN',
+      sourceLabel: 'STAFF_FILE_ETSY_HTML',
+      rating: parseNumberEvidence(aggregateRating.ratingValue).value,
+      reviewCount: parseNumberEvidence(aggregateRating.reviewCount || aggregateRating.ratingCount).value,
+      price: offers.price != null ? String(offers.price) : null,
+      priceAmount: parseNumberEvidence(offers.price).value,
+      priceCurrency: normalizeLine(offers.priceCurrency) || null,
+      originalPrice: offers.priceSpecification?.price != null ? String(offers.priceSpecification.price) : null,
+      originalPriceAmount: parseNumberEvidence(offers.priceSpecification?.price).value,
+      discountPercent: null,
+      totalViews: null, avgViews: null, views24h: null, totalSold: null, sold24h: null,
+      revenue: null, revenueCurrency: null, revenueApproximate: false, revenueRaw: null,
+      favorites: null, favoriteRate: null, favoriteRateApproximate: false,
+      conversionRate: null, conversionRateApproximate: false,
+      createdDate: null, createdRaw: null, updatedRaw: null,
+      tags: parsedTags.tags,
+      tagDiagnostics: parsedTags.diagnostics,
+      tagSource: item.keywords ? 'ETSY_HTML_METADATA' : 'NO_TAGS_REPORTED',
+      categories: [], country: null, shopCountry: null,
+      url: normalizeLine(item.url) || null,
+      fieldProvenance: {
+        listingId: observedCsvField(listingId, listingId),
+        priceAmount: observedCsvField(parseNumberEvidence(offers.price).value, offers.price),
+        reviewCount: observedCsvField(parseNumberEvidence(aggregateRating.reviewCount || aggregateRating.ratingCount).value,
+          aggregateRating.reviewCount || aggregateRating.ratingCount),
+        rating: observedCsvField(parseNumberEvidence(aggregateRating.ratingValue).value, aggregateRating.ratingValue)
+      },
+      evidenceSource: 'STAFF_MANUAL_ASSERTION',
+      evidenceState: 'UNVERIFIED_INPUT',
+      evidenceProvider: 'ETSY_SEARCH_HTML',
+      isSynthetic: false,
+      selected: true,
+      rawBlock: JSON.stringify(rawBlock || item)
+    });
+  };
   $('script[type="application/ld+json"]').each((_, element) => {
     let payload;
     try { payload = JSON.parse($(element).text()); } catch (_) { return; }
     const list = Array.isArray(payload) ? payload : [payload];
-    for (const itemList of list) {
-      const entries = itemList?.['@type'] === 'ItemList' ? itemList.itemListElement : [];
+    for (const jsonLd of list) {
+      if (jsonLd?.['@type'] === 'Product') appendProduct(jsonLd, sellers.length + 1, jsonLd);
+      const entries = jsonLd?.['@type'] === 'ItemList' ? jsonLd.itemListElement : [];
       for (const entry of entries || []) {
         const item = entry?.item || {};
-        const offers = Array.isArray(item.offers) ? item.offers[0] : (item.offers || {});
-        const rank = Number(entry.position);
-        if (!item.name) continue;
-        sellers.push({
-          id: `html-${Number.isFinite(rank) ? rank : sellers.length + 1}`,
-          sourceRank: Number.isFinite(rank) ? rank : sellers.length + 1,
-          title: normalizeLine(item.name),
-          shopName: normalizeLine(item.brand?.name) || null,
-          shopNameEvidenceState: item.brand?.name ? 'STAFF_FILE_HTML' : 'UNKNOWN',
-          sourceLabel: 'STAFF_FILE_ETSY_HTML',
-          rating: null,
-          reviewCount: null,
-          price: offers.price != null ? String(offers.price) : null,
-          priceAmount: parseNumberEvidence(offers.price).value,
-          priceCurrency: normalizeLine(offers.priceCurrency) || null,
-          originalPrice: offers.priceSpecification?.price != null ? String(offers.priceSpecification.price) : null,
-          originalPriceAmount: parseNumberEvidence(offers.priceSpecification?.price).value,
-          discountPercent: null,
-          totalViews: null, avgViews: null, views24h: null, totalSold: null, sold24h: null,
-          revenue: null, revenueCurrency: null, revenueApproximate: false, revenueRaw: null,
-          favorites: null, favoriteRate: null, favoriteRateApproximate: false,
-          conversionRate: null, conversionRateApproximate: false,
-          createdDate: null, createdRaw: null, updatedRaw: null,
-          tags: [], tagSource: 'NO_TAGS_REPORTED', categories: [], country: null, shopCountry: null,
-          url: normalizeLine(item.url) || null,
-          evidenceSource: 'STAFF_MANUAL_ASSERTION',
-          evidenceState: 'UNVERIFIED_INPUT',
-          evidenceProvider: 'ETSY_SEARCH_HTML',
-          isSynthetic: false,
-          selected: true,
-          rawBlock: JSON.stringify(entry)
-        });
+        appendProduct(item, entry.position, entry);
       }
     }
   });
+  const headerDiagnostics = {
+    recognizedColumns: [
+      { sourceColumn: 'JSON-LD Product.name', canonicalField: 'title' },
+      { sourceColumn: 'JSON-LD Product.sku', canonicalField: 'listingId' },
+      { sourceColumn: 'JSON-LD Product.offers', canonicalField: 'price' }
+    ],
+    unmappedColumns: [], canonicalCollisions: [], duplicateHeaderCollisions: [], invalidHeaders: [],
+    recognizedColumnCount: 3, unmappedColumnCount: 0, fieldCountValidated: true
+  };
   return finalizeParsedInput({
     normalizedRaw,
     parserVersion: 'ETSY_SEARCH_HTML_JSONLD_V1',
     inputFormat: 'HTML',
-    searchContext: { appliedFilters: [], unappliedFilters: [], resultCount: null, pageContainsAds: false, sortMode: null },
-    sellers
+    searchContext: { appliedFilters: [], unappliedFilters: [], resultCount: sellers.length, pageContainsAds: false, sortMode: null },
+    sellers,
+    headerDiagnostics,
+    rowAccounting: { inputRows: sellers.length, validRows: sellers.length }
   });
 }
 

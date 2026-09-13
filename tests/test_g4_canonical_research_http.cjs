@@ -62,8 +62,8 @@ async function main() {
   const projectId = project.body.projectId;
   const workbook = new ExcelJS.Workbook();
   workbook.addWorksheet('Cerebro').addRows([
-    ['Keyword Phrase','Search Volume','Keyword Sales','Position (Rank)','B0ABC12345','B0ABC12346'],
-    ['para mi hija',1200,40,3,1,4], ['regalo para hija',500,null,8,3,7]
+    ['Keyword Phrase','Search Volume','Keyword Sales','Position (Rank)'],
+    ['para mi hija',1200,40,3], ['regalo para hija',500,null,8]
   ]);
   const fixture = { name: 'sample_cerebro.xlsx', bytes: Buffer.from(await workbook.xlsx.writeBuffer()) };
   const before = { imports: (await get('SELECT COUNT(*) AS n FROM research_imports')).n,
@@ -95,22 +95,12 @@ async function main() {
   'Xray preview returns copy-ready Cerebro batches of at most ten ASINs before any Cerebro import');
   check((await get('SELECT COUNT(*) AS n FROM research_imports')).n === before.imports,
     'Xray ASIN batch preview remains zero write');
-  const xrayCommitted = await upload(`/api/projects/${projectId}/research-imports`, {
-    kind: 'AMAZON_XRAY', idempotencyKey: key(101),
-    researchFile: { name: 'sample_xray.xlsx', bytes: Buffer.from(await xrayWorkbook.xlsx.writeBuffer()) }
-  });
-  check(xrayCommitted.status === 201, JSON.stringify(xrayCommitted.body));
-  const batchPlan = await json(`/api/projects/${projectId}/amazon/asin-batches`, 'POST', {
-    xrayImportId: xrayCommitted.body.researchImportId, maxBatches: 2, expectedHeadArtifactId: null,
-    idempotencyKey: key(102), changeReason: 'CONFIRM_TEST_ASIN_BATCHES'
-  });
-  check(batchPlan.status === 201, JSON.stringify(batchPlan.body));
   const unsupported = await upload(`/api/projects/${projectId}/research-imports/preview`, {
     kind: 'AMAZON_CEREBRO', researchFile: { name: 'research.txt', bytes: Buffer.from('not a workbook') }
   });
   check(unsupported.status === 415 && unsupported.body.error === 'UNSUPPORTED_RESEARCH_FILE',
     'unsupported research extension rejected explicitly');
-  check((await get('SELECT COUNT(*) AS n FROM research_imports')).n === before.imports + 1,
+  check((await get('SELECT COUNT(*) AS n FROM research_imports')).n === before.imports,
     'rejected research file creates no import');
 
   const committed = await upload(`/api/projects/${projectId}/research-imports`, {
@@ -130,14 +120,8 @@ async function main() {
   check(replay.status === 201 || replay.status === 200, JSON.stringify(replay.body));
   check(replay.body.researchImportId === committed.body.researchImportId, 'idempotent replay returns same import');
 
-  const cerebroBinding = await json(`/api/projects/${projectId}/amazon/cerebro-bindings`, 'POST', {
-    asinBatchArtifactId: batchPlan.body.id, batchNumber: 1, cerebroImportId: committed.body.researchImportId,
-    expectedHeadArtifactId: null, idempotencyKey: key(103), changeReason: 'BIND_TEST_CEREBRO'
-  });
-  check(cerebroBinding.status === 201, JSON.stringify(cerebroBinding.body));
-
   const snapshot = await json(`/api/projects/${projectId}/research-snapshots`, 'POST', {
-    expectedHeadResearchSnapshotId: null, importIds: [xrayCommitted.body.researchImportId, committed.body.researchImportId],
+    expectedHeadResearchSnapshotId: null, importIds: [committed.body.researchImportId],
     idempotencyKey: key(2), changeReason: 'STAFF_CONFIRMED_RESEARCH'
   });
   check(snapshot.status === 201, JSON.stringify(snapshot.body));
@@ -147,12 +131,6 @@ async function main() {
   check(JSON.parse(snapshotRow.observations_json).cerebro.observations.length > 0, 'full observations persisted');
   check(JSON.parse(snapshotRow.accounting_json).unconsumedSheetCount === 0, 'snapshot accounting persisted');
   check(snapshotRow.snapshot_hash === snapshot.body.researchSnapshotHash, 'snapshot hash returned exactly');
-  const master = await json(`/api/projects/${projectId}/amazon/master-keywords`, 'POST', {
-    researchSnapshotId: snapshot.body.researchSnapshotId, asinBatchArtifactId: batchPlan.body.id,
-    cerebroBindingArtifactIds: [cerebroBinding.body.id], expectedHeadArtifactId: null,
-    idempotencyKey: key(104), changeReason: 'LOCK_TEST_AMAZON_MASTER_KW'
-  });
-  check(master.status === 201 && master.body.accounting.droppedKeywordCount === 0, JSON.stringify(master.body));
 
   const truth = await json(`/api/projects/${projectId}/product-truth/revisions`, 'POST', {
     expectedHeadRevisionId: null, idempotencyKey: key(3), changeReason: 'STAFF_DRAFT', facts: {
@@ -164,10 +142,15 @@ async function main() {
   });
   check(truth.status === 201, JSON.stringify(truth.body));
   const truthId = truth.body.productTruthRevisionId;
+  const master = await json(`/api/projects/${projectId}/amazon/master-keywords`, 'POST', {
+    researchSnapshotId: snapshot.body.researchSnapshotId, decisions: [], expectedHeadArtifactId: null,
+    idempotencyKey: key(23), changeReason: 'FREEZE_MASTER_KEYWORDS_FOR_DRAFT'
+  });
+  check(master.status === 201 && master.body.kind === 'AMAZON_MASTER_KEYWORDS', JSON.stringify(master.body));
   const beforeIntelligence = (await get('SELECT COUNT(*) AS n FROM intelligence_snapshots')).n;
   const intelligencePreview = await json(`/api/projects/${projectId}/intelligence-snapshots/preview`, 'POST', {
-    researchSnapshotId: snapshot.body.researchSnapshotId, productTruthRevisionId: truthId,
-    masterKeywordArtifactId: master.body.id, listingLanguage: 'EN'
+    researchSnapshotId: snapshot.body.researchSnapshotId, productTruthRevisionId: truthId, listingLanguage: 'EN',
+    masterKeywordArtifactId: master.body.id
   });
   check(intelligencePreview.status === 200, JSON.stringify(intelligencePreview.body));
   check(intelligencePreview.body.zeroWrite === true, 'intelligence preview is zero write');
@@ -175,7 +158,7 @@ async function main() {
   check((await get('SELECT COUNT(*) AS n FROM intelligence_snapshots')).n === beforeIntelligence, 'preview creates no intelligence snapshot');
   const intelligence = await json(`/api/projects/${projectId}/intelligence-snapshots`, 'POST', {
     expectedHeadIntelligenceSnapshotId: null, researchSnapshotId: snapshot.body.researchSnapshotId,
-    productTruthRevisionId: truthId, masterKeywordArtifactId: master.body.id, listingLanguage: 'EN', idempotencyKey: key(4),
+    productTruthRevisionId: truthId, listingLanguage: 'EN', masterKeywordArtifactId: master.body.id, idempotencyKey: key(4),
     changeReason: 'SAVE_COMMERCE_INTELLIGENCE'
   });
   check(intelligence.status === 201, JSON.stringify(intelligence.body));
@@ -211,6 +194,9 @@ async function main() {
   check(dependencies.researchSnapshotHash === snapshot.body.researchSnapshotHash
     && dependencies.intelligenceSnapshotHash === intelligence.body.intelligenceSnapshotHash,
   'listing binds exact research and intelligence hashes');
+  check(dependencies.masterKeywordArtifactId === master.body.id
+    && dependencies.masterKeywordArtifactHash === master.body.artifactHash,
+  'listing binds exact immutable Master Keyword artifact');
   check(Boolean(dependencies.policyContractId) && /^[0-9a-f]{64}$/.test(dependencies.policyContractArtifactHash)
     && /^[0-9a-f]{64}$/.test(dependencies.policyContextHash)
     && /^[0-9a-f]{64}$/.test(dependencies.policyLifecycleSnapshotDigest)
@@ -323,10 +309,8 @@ async function main() {
     externalReference: 'AMZ-US-MANUAL-123', notes: 'Owner verified marketplace submission evidence',
     idempotencyKey: key(17)
   });
-  check(ownerSubmission.status === 409
-    && ['INCOMPLETE_POLICY_LIFECYCLE_SNAPSHOT','POLICY_APPROVAL_BLOCKED','POLICY_CONTRACT_NOT_FOUND']
-      .includes(ownerSubmission.body.error),
-  'Owner handoff independently revalidates policy before reading any historical request');
+  check(ownerSubmission.status === 410 && ownerSubmission.body.error === 'LEGACY_SUBMISSION_HANDOFF_RETIRED',
+    'wrong Owner-to-bare-SUBMITTED writer is permanently retired while historical rows stay readable');
   check((await get('SELECT COUNT(*) AS n FROM canonical_submission_requests')).n === 0
     && (await get('SELECT COUNT(*) AS n FROM canonical_submission_handoffs')).n === 0,
   'legacy fail-open state cannot create a submission request or handoff');

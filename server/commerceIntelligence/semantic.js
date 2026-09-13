@@ -16,7 +16,7 @@ const PATTERNS = Object.freeze({
     'sister', 'hermana', 'brother', 'hermano', 'wife', 'esposa', 'husband', 'esposo',
     'girlfriend', 'novia', 'boyfriend', 'novio', 'grandma', 'abuela', 'grandpa', 'abuelo', 'nana', 'gigi', 'mimi', 'memaw', 'mamaw', 'granny', 'grandmother',
     'aunt', 'tia', 'uncle', 'tio', 'niece', 'sobrina', 'nephew', 'sobrino', 'suegra', 'nuera', 'cunada',
-    'teacher', 'profesora', 'nurse', 'enfermera', 'bestie', 'friend', 'amiga', 'amigo',
+    'teacher', 'teachers', 'profesor', 'profesora', 'maestro', 'maestra', 'nurse', 'enfermera', 'bestie', 'friend', 'amiga', 'amigo',
     'bride', 'groom', 'bridesmaid', 'family', 'familia', 'baby', 'bebe', 'kids', 'women', 'her', 'mujer', 'mujeres', 'pareja'],
   occasion: ['birthday', 'cumpleanos', 'christmas', 'navidad', 'halloween', 'mothers day', 'mothersday', 'fathers day',
     'wedding', 'boda', 'anniversary', 'aniversario', 'quinceanera', 'graduation', 'graduacion',
@@ -126,7 +126,7 @@ const RECIPIENT_FAMILIES = [
   ['uncle', 'tio'],
   ['niece', 'sobrina'],
   ['nephew', 'sobrino'],
-  ['teacher', 'teachers', 'profesora'],
+  ['teacher', 'teachers', 'profesor', 'profesora', 'maestro', 'maestra'],
   ['nurse', 'nurses', 'enfermera'],
   ['bride', 'bridesmaid', 'novia'],
   ['friend', 'bestie', 'amiga', 'amigo'],
@@ -134,6 +134,43 @@ const RECIPIENT_FAMILIES = [
   ['suegra', 'motherinlaw']
 ];
 const RECIPIENT_TOKENS = new Set(PATTERNS.recipient.flatMap(p => fold(p).split(/\s+/)));
+
+// Cross-language product identity families. These are nouns, not attributes:
+// they let an English Product Truth type ("Necklace") require a Spanish title
+// phrase such as "collar", without translating or approving material claims.
+const PRODUCT_FAMILIES = Object.freeze([
+  Object.freeze(['necklace', 'necklaces', 'collar', 'collares', 'cadena', 'cadenas', 'jewelry', 'joyeria', 'joyas']),
+  Object.freeze(['sweatshirt', 'sweatshirts', 'sudadera', 'sudaderas', 'crewneck', 'pullover', 'sweater', 'sweaters']),
+  Object.freeze(['hoodie', 'hoodies']),
+  Object.freeze(['shirt', 'shirts', 'camisa', 'camisas', 'tshirt', 'camiseta', 'camisetas']),
+  Object.freeze(['mug', 'mugs', 'taza', 'tazas', 'tumbler', 'vaso']),
+  Object.freeze(['blanket', 'blankets', 'manta', 'mantas']),
+  Object.freeze(['hat', 'hats', 'cap', 'caps', 'gorra', 'gorras']),
+  Object.freeze(['acrylic', 'acrilico', 'acrilica', 'plaque', 'sign']),
+  Object.freeze(['ring', 'rings', 'anillo', 'anillos']),
+  Object.freeze(['bracelet', 'bracelets', 'pulsera', 'pulseras']),
+  Object.freeze(['earring', 'earrings', 'pendiente', 'pendientes', 'arete', 'aretes']),
+  Object.freeze(['poster', 'print', 'printable', 'pdf', 'game', 'juego']),
+  Object.freeze(['pillow', 'pillows', 'almohada', 'cojin']),
+  Object.freeze(['candle', 'candles', 'vela', 'velas']),
+  Object.freeze(['keychain', 'keychains', 'llavero', 'llaveros']),
+  Object.freeze(['card', 'cards', 'tarjeta', 'tarjetas'])
+]);
+
+function allowedProductFamilies(texts) {
+  const allowed = new Set();
+  const sourceTokens = new Set(texts.flatMap(value => fold(value).split(/[^a-z0-9]+/).filter(Boolean)));
+  PRODUCT_FAMILIES.forEach((family, index) => {
+    if (family.some(token => sourceTokens.has(token))) allowed.add(index);
+  });
+  return allowed;
+}
+
+function matchesProductFamily(phrase, allowedFamilies) {
+  if (!allowedFamilies?.size) return false;
+  const phraseTokens = new Set(fold(phrase).split(/[^a-z0-9]+/).filter(Boolean));
+  return [...allowedFamilies].some(index => PRODUCT_FAMILIES[index].some(token => phraseTokens.has(token)));
+}
 
 function recipientFamily(token) {
   const value = fold(token);
@@ -196,4 +233,5 @@ function conflictingRecipient(phrase, allowedFamilies) {
 }
 
 module.exports = { classify, isGarbage, bannedClaim, isGeneric, spanishRatio,
-  allowedRecipientFamilies, conflictingRecipient, recipientFamily, PATTERNS };
+  allowedRecipientFamilies, conflictingRecipient, recipientFamily,
+  allowedProductFamilies, matchesProductFamily, PRODUCT_FAMILIES, PATTERNS };

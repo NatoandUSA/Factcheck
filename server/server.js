@@ -32,7 +32,10 @@ const { createRateLimiter } = require('./security/rateLimiter');
 const { COOKIE_NAME, SESSION_TTL_MS, createSessionRecord, verifySessionRecord, revokeSessionRecord } = require('./security/session');
 const { parseCookies, extractRawToken, requireAuth, requireRole, requireCsrfOrigin, corsOptionsDelegate } = require('./middleware/auth');
 const { runMigrations } = require('./database/migrations');
-const { ensureTestDatabaseFixtures: ensureFixturesForDb } = require('./database/testFixtures');
+const {
+  ensureTestDatabaseFixtures: ensureFixturesForDb,
+  ensureDevelopmentDatabaseFixtures
+} = require('./database/testFixtures');
 const { ensureLegacyDefaultAgents } = require('./database/defaultAgents');
 const { encryptSecret, decryptSecret, maskSecret } = require('./security/secretBox');
 const { approvalHash } = require('./security/approval');
@@ -57,13 +60,22 @@ const { assertCanonicalDependenciesCurrent, composeCommerceDraft, composeTruthOn
   validateCanonicalDraft } = require('./canonicalDraftService');
 const { appendIntelligenceSnapshot, appendResearchImport, appendResearchSnapshot,
   getCommerceState, getIntelligenceSnapshot, previewIntelligence } = require('./commerceSnapshotStore');
-const { recordCanonicalSubmission, requestCanonicalSubmission, reviewCanonicalListing } = require('./canonicalReviewHandoffStore');
+const { recordCanonicalSubmission, requestCanonicalSubmission, reviewCanonicalListing,
+  authorizeCanonicalSubmission, exportCanonicalSubmission,
+  reportCanonicalOperatorSubmission } = require('./canonicalReviewHandoffStore');
 const amazonResearchAdapter = require('./commerceIntelligence/amazonResearchAdapter');
 const amazonIntelligenceAdapter = require('./commerceIntelligence/amazonIntelligenceAdapter');
 const { selectAsinBatches } = require('./commerceIntelligence/asinSelector');
 const etsyResearchAdapter = require('./commerceIntelligence/etsyResearchAdapter');
 const etsyIntelligenceAdapter = require('./commerceIntelligence/etsyIntelligenceAdapter');
-const marketplaceWorkflow = require('./marketplaceResearchWorkflow');
+const { getArtifact, getArtifactState } = require('./commerceWorkflowArtifactStore');
+const { previewAsinPlan, saveAsinPlan, previewMasterKeywords,
+  saveMasterKeywords } = require('./amazonResearchWorkflow');
+const { previewWinners: previewEtsyWinners, saveWinners: saveEtsyWinners,
+  previewPatterns: previewEtsyPatterns, savePatterns: saveEtsyPatterns,
+  previewMasterKeywords: previewEtsyMasterKeywords,
+  saveMasterKeywords: saveEtsyMasterKeywords,
+  supplementPatternsWithYtrends } = require('./etsyResearchWorkflow');
 
 const PROJECT_POLICY_CLASSIFICATIONS = Object.freeze({
   CUSTOM_SWEATSHIRT: Object.freeze({ mediaClass: 'NON_MEDIA', productTypeId: 'CUSTOM_SWEATSHIRT', categoryId: 'APPAREL_SWEATSHIRT', productFamilyVersion: 'custom-sweatshirt-v1' }),
@@ -96,6 +108,25 @@ function requireExactDto(body, allowed) {
     code: 'UNEXPECTED_REQUEST_FIELD', status: 400, field: unexpected
   });
   return body;
+}
+
+// R4.3 cutover mode keeps legacy code readable for recovery while preventing
+// ordinary staff traffic from mutating a second workflow. CI for historical
+// contracts can omit the flag; W1 browser/UAT must run with it enabled.
+function denyLegacyWriteInR43(req, res, next) {
+  if (process.env.OMNI_R43_SINGLE_PATH === '1') {
+    return res.status(410).json({
+      success: false,
+      error: 'LEGACY_WRITE_ROUTE_RETIRED',
+      message: 'This legacy write route is not available in the R4.3 staff workflow.'
+    });
+  }
+  return next();
+}
+
+function denyRetiredSubmissionHandoff(req, res) {
+  return res.status(410).json({ success: false, error: 'LEGACY_SUBMISSION_HANDOFF_RETIRED',
+    message: 'Use request → Owner authorization → exact export → operator report. Historical rows remain read-only.' });
 }
 
 function revisionScope(user) {
@@ -336,8 +367,8 @@ const productTruthListingUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024, files: 1, fields: 4 },
   fileFilter(req, file, cb) {
-    const allowed = /\.html?$/i.test(file.originalname || '');
-    cb(allowed ? null : new Error('UNSUPPORTED_LISTING_HTML'), allowed);
+    const allowed = /\.(?:html?|txt)$/i.test(file.originalname || '');
+    cb(allowed ? null : new Error('UNSUPPORTED_LISTING_PAGE_CAPTURE'), allowed);
   }
 });
 
@@ -613,6 +644,12 @@ const ensureTestDatabaseFixtures = () => {
 };
 const databaseReady = runMigrations(db).then(() => {
   if (process.env.NODE_ENV === 'test') return ensureTestDatabaseFixtures();
+  if (process.env.NODE_ENV === 'development' && process.env.OMNI_SEED_LOCAL_DEMO_ACCOUNTS === '1') {
+    // The development UI advertises these local-only accounts. Keep the
+    // persistent development database aligned with that promise on every
+    // restart; production never enters this branch.
+    return ensureDevelopmentDatabaseFixtures(db).then(() => ensureLegacyDefaultAgents(db));
+  }
   return ensureLegacyDefaultAgents(db);
 });
 
@@ -1329,7 +1366,7 @@ app.post('/api/evidence', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SEL
 });
 
 // POST /api/evidence/:id/accept - Staff accepts research evidence (Restricted to OWNER & MANAGER)
-app.post('/api/evidence/:id/accept', requireAuth(db), requireRole(['OWNER', 'MANAGER']), (req, res) => {
+app.post('/api/evidence/:id/accept', requireAuth(db), requireRole(['OWNER', 'MANAGER']), denyLegacyWriteInR43, (req, res) => {
   const id = req.params.id;
   const now = new Date().toISOString();
 
@@ -1706,198 +1743,176 @@ app.post('/api/projects/:id/research-snapshots', requireAuth(db), requireRole(['
 
 app.get('/api/projects/:id/marketplace-workflow', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
   try {
-    const project = await requireCommerceProject(req);
-    const result = await marketplaceWorkflow.getWorkflowState(db, revisionScope(req.user), project.id);
-    res.json({ success: true, marketplace: project.marketplace, ...result });
+    await requireCommerceProject(req);
+    const state = await getArtifactState(db, revisionScope(req.user), req.params.id);
+    res.json({ success: true, ...state });
   } catch (error) { rejectRevisionStore(res, error); }
 });
 
-async function amazonBatchBuild(req) {
-  const project = await requireCommerceProject(req);
-  if (project.marketplace !== 'AMAZON') throw Object.assign(new Error('AMAZON_PROJECT_REQUIRED'), { code: 'AMAZON_PROJECT_REQUIRED' });
-  const body = requireExactDto(req.body, new Set(['xrayImportId','xrayImportIds','maxBatches','selectedAsins','expectedHeadArtifactId','idempotencyKey','changeReason']));
-  assertNoClientPolicyOverrides(body);
-  const preview = await marketplaceWorkflow.previewAmazonBatches(db, revisionScope(req.user), project.id,
-    body.xrayImportIds || body.xrayImportId, project.seed_phrase, { maxBatches: body.maxBatches, selectedAsins: body.selectedAsins,
-      screen: value => ipGuard.screenText(value) });
-  return { project, body, preview };
-}
-
-app.post('/api/projects/:id/amazon/asin-batches/preview', requireAuth(db), requireRole(['OWNER','MANAGER','SELLER']), async (req, res) => {
-  try { const { project, preview } = await amazonBatchBuild(req); res.json({ success: true, projectId: project.id, ...preview }); }
-  catch (error) { rejectRevisionStore(res, error); }
-});
-
-app.post('/api/projects/:id/amazon/asin-batches', requireAuth(db), requireRole(['OWNER','MANAGER','SELLER']), async (req, res) => {
-  try {
-    const { project, body, preview } = await amazonBatchBuild(req);
-    const result = await marketplaceWorkflow.appendArtifact(db, revisionScope(req.user), project.id, {
-      kind: 'AMAZON_ASIN_BATCH_PLAN', expectedHeadArtifactId: body.expectedHeadArtifactId,
-      idempotencyKey: body.idempotencyKey, changeReason: body.changeReason,
-      dependencies: preview.dependencies, payload: preview.payload, accounting: preview.accounting
-    });
-    res.status(result.duplicate ? 200 : 201).json({ success: true, projectId: project.id, ...result });
-  } catch (error) { rejectRevisionStore(res, error); }
-});
-
-app.post('/api/projects/:id/amazon/cerebro-bindings', requireAuth(db), requireRole(['OWNER','MANAGER','SELLER']), async (req, res) => {
+app.post('/api/projects/:id/amazon/asin-plan/preview', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
   try {
     const project = await requireCommerceProject(req);
-    const body = requireExactDto(req.body, new Set(['asinBatchArtifactId','batchNumber','cerebroImportId',
-      'expectedHeadArtifactId','idempotencyKey','changeReason'])); assertNoClientPolicyOverrides(body);
-    const built = await marketplaceWorkflow.buildCerebroBinding(db, revisionScope(req.user), project.id, body);
-    const result = await marketplaceWorkflow.appendArtifact(db, revisionScope(req.user), project.id, {
-      kind: 'AMAZON_CEREBRO_BINDING', expectedHeadArtifactId: body.expectedHeadArtifactId,
-      idempotencyKey: body.idempotencyKey, changeReason: body.changeReason, ...built
-    });
-    res.status(result.duplicate ? 200 : 201).json({ success: true, projectId: project.id, ...result });
+    const body = requireExactDto(req.body, new Set(['xrayImportIds', 'selectedAsins']));
+    assertNoClientPolicyOverrides(body);
+    const result = await previewAsinPlan(db, revisionScope(req.user), project.id,
+      { ...body, seedPhrase: project.seed_phrase }, value => ipGuard.screenText(value));
+    res.json({ success: true, ...result });
   } catch (error) { rejectRevisionStore(res, error); }
 });
 
-app.post('/api/projects/:id/amazon/master-keywords', requireAuth(db), requireRole(['OWNER','MANAGER','SELLER']), async (req, res) => {
+app.post('/api/projects/:id/amazon/asin-plan', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
   try {
     const project = await requireCommerceProject(req);
-    const body = requireExactDto(req.body, new Set(['researchSnapshotId','asinBatchArtifactId','cerebroBindingArtifactIds',
-      'expectedHeadArtifactId','idempotencyKey','changeReason'])); assertNoClientPolicyOverrides(body);
-    const research = await marketplaceWorkflow.researchSnapshot(db, revisionScope(req.user), project.id, body.researchSnapshotId);
-    const plan = await marketplaceWorkflow.getArtifact(db, revisionScope(req.user), project.id, body.asinBatchArtifactId, 'AMAZON_ASIN_BATCH_PLAN');
-    const bindingIds = Array.isArray(body.cerebroBindingArtifactIds) ? body.cerebroBindingArtifactIds : [];
-    if (!bindingIds.length) throw Object.assign(new Error('CEREBRO_BATCH_BINDING_REQUIRED'), { code: 'CEREBRO_BATCH_BINDING_REQUIRED' });
-    const bindings = await Promise.all(bindingIds.map(id => marketplaceWorkflow.getArtifact(db, revisionScope(req.user), project.id, id, 'AMAZON_CEREBRO_BINDING')));
-    if (bindings.some(binding => binding.dependencies.asinBatchArtifactId !== plan.id)) {
-      throw Object.assign(new Error('CEREBRO_BINDING_PLAN_MISMATCH'), { code: 'CEREBRO_BINDING_PLAN_MISMATCH' });
-    }
-    const boundBatchNumbers = new Set(bindings.map(binding => Number(binding.payload.batchNumber)));
-    const missingBatchNumbers = plan.payload.batches.map(batch => batch.batchNumber).filter(number => !boundBatchNumbers.has(number));
-    if (missingBatchNumbers.length) throw Object.assign(new Error('CEREBRO_REQUIRED_FOR_EACH_ASIN_BATCH'), {
-      code: 'CEREBRO_REQUIRED_FOR_EACH_ASIN_BATCH', status: 409, details: { missingBatchNumbers }
-    });
-    const snapshotImportIds = new Set(research.importManifest.map(item => Number(item.id)));
-    const requiredImportIds = [
-      ...(Array.isArray(plan.dependencies.xrayImports)
-        ? plan.dependencies.xrayImports.map(item => Number(item.id))
-        : [Number(plan.dependencies.xrayImportId)]),
-      ...bindings.map(binding => Number(binding.dependencies.cerebroImportId))];
-    const missingImportIds = requiredImportIds.filter(id => !snapshotImportIds.has(id));
-    if (missingImportIds.length) throw Object.assign(new Error('MASTER_KEYWORD_RESEARCH_IMPORT_MISMATCH'), {
-      code: 'MASTER_KEYWORD_RESEARCH_IMPORT_MISMATCH', status: 409, details: { missingImportIds }
-    });
-    const built = marketplaceWorkflow.amazonMasterKeywords(research);
-    const result = await marketplaceWorkflow.appendArtifact(db, revisionScope(req.user), project.id, {
-      kind: 'AMAZON_MASTER_KEYWORDS', expectedHeadArtifactId: body.expectedHeadArtifactId,
-      idempotencyKey: body.idempotencyKey, changeReason: body.changeReason,
-      dependencies: { researchSnapshotId: research.id, researchSnapshotHash: research.snapshotHash,
-        asinBatchArtifactId: plan.id, asinBatchArtifactHash: plan.artifactHash,
-        cerebroBindings: bindings.map(binding => ({ id: binding.id, artifactHash: binding.artifactHash,
-          cerebroImportId: binding.dependencies.cerebroImportId, batchNumber: binding.payload.batchNumber })) },
-      ...built
-    });
-    res.status(result.duplicate ? 200 : 201).json({ success: true, projectId: project.id, ...result });
+    const body = requireExactDto(req.body, new Set(['xrayImportIds', 'selectedAsins', 'expectedHeadArtifactId',
+      'idempotencyKey', 'changeReason']));
+    assertNoClientPolicyOverrides(body);
+    const result = await saveAsinPlan(db, revisionScope(req.user), project.id,
+      { ...body, seedPhrase: project.seed_phrase }, value => ipGuard.screenText(value));
+    res.status(result.duplicate ? 200 : 201).json({ success: true, ...result });
   } catch (error) { rejectRevisionStore(res, error); }
 });
 
-async function etsyWinnerBuild(req) {
-  const project = await requireCommerceProject(req);
-  if (project.marketplace !== 'ETSY') throw Object.assign(new Error('ETSY_PROJECT_REQUIRED'), { code: 'ETSY_PROJECT_REQUIRED' });
-  const body = requireExactDto(req.body, new Set(['researchSnapshotId','winnerCount','selectedEntityKeys','expectedHeadArtifactId','idempotencyKey','changeReason']));
-  assertNoClientPolicyOverrides(body);
-  const research = await marketplaceWorkflow.researchSnapshot(db, revisionScope(req.user), project.id, body.researchSnapshotId);
-  const built = marketplaceWorkflow.buildEtsyWinners(research, body.winnerCount, body.selectedEntityKeys);
-  return { project, body, research, built };
-}
-
-app.post('/api/projects/:id/etsy/winners/preview', requireAuth(db), requireRole(['OWNER','MANAGER','SELLER']), async (req, res) => {
-  try { const { project, research, built } = await etsyWinnerBuild(req); res.json({ success: true, zeroWrite: true,
-    projectId: project.id, dependencies: { researchSnapshotId: research.id, researchSnapshotHash: research.snapshotHash }, ...built }); }
-  catch (error) { rejectRevisionStore(res, error); }
-});
-
-app.post('/api/projects/:id/etsy/winners', requireAuth(db), requireRole(['OWNER','MANAGER','SELLER']), async (req, res) => {
-  try {
-    const { project, body, research, built } = await etsyWinnerBuild(req);
-    const result = await marketplaceWorkflow.appendArtifact(db, revisionScope(req.user), project.id, {
-      kind: 'ETSY_WINNER_SET', expectedHeadArtifactId: body.expectedHeadArtifactId,
-      idempotencyKey: body.idempotencyKey, changeReason: body.changeReason,
-      dependencies: { researchSnapshotId: research.id, researchSnapshotHash: research.snapshotHash }, ...built
-    });
-    res.status(result.duplicate ? 200 : 201).json({ success: true, projectId: project.id, ...result });
-  } catch (error) { rejectRevisionStore(res, error); }
-});
-
-app.post('/api/projects/:id/etsy/patterns', requireAuth(db), requireRole(['OWNER','MANAGER','SELLER']), async (req, res) => {
+app.post('/api/projects/:id/amazon/master-keywords/preview', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
   try {
     const project = await requireCommerceProject(req);
-    const body = requireExactDto(req.body, new Set(['winnerSetArtifactId','expectedHeadArtifactId','idempotencyKey','changeReason'])); assertNoClientPolicyOverrides(body);
-    const winners = await marketplaceWorkflow.getArtifact(db, revisionScope(req.user), project.id, body.winnerSetArtifactId, 'ETSY_WINNER_SET');
-    const built = marketplaceWorkflow.buildEtsyPatterns(winners);
-    const result = await marketplaceWorkflow.appendArtifact(db, revisionScope(req.user), project.id, {
-      kind: 'ETSY_PATTERN_SNAPSHOT', expectedHeadArtifactId: body.expectedHeadArtifactId,
-      idempotencyKey: body.idempotencyKey, changeReason: body.changeReason, ...built
-    });
-    res.status(result.duplicate ? 200 : 201).json({ success: true, projectId: project.id, ...result });
+    const body = requireExactDto(req.body, new Set(['researchSnapshotId', 'asinPlanArtifactId', 'decisions']));
+    assertNoClientPolicyOverrides(body);
+    const result = await previewMasterKeywords(db, revisionScope(req.user), project.id,
+      { ...body, seedPhrase: project.seed_phrase });
+    res.json({ success: true, ...result });
   } catch (error) { rejectRevisionStore(res, error); }
 });
 
-app.post('/api/projects/:id/etsy/master-keywords', requireAuth(db), requireRole(['OWNER','MANAGER','SELLER']), async (req, res) => {
+app.post('/api/projects/:id/amazon/master-keywords', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
   try {
     const project = await requireCommerceProject(req);
-    const body = requireExactDto(req.body, new Set(['researchSnapshotId','winnerSetArtifactId','patternArtifactId',
-      'expectedHeadArtifactId','idempotencyKey','changeReason'])); assertNoClientPolicyOverrides(body);
-    const research = await marketplaceWorkflow.researchSnapshot(db, revisionScope(req.user), project.id, body.researchSnapshotId);
-    const winners = await marketplaceWorkflow.getArtifact(db, revisionScope(req.user), project.id, body.winnerSetArtifactId, 'ETSY_WINNER_SET');
-    const patterns = await marketplaceWorkflow.getArtifact(db, revisionScope(req.user), project.id, body.patternArtifactId, 'ETSY_PATTERN_SNAPSHOT');
-    if (Number(winners.dependencies.researchSnapshotId) !== research.id) throw Object.assign(
-      new Error('ETSY_WINNER_RESEARCH_MISMATCH'), { code: 'ETSY_WINNER_RESEARCH_MISMATCH', status: 409 });
-    if (Number(patterns.dependencies.winnerSetArtifactId) !== winners.id) throw Object.assign(
-      new Error('ETSY_PATTERN_WINNER_MISMATCH'), { code: 'ETSY_PATTERN_WINNER_MISMATCH', status: 409 });
-    const built = marketplaceWorkflow.buildEtsyMaster(research, winners, patterns);
-    const result = await marketplaceWorkflow.appendArtifact(db, revisionScope(req.user), project.id, {
-      kind: 'ETSY_MASTER_KEYWORDS', expectedHeadArtifactId: body.expectedHeadArtifactId,
-      idempotencyKey: body.idempotencyKey, changeReason: body.changeReason, ...built
-    });
-    res.status(result.duplicate ? 200 : 201).json({ success: true, projectId: project.id, ...result });
+    const body = requireExactDto(req.body, new Set(['researchSnapshotId', 'asinPlanArtifactId', 'decisions',
+      'expectedHeadArtifactId', 'idempotencyKey', 'changeReason']));
+    assertNoClientPolicyOverrides(body);
+    const result = await saveMasterKeywords(db, revisionScope(req.user), project.id,
+      { ...body, seedPhrase: project.seed_phrase });
+    res.status(result.duplicate ? 200 : 201).json({ success: true, ...result });
   } catch (error) { rejectRevisionStore(res, error); }
 });
 
-async function intelligenceConfiguration(project, body, user) {
+app.post('/api/projects/:id/etsy/winners/preview', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    const project = await requireCommerceProject(req);
+    const body = requireExactDto(req.body, new Set(['researchSnapshotId', 'selectedEntityIds']));
+    assertNoClientPolicyOverrides(body);
+    const result = await previewEtsyWinners(db, revisionScope(req.user), project.id,
+      { ...body, seedPhrase: project.seed_phrase });
+    res.json({ success: true, ...result });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+app.post('/api/projects/:id/etsy/winners', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    const project = await requireCommerceProject(req);
+    const body = requireExactDto(req.body, new Set(['researchSnapshotId', 'selectedEntityIds', 'expectedHeadArtifactId',
+      'idempotencyKey', 'changeReason']));
+    assertNoClientPolicyOverrides(body);
+    const result = await saveEtsyWinners(db, revisionScope(req.user), project.id,
+      { ...body, seedPhrase: project.seed_phrase });
+    res.status(result.duplicate ? 200 : 201).json({ success: true, ...result });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+app.post('/api/projects/:id/etsy/patterns/preview', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    const project = await requireCommerceProject(req);
+    const body = requireExactDto(req.body, new Set(['winnerArtifactId']));
+    assertNoClientPolicyOverrides(body);
+    const result = await previewEtsyPatterns(db, revisionScope(req.user), project.id, body);
+    res.json({ success: true, ...result });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+app.post('/api/projects/:id/etsy/patterns', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    const project = await requireCommerceProject(req);
+    const body = requireExactDto(req.body, new Set(['winnerArtifactId', 'expectedHeadArtifactId', 'idempotencyKey', 'changeReason']));
+    assertNoClientPolicyOverrides(body);
+    const result = await saveEtsyPatterns(db, revisionScope(req.user), project.id, body);
+    res.status(result.duplicate ? 200 : 201).json({ success: true, ...result });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+app.post('/api/projects/:id/etsy/patterns/ytrends', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    const project = await requireCommerceProject(req);
+    const body = requireExactDto(req.body, new Set(['patternArtifactId', 'idempotencyKey', 'changeReason']));
+    assertNoClientPolicyOverrides(body);
+    const result = await supplementPatternsWithYtrends(db, revisionScope(req.user), project.id, body,
+      seedPhrase => ytrendsMcp.exploreNiche(seedPhrase));
+    res.status(result.duplicate ? 200 : 201).json({ success: true, ...result });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+app.post('/api/projects/:id/etsy/master-keywords/preview', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    const project = await requireCommerceProject(req);
+    const body = requireExactDto(req.body, new Set(['patternArtifactId', 'decisions']));
+    assertNoClientPolicyOverrides(body);
+    const result = await previewEtsyMasterKeywords(db, revisionScope(req.user), project.id, body);
+    res.json({ success: true, ...result });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+app.post('/api/projects/:id/etsy/master-keywords', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    const project = await requireCommerceProject(req);
+    const body = requireExactDto(req.body, new Set(['patternArtifactId', 'decisions', 'expectedHeadArtifactId',
+      'idempotencyKey', 'changeReason']));
+    assertNoClientPolicyOverrides(body);
+    const result = await saveEtsyMasterKeywords(db, revisionScope(req.user), project.id, body);
+    res.status(result.duplicate ? 200 : 201).json({ success: true, ...result });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+function intelligenceConfiguration(project, body, masterKeywordArtifact = null) {
   const requested = String(body.listingLanguage || 'AUTO').trim().toUpperCase();
   if (!['AUTO','EN','ES'].includes(requested)) throw Object.assign(new Error('LISTING_LANGUAGE_UNSUPPORTED'), {
     code: 'LISTING_LANGUAGE_UNSUPPORTED', status: 400
   });
-  const artifactId = Number(body.masterKeywordArtifactId);
-  if (!Number.isInteger(artifactId) || artifactId < 1) throw Object.assign(new Error('MASTER_KEYWORD_SNAPSHOT_REQUIRED'), {
-    code: 'MASTER_KEYWORD_SNAPSHOT_REQUIRED', status: 409
-  });
-  const kind = project.marketplace === 'AMAZON' ? 'AMAZON_MASTER_KEYWORDS' : 'ETSY_MASTER_KEYWORDS';
-  const master = await marketplaceWorkflow.getArtifact(db, revisionScope(user), project.id, artifactId, kind);
-  if (Number(master.dependencies.researchSnapshotId) !== Number(body.researchSnapshotId)) {
-    throw Object.assign(new Error('MASTER_KEYWORD_RESEARCH_SNAPSHOT_MISMATCH'), {
-      code: 'MASTER_KEYWORD_RESEARCH_SNAPSHOT_MISMATCH', status: 409
-    });
-  }
-  const configuration = Object.freeze({ seedPhrase: String(project.seed_phrase || '').trim(),
-    masterKeywordArtifactId: master.id, masterKeywordArtifactHash: master.artifactHash,
-    masterKeywordCount: master.accounting.masterKeywordCount,
+  return Object.freeze({ seedPhrase: String(project.seed_phrase || '').trim(),
+    ...(masterKeywordArtifact ? { masterKeywordArtifactId: masterKeywordArtifact.id,
+      masterKeywordArtifactHash: masterKeywordArtifact.artifactHash } : {}),
     ...(requested === 'AUTO' ? {} : { listingLanguage: requested }) });
-  return Object.freeze({ configuration, master });
 }
 
-function intelligenceAdapterFor(project, master) {
+async function selectedMasterKeywordArtifact(project, scope, artifactIdInput) {
+  const artifactId = Number(artifactIdInput);
+  if (!Number.isInteger(artifactId) || artifactId < 1) throw Object.assign(
+    new Error('MASTER_KEYWORD_ARTIFACT_REQUIRED'), { code: 'MASTER_KEYWORD_ARTIFACT_REQUIRED', status: 409 });
+  const kind = project.marketplace === 'AMAZON' ? 'AMAZON_MASTER_KEYWORDS' : 'ETSY_MASTER_KEYWORDS';
+  const artifact = await getArtifact(db, scope, project.id, artifactId, kind);
+  const state = await getArtifactState(db, scope, project.id);
+  if (state.heads[kind]?.id !== artifact.id) throw Object.assign(
+    new Error('STALE_MASTER_KEYWORD_ARTIFACT'), { code: 'STALE_MASTER_KEYWORD_ARTIFACT', status: 409 });
+  return artifact;
+}
+
+function intelligenceAdapterFor(project, masterKeywordArtifact = null, beforeCommit = null) {
   const adapter = project.marketplace === 'AMAZON' ? amazonIntelligenceAdapter : etsyIntelligenceAdapter;
-  return Object.freeze({ buildIntelligence: input => adapter.buildIntelligence({ ...input,
-    masterKeywords: master.payload.keywords }) });
+  return Object.freeze({ ...adapter,
+    buildIntelligence: context => adapter.buildIntelligence(Object.freeze({ ...context, masterKeywordArtifact })),
+    ...(beforeCommit ? { beforeCommit } : {}) });
 }
 
 app.post('/api/projects/:id/intelligence-snapshots/preview', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
   try {
     const project = await requireCommerceProject(req);
-    const body = requireExactDto(req.body, new Set(['researchSnapshotId', 'productTruthRevisionId', 'masterKeywordArtifactId', 'listingLanguage']));
+    const body = requireExactDto(req.body, new Set(['researchSnapshotId', 'productTruthRevisionId', 'listingLanguage',
+      'masterKeywordArtifactId']));
     assertNoClientPolicyOverrides(body);
-    const resolved = await intelligenceConfiguration(project, body, req.user);
+    const scope = revisionScope(req.user);
+    const masterKeywordArtifact = await selectedMasterKeywordArtifact(project, scope, body.masterKeywordArtifactId);
     const result = await previewIntelligence(db, revisionScope(req.user), project.id, {
       researchSnapshotId: body.researchSnapshotId, productTruthRevisionId: body.productTruthRevisionId,
-      configuration: resolved.configuration
-    }, intelligenceAdapterFor(project, resolved.master));
+      configuration: intelligenceConfiguration(project, body, masterKeywordArtifact)
+    }, intelligenceAdapterFor(project, masterKeywordArtifact));
+    if (masterKeywordArtifact) await selectedMasterKeywordArtifact(project, scope, masterKeywordArtifact.id);
     res.json({ success: true, ...result });
   } catch (error) { rejectRevisionStore(res, error); }
 });
@@ -1906,16 +1921,20 @@ app.post('/api/projects/:id/intelligence-snapshots', requireAuth(db), requireRol
   try {
     const project = await requireCommerceProject(req);
     const body = requireExactDto(req.body, new Set(['expectedHeadIntelligenceSnapshotId', 'researchSnapshotId',
-      'productTruthRevisionId', 'masterKeywordArtifactId', 'listingLanguage', 'idempotencyKey', 'changeReason']));
+      'productTruthRevisionId', 'listingLanguage', 'masterKeywordArtifactId', 'idempotencyKey', 'changeReason']));
     assertNoClientPolicyOverrides(body);
-    const resolved = await intelligenceConfiguration(project, body, req.user);
-    const result = await appendIntelligenceSnapshot(db, revisionScope(req.user), project.id, {
+    const scope = revisionScope(req.user);
+    const masterKeywordArtifact = await selectedMasterKeywordArtifact(project, scope, body.masterKeywordArtifactId);
+    const assertMasterCurrent = masterKeywordArtifact
+      ? async () => { await selectedMasterKeywordArtifact(project, scope, masterKeywordArtifact.id); }
+      : null;
+    const result = await appendIntelligenceSnapshot(db, scope, project.id, {
       expectedHeadIntelligenceSnapshotId: body.expectedHeadIntelligenceSnapshotId,
       researchSnapshotId: body.researchSnapshotId, productTruthRevisionId: body.productTruthRevisionId,
       idempotencyKey: body.idempotencyKey, changeReason: body.changeReason,
-      configuration: resolved.configuration
-    }, intelligenceAdapterFor(project, resolved.master));
-    const persisted = await getIntelligenceSnapshot(db, revisionScope(req.user), project.id, result.intelligenceSnapshotId);
+      configuration: intelligenceConfiguration(project, body, masterKeywordArtifact)
+    }, intelligenceAdapterFor(project, masterKeywordArtifact, assertMasterCurrent));
+    const persisted = await getIntelligenceSnapshot(db, scope, project.id, result.intelligenceSnapshotId);
     res.status(result.revisionNumber === 1 ? 201 : 200).json({ success: true, ...result,
       output: persisted.output, accounting: persisted.accounting, configuration: persisted.configuration });
   } catch (error) { rejectRevisionStore(res, error); }
@@ -1989,6 +2008,18 @@ app.get('/api/projects/:id/listings', requireAuth(db), requireRole(['OWNER', 'MA
         AND q.tenant_id=l.tenant_id AND q.workspace_id=l.workspace_id AND q.marketplace=l.marketplace ORDER BY q.id DESC LIMIT 1) AS submissionPackageHash,
       (SELECT q.notes FROM canonical_submission_requests q WHERE q.listing_id=l.id AND q.listing_revision_id=l.head_revision_id
         AND q.tenant_id=l.tenant_id AND q.workspace_id=l.workspace_id AND q.marketplace=l.marketplace ORDER BY q.id DESC LIMIT 1) AS submissionRequestNotes,
+      (SELECT a.id FROM canonical_submission_authorizations a WHERE a.listing_id=l.id AND a.listing_revision_id=l.head_revision_id
+        AND a.tenant_id=l.tenant_id AND a.workspace_id=l.workspace_id AND a.marketplace=l.marketplace LIMIT 1) AS submissionAuthorizationId,
+      (SELECT a.notes FROM canonical_submission_authorizations a WHERE a.listing_id=l.id AND a.listing_revision_id=l.head_revision_id
+        AND a.tenant_id=l.tenant_id AND a.workspace_id=l.workspace_id AND a.marketplace=l.marketplace LIMIT 1) AS submissionAuthorizationNotes,
+      (SELECT e.id FROM canonical_submission_exports e WHERE e.listing_id=l.id AND e.listing_revision_id=l.head_revision_id
+        AND e.tenant_id=l.tenant_id AND e.workspace_id=l.workspace_id AND e.marketplace=l.marketplace LIMIT 1) AS submissionExportId,
+      (SELECT e.export_hash FROM canonical_submission_exports e WHERE e.listing_id=l.id AND e.listing_revision_id=l.head_revision_id
+        AND e.tenant_id=l.tenant_id AND e.workspace_id=l.workspace_id AND e.marketplace=l.marketplace LIMIT 1) AS submissionExportHash,
+      (SELECT r.reported_at FROM canonical_operator_submission_reports r WHERE r.listing_id=l.id AND r.listing_revision_id=l.head_revision_id
+        AND r.tenant_id=l.tenant_id AND r.workspace_id=l.workspace_id AND r.marketplace=l.marketplace LIMIT 1) AS operatorReportedAt,
+      (SELECT r.external_reference FROM canonical_operator_submission_reports r WHERE r.listing_id=l.id AND r.listing_revision_id=l.head_revision_id
+        AND r.tenant_id=l.tenant_id AND r.workspace_id=l.workspace_id AND r.marketplace=l.marketplace LIMIT 1) AS operatorExternalReference,
       (SELECT h.submitted_at FROM canonical_submission_handoffs h WHERE h.listing_id=l.id AND h.listing_revision_id=l.head_revision_id
         AND h.tenant_id=l.tenant_id AND h.workspace_id=l.workspace_id AND h.marketplace=l.marketplace LIMIT 1) AS submittedAt,
       (SELECT h.external_reference FROM canonical_submission_handoffs h WHERE h.listing_id=l.id AND h.listing_revision_id=l.head_revision_id
@@ -2065,7 +2096,46 @@ app.post('/api/listings/:id/submission-requests', requireAuth(db), requireRole([
   } catch (error) { rejectRevisionStore(res, error); }
 });
 
-app.post('/api/listings/:id/submission-handoffs', requireAuth(db), requireRole(['OWNER']), async (req, res) => {
+const canonicalApprovalHooks = (db, scope) => ({
+  assertDependenciesCurrent: listing => assertCanonicalDependenciesCurrent(db, scope, listing.project_id, listing.dependencies),
+  assertApprovalEligible: async listing => {
+    const validated = await validateCanonicalDraft(db, scope, listing.project_id,
+      listing.dependencies.productTruthRevisionId, listing.content, listing.dependencies.intelligenceSnapshotId, 'APPROVAL');
+    if (hashBytes(canonicalJson(validated.content)) !== listing.content_hash) {
+      throw Object.assign(new Error('REVISION_VALIDATION_DRIFT'), { code: 'REVISION_VALIDATION_DRIFT', status: 409 });
+    }
+  }
+});
+
+app.post('/api/listings/:id/submission-authorizations', requireAuth(db), requireRole(['OWNER']), async (req, res) => {
+  try {
+    const body = requireExactDto(req.body, new Set(['submissionRequestId', 'notes', 'idempotencyKey']));
+    assertNoClientPolicyOverrides(body); const scope = revisionScope(req.user);
+    const result = await authorizeCanonicalSubmission(db, scope, req.params.id, body, canonicalApprovalHooks(db, scope));
+    res.status(201).json({ success: true, ...result });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+app.post('/api/listings/:id/submission-exports', requireAuth(db), requireRole(['SELLER']), async (req, res) => {
+  try {
+    const body = requireExactDto(req.body, new Set(['submissionAuthorizationId', 'idempotencyKey']));
+    assertNoClientPolicyOverrides(body); const scope = revisionScope(req.user);
+    const result = await exportCanonicalSubmission(db, scope, req.params.id, body, canonicalApprovalHooks(db, scope));
+    res.status(201).json({ success: true, ...result });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+app.post('/api/listings/:id/operator-submission-reports', requireAuth(db), requireRole(['SELLER']), async (req, res) => {
+  try {
+    const body = requireExactDto(req.body, new Set(['submissionAuthorizationId', 'submissionExportId',
+      'manualSubmissionConfirmed', 'externalReference', 'notes', 'idempotencyKey']));
+    assertNoClientPolicyOverrides(body); const scope = revisionScope(req.user);
+    const result = await reportCanonicalOperatorSubmission(db, scope, req.params.id, body, canonicalApprovalHooks(db, scope));
+    res.status(201).json({ success: true, ...result });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+app.post('/api/listings/:id/submission-handoffs', requireAuth(db), requireRole(['OWNER']), denyRetiredSubmissionHandoff, async (req, res) => {
   try {
     const body = requireExactDto(req.body, new Set(['submissionRequestId', 'confirmedExternalSubmission', 'externalReference', 'notes', 'idempotencyKey']));
     assertNoClientPolicyOverrides(body);
@@ -2154,7 +2224,7 @@ app.get('/api/listings/:id/revisions/:revisionId', requireAuth(db), requireRole(
 const ALLOWED_PROJECT_TRANSITIONS = projectStates.transitions;
 
 // PATCH /api/projects/:id/transition - Server-authoritative state transition
-app.patch('/api/projects/:id/transition', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
+app.patch('/api/projects/:id/transition', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), denyLegacyWriteInR43, (req, res) => {
   const projectId = req.params.id;
   const { targetState, productTruthNotes } = req.body || {};
 
@@ -2498,7 +2568,7 @@ app.post('/api/login', (req, res) => {
 
 
 // Create a new listing (DRAFT/NEEDS_QA or IP_RISK_BLOCKED)
-app.post('/api/listings', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
+app.post('/api/listings', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), denyLegacyWriteInR43, (req, res) => {
   const { amazonTitle, etsyTitle, categoryName, projectId, stage, payload = {} } = req.body || {};
   
   // Stage 1/Stage 2 Invariant: Cannot generate listings during intake, research, DNA, or MKL freezing
@@ -2857,7 +2927,7 @@ app.put('/api/listings/:id/product-truth', requireAuth(db), requireRole(['OWNER'
 });
 
 // Approve a listing using Canonical Publish Gate (Fail-Closed Gate Authority - Protected)
-app.patch('/api/listings/:id/approve', requireAuth(db), requireRole(['OWNER', 'MANAGER']), (req, res) => {
+app.patch('/api/listings/:id/approve', requireAuth(db), requireRole(['OWNER', 'MANAGER']), denyLegacyWriteInR43, (req, res) => {
   const { id } = req.params;
 
   const { expectedVersion, productTruthNotes } = req.body || {};
@@ -3492,7 +3562,7 @@ app.post('/api/settings/llm', requireAuth(db), requireRole(['OWNER']), (req, res
 });
 
 // API: Learning Box — Analyze Amazon/Etsy URL or Competitor text & Extract Structural DNA
-app.post('/api/learning/analyze', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+app.post('/api/learning/analyze', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), denyLegacyWriteInR43, async (req, res) => {
   const { url = '', rawText = '', category = 'Custom Gift' } = req.body;
   // Marketplace is server-derived from the authenticated session, never
   // trusted from the client body (GPT PR-5 review finding P0-B1).
@@ -3659,7 +3729,7 @@ app.get('/api/learning/templates', requireAuth(db), requireRole(['OWNER', 'MANAG
 
 
 // API: Delete learned template (workspace-scoped — IDOR-safe 404 for out-of-scope IDs)
-app.delete('/api/learning/templates/:id', requireAuth(db), requireRole(['OWNER', 'MANAGER']), (req, res) => {
+app.delete('/api/learning/templates/:id', requireAuth(db), requireRole(['OWNER', 'MANAGER']), denyLegacyWriteInR43, (req, res) => {
   const { id } = req.params;
   db.run(
     "DELETE FROM learned_templates WHERE id = ? AND tenant_id = ? AND workspace_id = ? AND marketplace = ?",
@@ -3730,7 +3800,7 @@ app.post('/api/etsy/scan-search', requireAuth(db), requireRole(['OWNER', 'MANAGE
 });
 
 // API: ETSY Evidence Batch Learn — SEO recommendation only, not Product Truth.
-app.post('/api/etsy/batch-learn', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+app.post('/api/etsy/batch-learn', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), denyLegacyWriteInR43, async (req, res) => {
   if (req.user.marketplace !== 'ETSY') {
     return res.status(403).json({ success: false, error: 'MARKETPLACE_MISMATCH', message: 'This endpoint requires an Etsy workspace session.' });
   }
@@ -3989,7 +4059,7 @@ app.post('/api/etsy/feed-search-results-file', requireAuth(db), requireRole(['OW
 });
 
 // POST /api/research/smart-pull - Project-bound market evidence analysis.
-app.post('/api/research/smart-pull', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+app.post('/api/research/smart-pull', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), denyLegacyWriteInR43, async (req, res) => {
   const { query, unitCost, projectId } = req.body || {};
   const rawInput = typeof query === 'string' ? query.trim() : '';
   if (!rawInput) {
@@ -4146,7 +4216,7 @@ app.post('/api/research/smart-pull', requireAuth(db), requireRole(['OWNER', 'MAN
 });
 
 // API: Amazon Quick Draft (Works directly from Seed Phrase, 10 ASINs, or Cerebro)
-app.post('/api/amazon/quick-draft', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+app.post('/api/amazon/quick-draft', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), denyLegacyWriteInR43, async (req, res) => {
   if (req.user.marketplace !== 'AMAZON') {
     return res.status(403).json({ success: false, error: 'MARKETPLACE_MISMATCH' });
   }
@@ -4787,8 +4857,8 @@ const handleReportUpload = async (req, res) => {
   }
 };
 
-app.post('/api/upload-h10', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), upload.any(), handleReportUpload);
-app.post('/api/upload-trends', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), upload.any(), handleReportUpload);
+app.post('/api/upload-h10', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), denyLegacyWriteInR43, upload.any(), handleReportUpload);
+app.post('/api/upload-trends', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), denyLegacyWriteInR43, upload.any(), handleReportUpload);
 
 // API: Batch a pasted ASIN list into Cerebro-ready groups of 10 (AsinBatcherWidget's
 // manual-paste flow — separate from /api/upload-h10's file-upload flow)
@@ -4882,7 +4952,7 @@ app.get('/api/trends', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER
 });
 
 // API: Instantly Draft listing for a specific trend using Multi-LLM Gateway (Gemini / GPT-4o / Claude) + Few-Shot Learning
-app.post('/api/trends/:id/draft', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+app.post('/api/trends/:id/draft', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), denyLegacyWriteInR43, async (req, res) => {
   const { id } = req.params;
   const { projectId } = req.body || {};
   try { assertNoClientPolicyOverrides(req.body || {}); } catch (error) { return rejectListingGuard(res, error); }

@@ -15,6 +15,8 @@ assert.ok(setup.includes('Tạo project'), 'Project setup must expose a visible 
 assert.ok(setup.includes('canonicalProjectClassification'), 'Project setup must bind a canonical product classification');
 assert.ok(setup.includes('aria-label="Listing locale"'), 'Project setup must require an explicit listing locale');
 assert.ok(setup.includes('productFamilyVersion'), 'Project setup must send the full policy context');
+assert.ok(setup.includes('project-login-required') && setup.includes('invalidateSession'),
+  'Project setup must fail closed to shared login when the session is absent or expires');
 assert.ok(evidence.includes("/api/evidence?projectId="), 'Evidence gate must load project-scoped evidence');
 assert.ok(evidence.includes('/accept'), 'Evidence gate must expose the server acceptance action');
 assert.ok(evidence.includes("'RESEARCH_ACCEPTED'"), 'Evidence gate must offer the canonical research transition');

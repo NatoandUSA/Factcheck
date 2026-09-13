@@ -5,7 +5,8 @@ const AuthContext = createContext({
   authLoading: true,
   login: async () => {},
   logout: async () => {},
-  switchWorkspace: async () => {}
+  switchWorkspace: async () => {},
+  invalidateSession: () => {}
 });
 
 export const useAuth = () => {
@@ -15,7 +16,8 @@ export const useAuth = () => {
     authLoading: true,
     login: async () => {},
     logout: async () => {},
-    switchWorkspace: async () => {}
+    switchWorkspace: async () => {},
+    invalidateSession: () => {}
   };
 };
 
@@ -73,8 +75,13 @@ export const AuthProvider = ({ children }) => {
     return data.user;
   };
 
+  // A backend restart, explicit revocation or TTL expiry can invalidate a
+  // cookie while React still holds the previously authenticated user. Any
+  // authenticated route that receives 401 calls this before offering login.
+  const invalidateSession = () => setUser(null);
+
   return (
-    <AuthContext.Provider value={{ user, authLoading, login, logout, switchWorkspace }}>
+    <AuthContext.Provider value={{ user, authLoading, login, logout, switchWorkspace, invalidateSession }}>
       {children}
     </AuthContext.Provider>
   );

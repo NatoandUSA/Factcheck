@@ -102,7 +102,8 @@ function sanitizeBackendKeywords(listing, truth) {
     });
     if (Array.isArray(sanitized.etsyTagExplanations)) {
       const retained = new Set(sanitized.etsyTags.map(tag => String(tag).trim().toLowerCase()));
-      sanitized.etsyTagExplanations = sanitized.etsyTagExplanations.filter(item => retained.has(String(item?.tag || '').trim().toLowerCase()));
+      sanitized.etsyTagExplanations = sanitized.etsyTagExplanations.filter(item => retained.has(
+        String(item?.tag ?? item?.value ?? '').trim().toLowerCase()));
     }
   }
 

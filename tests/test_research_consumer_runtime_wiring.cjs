@@ -56,6 +56,7 @@ process.env.NODE_ENV = 'test';
 
   const { default: MasterKeywordTable } =
     await vite.ssrLoadModule('/src/components/MasterKeywordTable.jsx');
+  const { AuthProvider } = await vite.ssrLoadModule('/src/context/AuthContext.jsx');
   let keywordRequests = [];
   let pending = new Map();
   global.fetch = url => {
@@ -120,6 +121,9 @@ process.env.NODE_ENV = 'test';
     global.fetch = async (url, options = {}) => {
       const text = String(url);
       urls.push(text);
+      if (text === '/api/auth/me') {
+        return response({ user: { userId: 7, role: 'SELLER', workspaceId: 11, marketplace } });
+      }
       if (text === '/api/projects' && options.method === 'POST') {
         created = true;
         return response({ success: true, projectId });
@@ -154,11 +158,13 @@ process.env.NODE_ENV = 'test';
     };
     document.getElementById('root').replaceChildren();
     root = createRoot(document.getElementById('root'));
-    await act(async () => root.render(React.createElement(Component, {
-      onShowToast: (message, level) => {
-        if (level === 'error' || String(message).includes('Không thể')) errors.push(message);
-      }
-    })));
+    await act(async () => root.render(React.createElement(AuthProvider, null,
+      React.createElement(Component, {
+        onShowToast: (message, level) => {
+          if (level === 'error' || String(message).includes('Không thể')) errors.push(message);
+        }
+      }))));
+    for (let index = 0; index < 3; index += 1) await flush();
     const name = document.querySelector('input[aria-label="Tên project"]');
     const seed = document.querySelector('input[aria-label="Seed phrase project"]');
     check(Boolean(name && seed), `${marketplace} outer workspace must mount ProjectSetupCard`);

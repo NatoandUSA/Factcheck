@@ -12,8 +12,10 @@ const LISTING_REVISION_VALIDATION_ACCOUNTING_MIGRATION = '012_listing_revision_v
 const COMMERCE_SNAPSHOT_MIGRATION = '013_commerce_research_intelligence_snapshots';
 const CANONICAL_REVIEW_HANDOFF_MIGRATION = '014_canonical_review_submission_handoff';
 const OWNER_SUBMISSION_AUTHORIZATION_MIGRATION = '015_owner_submission_authorization';
-const MARKETPLACE_RESEARCH_WORKFLOW_MIGRATION = '016_marketplace_research_workflow_artifacts';
+const COMMERCE_WORKFLOW_ARTIFACT_MIGRATION = '2026-09-12_commerce_workflow_artifacts_v2_upgrade';
+const OPERATOR_REPORTED_SUBMISSION_MIGRATION = '017_operator_reported_submission_lifecycle';
 const crypto = require('node:crypto');
+const { canonicalJson, hashBytes } = require('../revisionStore');
 
 function run(db, sql, params = []) {
   return new Promise((resolve, reject) => {
@@ -419,36 +421,6 @@ async function migrateCommerceSnapshots(db) {
   }
 }
 
-async function migrateMarketplaceResearchWorkflow(db) {
-  await run(db, `CREATE TABLE IF NOT EXISTS commerce_workflow_artifacts (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    tenant_id TEXT NOT NULL, workspace_id INTEGER NOT NULL,
-    marketplace TEXT NOT NULL CHECK(marketplace IN ('AMAZON','ETSY')),
-    project_id INTEGER NOT NULL REFERENCES research_projects(id),
-    kind TEXT NOT NULL CHECK(kind IN (
-      'AMAZON_ASIN_BATCH_PLAN','AMAZON_CEREBRO_BINDING','AMAZON_MASTER_KEYWORDS',
-      'ETSY_WINNER_SET','ETSY_PATTERN_SNAPSHOT','ETSY_MASTER_KEYWORDS')),
-    revision_number INTEGER NOT NULL,
-    parent_revision_id INTEGER REFERENCES commerce_workflow_artifacts(id),
-    dependency_manifest_json TEXT NOT NULL,
-    dependency_manifest_hash TEXT NOT NULL CHECK(length(dependency_manifest_hash)=64),
-    payload_json TEXT NOT NULL, payload_hash TEXT NOT NULL CHECK(length(payload_hash)=64),
-    accounting_json TEXT NOT NULL, accounting_hash TEXT NOT NULL CHECK(length(accounting_hash)=64),
-    engine_binding_hash TEXT NOT NULL CHECK(length(engine_binding_hash)=64),
-    artifact_hash TEXT NOT NULL CHECK(length(artifact_hash)=64),
-    change_reason TEXT NOT NULL, idempotency_key TEXT NOT NULL,
-    created_by INTEGER NOT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(project_id,kind,revision_number),
-    UNIQUE(tenant_id,workspace_id,marketplace,kind,idempotency_key)
-  )`);
-  await run(db, `CREATE INDEX IF NOT EXISTS idx_commerce_workflow_artifacts_scope
-    ON commerce_workflow_artifacts(tenant_id,workspace_id,marketplace,project_id,kind,revision_number)`);
-  await run(db, `CREATE TRIGGER IF NOT EXISTS commerce_workflow_artifacts_immutable_update
-    BEFORE UPDATE ON commerce_workflow_artifacts BEGIN SELECT RAISE(ABORT,'IMMUTABLE_COMMERCE_WORKFLOW_ARTIFACT'); END`);
-  await run(db, `CREATE TRIGGER IF NOT EXISTS commerce_workflow_artifacts_immutable_delete
-    BEFORE DELETE ON commerce_workflow_artifacts BEGIN SELECT RAISE(ABORT,'IMMUTABLE_COMMERCE_WORKFLOW_ARTIFACT'); END`);
-}
-
 async function migrateCanonicalReviewHandoff(db) {
   await run(db, `CREATE TABLE IF NOT EXISTS canonical_listing_reviews (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -544,6 +516,339 @@ async function migrateOwnerSubmissionAuthorization(db) {
     BEFORE UPDATE ON canonical_submission_requests BEGIN SELECT RAISE(ABORT,'IMMUTABLE_CANONICAL_HANDOFF'); END`);
   await run(db, `CREATE TRIGGER IF NOT EXISTS canonical_submission_requests_immutable_delete
     BEFORE DELETE ON canonical_submission_requests BEGIN SELECT RAISE(ABORT,'IMMUTABLE_CANONICAL_HANDOFF'); END`);
+}
+
+async function migrateOperatorReportedSubmissionLifecycle(db) {
+  // Migration 014 keyed receipts only by workspace + operation + key. Rebuild
+  // without rewriting response bytes so the same UUID can safely be used in
+  // different projects/listings and replay lookup is fully object-scoped.
+  await run(db, 'DROP TABLE IF EXISTS canonical_handoff_write_receipts_v017');
+  await run(db, `CREATE TABLE canonical_handoff_write_receipts_v017 (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id TEXT NOT NULL, workspace_id INTEGER NOT NULL,
+    marketplace TEXT NOT NULL CHECK(marketplace IN ('AMAZON','ETSY')),
+    project_id INTEGER NOT NULL REFERENCES research_projects(id),
+    listing_id INTEGER NOT NULL REFERENCES listings(id),
+    operation TEXT NOT NULL, idempotency_key TEXT NOT NULL,
+    request_hash TEXT NOT NULL CHECK(length(request_hash)=64), response_json TEXT NOT NULL,
+    created_by INTEGER NOT NULL, created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id,workspace_id,marketplace,project_id,listing_id,operation,idempotency_key)
+  )`);
+  await run(db, `INSERT INTO canonical_handoff_write_receipts_v017
+    (id,tenant_id,workspace_id,marketplace,project_id,listing_id,operation,idempotency_key,
+     request_hash,response_json,created_by,created_at)
+    SELECT id,tenant_id,workspace_id,marketplace,project_id,listing_id,operation,idempotency_key,
+     request_hash,response_json,created_by,created_at FROM canonical_handoff_write_receipts`);
+  await run(db, 'DROP TABLE canonical_handoff_write_receipts');
+  await run(db, 'ALTER TABLE canonical_handoff_write_receipts_v017 RENAME TO canonical_handoff_write_receipts');
+  await run(db, `CREATE INDEX idx_canonical_handoff_receipts_scope
+    ON canonical_handoff_write_receipts(tenant_id,workspace_id,marketplace,project_id,listing_id,operation,id)`);
+  await run(db, `CREATE TRIGGER canonical_handoff_write_receipts_immutable_update
+    BEFORE UPDATE ON canonical_handoff_write_receipts BEGIN SELECT RAISE(ABORT,'IMMUTABLE_CANONICAL_HANDOFF'); END`);
+  await run(db, `CREATE TRIGGER canonical_handoff_write_receipts_immutable_delete
+    BEFORE DELETE ON canonical_handoff_write_receipts BEGIN SELECT RAISE(ABORT,'IMMUTABLE_CANONICAL_HANDOFF'); END`);
+  await run(db, `CREATE TABLE IF NOT EXISTS canonical_submission_authorizations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id TEXT NOT NULL, workspace_id INTEGER NOT NULL,
+    marketplace TEXT NOT NULL CHECK(marketplace IN ('AMAZON','ETSY')),
+    project_id INTEGER NOT NULL REFERENCES research_projects(id),
+    listing_id INTEGER NOT NULL REFERENCES listings(id),
+    listing_revision_id INTEGER NOT NULL REFERENCES listing_revisions(id),
+    review_id INTEGER NOT NULL REFERENCES canonical_listing_reviews(id),
+    submission_request_id INTEGER NOT NULL REFERENCES canonical_submission_requests(id),
+    package_hash TEXT NOT NULL CHECK(length(package_hash)=64),
+    notes TEXT NOT NULL, authorized_by INTEGER NOT NULL,
+    authorized_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(listing_revision_id), UNIQUE(submission_request_id)
+  )`);
+  await run(db, `CREATE INDEX IF NOT EXISTS idx_canonical_submission_authorizations_scope
+    ON canonical_submission_authorizations(tenant_id,workspace_id,marketplace,project_id,listing_id,id)`);
+  await run(db, `CREATE TABLE IF NOT EXISTS canonical_submission_exports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id TEXT NOT NULL, workspace_id INTEGER NOT NULL,
+    marketplace TEXT NOT NULL CHECK(marketplace IN ('AMAZON','ETSY')),
+    project_id INTEGER NOT NULL REFERENCES research_projects(id),
+    listing_id INTEGER NOT NULL REFERENCES listings(id),
+    listing_revision_id INTEGER NOT NULL REFERENCES listing_revisions(id),
+    authorization_id INTEGER NOT NULL REFERENCES canonical_submission_authorizations(id),
+    package_hash TEXT NOT NULL CHECK(length(package_hash)=64),
+    export_json TEXT NOT NULL CHECK(json_valid(export_json) AND length(CAST(export_json AS BLOB))<=4194304),
+    export_hash TEXT NOT NULL CHECK(length(export_hash)=64),
+    exported_by INTEGER NOT NULL, exported_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(authorization_id)
+  )`);
+  await run(db, `CREATE INDEX IF NOT EXISTS idx_canonical_submission_exports_scope
+    ON canonical_submission_exports(tenant_id,workspace_id,marketplace,project_id,listing_id,id)`);
+  await run(db, `CREATE TABLE IF NOT EXISTS canonical_operator_submission_reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id TEXT NOT NULL, workspace_id INTEGER NOT NULL,
+    marketplace TEXT NOT NULL CHECK(marketplace IN ('AMAZON','ETSY')),
+    project_id INTEGER NOT NULL REFERENCES research_projects(id),
+    listing_id INTEGER NOT NULL REFERENCES listings(id),
+    listing_revision_id INTEGER NOT NULL REFERENCES listing_revisions(id),
+    authorization_id INTEGER NOT NULL REFERENCES canonical_submission_authorizations(id),
+    export_id INTEGER NOT NULL REFERENCES canonical_submission_exports(id),
+    package_hash TEXT NOT NULL CHECK(length(package_hash)=64),
+    external_reference TEXT NOT NULL, notes TEXT NOT NULL,
+    reported_by INTEGER NOT NULL, reported_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(listing_revision_id), UNIQUE(export_id)
+  )`);
+  await run(db, `CREATE INDEX IF NOT EXISTS idx_canonical_operator_submission_reports_scope
+    ON canonical_operator_submission_reports(tenant_id,workspace_id,marketplace,project_id,listing_id,id)`);
+  for (const table of ['canonical_submission_authorizations','canonical_submission_exports','canonical_operator_submission_reports']) {
+    await run(db, `CREATE TRIGGER IF NOT EXISTS ${table}_immutable_update
+      BEFORE UPDATE ON ${table} BEGIN SELECT RAISE(ABORT,'IMMUTABLE_CANONICAL_SUBMISSION_EVENT'); END`);
+    await run(db, `CREATE TRIGGER IF NOT EXISTS ${table}_immutable_delete
+      BEFORE DELETE ON ${table} BEGIN SELECT RAISE(ABORT,'IMMUTABLE_CANONICAL_SUBMISSION_EVENT'); END`);
+  }
+  // This database invariant survives a rollback to pre-W5 application code,
+  // whose JavaScript knew only the historical bare SUBMITTED terminal state.
+  await run(db, `CREATE TRIGGER IF NOT EXISTS listings_operator_reported_terminal_update
+    BEFORE UPDATE ON listings WHEN OLD.status='OPERATOR_REPORTED_SUBMITTED'
+      AND (NEW.status<>OLD.status OR NEW.head_revision_id<>OLD.head_revision_id)
+    BEGIN SELECT RAISE(ABORT,'OPERATOR_REPORTED_SUBMITTED_TERMINAL'); END`);
+
+  const requiredColumns = {
+    canonical_submission_authorizations: ['id','tenant_id','workspace_id','marketplace','project_id','listing_id',
+      'listing_revision_id','review_id','submission_request_id','package_hash','notes','authorized_by','authorized_at'],
+    canonical_submission_exports: ['id','tenant_id','workspace_id','marketplace','project_id','listing_id',
+      'listing_revision_id','authorization_id','package_hash','export_json','export_hash','exported_by','exported_at'],
+    canonical_operator_submission_reports: ['id','tenant_id','workspace_id','marketplace','project_id','listing_id',
+      'listing_revision_id','authorization_id','export_id','package_hash','external_reference','notes','reported_by','reported_at'],
+    canonical_handoff_write_receipts: ['id','tenant_id','workspace_id','marketplace','project_id','listing_id',
+      'operation','idempotency_key','request_hash','response_json','created_by','created_at']
+  };
+  for (const [table, required] of Object.entries(requiredColumns)) {
+    const present = new Set((await all(db, `PRAGMA table_info(${table})`)).map(column => column.name));
+    const missing = required.filter(column => !present.has(column));
+    if (missing.length) {
+      const error = new Error(`OPERATOR_SUBMISSION_SCHEMA_INCOMPATIBLE:${table}:${missing.join(',')}`);
+      error.code = 'OPERATOR_SUBMISSION_SCHEMA_INCOMPATIBLE'; throw error;
+    }
+  }
+  const requiredObjects = ['idx_canonical_handoff_receipts_scope','idx_canonical_submission_authorizations_scope',
+    'idx_canonical_submission_exports_scope','idx_canonical_operator_submission_reports_scope',
+    'canonical_submission_authorizations_immutable_update','canonical_submission_authorizations_immutable_delete',
+    'canonical_submission_exports_immutable_update','canonical_submission_exports_immutable_delete',
+    'canonical_operator_submission_reports_immutable_update','canonical_operator_submission_reports_immutable_delete',
+    'listings_operator_reported_terminal_update'];
+  const objects = new Set((await all(db, `SELECT name FROM sqlite_master WHERE type IN ('index','trigger')`))
+    .map(object => object.name));
+  const missingObjects = requiredObjects.filter(name => !objects.has(name));
+  if (missingObjects.length) {
+    const error = new Error(`OPERATOR_SUBMISSION_SCHEMA_INCOMPATIBLE:${missingObjects.join(',')}`);
+    error.code = 'OPERATOR_SUBMISSION_SCHEMA_INCOMPATIBLE'; throw error;
+  }
+  const receiptUniqueColumns = ['tenant_id','workspace_id','marketplace','project_id','listing_id','operation','idempotency_key'];
+  const receiptIndexes = await all(db, 'PRAGMA index_list(canonical_handoff_write_receipts)');
+  let scopedUnique = false;
+  for (const index of receiptIndexes.filter(item => item.unique === 1)) {
+    const columns = (await all(db, `PRAGMA index_info(${index.name})`)).sort((a, b) => a.seqno - b.seqno).map(item => item.name);
+    if (columns.length === receiptUniqueColumns.length && columns.every((column, position) => column === receiptUniqueColumns[position])) {
+      scopedUnique = true; break;
+    }
+  }
+  if (!scopedUnique) {
+    const error = new Error('OPERATOR_SUBMISSION_SCHEMA_INCOMPATIBLE:receipt_unique_scope');
+    error.code = 'OPERATOR_SUBMISSION_SCHEMA_INCOMPATIBLE'; throw error;
+  }
+}
+
+const WORKFLOW_V1_COLUMNS = Object.freeze([
+  'id','tenant_id','workspace_id','marketplace','project_id','kind','revision_number','parent_revision_id',
+  'dependency_manifest_json','dependency_manifest_hash','payload_json','payload_hash','accounting_json','accounting_hash',
+  'engine_binding_hash','artifact_hash','change_reason','idempotency_key','created_by','created_at'
+]);
+const WORKFLOW_V2_COLUMNS = Object.freeze([
+  ...WORKFLOW_V1_COLUMNS, 'request_hash','integrity_version','parser_binding_hash','normalization_binding_hash',
+  'scoring_binding_hash','policy_binding_hash'
+]);
+
+function workflowSchemaError(classification, details = {}) {
+  const error = new Error(`COMMERCE_WORKFLOW_ARTIFACT_SCHEMA_INCOMPATIBLE:${classification}`);
+  error.code = 'COMMERCE_WORKFLOW_ARTIFACT_SCHEMA_INCOMPATIBLE';
+  error.details = { classification, ...details };
+  return error;
+}
+
+async function createCommerceWorkflowArtifactsV2Table(db, tableName = 'commerce_workflow_artifacts') {
+  await run(db, `CREATE TABLE ${tableName} (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id TEXT NOT NULL,
+    workspace_id INTEGER NOT NULL REFERENCES workspaces(id),
+    marketplace TEXT NOT NULL CHECK(marketplace IN ('AMAZON','ETSY')),
+    project_id INTEGER NOT NULL REFERENCES research_projects(id),
+    kind TEXT NOT NULL CHECK(kind IN (
+      'AMAZON_ASIN_BATCH_PLAN','AMAZON_CEREBRO_BINDING','AMAZON_MASTER_KEYWORDS',
+      'ETSY_WINNER_SET','ETSY_PATTERN_SNAPSHOT','ETSY_MASTER_KEYWORDS'
+    )),
+    revision_number INTEGER NOT NULL CHECK(revision_number >= 1),
+    parent_revision_id INTEGER NULL REFERENCES ${tableName}(id),
+    integrity_version INTEGER NOT NULL DEFAULT 2 CHECK(integrity_version IN (1,2)),
+    request_hash TEXT NOT NULL CHECK(length(request_hash)=64),
+    idempotency_key TEXT NOT NULL,
+    dependency_manifest_json TEXT NOT NULL CHECK(json_valid(dependency_manifest_json)),
+    dependency_manifest_hash TEXT NOT NULL CHECK(length(dependency_manifest_hash)=64),
+    payload_json TEXT NOT NULL CHECK(json_valid(payload_json)),
+    payload_hash TEXT NOT NULL CHECK(length(payload_hash)=64),
+    accounting_json TEXT NOT NULL CHECK(json_valid(accounting_json)),
+    accounting_hash TEXT NOT NULL CHECK(length(accounting_hash)=64),
+    engine_binding_hash TEXT NOT NULL CHECK(length(engine_binding_hash)=64),
+    parser_binding_hash TEXT NULL CHECK(parser_binding_hash IS NULL OR length(parser_binding_hash)=64),
+    normalization_binding_hash TEXT NULL CHECK(normalization_binding_hash IS NULL OR length(normalization_binding_hash)=64),
+    scoring_binding_hash TEXT NULL CHECK(scoring_binding_hash IS NULL OR length(scoring_binding_hash)=64),
+    policy_binding_hash TEXT NULL CHECK(policy_binding_hash IS NULL OR length(policy_binding_hash)=64),
+    artifact_hash TEXT NOT NULL CHECK(length(artifact_hash)=64),
+    change_reason TEXT NOT NULL,
+    created_by INTEGER NOT NULL REFERENCES users(id),
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK((integrity_version=1 AND parser_binding_hash IS NULL AND normalization_binding_hash IS NULL
+      AND scoring_binding_hash IS NULL AND policy_binding_hash IS NULL)
+      OR (integrity_version=2 AND length(parser_binding_hash)=64 AND length(normalization_binding_hash)=64
+        AND length(scoring_binding_hash)=64)),
+    CHECK(integrity_version=1 OR (length(CAST(dependency_manifest_json AS BLOB))<=262144
+      AND length(CAST(payload_json AS BLOB))<=2097152 AND length(CAST(accounting_json AS BLOB))<=262144)),
+    UNIQUE(tenant_id,workspace_id,marketplace,project_id,kind,revision_number),
+    UNIQUE(tenant_id,workspace_id,marketplace,project_id,kind,idempotency_key)
+  )`);
+}
+
+async function createCommerceWorkflowArtifactsV2Objects(db) {
+  await run(db, `CREATE INDEX idx_commerce_workflow_artifacts_scope
+    ON commerce_workflow_artifacts(tenant_id,workspace_id,marketplace,project_id,kind,revision_number DESC)`);
+  await run(db, `CREATE TRIGGER commerce_workflow_artifacts_immutable_update
+    BEFORE UPDATE ON commerce_workflow_artifacts BEGIN SELECT RAISE(ABORT,'IMMUTABLE_WORKFLOW_ARTIFACT'); END`);
+  await run(db, `CREATE TRIGGER commerce_workflow_artifacts_immutable_delete
+    BEFORE DELETE ON commerce_workflow_artifacts BEGIN SELECT RAISE(ABORT,'IMMUTABLE_WORKFLOW_ARTIFACT'); END`);
+  await run(db, `CREATE TRIGGER commerce_workflow_artifacts_parent_guard
+    BEFORE INSERT ON commerce_workflow_artifacts
+    WHEN (NEW.parent_revision_id IS NULL AND NEW.revision_number<>1)
+      OR (NEW.parent_revision_id IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM commerce_workflow_artifacts parent
+        WHERE parent.id=NEW.parent_revision_id
+          AND parent.tenant_id=NEW.tenant_id AND parent.workspace_id=NEW.workspace_id
+          AND parent.marketplace=NEW.marketplace AND parent.project_id=NEW.project_id
+          AND parent.kind=NEW.kind AND NEW.revision_number=parent.revision_number+1
+      ))
+    BEGIN SELECT RAISE(ABORT,'WORKFLOW_ARTIFACT_PARENT_INVALID'); END`);
+}
+
+function donorArtifactHash(row) {
+  return hashBytes(canonicalJson({ accountingHash: row.accounting_hash,
+    dependencyManifestHash: row.dependency_manifest_hash, engineBindingHash: row.engine_binding_hash,
+    payloadHash: row.payload_hash }));
+}
+
+function migratedRequestHash(row) {
+  return hashBytes(canonicalJson({ migration: 'DONOR_V1_TO_DUAL_INTEGRITY_V2', legacy: {
+    id: row.id, tenantId: row.tenant_id, workspaceId: row.workspace_id, marketplace: row.marketplace,
+    projectId: row.project_id, kind: row.kind, revisionNumber: row.revision_number,
+    parentRevisionId: row.parent_revision_id, dependencyManifestHash: row.dependency_manifest_hash,
+    payloadHash: row.payload_hash, accountingHash: row.accounting_hash, engineBindingHash: row.engine_binding_hash,
+    artifactHash: row.artifact_hash, changeReason: row.change_reason, idempotencyKey: row.idempotency_key,
+    createdBy: row.created_by, createdAt: row.created_at
+  } }));
+}
+
+async function validateDonorWorkflowRows(db, rows) {
+  const projects = new Map((await all(db, 'SELECT id,tenant_id,workspace_id,marketplace FROM research_projects'))
+    .map(row => [Number(row.id), row]));
+  const workspaces = new Set((await all(db, 'SELECT id FROM workspaces')).map(row => Number(row.id)));
+  const users = new Set((await all(db, 'SELECT id FROM users')).map(row => Number(row.id)));
+  const byId = new Map(rows.map(row => [Number(row.id), row]));
+  for (const row of rows) {
+    try { JSON.parse(row.dependency_manifest_json); JSON.parse(row.payload_json); JSON.parse(row.accounting_json); }
+    catch (_) { throw workflowSchemaError('DONOR_V1_INVALID_JSON', { artifactId: row.id }); }
+    if (sha256Bytes(row.dependency_manifest_json) !== row.dependency_manifest_hash
+      || sha256Bytes(row.payload_json) !== row.payload_hash || sha256Bytes(row.accounting_json) !== row.accounting_hash
+      || donorArtifactHash(row) !== row.artifact_hash) {
+      throw workflowSchemaError('DONOR_V1_INTEGRITY_FAILURE', { artifactId: row.id });
+    }
+    const project = projects.get(Number(row.project_id));
+    if (!project || project.tenant_id !== row.tenant_id || Number(project.workspace_id) !== Number(row.workspace_id)
+      || project.marketplace !== row.marketplace || !workspaces.has(Number(row.workspace_id))
+      || !users.has(Number(row.created_by))) throw workflowSchemaError('DONOR_V1_SCOPE_ORPHAN', { artifactId: row.id });
+    const parent = row.parent_revision_id == null ? null : byId.get(Number(row.parent_revision_id));
+    if ((Number(row.revision_number) === 1 && parent) || (Number(row.revision_number) > 1
+      && (!parent || parent.tenant_id !== row.tenant_id || Number(parent.workspace_id) !== Number(row.workspace_id)
+        || parent.marketplace !== row.marketplace || Number(parent.project_id) !== Number(row.project_id)
+        || parent.kind !== row.kind || Number(parent.revision_number) + 1 !== Number(row.revision_number)))) {
+      throw workflowSchemaError('DONOR_V1_PARENT_INVALID', { artifactId: row.id });
+    }
+  }
+  const externalReferences = await all(db, `SELECT name FROM sqlite_master WHERE type='table'
+    AND name<>'commerce_workflow_artifacts' AND lower(COALESCE(sql,'')) LIKE '%references commerce_workflow_artifacts%'`);
+  if (externalReferences.length) throw workflowSchemaError('DONOR_V1_EXTERNAL_REFERENCE', { tables: externalReferences.map(row => row.name) });
+}
+
+async function upgradeDonorWorkflowArtifacts(db) {
+  const rows = await all(db, 'SELECT * FROM commerce_workflow_artifacts ORDER BY revision_number,id');
+  await validateDonorWorkflowRows(db, rows);
+  await run(db, 'DROP TRIGGER IF EXISTS commerce_workflow_artifacts_immutable_update');
+  await run(db, 'DROP TRIGGER IF EXISTS commerce_workflow_artifacts_immutable_delete');
+  await run(db, 'DROP INDEX IF EXISTS idx_commerce_workflow_artifacts_scope');
+  await createCommerceWorkflowArtifactsV2Table(db, 'commerce_workflow_artifacts_v2_upgrade');
+  for (const row of rows) await run(db, `INSERT INTO commerce_workflow_artifacts_v2_upgrade
+    (id,tenant_id,workspace_id,marketplace,project_id,kind,revision_number,parent_revision_id,integrity_version,
+     request_hash,idempotency_key,dependency_manifest_json,dependency_manifest_hash,payload_json,payload_hash,
+     accounting_json,accounting_hash,engine_binding_hash,parser_binding_hash,normalization_binding_hash,
+     scoring_binding_hash,policy_binding_hash,artifact_hash,change_reason,created_by,created_at)
+    VALUES (?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?,?,NULL,NULL,NULL,NULL,?,?,?,?)`, [row.id,row.tenant_id,row.workspace_id,
+      row.marketplace,row.project_id,row.kind,row.revision_number,row.parent_revision_id,migratedRequestHash(row),
+      row.idempotency_key,row.dependency_manifest_json,row.dependency_manifest_hash,row.payload_json,row.payload_hash,
+      row.accounting_json,row.accounting_hash,row.engine_binding_hash,row.artifact_hash,row.change_reason,row.created_by,row.created_at]);
+  const copied = (await all(db, 'SELECT COUNT(*) AS count FROM commerce_workflow_artifacts_v2_upgrade'))[0]?.count || 0;
+  if (copied !== rows.length) throw workflowSchemaError('DONOR_V1_COPY_COUNT_MISMATCH', { expected: rows.length, copied });
+  await run(db, 'DROP TABLE commerce_workflow_artifacts');
+  await run(db, 'ALTER TABLE commerce_workflow_artifacts_v2_upgrade RENAME TO commerce_workflow_artifacts');
+  await createCommerceWorkflowArtifactsV2Objects(db);
+  const sequence = await all(db, "SELECT name FROM sqlite_master WHERE type='table' AND name='sqlite_sequence'");
+  if (sequence.length && rows.length) {
+    await run(db, "DELETE FROM sqlite_sequence WHERE name='commerce_workflow_artifacts'");
+    await run(db, "INSERT INTO sqlite_sequence(name,seq) VALUES ('commerce_workflow_artifacts',?)",
+      [Math.max(...rows.map(row => Number(row.id)))]);
+  }
+  const fkErrors = await all(db, 'PRAGMA foreign_key_check(commerce_workflow_artifacts)');
+  const integrity = await all(db, 'PRAGMA integrity_check');
+  if (fkErrors.length || integrity.some(row => row.integrity_check !== 'ok')) {
+    throw workflowSchemaError('DONOR_V1_POST_UPGRADE_CHECK_FAILED', { foreignKeyErrors: fkErrors.length });
+  }
+}
+
+async function migrateCommerceWorkflowArtifacts(db) {
+  const existing = await all(db, "SELECT name FROM sqlite_master WHERE type='table' AND name='commerce_workflow_artifacts'");
+  if (!existing.length) {
+    await createCommerceWorkflowArtifactsV2Table(db);
+    await createCommerceWorkflowArtifactsV2Objects(db);
+    return;
+  }
+  const columns = (await all(db, 'PRAGMA table_info(commerce_workflow_artifacts)')).map(column => column.name);
+  const columnSet = new Set(columns);
+  if (WORKFLOW_V2_COLUMNS.every(column => columnSet.has(column))) {
+    const expectedObjects = ['idx_commerce_workflow_artifacts_scope','commerce_workflow_artifacts_immutable_update',
+      'commerce_workflow_artifacts_immutable_delete','commerce_workflow_artifacts_parent_guard'];
+    const objectNames = new Set((await all(db, `SELECT name FROM sqlite_master WHERE tbl_name='commerce_workflow_artifacts'
+      AND type IN ('index','trigger')`)).map(row => row.name));
+    const missingObjects = expectedObjects.filter(name => !objectNames.has(name));
+    if (missingObjects.length) throw workflowSchemaError('V2_INCOMPLETE', { missingObjects });
+    return;
+  }
+  const exactDonorV1 = columns.length === WORKFLOW_V1_COLUMNS.length && WORKFLOW_V1_COLUMNS.every(column => columnSet.has(column));
+  if (!exactDonorV1) throw workflowSchemaError('UNKNOWN_SCHEMA', { columns });
+  const donorObjects = new Set((await all(db, `SELECT name FROM sqlite_master WHERE tbl_name='commerce_workflow_artifacts'
+    AND type IN ('index','trigger')`)).map(row => row.name));
+  const missingDonorObjects = ['idx_commerce_workflow_artifacts_scope','commerce_workflow_artifacts_immutable_update',
+    'commerce_workflow_artifacts_immutable_delete'].filter(name => !donorObjects.has(name));
+  if (missingDonorObjects.length) throw workflowSchemaError('DONOR_V1_OBJECTS_UNKNOWN', { missingObjects: missingDonorObjects });
+  const rowCount = (await all(db, 'SELECT COUNT(*) AS count FROM commerce_workflow_artifacts'))[0]?.count || 0;
+  if (!rowCount) {
+    await run(db, 'DROP TRIGGER IF EXISTS commerce_workflow_artifacts_immutable_update');
+    await run(db, 'DROP TRIGGER IF EXISTS commerce_workflow_artifacts_immutable_delete');
+    await run(db, 'DROP INDEX IF EXISTS idx_commerce_workflow_artifacts_scope');
+    await run(db, 'DROP TABLE commerce_workflow_artifacts');
+    await createCommerceWorkflowArtifactsV2Table(db); await createCommerceWorkflowArtifactsV2Objects(db); return;
+  }
+  await upgradeDonorWorkflowArtifacts(db);
 }
 
 async function runMigrations(db) {
@@ -771,12 +1076,24 @@ async function runMigrations(db) {
       throw error;
     }
   }
-  const marketplaceWorkflowApplied = await all(db, 'SELECT id FROM schema_migrations WHERE id=?', [MARKETPLACE_RESEARCH_WORKFLOW_MIGRATION]);
-  if (marketplaceWorkflowApplied.length === 0) {
+  const workflowArtifactApplied = await all(db, 'SELECT id FROM schema_migrations WHERE id=?', [COMMERCE_WORKFLOW_ARTIFACT_MIGRATION]);
+  if (workflowArtifactApplied.length === 0) {
     await run(db, 'BEGIN IMMEDIATE');
     try {
-      await migrateMarketplaceResearchWorkflow(db);
-      await run(db, 'INSERT INTO schema_migrations(id) VALUES (?)', [MARKETPLACE_RESEARCH_WORKFLOW_MIGRATION]);
+      await migrateCommerceWorkflowArtifacts(db);
+      await run(db, 'INSERT INTO schema_migrations(id) VALUES (?)', [COMMERCE_WORKFLOW_ARTIFACT_MIGRATION]);
+      await run(db, 'COMMIT');
+    } catch (error) {
+      try { await run(db, 'ROLLBACK'); } catch (_) {}
+      throw error;
+    }
+  }
+  const operatorSubmissionApplied = await all(db, 'SELECT id FROM schema_migrations WHERE id=?', [OPERATOR_REPORTED_SUBMISSION_MIGRATION]);
+  if (operatorSubmissionApplied.length === 0) {
+    await run(db, 'BEGIN IMMEDIATE');
+    try {
+      await migrateOperatorReportedSubmissionLifecycle(db);
+      await run(db, 'INSERT INTO schema_migrations(id) VALUES (?)', [OPERATOR_REPORTED_SUBMISSION_MIGRATION]);
       await run(db, 'COMMIT');
     } catch (error) {
       try { await run(db, 'ROLLBACK'); } catch (_) {}
@@ -877,8 +1194,11 @@ module.exports = {
   COMMERCE_SNAPSHOT_MIGRATION,
   CANONICAL_REVIEW_HANDOFF_MIGRATION,
   OWNER_SUBMISSION_AUTHORIZATION_MIGRATION,
-  MARKETPLACE_RESEARCH_WORKFLOW_MIGRATION,
+  COMMERCE_WORKFLOW_ARTIFACT_MIGRATION,
+  OPERATOR_REPORTED_SUBMISSION_MIGRATION,
   migrateOwnerSubmissionAuthorization,
+  migrateCommerceWorkflowArtifacts,
+  migrateOperatorReportedSubmissionLifecycle,
   AGENT_WORKSPACE_SCOPE_MIGRATION,
   PROJECT_SCOPED_EVIDENCE_MIGRATION,
   CANONICAL_DAG_MIGRATION,

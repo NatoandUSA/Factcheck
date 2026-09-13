@@ -198,7 +198,7 @@ async function tick(window) {
     'listing extraction must return zero-write facts and observed DNA metadata together');
 
   const amazonPreview = parseListingHtml(`<!doctype html><html><body>
-    <span id="productTitle">Para Mi Hija Necklace</span>
+    <span id="productTitle">Para Mi Hija Cubic Zirconia Necklace</span>
     <div id="productFactsDesktopExpander"><ul><li>Spanish message card included in a gift box for graduation</li></ul></div>
     <table><tr><th>Material</th><td>Stainless Steel</td></tr><tr><th>Metal Stamp</th><td>14k</td></tr>
       <tr><th>Item Type Name</th><td>Necklace</td></tr><tr><th>Size</th><td>18 inches</td></tr></table>
@@ -206,9 +206,37 @@ async function tick(window) {
   check(amazonPreview.observations.bullets.length === 1
     && amazonPreview.facts.productType.value === 'Necklace'
     && amazonPreview.facts.materials.value === 'Stainless Steel'
+    && amazonPreview.facts.gemstones.value === 'Cubic Zirconia'
     && amazonPreview.facts.purity.value === '14k'
     && amazonPreview.facts.packaging.value.includes('Gift box'),
   'Amazon saved HTML must extract product facts, bullet DNA and packaging signals');
+
+  const renderedTextPreview = parseListingHtml(`Collar Para Mi Hija en Español
+Material
+Stainless Steel
+Metal type
+Stainless Steel
+Clasp type
+Lobster
+Chain type
+Cable
+Gem type
+Cubic Zirconia
+Item type name
+Necklace
+About this item
+Regalo especial para hija
+Gift box with message card
+Product Description
+Adjustable 18 to 22 inch chain.`, { marketplace: 'AMAZON', sourceReference: 'rendered-page-text' });
+  check(renderedTextPreview.accounting.renderedTextInput === true
+    && renderedTextPreview.facts.productName.value === 'Collar Para Mi Hija en Español'
+    && renderedTextPreview.facts.components.value.includes('Clasp Type: Lobster')
+    && renderedTextPreview.facts.gemstones.value === 'Cubic Zirconia',
+  'rendered page text fallback must recover title, components and gemstones when marketplace HTML saving is blocked');
+  check(renderedTextPreview.observations.bullets.length === 2
+    && renderedTextPreview.facts.packaging.value.includes('Gift box'),
+  'rendered page text fallback must preserve About-this-item and packaging evidence');
 
   project.value = '';
   document.getElementById('sameSource').checked = true;

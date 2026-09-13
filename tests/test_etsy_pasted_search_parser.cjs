@@ -299,6 +299,11 @@ async function waitForEtsyOwner() {
   assert.strictEqual(csv.sellers[0].evidenceSource, 'STAFF_MANUAL_ASSERTION');
   assert.strictEqual(csv.sellers[0].evidenceState, 'UNVERIFIED_INPUT');
 
+  const noisyTagCsv = parseEtsySearchCsv(`listing_id,title,shop,he_tags,keyword_context\n2001,"Para Mi Hija Necklace",Shop,"?13 Check Sugg (13) Copy Suggestions para mi querida hijaregalo para hijacollar a mi hija",para mi hija`);
+  assert.deepStrictEqual(noisyTagCsv.sellers[0].tags, [], 'concatenated HeyEtsy suggestion controls must not become one garbage tag');
+  assert.strictEqual(noisyTagCsv.sellers[0].tagDiagnostics.status, 'UNPARSEABLE_CONCATENATED_SUGGESTIONS');
+  assert.strictEqual(noisyTagCsv.sellers[0].tagSource, 'STAFF_FILE_CSV_UNPARSEABLE_SUGGESTION');
+
   const html = parseEtsySearchHtml(HTML_SAMPLE);
   assert.strictEqual(html.inputFormat, 'HTML');
   assert.strictEqual(html.sellers.length, 1);

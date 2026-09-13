@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import Header from './components/Header';
-import AmazonWorkspace from './components/AmazonWorkspace';
-import EtsyWorkspace from './components/EtsyWorkspace';
+import SinglePathMarketplaceWorkspace from './components/SinglePathMarketplaceWorkspace';
 import ProductListingPageSimulator from './components/ProductListingPageSimulator';
 import ListingHistory from './components/ListingHistory';
 import ApiKeyModal from './components/ApiKeyModal';
@@ -284,27 +283,27 @@ export default function App() {
       <main className="main-content">
         {/* TAB 1: Amazon A10 Workspace */}
         {activeTab === 'amazon-workspace' && (
-          <AmazonWorkspace
+          <SinglePathMarketplaceWorkspace
+            marketplace="AMAZON"
+            onRequireLogin={() => setIsLoginModalOpen(true)}
             onSelectListing={(item) => {
               handleSelectFromHistory(item);
               setActiveTab('product-page');
             }}
-            onApproveListing={handleApproveListing}
             onShowToast={showToast}
-            onViewHistory={() => setActiveTab('history')}
           />
         )}
 
         {/* TAB 2: Etsy Contextual Workspace */}
         {activeTab === 'etsy-workspace' && (
-          <EtsyWorkspace
+          <SinglePathMarketplaceWorkspace
+            marketplace="ETSY"
+            onRequireLogin={() => setIsLoginModalOpen(true)}
             onSelectListing={(item) => {
               handleSelectFromHistory(item);
               setActiveTab('product-page');
             }}
-            onApproveListing={handleApproveListing}
             onShowToast={showToast}
-            onViewHistory={() => setActiveTab('history')}
           />
         )}
 

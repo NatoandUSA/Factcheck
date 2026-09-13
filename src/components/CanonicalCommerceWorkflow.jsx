@@ -572,8 +572,13 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
       intelligenceSnapshotId: draft.intelligenceSnapshotId, content: draft.content
     }));
     notify(`Đã lưu listing #${result.listingId} ở trạng thái ${result.status}; chưa submit lên sàn.`);
-    onSelectListing?.({ id: result.listingId, project_id: projectId, status: result.status, ...result.content });
+    // Keep staff inside the canonical workspace after persistence. Navigating
+    // here unmounted this component before run() could append SUCCESS, making
+    // a completed save look permanently stuck at STARTED in the copied log.
+    // The persisted listing is available in the queue after refresh and can
+    // still be opened explicitly for review/simulation.
     await refresh();
+    return result;
   });
 
   const reviewListing = (listingId, decision) => run('review-listing', async () => {
@@ -641,8 +646,9 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
   });
 
   const copyExecutionLog = async () => {
-    const packet = { schemaVersion: 1, generatedAt: new Date().toISOString(), marketplace, projectId,
-      projectName: activeProject?.name || null, entries: executionLog };
+    const packet = { schemaVersion: 2, generatedAt: new Date().toISOString(), marketplace, projectId,
+      projectName: activeProject?.name || null, captureState: busy ? 'REQUEST_IN_FLIGHT' : 'IDLE',
+      inFlightAction: busy || null, entries: executionLog };
     await navigator.clipboard.writeText(JSON.stringify(packet, null, 2));
     notify(`Đã copy ${executionLog.length} dòng nhật ký; không bao gồm cookie hoặc nội dung file.`);
   };
@@ -733,7 +739,8 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
       </div>}
       <details data-testid="canonical-execution-log" style={{ marginTop: 9, border: '1px solid #94a3b8', borderRadius: 9, padding: 9, background: '#fff' }}>
         <summary style={{ cursor: 'pointer', fontWeight: 800 }}>Nhật ký thực thi để gửi Codex ({executionLog.length})</summary>
-        <p style={{ margin: '7px 0', fontSize: '.75rem', color: '#475569' }}>Ghi thao tác, mã lỗi, project và artifact heads. Không ghi cookie, mật khẩu hoặc nội dung file.</p>
+        <p style={{ margin: '7px 0', fontSize: '.75rem', color: '#475569' }}>Ghi thao tác, mã lỗi, project và artifact heads. Không ghi cookie, mật khẩu hoặc nội dung file. STARTED ở dòng cuối nghĩa là request còn đang chạy, không đồng nghĩa bị khóa.</p>
+        {busy && <div role="status" style={{ marginBottom: 7, padding: 7, borderRadius: 7, background: '#fef3c7', color: '#92400e', fontSize: '.75rem', fontWeight: 700 }}>Đang chờ: {busy}. Nếu copy log lúc này, packet sẽ ghi REQUEST_IN_FLIGHT; hãy chờ SUCCESS/FAILED nếu có thể.</div>}
         <div style={{ display: 'flex', gap: 8, marginBottom: 7 }}>
           <button type="button" disabled={!executionLog.length} onClick={() => copyExecutionLog().catch(errorValue => notify(errorValue.message, 'error'))}>Copy log JSON</button>
           <button type="button" disabled={!executionLog.length} onClick={clearExecutionLog}>Xóa log tab này</button>
@@ -1072,7 +1079,8 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
             <small>{(listing.amazonAPlusPoints || []).map((point, index) => `Point ${index + 1}: ${characterCount(point)} ký tự`).join(' · ') || 'Chưa có point'}</small></label>
           <label><b>PPC targeting — có thể chứa keyword claim chưa xác minh, không phải copy hiển thị</b><textarea value={(listing.ppcKeywords || []).map(item => typeof item === 'string' ? item : item.phrase || '').join('\n')} onChange={event => updateDraft('ppcKeywords', event.target.value.split('\n').map(phrase => phrase.trim()).filter(Boolean))} rows={6} style={{ width: '100%' }} /></label>
         </> : <>
-          <label><b>Etsy Title ({Array.from(listing.etsyTitle || '').length}/140)</b><textarea value={listing.etsyTitle || ''} onChange={event => updateDraft('etsyTitle', event.target.value)} rows={2} style={{ width: '100%' }} /></label>
+          <div style={{ padding: 9, borderRadius: 8, background: '#fff7ed', color: '#7c2d12', fontSize: '.76rem' }}><b>Etsy title:</b> vùng làm việc 126–138/140 khi Master KW có đủ phrase liên quan, an toàn và không lặp. Nếu thiếu dữ liệu an toàn, Omni báo thiếu thay vì bịa hoặc nhồi từ.</div>
+          <label><CapacityLabel label="Etsy Title" used={characterCount(listing.etsyTitle)} limit={140} /><textarea value={listing.etsyTitle || ''} onChange={event => updateDraft('etsyTitle', event.target.value)} rows={2} style={{ width: '100%' }} /></label>
           <label><b>Tối đa 13 Tags an toàn — mỗi dòng một tag</b><textarea value={(listing.etsyTags || []).join('\n')} onChange={event => updateEtsyTags(event.target.value)} rows={7} style={{ width: '100%' }} /></label>
           <div style={{ border: '1px solid #fed7aa', borderRadius: 8, padding: 9, background: '#fff7ed' }}>
             <b>Phân bổ tag do engine tạo: {listing.etsyTagStatus?.code === 'TAG_SHORTAGE'

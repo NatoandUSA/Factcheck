@@ -50,8 +50,12 @@ const DEFINITIONS = deepFreeze({
     patterns: [/\b\d\s?[- ]?star\b/, /\bfive[- ]?star\b/, /\bbest ?seller\b/, /\bamazon(?:'s)? choice\b/, /\btop[- ]?rated\b/, /\bnumber one\b/, /(?:^|[^a-z0-9])#1\b/, /\bquality inspected\b/, /\baward[- ]?winning\b/, /\bmost popular\b/, /\bguarantee(?:d)?\b/, /\b\d\s?estrellas?\b/, /\bmas vendido\b/, /\bgarantizado\b/, /\bmejor calidad\b/]
   },
   PACKAGING_ACCESSORY_INCLUDED_EXTRA: {
-    terms: ['box', 'giftbox', 'boxed', 'velvet', 'pouch', 'ribbon', 'satin', 'caja', 'estuche', 'bolsa', 'card', 'tarjeta', 'certificate', 'usb', 'charger', 'cable', 'battery', 'batteries'],
-    patterns: [/\bgift box\b/, /\bcaja de regalo\b/, /\bcertificado incluido\b/, /\b(?:includes?|comes with)\s+(?:a|an|one|two|three|\d+)\s+(?:box|pouch|card|charger|cable|battery)\b/]
+    // "Cable" by itself is also a jewelry-chain construction (for example,
+    // "cable chain").  Treating the bare token as an included accessory
+    // caused verified necklace copy to fail Product Truth.  Accessory cables
+    // remain guarded by the explicit phrases below.
+    terms: ['box', 'giftbox', 'boxed', 'velvet', 'pouch', 'ribbon', 'satin', 'caja', 'estuche', 'bolsa', 'card', 'tarjeta', 'certificate', 'usb', 'charger', 'battery', 'batteries'],
+    patterns: [/\bgift box\b/, /\bcaja de regalo\b/, /\bcertificado incluido\b/, /\b(?:usb|charging|charger|power) cable\b/, /\b(?:includes?|comes with)\s+(?:a|an|one|two|three|\d+)\s+(?:box|pouch|card|charger|cable|battery)\b/]
   },
   SAFETY_MEDICAL_HEALTH_AGE_COMPLIANCE: {
     terms: ['hypoallergenic', 'antialergico', 'antialergica', 'nontoxic', 'non-toxic'],

@@ -34,8 +34,9 @@ async function main() {
   check(result.output.listingDraft.etsyTitle.length <= 140, 'Etsy title within limit');
   check(/custom necklace/i.test(result.output.listingDraft.etsyTitle),
     'Etsy title retains the Product Truth identity while allocating safe Master KW phrases');
-  check(result.output.listingDraft.etsyTitle.split(',').length <= 5,
-    'Etsy title uses a bounded set of readable clauses instead of keyword stuffing');
+  check(new Set(result.output.listingDraft.etsyTitle.split(',').map(value => value.trim().toLowerCase())).size
+    === result.output.listingDraft.etsyTitle.split(',').length,
+  'Etsy title uses distinct readable clauses instead of duplicate padding');
   check(result.output.listingDraft.etsyTags.length <= 13, 'Etsy tag count within limit');
   check(result.output.listingDraft.etsyTags.every(tag => Array.from(tag).length <= 20), 'every Etsy tag within limit');
   check(result.output.listingDraft.etsyTagExplanations.length === result.output.listingDraft.etsyTags.length,
@@ -106,6 +107,19 @@ async function main() {
   check(automaticSpanish.output.language === 'ES', 'AUTO infers Spanish from the canonical project seed');
   check(automaticSpanish.accounting.languageTargetingCount === 0,
     'AUTO does not misroute Spanish source phrases into the other-language bucket');
+  const richTitle = await adapter.buildIntelligence({
+    research: { observations: { marketplace: 'ETSY', queryContexts: ['collar para hija'], sellers: [] } },
+    productTruth: { snapshot: { asserted: {
+      productName: asserted('Collar para mi hija'), productType: asserted('Collar'), recipient: asserted('hija'),
+      occasion: asserted('graduacion y cumpleanos'), materials: asserted('acero inoxidable')
+    } } }, configuration: { seedPhrase: 'collar para hija', listingLanguage: 'ES' },
+    masterKeywordArtifact: master([
+      'collar para mi hija', 'regalo de graduacion para hija', 'joyeria de acero inoxidable',
+      'regalo de cumpleanos para hija', 'collar de mama para hija', 'mensaje especial para hija'
+    ], 4)
+  });
+  check(richTitle.output.listingDraft.etsyTitle.length >= 126 && richTitle.output.listingDraft.etsyTitle.length <= 138,
+    'rich safe corpus fills the Etsy title working target of 90-99 percent without truncation');
   console.log(`G4 Etsy intelligence adapter: ${passed}/${passed} PASS`);
 }
 

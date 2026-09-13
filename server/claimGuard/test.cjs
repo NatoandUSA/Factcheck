@@ -79,6 +79,13 @@ test('verified included items corroborate message cards without making identity 
   assert.equal(guard.auditComposedOutput({ title: 'Necklace with velvet pouch' }, truth).claimSurfaceBlockingFree, false);
 });
 
+test('jewelry cable chain is not confused with an included accessory cable', () => {
+  const truth = { components: 'Cable chain with lobster clasp' };
+  assert.equal(guard.auditComposedOutput({ bullet: 'Cable chain with lobster clasp' }, truth).clean, true);
+  assert.equal(guard.auditComposedOutput({ bullet: 'Includes a charging cable' }, truth).claimSurfaceBlockingFree, false);
+  assert.equal(guard.auditComposedOutput({ bullet: 'Comes with a cable' }, truth).claimSurfaceBlockingFree, false);
+});
+
 test('wrong material and wrong size remain blocked', () => {
   const truth = { materials: ['14k gold plated stainless steel'], sizes: ['18 inch'] };
   const audit = guard.auditComposedOutput({ title: 'Sterling silver necklace', bullet: '20 inch chain' }, truth);

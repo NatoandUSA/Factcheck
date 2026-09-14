@@ -54,7 +54,7 @@ const { buildStaffAttestedCard, normalizeSnapshot, productTruthAuthorityHash, va
 const { assertNoClientPolicyOverrides } = require('./policy/contractRegistry');
 const { appendProductTruthRevision, confirmProductTruthRevision, listProductTruthRevisions } = require('./productTruthStore');
 const { parseProductTruthWorkbook } = require('./productTruthWorkbookParser');
-const { parseListingHtml } = require('./productTruthListingParser');
+const { parseListingHtml, parseListingCapture } = require('./productTruthListingParser');
 const { createListingWithRevision, appendListingRevision, canonicalJson, getListingRevision, hashBytes, listListingRevisions } = require('./revisionStore');
 const { assertCanonicalDependenciesCurrent, composeCommerceDraft, composeTruthOnlyDraft,
   validateCanonicalDraft } = require('./canonicalDraftService');
@@ -367,7 +367,7 @@ const productTruthListingUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024, files: 1, fields: 4 },
   fileFilter(req, file, cb) {
-    const allowed = /\.(?:html?|txt)$/i.test(file.originalname || '');
+    const allowed = /\.(?:html?|txt|csv|json)$/i.test(file.originalname || '');
     cb(allowed ? null : new Error('UNSUPPORTED_LISTING_PAGE_CAPTURE'), allowed);
   }
 });
@@ -1574,6 +1574,7 @@ app.post('/api/projects/:id/product-truth-listing/preview', requireAuth(db), req
       if (sourceReference.length > 2000) throw Object.assign(new Error('LISTING_REFERENCE_TOO_LARGE'), {
         code: 'LISTING_REFERENCE_TOO_LARGE', status: 400
       });
+      const structuredCapture = req.file && /\.(?:csv|json)$/i.test(req.file.originalname || '');
       let html = req.file?.buffer?.toString('utf8') || '';
       if (!html) {
         if (project.marketplace === 'AMAZON' && /^[A-Z0-9]{10}$/i.test(sourceReference)) {
@@ -1591,10 +1592,12 @@ app.post('/api/projects/:id/product-truth-listing/preview', requireAuth(db), req
             code: 'LISTING_FETCH_FAILED_USE_HTML', status: 422
           });
         }
-      } else if (!sourceReference) {
+      } else if (!sourceReference && !structuredCapture) {
         sourceReference = req.file.originalname;
       }
-      const preview = parseListingHtml(html, { marketplace: project.marketplace, sourceReference });
+      const preview = structuredCapture
+        ? parseListingCapture(req.file.buffer, { marketplace: project.marketplace, sourceReference, fileName: req.file.originalname })
+        : parseListingHtml(html, { marketplace: project.marketplace, sourceReference });
       res.json({ success: true, fileName: req.file?.originalname || null, byteLength: Buffer.byteLength(html), ...preview });
     } catch (error) { rejectRevisionStore(res, error); }
   });

@@ -75,7 +75,7 @@ const { previewWinners: previewEtsyWinners, saveWinners: saveEtsyWinners,
   previewPatterns: previewEtsyPatterns, savePatterns: saveEtsyPatterns,
   previewMasterKeywords: previewEtsyMasterKeywords,
   saveMasterKeywords: saveEtsyMasterKeywords,
-  supplementPatternsWithYtrends } = require('./etsyResearchWorkflow');
+  supplementPatternsWithYtrends, validateBrowserYtrendsPayload } = require('./etsyResearchWorkflow');
 
 const PROJECT_POLICY_CLASSIFICATIONS = Object.freeze({
   CUSTOM_SWEATSHIRT: Object.freeze({ mediaClass: 'NON_MEDIA', productTypeId: 'CUSTOM_SWEATSHIRT', categoryId: 'APPAREL_SWEATSHIRT', productFamilyVersion: 'custom-sweatshirt-v1' }),
@@ -137,6 +137,7 @@ function revisionScope(user) {
 function rejectRevisionStore(res, error) {
   const status = Number.isInteger(error?.status) ? error.status : 500;
   return res.status(status).json({ success: false, error: error?.code || 'REVISION_STORE_UNAVAILABLE',
+    ...(error?.details && typeof error.details === 'object' ? { details: error.details } : {}),
     ...(error?.details && typeof error.details === 'object' ? error.details : {}),
     ...(error?.field ? { field: error.field } : {}) });
 }
@@ -1844,12 +1845,27 @@ app.post('/api/projects/:id/etsy/patterns', requireAuth(db), requireRole(['OWNER
 app.post('/api/projects/:id/etsy/patterns/ytrends', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
   try {
     const project = await requireCommerceProject(req);
-    const body = requireExactDto(req.body, new Set(['patternArtifactId', 'idempotencyKey', 'changeReason']));
-    assertNoClientPolicyOverrides(body);
+    const body = requireExactDto(req.body, new Set(['patternArtifactId', 'idempotencyKey', 'changeReason', 'providerPayload', 'providerTransport']));
+    assertNoClientPolicyOverrides({ patternArtifactId: body.patternArtifactId, idempotencyKey: body.idempotencyKey,
+      changeReason: body.changeReason, providerTransport: body.providerTransport });
+    const browserPayload = body.providerTransport === 'BROWSER_DIRECT'
+      ? validateBrowserYtrendsPayload(body.providerPayload)
+      : null;
+    if (body.providerPayload && !browserPayload) throw Object.assign(new Error('ETSY_YTRENDS_BROWSER_TRANSPORT_REQUIRED'), {
+      code: 'ETSY_YTRENDS_BROWSER_TRANSPORT_REQUIRED', status: 400
+    });
     const result = await supplementPatternsWithYtrends(db, revisionScope(req.user), project.id, body,
-      seedPhrase => ytrendsMcp.exploreNiche(seedPhrase));
+      (seedPhrase, patternPayload) => browserPayload || ytrendsMcp.pullKeywordEcosystem(seedPhrase, [
+        ...(patternPayload.observedTags || []).map(item => item.phrase),
+        ...(patternPayload.repeatedPhrases || []).map(item => item.phrase),
+        ...(patternPayload.titleHeads || [])
+      ]));
     res.status(result.duplicate ? 200 : 201).json({ success: true, ...result });
-  } catch (error) { rejectRevisionStore(res, error); }
+  } catch (error) {
+    console.warn('[YTRENDS_SUPPLEMENT_FAILED]', JSON.stringify({ projectId: req.params.id,
+      code: error?.code || 'UNKNOWN', details: error?.details || null, diagnostic: ytrendsMcp.lastDiagnostic || null }));
+    rejectRevisionStore(res, error);
+  }
 });
 
 app.post('/api/projects/:id/etsy/master-keywords/preview', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {

@@ -309,15 +309,27 @@ function normalizeYtrendsSupplement(raw, seedPhrase, fetchedAt = new Date().toIS
   for (const listing of Array.isArray(data.top_listings) ? data.top_listings : []) {
     for (const tag of Array.isArray(listing.tags) ? listing.tags : []) add(tag, 'top_listings.tags');
   }
-  return { provider: 'YTRENDS_MCP', evidenceTier: 'E3_SUPPLEMENTAL_INDEX', seedPhrase: text(seedPhrase), fetchedAt,
+  const transport = raw?._omniTransport === 'BROWSER_DIRECT' ? 'BROWSER_DIRECT' : 'SERVER_DIRECT';
+  return { provider: 'YTRENDS_MCP', evidenceTier: 'E3_SUPPLEMENTAL_INDEX', transport,
+    serverVerifiedTransport: transport === 'SERVER_DIRECT', providerTools: Array.isArray(raw?._omniTools) ? raw._omniTools.slice(0, 10) : [],
+    seedPhrase: text(seedPhrase), providerSeed: text(raw?._omniSeedUsed || seedPhrase), fetchedAt,
     phrases: [...phrases.values()], overview: data.overview && typeof data.overview === 'object' ? data.overview : null,
     responseHash: hashBytes(canonicalJson(raw == null ? null : raw)) };
+}
+
+function validateBrowserYtrendsPayload(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new EtsyWorkflowError('ETSY_YTRENDS_BROWSER_PAYLOAD_INVALID', 400);
+  const encoded = canonicalJson(raw);
+  if (Buffer.byteLength(encoded, 'utf8') > 1024 * 1024) throw new EtsyWorkflowError('ETSY_YTRENDS_BROWSER_PAYLOAD_TOO_LARGE', 413);
+  if (raw._omniTransport !== 'BROWSER_DIRECT') throw new EtsyWorkflowError('ETSY_YTRENDS_BROWSER_TRANSPORT_REQUIRED', 400);
+  if (!raw.data || typeof raw.data !== 'object' || Array.isArray(raw.data)) throw new EtsyWorkflowError('ETSY_YTRENDS_BROWSER_PAYLOAD_INVALID', 400);
+  return JSON.parse(encoded);
 }
 
 async function supplementPatternsWithYtrends(db, scope, projectId, input, fetcher) {
   const pattern = await currentArtifact(db, scope, projectId, input.patternArtifactId, 'ETSY_PATTERN_SNAPSHOT');
   let raw;
-  try { raw = await fetcher(pattern.payload.seedPhrase); }
+  try { raw = await fetcher(pattern.payload.seedPhrase, pattern.payload); }
   catch (error) { throw new EtsyWorkflowError('ETSY_YTRENDS_UNAVAILABLE', 503, { providerMessage: text(error?.message).slice(0, 300) }); }
   const supplement = normalizeYtrendsSupplement(raw, pattern.payload.seedPhrase);
   if (!supplement.phrases.length) throw new EtsyWorkflowError('ETSY_YTRENDS_NO_USABLE_PHRASES', 422);
@@ -427,4 +439,4 @@ async function saveMasterKeywords(db, scope, projectId, input) {
 
 module.exports = Object.freeze({ EtsyWorkflowError, bindings, evidenceTier, mergeEntities, relevance, rankEntities,
   previewWinners, saveWinners, minePatterns, previewPatterns, savePatterns, buildMaster, previewMasterKeywords,
-  saveMasterKeywords, normalizeYtrendsSupplement, supplementPatternsWithYtrends });
+  saveMasterKeywords, normalizeYtrendsSupplement, validateBrowserYtrendsPayload, supplementPatternsWithYtrends });

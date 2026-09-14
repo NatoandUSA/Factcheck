@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { pullYtrendsFromBrowser } from '../ytrendsBrowserClient';
 
 const CORE_FACT_FIELDS = [
   ['productName', 'Tên sản phẩm', true], ['productType', 'Loại sản phẩm', true],
@@ -436,10 +437,37 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
   const supplementEtsyPatterns = () => run('etsy-ytrends-supplement', async () => {
     const pattern = workflowState?.heads?.ETSY_PATTERN_SNAPSHOT;
     if (!pattern) throw new Error('Hãy lưu Pattern Snapshot trước.');
-    const result = await api(`/api/projects/${projectId}/etsy/patterns/ytrends`, jsonOptions({
-      patternArtifactId: pattern.id, idempotencyKey: uuid(), changeReason: 'ADD_OPTIONAL_YTRENDS_SUPPLEMENT'
-    }));
-    notify(`Đã thêm ${result.accounting?.ytrendsSupplementPhraseCount} phrase YTrends E3. File live/HeyEtsy vẫn là nguồn chính.`);
+    let result;
+    let transport = 'SERVER_DIRECT';
+    try {
+      result = await api(`/api/projects/${projectId}/etsy/patterns/ytrends`, jsonOptions({
+        patternArtifactId: pattern.id, idempotencyKey: uuid(), changeReason: 'ADD_OPTIONAL_YTRENDS_SUPPLEMENT_SERVER_DIRECT'
+      }));
+    } catch (serverError) {
+      if (serverError.code !== 'ETSY_YTRENDS_UNAVAILABLE') throw serverError;
+      transport = 'BROWSER_DIRECT';
+      appendExecutionLog({ action: 'etsy-ytrends-browser-fallback', status: 'STARTED',
+        reason: safeErrorDetails(serverError) });
+      try {
+        const seedPhrase = pattern.payload?.seedPhrase || activeProject?.seed_phrase || activeProject?.seedPhrase;
+        const patternFallbackSeeds = [
+          ...(pattern.payload?.observedTags || []).map(item => item.phrase),
+          ...(pattern.payload?.repeatedPhrases || []).map(item => item.phrase),
+          ...(pattern.payload?.titleHeads || [])
+        ];
+        const providerPayload = await pullYtrendsFromBrowser(seedPhrase, patternFallbackSeeds);
+        result = await api(`/api/projects/${projectId}/etsy/patterns/ytrends`, jsonOptions({
+          patternArtifactId: pattern.id, idempotencyKey: uuid(), changeReason: 'ADD_OPTIONAL_YTRENDS_SUPPLEMENT_BROWSER_DIRECT',
+          providerTransport: 'BROWSER_DIRECT', providerPayload
+        }));
+        appendExecutionLog({ action: 'etsy-ytrends-browser-fallback', status: 'SUCCESS',
+          result: { accounting: result.accounting, transport } });
+      } catch (browserError) {
+        appendExecutionLog({ action: 'etsy-ytrends-browser-fallback', status: 'FAILED', error: safeErrorDetails(browserError) });
+        throw browserError;
+      }
+    }
+    notify(`Đã thêm ${result.accounting?.ytrendsSupplementPhraseCount} phrase YTrends E3 qua ${transport}. File live/HeyEtsy vẫn là nguồn chính.`);
     setMasterPreview(null); await refresh(); return result;
   });
 

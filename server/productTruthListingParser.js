@@ -2,6 +2,7 @@
 
 const cheerio = require('cheerio');
 const crypto = require('node:crypto');
+const Papa = require('papaparse');
 
 class ProductTruthListingError extends Error {
   constructor(code, status = 400, details = {}) {
@@ -209,4 +210,139 @@ function parseListingHtml(html, { marketplace, sourceReference = '' } = {}) {
   });
 }
 
-module.exports = Object.freeze({ ProductTruthListingError, parseListingHtml });
+function parseJsonCell(value, fallback) {
+  if (value == null || value === '') return fallback;
+  if (typeof value === 'object') return value;
+  try { return JSON.parse(String(value)); }
+  catch (_) { return fallback; }
+}
+
+function captureRowFromJson(rawText) {
+  let envelope;
+  try { envelope = JSON.parse(rawText); }
+  catch (_) { throw new ProductTruthListingError('INVALID_PRODUCT_TRUTH_CAPTURE_JSON'); }
+  if (envelope?.schema_version !== 'omni_listing_v1'
+    || !Array.isArray(envelope.headers) || !Array.isArray(envelope.rows)) {
+    throw new ProductTruthListingError('UNSUPPORTED_PRODUCT_TRUTH_CAPTURE_SCHEMA');
+  }
+  const normalizedHeaders = envelope.headers.map(header => String(header || '').trim());
+  if (normalizedHeaders.some(header => !header) || new Set(normalizedHeaders).size !== normalizedHeaders.length) {
+    throw new ProductTruthListingError('PRODUCT_TRUTH_CAPTURE_HEADERS_INVALID');
+  }
+  if (envelope.rows.length !== 1) {
+    throw new ProductTruthListingError('PRODUCT_TRUTH_DETAIL_CAPTURE_REQUIRED', 400, { rowCount: envelope.rows.length });
+  }
+  const values = envelope.rows[0];
+  if (!Array.isArray(values) || values.length !== envelope.headers.length) {
+    throw new ProductTruthListingError('PRODUCT_TRUTH_CAPTURE_FIELD_COUNT_MISMATCH');
+  }
+  return {
+    row: Object.fromEntries(normalizedHeaders.map((header, index) => [header, values[index]])),
+    envelope
+  };
+}
+
+function captureRowFromCsv(rawText) {
+  const parsed = Papa.parse(rawText.replace(/^\uFEFF/, ''), { header: true, skipEmptyLines: 'greedy' });
+  const fatal = (parsed.errors || []).find(error => error.type === 'Quotes'
+    || error.code === 'TooFewFields' || error.code === 'TooManyFields');
+  if (fatal) throw new ProductTruthListingError('INVALID_PRODUCT_TRUTH_CAPTURE_CSV', 400, { code: fatal.code, row: fatal.row });
+  if (!Array.isArray(parsed.meta?.fields) || !parsed.meta.fields.includes('source_page_type')) {
+    throw new ProductTruthListingError('UNSUPPORTED_PRODUCT_TRUTH_CAPTURE_SCHEMA');
+  }
+  if (parsed.meta.fields.some(field => !String(field || '').trim())
+    || Object.keys(parsed.meta.renamedHeaders || {}).length > 0) {
+    throw new ProductTruthListingError('PRODUCT_TRUTH_CAPTURE_HEADERS_INVALID');
+  }
+  if (parsed.data.length !== 1) {
+    throw new ProductTruthListingError('PRODUCT_TRUTH_DETAIL_CAPTURE_REQUIRED', 400, { rowCount: parsed.data.length });
+  }
+  if (Object.prototype.hasOwnProperty.call(parsed.data[0], '__parsed_extra')) {
+    throw new ProductTruthListingError('PRODUCT_TRUTH_CAPTURE_FIELD_COUNT_MISMATCH');
+  }
+  return { row: parsed.data[0], envelope: null };
+}
+
+const escapeHtml = value => clean(value).replace(/[&<>"']/g, character => ({
+  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+}[character]));
+
+function attributePairs(row, keys) {
+  const pairs = [];
+  for (const key of keys) {
+    const parsed = parseJsonCell(row[key], []);
+    if (!Array.isArray(parsed)) continue;
+    for (const item of parsed) {
+      if (item && typeof item === 'object' && clean(item.key) && clean(item.value)) {
+        pairs.push({ key: clean(item.key), value: clean(item.value) });
+      }
+    }
+  }
+  return pairs;
+}
+
+function listingCaptureHtml(row, marketplace) {
+  const title = escapeHtml(row.title);
+  const description = escapeHtml(row.product_description || row.description);
+  const categories = parseJsonCell(row.categories_json || row.category_breadcrumb_json, []);
+  const categoryList = Array.isArray(categories) ? categories : [];
+  const attributes = marketplace === 'AMAZON'
+    ? attributePairs(row, ['top_highlights_json', 'features_specs_json', 'style_json', 'product_details_json'])
+    : attributePairs(row, ['item_details_json']);
+  const bullets = marketplace === 'AMAZON'
+    ? parseJsonCell(row.about_this_item_json, [])
+    : parseJsonCell(row.highlights_json, []).map(item => typeof item === 'object' ? item.value : item);
+  const table = attributes.map(item => `<tr><th>${escapeHtml(item.key)}</th><td>${escapeHtml(item.value)}</td></tr>`).join('');
+  const breadcrumb = categoryList.map(item => `<a>${escapeHtml(item)}</a>`).join('');
+  if (marketplace === 'AMAZON') {
+    return `<body><span id="productTitle">${title}</span><div id="wayfinding-breadcrumbs_container">${breadcrumb}</div>`
+      + `<div id="feature-bullets"><ul>${(Array.isArray(bullets) ? bullets : []).map(item => `<li><span class="a-list-item">${escapeHtml(item)}</span></li>`).join('')}</ul></div>`
+      + `<div id="productDescription">${description}</div><table>${table}</table></body>`;
+  }
+  return `<body><h1 data-buy-box-listing-title="true">${title}</h1><nav aria-label="breadcrumb">${breadcrumb}</nav>`
+    + `<div data-product-details><ul>${(Array.isArray(bullets) ? bullets : []).map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul></div>`
+    + `<div data-id="description-text">${description}</div><table>${table}</table></body>`;
+}
+
+function truthyFlag(value) {
+  return ['1', 'true', 'yes'].includes(String(value || '').trim().toLowerCase());
+}
+
+function parseListingCapture(buffer, { marketplace, sourceReference = '', fileName = '' } = {}) {
+  if (!Buffer.isBuffer(buffer) || buffer.length === 0) throw new ProductTruthListingError('PRODUCT_TRUTH_CAPTURE_REQUIRED');
+  const rawText = buffer.toString('utf8');
+  const isJson = /\.json$/i.test(fileName);
+  const { row, envelope } = isJson ? captureRowFromJson(rawText) : captureRowFromCsv(rawText);
+  const expectedPageType = marketplace === 'AMAZON' ? 'amazon_product_detail' : 'etsy_listing_detail';
+  const pageType = clean(row.source_page_type || envelope?.source_page_type);
+  if (pageType !== expectedPageType) {
+    throw new ProductTruthListingError('PRODUCT_TRUTH_DETAIL_CAPTURE_REQUIRED', 400, { expectedPageType, actualPageType: pageType || null });
+  }
+  const listingId = clean(marketplace === 'AMAZON' ? row.asin : row.listing_id);
+  if (!listingId || (marketplace === 'AMAZON' ? !/^[A-Z0-9]{10}$/i.test(listingId) : !/^\d{6,15}$/.test(listingId))) {
+    throw new ProductTruthListingError('PRODUCT_TRUTH_CAPTURE_LISTING_ID_REQUIRED');
+  }
+  if (!clean(row.title)) throw new ProductTruthListingError('LISTING_CONTENT_NOT_EXTRACTED', 422);
+  const displayedId = clean(marketplace === 'AMAZON' ? row.displayed_asin : listingId);
+  const identityConflict = marketplace === 'AMAZON'
+    && (truthyFlag(row.asin_conflict) || (displayedId && displayedId.toUpperCase() !== listingId.toUpperCase()));
+  const originalHash = crypto.createHash('sha256').update(buffer).digest('hex');
+  const effectiveSource = clean(sourceReference || row.source_url || row.url || envelope?.source_url || fileName);
+  if (effectiveSource.length > 2000) throw new ProductTruthListingError('LISTING_REFERENCE_TOO_LARGE');
+  const parsed = parseListingHtml(listingCaptureHtml(row, marketplace), { marketplace, sourceReference: effectiveSource });
+  const basisNote = `Trích từ file capture listing cùng supplier/nguồn hàng do staff xác nhận; nguồn: ${effectiveSource || fileName}; SHA-256: ${originalHash}`;
+  const facts = Object.freeze(Object.fromEntries(Object.entries(parsed.facts).map(([key, fact]) => [key, { ...fact, basisNote }])));
+  const warnings = identityConflict ? Object.freeze([Object.freeze({
+    code: 'LISTING_IDENTITY_CONFLICT', requestedListingId: listingId, displayedListingId: displayedId || null,
+    message: `ASIN từ URL/capture (${listingId}) khác ASIN hiển thị trong Product Details (${displayedId || 'UNKNOWN'}). Xác nhận exact variant trước khi áp dụng.`
+  })]) : Object.freeze([]);
+  return Object.freeze({ ...parsed, rawHash: originalHash, facts,
+    sourceReference: effectiveSource || null,
+    capture: Object.freeze({ schemaVersion: envelope?.schema_version || 'csv.omni_listing_v1',
+      exporterVersion: envelope?.exporter_version || null, sourcePageType: pageType, listingId,
+      displayedListingId: displayedId || null }),
+    identity: Object.freeze({ state: identityConflict ? 'REVIEW_REQUIRED' : 'CLEAR', listingId,
+      displayedListingId: displayedId || null }), warnings });
+}
+
+module.exports = Object.freeze({ ProductTruthListingError, parseListingHtml, parseListingCapture });

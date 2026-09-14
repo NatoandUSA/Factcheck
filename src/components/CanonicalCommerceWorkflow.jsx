@@ -129,6 +129,7 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
   const [listingHtmlFile, setListingHtmlFile] = useState(null);
   const [listingPageText, setListingPageText] = useState('');
   const [sameSourceConfirmed, setSameSourceConfirmed] = useState(false);
+  const [captureIdentityConfirmed, setCaptureIdentityConfirmed] = useState(false);
   const [listingFactPreview, setListingFactPreview] = useState(null);
   const [files, setFiles] = useState([]);
   const [filePreviews, setFilePreviews] = useState([]);
@@ -235,7 +236,7 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
     setAsinPlanPreview(null); setSelectedAsinText(''); setMasterPreview(null); setKeywordDecisions({}); setKeywordQuery('');
     setEtsyWinnerPreview(null); setSelectedEtsyWinners([]); setEtsyPatternPreview(null);
     setSubmissionInputs({}); setExactExports({});
-    setListingSource(''); setListingHtmlFile(null); setSameSourceConfirmed(false); setListingFactPreview(null);
+    setListingSource(''); setListingHtmlFile(null); setSameSourceConfirmed(false); setCaptureIdentityConfirmed(false); setListingFactPreview(null);
     setPolicyContext(activeProject ? {
       locale: activeProject.locale, media_class: activeProject.media_class,
       product_type_id: activeProject.product_type_id, category_id: activeProject.category_id,
@@ -479,18 +480,38 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
       }
       throw caught;
     }
-    setFacts(previous => {
+    if (result.identity?.state !== 'REVIEW_REQUIRED') setFacts(previous => {
       const merged = { ...previous };
       for (const [key, fact] of Object.entries(result.facts || {})) {
         if (key in merged && fact?.disposition === 'ASSERTED') merged[key] = text(fact.value);
       }
       return merged;
     });
-    setTruthBasis('REFERENCE_LISTING_SAME_SOURCE');
-    setTruthBasisNote(`Listing cùng nguồn: ${result.sourceReference || listingSource.trim() || htmlFile?.name || 'rendered page text'}`);
+    if (result.identity?.state !== 'REVIEW_REQUIRED') {
+      setTruthBasis('REFERENCE_LISTING_SAME_SOURCE');
+      setTruthBasisNote(`Listing cùng nguồn: ${result.sourceReference || listingSource.trim() || htmlFile?.name || 'rendered page text'}`);
+    }
+    setCaptureIdentityConfirmed(false);
     setListingFactPreview(result);
-    notify(`Đã điền ${result.accounting?.extractedFactCount || 0} trường từ listing; hãy sửa khác biệt của biến thể trước khi lưu.`);
+    notify(result.identity?.state === 'REVIEW_REQUIRED'
+      ? 'Đã đọc file nhưng chưa điền form: ID/ASIN đang xung đột. Hãy xác nhận exact variant trước.'
+      : `Đã điền ${result.accounting?.extractedFactCount || 0} trường từ listing; hãy sửa khác biệt của biến thể trước khi lưu.`,
+    result.identity?.state === 'REVIEW_REQUIRED' ? 'error' : 'success');
   });
+
+  const applyReviewedListingFacts = () => {
+    if (!listingFactPreview || listingFactPreview.identity?.state !== 'REVIEW_REQUIRED' || !captureIdentityConfirmed) return;
+    setFacts(previous => {
+      const merged = { ...previous };
+      for (const [key, fact] of Object.entries(listingFactPreview.facts || {})) {
+        if (key in merged && fact?.disposition === 'ASSERTED') merged[key] = text(fact.value);
+      }
+      return merged;
+    });
+    setTruthBasis('REFERENCE_LISTING_SAME_SOURCE');
+    setTruthBasisNote(`Listing cùng nguồn, exact variant đã được staff xác nhận: ${listingFactPreview.sourceReference || listingHtmlFile?.name || 'structured capture'}`);
+    notify(`Đã áp dụng ${listingFactPreview.accounting?.extractedFactCount || 0} trường sau xác nhận exact variant.`);
+  };
 
   const saveTruth = () => run('truth', async () => {
     const entries = Object.entries(facts).filter(([, value]) => text(value).trim());
@@ -963,8 +984,8 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
           <ActionButton accent={accent} disabled={!sameSourceConfirmed || !listingSource.trim() || busy} onClick={() => previewReferenceListing(null)}>Quét link và điền</ActionButton>
         </div>
         <div style={{ display: 'flex', gap: 9, flexWrap: 'wrap', alignItems: 'center', marginTop: 9 }}>
-          <input aria-label="Upload HTML listing" type="file" accept=".html,.htm,.txt,text/html,text/plain" onChange={event => { setListingHtmlFile(event.target.files?.[0] || null); setListingFactPreview(null); }} />
-          <ActionButton accent="#475569" disabled={!sameSourceConfirmed || !listingHtmlFile || busy} onClick={() => previewReferenceListing(listingHtmlFile)}>Upload HTML và điền (TXT cũng được)</ActionButton>
+          <input aria-label="Upload listing capture" type="file" accept=".html,.htm,.txt,.csv,.json,text/html,text/plain,text/csv,application/json" onChange={event => { setListingHtmlFile(event.target.files?.[0] || null); setListingFactPreview(null); setCaptureIdentityConfirmed(false); }} />
+          <ActionButton accent="#475569" disabled={!sameSourceConfirmed || !listingHtmlFile || busy} onClick={() => previewReferenceListing(listingHtmlFile)}>Preview HTML / TXT / CSV / JSON</ActionButton>
         </div>
         <label style={{ display: 'grid', gap: 4, marginTop: 9, fontSize: '.75rem', fontWeight: 800 }}>Hoặc dán nội dung trang đã render (dòng đầu là title)
           <textarea aria-label="Dán nội dung listing đã render" value={listingPageText} onChange={event => { setListingPageText(event.target.value); setListingFactPreview(null); }} rows={4} placeholder="Copy phần thông tin sản phẩm trong tab Amazon/Etsy rồi dán vào đây. Giữ các dòng Material, Gem type, Size, About this item, Description…" />
@@ -975,6 +996,11 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
           <div><b>{listingFactPreview.observations?.title}</b></div>
           <div style={{ fontSize: '.75rem', color: '#475569', marginTop: 4 }}>{listingFactPreview.accounting?.extractedFactCount} trường · {listingFactPreview.accounting?.observedBulletCount || 0} bullet · SHA-256 {listingFactPreview.rawHash?.slice(0, 12)}…</div>
           {(listingFactPreview.observations?.bullets || []).length > 0 && <details style={{ marginTop: 5 }}><summary>Thông tin listing đã đọc</summary><pre style={{ whiteSpace: 'pre-wrap', fontSize: '.72rem' }}>{listingFactPreview.observations.bullets.join('\n')}</pre></details>}
+          {listingFactPreview.identity?.state === 'REVIEW_REQUIRED' && <div style={{ marginTop: 8, padding: 8, border: '1px solid #f59e0b', borderRadius: 7, background: '#fffbeb', color: '#92400e' }}>
+            {(listingFactPreview.warnings || []).map(item => <div key={item.code}><b>{item.code}</b>: {item.message}</div>)}
+            <label style={{ display: 'block', marginTop: 7, fontWeight: 700 }}><input type="checkbox" checked={captureIdentityConfirmed} onChange={event => setCaptureIdentityConfirmed(event.target.checked)} /> Tôi đã đối chiếu SKU/variant và xác nhận các dữ kiện đang áp dụng cho exact variant của project.</label>
+            <div style={{ marginTop: 7 }}><ActionButton accent="#b45309" disabled={!captureIdentityConfirmed || busy} onClick={applyReviewedListingFacts}>Áp dụng dữ kiện sau xác nhận exact variant</ActionButton></div>
+          </div>}
         </div>}
       </div>
       <div style={{ display: 'flex', gap: 9, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>

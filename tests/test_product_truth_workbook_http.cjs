@@ -80,6 +80,38 @@ let server;
   assert.equal((await get('SELECT COUNT(*) AS n FROM product_truth_revisions')).n, before,
     'listing preview must not create a Product Truth revision');
 
+  const captureHeaders = ['asin', 'displayed_asin', 'asin_conflict', 'title', 'top_highlights_json',
+    'about_this_item_json', 'source_url', 'source_page_type'];
+  const captureJson = JSON.stringify({ schema_version: 'omni_listing_v1', exporter_version: '2.1.0',
+    source_page_type: 'amazon_product_detail', headers: captureHeaders, rows: [[
+      'B0D5W7RXC2', 'B0D5W7RQQX', '1', 'Structured Capture Necklace',
+      JSON.stringify([{ key: 'Material', value: 'Stainless Steel' }]),
+      JSON.stringify(['Message card included']), 'https://www.amazon.com/dp/B0D5W7RXC2', 'amazon_product_detail'
+    ]] });
+  const captureForm = new FormData();
+  captureForm.append('file', new Blob([captureJson], { type: 'application/json' }), 'amazon-capture.json');
+  captureForm.append('confirmSameSource', 'true');
+  const captureResponse = await fetch(`${origin}/api/projects/${project.projectId}/product-truth-listing/preview`, {
+    method: 'POST', headers: { Cookie: `omni_session=${session.rawToken}`, Origin: origin }, body: captureForm
+  });
+  const capturePreview = await captureResponse.json();
+  assert.equal(captureResponse.status, 200, JSON.stringify(capturePreview));
+  assert.equal(capturePreview.identity.state, 'REVIEW_REQUIRED');
+  assert.equal(capturePreview.warnings[0].code, 'LISTING_IDENTITY_CONFLICT');
+  assert.equal(capturePreview.facts.materials.value, 'Stainless Steel');
+  assert.equal((await get('SELECT COUNT(*) AS n FROM product_truth_revisions')).n, before,
+    'structured capture preview must not create a Product Truth revision');
+
+  const searchCsv = 'listing_id,title,source_page_type\n4533292901,First listing,etsy_search_results\n4522488869,Second listing,etsy_search_results\n';
+  const searchForm = new FormData();
+  searchForm.append('file', new Blob([searchCsv], { type: 'text/csv' }), 'etsy-search.csv');
+  searchForm.append('confirmSameSource', 'true');
+  const searchResponse = await fetch(`${origin}/api/projects/${project.projectId}/product-truth-listing/preview`, {
+    method: 'POST', headers: { Cookie: `omni_session=${session.rawToken}`, Origin: origin }, body: searchForm
+  });
+  assert.equal(searchResponse.status, 400);
+  assert.equal((await searchResponse.json()).error, 'PRODUCT_TRUTH_DETAIL_CAPTURE_REQUIRED');
+
   const unconfirmedListing = new FormData();
   unconfirmedListing.append('file', new Blob([listingHtml]), 'amazon-listing.html');
   const unconfirmedResponse = await fetch(`${origin}/api/projects/${project.projectId}/product-truth-listing/preview`, {
@@ -101,7 +133,7 @@ let server;
   });
   assert.equal(unsupported.status, 415);
 
-  console.log('Product Truth workbook/listing HTTP: 17/17 PASS');
+  console.log('Product Truth workbook/listing HTTP: 24/24 PASS');
 })().catch(error => { console.error(error); process.exitCode = 1; }).finally(async () => {
   if (server) await new Promise(resolve => server.close(resolve));
   if (db?.open) await new Promise(resolve => db.close(resolve));

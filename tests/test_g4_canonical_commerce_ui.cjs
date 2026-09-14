@@ -159,11 +159,11 @@ const assert = require('assert');
 
   const sameSource = [...document.querySelectorAll('input[type="checkbox"]')].find(item => item.parentElement.textContent.includes('cùng supplier'));
   await act(async () => { sameSource.click(); });
-  const listingHtmlInput = document.querySelector('input[aria-label="Upload HTML listing"]');
+  const listingHtmlInput = document.querySelector('input[aria-label="Upload listing capture"]');
   const listingHtml = new dom.window.File(['<span id="productTitle">Para Mi Hija Necklace</span>'], 'amz.html', { type: 'text/html' });
   Object.defineProperty(listingHtmlInput, 'files', { value: [listingHtml], configurable: true });
   await act(async () => { listingHtmlInput.dispatchEvent(new dom.window.Event('change', { bubbles: true })); });
-  await act(async () => { buttons().find(button => button.textContent.includes('Upload HTML và điền')).click(); });
+  await act(async () => { buttons().find(button => button.textContent.includes('Preview HTML / TXT / CSV / JSON')).click(); });
   check(calls.some(call => call.url.endsWith('/product-truth-listing/preview')),
     'integrated Product Truth scan must reuse the authenticated project-scoped route');
   check([...document.querySelectorAll('input')].some(item => item.value === 'Stainless Steel')

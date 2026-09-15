@@ -4,6 +4,7 @@ import ProjectSetupCard from './ProjectSetupCard';
 import { useAuth } from '../context/AuthContext';
 
 const CATEGORIES = Object.freeze([
+  'Other / New Physical Product',
   'Jewelry', 'Embroidery', 'Acrylic', 'Blanket', 'Apparel: Sweatshirt',
   'Apparel: Shirt', 'Apparel: Hoodie', 'Mug'
 ]);
@@ -25,7 +26,7 @@ export default function SinglePathMarketplaceWorkspace({ marketplace, onSelectLi
   const [projects, setProjects] = useState([]);
   const [activeProjectId, setActiveProjectId] = useState('');
   const [showCreate, setShowCreate] = useState(false);
-  const [category, setCategory] = useState('Jewelry');
+  const [category, setCategory] = useState('Other / New Physical Product');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const toastRef = useRef(onShowToast);
@@ -94,6 +95,7 @@ export default function SinglePathMarketplaceWorkspace({ marketplace, onSelectLi
       <label style={{ width: 'fit-content' }}>Loại sản phẩm {' '}
         <select value={category} onChange={event => setCategory(event.target.value)}>
           {CATEGORIES.map(item => <option key={item} value={item}>{item}</option>)}
+          {marketplace === 'ETSY' && <option value="Digital Product">Digital Product / Printable</option>}
         </select>
       </label>
       <ProjectSetupCard marketplace={marketplace} category={category} seedPhrase="" accent={accent}

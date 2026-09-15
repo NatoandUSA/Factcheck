@@ -32,12 +32,20 @@ function normalizeList(value) {
 }
 
 function normalizeTruth(input = {}) {
+  const universalFeatures = [
+    ...normalizeList(input.features),
+    String(input.specifications || '').trim(), String(input.capabilities || '').trim(),
+    String(input.intendedUse || '').trim(), String(input.compatibility || input.softwareCompatibility || '').trim(),
+    String(input.performance || '').trim(), String(input.durability || '').trim(),
+    String(input.instructions || '').trim(), String(input.warranty || '').trim(),
+    String(input.safetyWarnings || input.safety || '').trim()
+  ].filter(Boolean);
   return {
     productType: String(input.productType || '').trim(),
     productName: String(input.productName || '').trim(),
     recipient: String(input.recipient || '').trim(),
     occasion: String(input.occasion || '').trim(),
-    materials: normalizeList(input.materials),
+    materials: normalizeList(input.materials || input.composition || input.ingredients),
     purity: String(input.purity || '').trim(),
     finish: String(input.finish || '').trim(),
     gemstones: normalizeList(input.gemstones),
@@ -47,7 +55,7 @@ function normalizeTruth(input = {}) {
     dimensions: normalizeList(input.dimensions),
     weight: String(input.weight || '').trim(),
     quantity: String(input.quantity || '').trim(),
-    features: normalizeList(input.features),
+    features: [...new Set(universalFeatures)],
     personalization: String(input.personalization || '').trim(),
     packaging: String(input.packaging || '').trim(),
     care: String(input.care || '').trim(),

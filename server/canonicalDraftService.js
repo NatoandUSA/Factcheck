@@ -76,9 +76,16 @@ function composeTruthOnlyContent(truth, marketplace) {
   const occasion = scalar(facts.occasion);
   const title = [productType, recipient ? `for ${recipient}` : '', occasion].filter(Boolean).join(' ').trim();
   const detailPairs = [
-    ['Material', facts.materials || facts.composition], ['Size', facts.sizes || facts.dimensions],
+    ['Brand', facts.brand], ['Model', facts.model],
+    ['Material / ingredients', facts.materials || facts.composition || facts.ingredients],
+    ['Size', facts.sizes || facts.dimensions], ['Features', facts.features || facts.capabilities],
+    ['Specifications', facts.specifications], ['Intended use', facts.intendedUse],
+    ['Compatibility', facts.compatibility || facts.softwareCompatibility],
+    ['Performance', facts.performance], ['Durability', facts.durability],
     ['Personalization', facts.personalization], ['Included', facts.includedItems],
-    ['Format', facts.fileFormat], ['Players', facts.playerCount], ['Age', facts.minimumAge], ['Duration', facts.duration]
+    ['Format', facts.fileFormat], ['Players', facts.playerCount], ['Age', facts.minimumAge], ['Duration', facts.duration],
+    ['Instructions', facts.instructions], ['Warranty', facts.warranty],
+    ['Safety', facts.safetyWarnings || facts.safety], ['Allergens', facts.allergens]
   ].map(([label, value]) => [label, scalar(value)]).filter(([, value]) => value);
   const description = [title, ...detailPairs.map(([label, value]) => `${label}: ${value}`)].join('. ');
   if (marketplace === 'AMAZON') return Object.freeze({

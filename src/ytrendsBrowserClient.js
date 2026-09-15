@@ -2,6 +2,14 @@ const MCP_URL = 'https://mcp.trends.ytuong.ai/mcp';
 const PROTOCOL_VERSION = '2025-06-18';
 const REQUIRED_TOOLS = ['ytrends_explore_niche', 'ytrends_research_keyword', 'ytrends_find_trending_keywords', 'ytrends_search'];
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
+const dataOf = value => value?.data && typeof value.data === 'object' ? value.data : {};
+const hasKeywordPhrases = value => {
+  const data = dataOf(value);
+  return Boolean((data.adjacent_tags || []).length || (data.related_keywords || []).length
+    || (data.top_listings || []).some(row => Array.isArray(row?.tags) && row.tags.length));
+};
+const sourcedRows = (rows, sourceField) => (Array.isArray(rows) ? rows : []).map(item =>
+  typeof item === 'string' ? { tag: item, _omniSourceField: sourceField } : { ...item, _omniSourceField: sourceField });
 
 function parseMcpBody(body) {
   let parsed = null;
@@ -56,7 +64,7 @@ async function createClient() {
   const names = new Set(tools.map(tool => tool?.name));
   const missing = REQUIRED_TOOLS.filter(name => !names.has(name));
   if (missing.length) throw new Error(`YTRENDS_TOOL_CONTRACT_CHANGED:${missing.join(',')}`);
-  return async (name, args) => {
+  const call = async (name, args) => {
     await wait(1000);
     const response = await postMcp({ jsonrpc: '2.0', id: Date.now(), method: 'tools/call',
       params: { name, arguments: args } }, sessionId);
@@ -66,42 +74,45 @@ async function createClient() {
     if (!value) return parsed?.result || {};
     try { return JSON.parse(value); } catch (_) { return value; }
   };
+  call.toolNames = names;
+  return call;
 }
 
 export async function pullYtrendsFromBrowser(seed, alternateSeeds = []) {
   const call = await createClient();
-  const explored = await call('ytrends_explore_niche', { seed, response_format: 'concise' });
-  const exploredData = explored?.data && typeof explored.data === 'object' ? explored.data : {};
-  const hasPhrases = (Array.isArray(exploredData.adjacent_tags) && exploredData.adjacent_tags.length)
-    || (Array.isArray(exploredData.related_keywords) && exploredData.related_keywords.length)
-    || (Array.isArray(exploredData.top_listings) && exploredData.top_listings.some(row => Array.isArray(row?.tags) && row.tags.length));
-  if (hasPhrases) return { ...explored, _omniTransport: 'BROWSER_DIRECT', _omniRequestedSeed: seed,
-    _omniSeedUsed: seed, _omniTools: ['ytrends_explore_niche'] };
-  const researched = await call('ytrends_research_keyword', { keyword: seed, response_format: 'concise' });
-  const trending = await call('ytrends_find_trending_keywords', { search: seed, limit: 25, response_format: 'concise' });
-  const searched = await call('ytrends_search', { query: seed, limit: 25 });
-  const researchData = researched?.data && typeof researched.data === 'object' ? researched.data : {};
-  const trendingRows = Array.isArray(trending?.data?.tags) ? trending.data.tags : [];
-  const searchRows = Array.isArray(searched?.data?.results) ? searched.data.results : [];
-  const searchKeywords = searchRows.filter(row => row?.kind === 'keyword' || row?.type === 'keyword')
-    .map(row => row.keyword || row.tag || row.name).filter(Boolean);
-  const combined = { data: { overview: exploredData.overview || researchData.stats || null,
-    adjacent_tags: [...(exploredData.adjacent_tags || []), ...trendingRows, ...searchKeywords],
-    related_keywords: researchData.related_keywords || [], top_listings: researchData.top_listings || [] },
-  _omniTransport: 'BROWSER_DIRECT', _omniRequestedSeed: seed, _omniSeedUsed: seed,
-  _omniTools: ['ytrends_explore_niche', 'ytrends_research_keyword', 'ytrends_find_trending_keywords', 'ytrends_search'] };
-  const combinedHasPhrases = combined.data.adjacent_tags.length || combined.data.related_keywords.length
-    || combined.data.top_listings.some(row => Array.isArray(row?.tags) && row.tags.length);
-  if (combinedHasPhrases) return combined;
+  let providerSeed = seed;
+  let explored = await call('ytrends_explore_niche', { seed, depth: 'deep', response_format: 'detailed' });
   const candidates = [...new Set((alternateSeeds || []).map(value => String(value || '').trim())
     .filter(value => value && value !== seed))].slice(0, 2);
-  for (const candidate of candidates) {
-    const alternative = await call('ytrends_explore_niche', { seed: candidate, response_format: 'concise' });
-    const data = alternative?.data && typeof alternative.data === 'object' ? alternative.data : {};
-    const useful = (data.adjacent_tags || []).length || (data.related_keywords || []).length
-      || (data.top_listings || []).some(row => Array.isArray(row?.tags) && row.tags.length);
-    if (useful) return { ...alternative, _omniTransport: 'BROWSER_DIRECT', _omniRequestedSeed: seed,
-      _omniSeedUsed: candidate, _omniTools: ['ytrends_explore_niche', 'pattern-derived-seed-fallback'] };
+  if (!hasKeywordPhrases(explored)) {
+    for (const candidate of candidates) {
+      const alternative = await call('ytrends_explore_niche', { seed: candidate, depth: 'deep', response_format: 'detailed' });
+      if (!hasKeywordPhrases(alternative)) continue;
+      providerSeed = candidate; explored = alternative; break;
+    }
   }
-  return combined;
+  const specs = [
+    ['ytrends_research_keyword', { keyword: providerSeed, response_format: 'detailed' }],
+    ['ytrends_find_trending_keywords', { search: providerSeed, limit: 50, response_format: 'detailed' }],
+    ['ytrends_search', { query: providerSeed, limit: 30, kinds: ['keyword', 'listing'] }],
+    ['ytrends_find_hidden_gems', { search: providerSeed, limit: 50, response_format: 'detailed' }],
+    ['ytrends_scout_opportunities', { search: providerSeed, limit: 50, response_format: 'detailed' }]
+  ].filter(([name]) => call.toolNames.has(name));
+  const pulls = [{ tool: 'ytrends_explore_niche', status: 'SUCCESS' }]; const results = new Map();
+  for (const [name, args] of specs) {
+    try { results.set(name, await call(name, args)); pulls.push({ tool: name, status: 'SUCCESS' }); }
+    catch (error) { pulls.push({ tool: name, status: 'FAILED', code: String(error?.message || 'YTRENDS_TOOL_ERROR').slice(0, 120) }); }
+  }
+  const exploredData = dataOf(explored); const researchData = dataOf(results.get('ytrends_research_keyword'));
+  const trendingData = dataOf(results.get('ytrends_find_trending_keywords'));
+  const searchData = dataOf(results.get('ytrends_search')); const gemsData = dataOf(results.get('ytrends_find_hidden_gems'));
+  const scoutData = dataOf(results.get('ytrends_scout_opportunities'));
+  const searchRows = (searchData.results || []).filter(row => !row?.kind || row.kind === 'keyword' || row.type === 'keyword');
+  return { data: { overview: exploredData.overview || researchData.stats || null,
+    adjacent_tags: exploredData.adjacent_tags || [], related_keywords: researchData.related_keywords || exploredData.related_keywords || [],
+    top_listings: researchData.top_listings || exploredData.top_listings || [], discovery_keywords: [
+      ...sourcedRows(trendingData.tags, 'trending.tags'), ...sourcedRows(searchRows, 'search.results'),
+      ...sourcedRows(gemsData.tags, 'hidden_gems.tags'), ...sourcedRows(scoutData.results, 'opportunities.results')
+    ] }, _omniTransport: 'BROWSER_DIRECT', _omniRequestedSeed: seed, _omniSeedUsed: providerSeed,
+    _omniTools: pulls.filter(item => item.status === 'SUCCESS').map(item => item.tool), _omniPulls: pulls };
 }

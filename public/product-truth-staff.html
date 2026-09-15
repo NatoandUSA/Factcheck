@@ -90,10 +90,12 @@
   (() => {
     const FACTS = [
       ['productName','Tên sản phẩm',true],['productType','Loại sản phẩm',true],['category','Danh mục'],
+      ['brand','Thương hiệu'],['manufacturer','Nhà sản xuất'],['model','Model'],['sku','SKU / mã nội bộ'],['identifiers','Mã nhận diện khác'],
       ['materials','Chất liệu'],['composition','Thành phần'],['colors','Màu sắc'],['finish','Hoàn thiện bề mặt'],
       ['design','Thiết kế'],['style','Phong cách'],['theme','Chủ đề'],['pattern','Họa tiết'],['purity','Độ tinh khiết / lớp mạ'],
       ['components','Bộ phận / cấu kiện'],['gemstones','Đá / thành phần trang sức'],['includedItems','Vật phẩm đi kèm'],
       ['sizes','Kích thước'],['dimensions','Kích thước chi tiết'],['weight','Khối lượng'],['quantity','Số lượng'],['capacity','Dung tích / sức chứa'],
+      ['features','Tính năng đã xác minh'],['specifications','Thông số kỹ thuật'],['intendedUse','Mục đích sử dụng'],
       ['capabilities','Tính năng / khả năng'],['personalization','Khả năng cá nhân hóa'],['process','Quy trình / phương pháp sản xuất'],
       ['origin','Xuất xứ'],['shipFrom','Nơi gửi hàng'],['facility','Cơ sở sản xuất'],['productionPartner','Đối tác sản xuất'],
       ['fulfillment','Phương thức hoàn tất đơn'],['processingTime','Thời gian xử lý'],['delivery','Thông tin giao hàng'],
@@ -103,10 +105,13 @@
       ['environment','Điều kiện môi trường'],['ethical','Thông tin đạo đức / lao động'],['sustainability','Thông tin bền vững'],
       ['recipient','Người nhận'],['occasion','Dịp sử dụng'],['audience','Đối tượng'],['digital','Sản phẩm số'],['digitalDetails','Chi tiết sản phẩm số'],
       ['fileFormat','Định dạng file'],['license','Giấy phép'],['usageRights','Quyền sử dụng'],['playerCount','Số người chơi'],
-      ['minimumAge','Tuổi tối thiểu'],['duration','Thời lượng'],['language','Ngôn ngữ sản phẩm']
+      ['minimumAge','Tuổi tối thiểu'],['duration','Thời lượng'],['language','Ngôn ngữ sản phẩm'],
+      ['instructions','Hướng dẫn sử dụng'],['warranty','Bảo hành'],['ingredients','Thành phần nguyên liệu'],
+      ['allergens','Chất gây dị ứng'],['safetyWarnings','Cảnh báo an toàn'],
+      ['softwareCompatibility','Tương thích phần mềm / thiết bị'],['digitalDelivery','Cách giao file số']
     ];
     const PHYSICAL = new Set(['productName','productType','category','materials','colors','sizes','personalization','process','includedItems','packaging','recipient','occasion','audience']);
-    const DIGITAL = new Set(['productName','productType','category','digital','digitalDetails','fileFormat','license','usageRights','playerCount','minimumAge','duration','language','recipient','occasion','audience']);
+    const DIGITAL = new Set(['productName','productType','category','digital','digitalDetails','fileFormat','license','usageRights','playerCount','minimumAge','duration','language','softwareCompatibility','digitalDelivery','recipient','occasion','audience']);
     const BASES = [['SUPPLIER_SPEC','Thông số nhà cung cấp'],['OWN_LISTING_RECORD','Listing đã đăng của công ty'],['REFERENCE_LISTING_SAME_SOURCE','Listing cùng supplier / nguồn hàng'],['PHYSICAL_INSPECTION','Kiểm tra sản phẩm thực tế'],
       ['PRODUCTION_WORKFLOW','Quy trình sản xuất'],['RIGHTS_RECORD','Hồ sơ quyền sở hữu / IP'],['OTHER','Nguồn khác đã kiểm tra']];
     const $ = id => document.getElementById(id);

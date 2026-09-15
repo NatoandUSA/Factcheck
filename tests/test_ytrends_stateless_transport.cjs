@@ -4,7 +4,7 @@ const assert = require('node:assert');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const clientModule = require('../server/ytuongMcpClient');
-const { normalizeYtrendsSupplement, validateBrowserYtrendsPayload } = require('../server/etsyResearchWorkflow');
+const { normalizeYtrendsSupplement, validateBrowserYtrendsPayload, YTRENDS_MAX_PHRASES_PER_SNAPSHOT } = require('../server/etsyResearchWorkflow');
 const { YTrendsMcpClient } = clientModule;
 
 const sse = payload => `event: message\ndata: ${JSON.stringify(payload)}\n\n`;
@@ -47,17 +47,18 @@ class FakeClient extends YTrendsMcpClient {
     response({ jsonrpc: '2.0', id: 1, result: { protocolVersion: '2025-06-18' } }), response(null, null, 202),
     response({ jsonrpc: '2.0', id: 2, result: { tools: toolNames.map(name => ({ name })) } }),
     response({ jsonrpc: '2.0', id: 3, result: { content: [{ type: 'text', text: JSON.stringify({ data: {} }) }] } }),
-    response({ jsonrpc: '2.0', id: 4, result: { content: [{ type: 'text', text: JSON.stringify({ data: { related_keywords: [], top_listings: [] } }) }] } }),
-    response({ jsonrpc: '2.0', id: 5, result: { content: [{ type: 'text', text: JSON.stringify({ data: { tags: [] } }) }] } }),
-    response({ jsonrpc: '2.0', id: 6, result: { content: [{ type: 'text', text: JSON.stringify({ data: { results: [] } }) }] } }),
-    response({ jsonrpc: '2.0', id: 7, result: { content: [{ type: 'text', text: JSON.stringify({
+    response({ jsonrpc: '2.0', id: 4, result: { content: [{ type: 'text', text: JSON.stringify({
       data: { adjacent_tags: [{ tag: 'daughter necklace' }] }
-    }) }] } })
+    }) }] } }),
+    response({ jsonrpc: '2.0', id: 5, result: { content: [{ type: 'text', text: JSON.stringify({ data: { related_keywords: [{ tag: 'daughter gift' }], top_listings: [] } }) }] } }),
+    response({ jsonrpc: '2.0', id: 6, result: { content: [{ type: 'text', text: JSON.stringify({ data: { tags: [{ tag: 'gift for daughter' }] } }) }] } }),
+    response({ jsonrpc: '2.0', id: 7, result: { content: [{ type: 'text', text: JSON.stringify({ data: { results: [{ kind: 'keyword', name: 'daughter jewelry' }] } }) }] } })
   ]);
   const fallbackResult = await sparseClient.pullKeywordEcosystem('para mi hija', ['daughter necklace']);
   assert.equal(fallbackResult._omniRequestedSeed, 'para mi hija');
   assert.equal(fallbackResult._omniSeedUsed, 'daughter necklace');
-  assert.ok(fallbackResult._omniTools.includes('pattern-derived-seed-fallback'));
+  assert.ok(fallbackResult.data.related_keywords.length > 0, 'fallback seed must still receive detailed multi-tool research');
+  assert.ok(fallbackResult.data.discovery_keywords.length > 1, 'multiple YTrends tools must contribute comparison phrases');
 
   const fetchQueue = [
     response({ jsonrpc: '2.0', id: 1, result: { protocolVersion: '2025-06-18' } }),
@@ -65,7 +66,10 @@ class FakeClient extends YTrendsMcpClient {
     response({ jsonrpc: '2.0', id: 2, result: { tools: toolNames.map(name => ({ name })) } }),
     response({ jsonrpc: '2.0', id: 3, result: { content: [{ type: 'text', text: JSON.stringify({
       data: { adjacent_tags: [{ tag: 'gift for daughter' }] }
-    }) }] } })
+    }) }] } }),
+    response({ jsonrpc: '2.0', id: 4, result: { content: [{ type: 'text', text: JSON.stringify({ data: { related_keywords: [{ tag: 'daughter necklace gift' }], top_listings: [] } }) }] } }),
+    response({ jsonrpc: '2.0', id: 5, result: { content: [{ type: 'text', text: JSON.stringify({ data: { tags: [{ tag: 'mom daughter gift' }] } }) }] } }),
+    response({ jsonrpc: '2.0', id: 6, result: { content: [{ type: 'text', text: JSON.stringify({ data: { results: [{ kind: 'keyword', name: 'daughter keepsake' }] } }) }] } })
   ];
   const originalFetch = global.fetch;
   global.fetch = async () => {
@@ -84,6 +88,12 @@ class FakeClient extends YTrendsMcpClient {
     assert.equal(supplement.serverVerifiedTransport, false);
     assert.equal(supplement.providerSeed, 'daughter necklace');
     assert.equal(supplement.phrases[0].phrase, 'gift for daughter');
+    assert.ok(supplement.phrases.length >= 4, 'browser fallback must aggregate multiple YTrends tools rather than stop at 10 explore results');
+    const bounded = normalizeYtrendsSupplement({ data: { adjacent_tags: Array.from({ length: 275 }, (_, index) => `keyword ${index + 1}`) } }, 'daughter necklace');
+    assert.equal(YTRENDS_MAX_PHRASES_PER_SNAPSHOT, 250);
+    assert.equal(bounded.snapshotSafetyLimit, 250, 'artifact must disclose its storage safety bound');
+    assert.equal(bounded.candidatePhraseCount, 275, 'artifact must retain transparent pre-bound accounting');
+    assert.equal(bounded.phrases.length, 250, 'a snapshot must remain bounded without imposing a ten-keyword business cap');
   } finally { global.fetch = originalFetch; }
-  console.log('🟢 YTrends stateless transport and bounded browser fallback contract passed.');
+  console.log('🟢 YTrends stateless multi-tool transport and bounded browser fallback contract passed.');
 })().catch(error => { console.error(error); process.exit(1); });

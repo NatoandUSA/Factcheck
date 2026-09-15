@@ -295,25 +295,42 @@ async function savePatterns(db, scope, projectId, input) {
     payload: preview.payload, accounting: preview.accounting, bindings: preview.bindings });
 }
 
+const YTRENDS_MAX_PHRASES_PER_SNAPSHOT = 250;
+
 function normalizeYtrendsSupplement(raw, seedPhrase, fetchedAt = new Date().toISOString()) {
   const data = raw?.data && typeof raw.data === 'object' ? raw.data : (raw && typeof raw === 'object' ? raw : {});
   const phrases = new Map();
   const add = (value, sourceField) => {
-    const phrase = text(typeof value === 'string' ? value : value?.keyword || value?.tag || value?.name);
+    const phrase = text(typeof value === 'string' ? value : value?.keyword || value?.tag || value?.name || value?.phrase);
     if (!phrase || phrase.length > 140) return;
-    const key = fold(phrase); const current = phrases.get(key) || { phrase, sourceFields: [] };
-    if (!current.sourceFields.includes(sourceField)) current.sourceFields.push(sourceField); phrases.set(key, current);
+    const resolvedSource = text(value?._omniSourceField || sourceField);
+    const key = fold(phrase); const current = phrases.get(key) || { phrase, sourceFields: [], providerObservations: [] };
+    if (!current.sourceFields.includes(resolvedSource)) current.sourceFields.push(resolvedSource);
+    if (value && typeof value === 'object' && current.providerObservations.length < 4) {
+      const observation = { sourceField: resolvedSource };
+      for (const metric of ['listing_count','seller_count','avg_revenue','total_revenue','avg_conversion_rate','avg_fav_rate',
+        'avg_sold_24h','avg_views_24h','opportunity_score','competition_score','competition_level','gem_score',
+        'momentum_score','rank','data_confidence','relevance_score','co_occurrence_count','lift']) {
+        if (value[metric] !== undefined && value[metric] !== null) observation[metric] = value[metric];
+      }
+      current.providerObservations.push(observation);
+    }
+    phrases.set(key, current);
   };
   for (const item of Array.isArray(data.adjacent_tags) ? data.adjacent_tags : []) add(item, 'adjacent_tags');
   for (const item of Array.isArray(data.related_keywords) ? data.related_keywords : []) add(item, 'related_keywords');
   for (const listing of Array.isArray(data.top_listings) ? data.top_listings : []) {
     for (const tag of Array.isArray(listing.tags) ? listing.tags : []) add(tag, 'top_listings.tags');
   }
+  for (const item of Array.isArray(data.discovery_keywords) ? data.discovery_keywords : []) add(item, 'discovery_keywords');
   const transport = raw?._omniTransport === 'BROWSER_DIRECT' ? 'BROWSER_DIRECT' : 'SERVER_DIRECT';
   return { provider: 'YTRENDS_MCP', evidenceTier: 'E3_SUPPLEMENTAL_INDEX', transport,
     serverVerifiedTransport: transport === 'SERVER_DIRECT', providerTools: Array.isArray(raw?._omniTools) ? raw._omniTools.slice(0, 10) : [],
     seedPhrase: text(seedPhrase), providerSeed: text(raw?._omniSeedUsed || seedPhrase), fetchedAt,
-    phrases: [...phrases.values()], overview: data.overview && typeof data.overview === 'object' ? data.overview : null,
+    requestCount: Array.isArray(raw?._omniPulls) ? raw._omniPulls.length : 1,
+    successfulRequestCount: Array.isArray(raw?._omniPulls) ? raw._omniPulls.filter(item => item.status === 'SUCCESS').length : 1,
+    candidatePhraseCount: phrases.size, snapshotSafetyLimit: YTRENDS_MAX_PHRASES_PER_SNAPSHOT,
+    phrases: [...phrases.values()].slice(0, YTRENDS_MAX_PHRASES_PER_SNAPSHOT), overview: data.overview && typeof data.overview === 'object' ? data.overview : null,
     responseHash: hashBytes(canonicalJson(raw == null ? null : raw)) };
 }
 
@@ -439,4 +456,5 @@ async function saveMasterKeywords(db, scope, projectId, input) {
 
 module.exports = Object.freeze({ EtsyWorkflowError, bindings, evidenceTier, mergeEntities, relevance, rankEntities,
   previewWinners, saveWinners, minePatterns, previewPatterns, savePatterns, buildMaster, previewMasterKeywords,
-  saveMasterKeywords, normalizeYtrendsSupplement, validateBrowserYtrendsPayload, supplementPatternsWithYtrends });
+  saveMasterKeywords, normalizeYtrendsSupplement, validateBrowserYtrendsPayload, supplementPatternsWithYtrends,
+  YTRENDS_MAX_PHRASES_PER_SNAPSHOT });

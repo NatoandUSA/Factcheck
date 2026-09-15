@@ -2,7 +2,7 @@
 # ==============================================================================
 # OMNISELLER STUDIO — SAFE SYSTEMD RELEASE PLATFORM MIGRATION INSTALLER
 # Authoritative Baseline SHA: e6df541c4a5d7fbc9d6e5bbca18b48d442039b96
-# Target VPS Host: etsy@51.79.200.65 (Ubuntu 22.04 LTS)
+# Production host identity is maintained in external operations inventory.
 # ==============================================================================
 
 set -Eeuo pipefail

@@ -79,7 +79,7 @@ Pre-cutover requirements:
 1. Exact 40-character baseline and target commits resolve locally.
 2. Node major is 22 and production state paths are external to the release tree.
 3. The external environment file contains exactly one `OMNI_R43_SINGLE_PATH=1` assignment.
-4. If the whole-tree schema/source fingerprint or its comparator changes, an exact baseline/target technical receipt proves:
+4. Only a real schema-authority fingerprint change requires an exact baseline/target technical receipt proving:
    - forward migration;
    - baseline read after forward migration;
    - restore from the immutable backup.
@@ -202,3 +202,26 @@ Additional defense-in-depth accepted from the review: legacy writes are default-
 Second-successor focused checks pass for schema adversarial coverage, technical receipt negative cases, GitHub Owner authorization, runtime policy, raw LF enforcement, shell syntax, no-clobber receipt publishing and R4.3 Single-Path (`19/19`). The local unsupported Node 24 inventory is now 102 suites and reports `101/102 PASS`; only the pre-existing Windows process-tree sentinel fails. Exact Node 22 CI on the new frozen SHA remains required before merge eligibility.
 
 Second-successor reviewers must reproduce only the changed control surface: whole-tree fingerprint blind spots and comparator drift, technical receipt empty/no-op/stale cases, forged GitHub identity/digest/commit cases, CRLF rejection, duplicate receipt refusal, default-deny without environment configuration and backup receipt completeness. Do not reopen already accepted C-01–C-07 without new executable counter-evidence.
+
+## 12. GPT1/Claude review of `55cf91d2` and deploy-deadlock correction
+
+GPT1 proved a P0 interaction that module-level adversarial coverage did not detect: the whole-tree digest changed for every release, comparator absence forced the migration branch, and the technical receipt correctly rejected a no-op database hash. The result was an impossible deploy for a control-only release. Claude independently confirmed the over-trigger as E-06 and found E-07, an unguarded failure window after the service stops.
+
+Canonical disposition:
+
+| ID | Decision | Correction |
+|---|---|---|
+| GPT1 deploy deadlock | `ACCEPT — P0 PROVEN` | Split schema authority, release-control integrity and comparator identity. Only schema change requires migration rehearsal. Comparator-only change requires exact Owner authorization and must not fabricate a DB migration. |
+| E-07 backup failure window | `ACCEPT — P1 PROVEN` | Arm inherited `ERR` rollback immediately before service stop, disable it inside rollback, and explicitly guard backup directory creation, primary DB copy and checksum creation. |
+| E-03 authorization revocation | `ACCEPT — P2 PROVEN` | Use the Owner's latest timestamped review and reject an explicit digest-bound revocation marker. |
+| E-04 GitHub verification | `ACCEPT — P2 PROVEN` | Verify PR head equals target SHA and base is `main`; paginate with a hard page bound and a ten-second request timeout. Keep the repository public for read-only verification while removing committed host identity. |
+| E-05 local CRLF | `ACCEPT — WORKTREE HYGIENE` | Renormalize tracked shell/template paths; never weaken raw-byte LF assertions. |
+| E-01/E-02 extension/symlink | `ACCEPT — DEFENSE IN DEPTH` | Release-control digest covers every regular file and committed symlink without an extension allowlist. Schema dependencies are recursively resolved regardless of extension; schema-authority symlinks are rejected. |
+
+The schema-authority manifest seeds `server/database/migrations.js` and `server/projectStateRegistry.js`, recursively includes their relative dependencies, and hashes only the marked bootstrap-schema region of `server/server.js`. Any additional DDL elsewhere in `server/server.js` fails closed. UI, test and route-only edits change `releaseControlFingerprint` but not `schemaAuthorityFingerprint`; actual migration/bootstrap/dependency edits change the schema fingerprint. `release_gate_policy.cjs` makes this decision executable and independently tested.
+
+Owner authorization schema v2 binds the baseline/target commits, both schema fingerprints, both comparator fingerprints, the target release-control fingerprint and the technical-evidence hash. It is required for every release. When schema is unchanged, the release-control fingerprint is the evidence binding; when schema changes, the verified migration evidence SHA replaces it.
+
+Required final-delta review: reproduce UI/test-only no-migration behavior, actual DDL requiring rehearsal, comparator-only Owner review, latest-review/revocation behavior, PR lineage/pagination/timeout, schema symlink rejection, and E-07 rollback under an unwritable backup destination. Production read-only DDL and stale-row receipts remain blocking evidence.
+
+The third-successor canonical inventory contains 103 suites. Focused controls and the Vite build pass locally; the unsupported Node 24/Windows run reports `102/103 PASS`, with only the previously isolated process-tree sentinel failing. The exact successor must still pass the Node 22 PR event before this section becomes certifying evidence.

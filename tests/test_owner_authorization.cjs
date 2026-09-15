@@ -3,39 +3,58 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { authorizationDigest, verifyOwnerReviews } = require('../scripts/verify_owner_authorization.cjs');
+const { authorizationDigest, nextLink, verifyOwnerReviews } = require('../scripts/verify_owner_authorization.cjs');
 
 const authority = {
   baselineSha: 'a'.repeat(40), targetSha: 'b'.repeat(40),
   baselineSchemaFingerprint: 'c'.repeat(64), targetSchemaFingerprint: 'd'.repeat(64),
-  evidenceSha256: 'e'.repeat(64)
+  baselineComparatorFingerprint: 'e'.repeat(64), targetComparatorFingerprint: 'f'.repeat(64),
+  releaseControlFingerprint: '1'.repeat(64), evidenceSha256: '2'.repeat(64)
 };
+const pullRequest = { head: { sha: authority.targetSha }, base: { ref: 'main' } };
 const digest = authorizationDigest(authority);
+const marker = `OMNISELLER_OWNER_AUTHORIZATION_V2:${digest}`;
 const valid = [{
   kind: 'review', state: 'APPROVED', commit_id: authority.targetSha, user: { login: 'NatoandUSA' },
-  body: `Reviewed exact evidence.\nOMNISELLER_OWNER_AUTHORIZATION_V1:${digest}`
+  submitted_at: '2026-09-15T12:00:00Z', body: `Reviewed exact evidence.\n${marker}`
 }];
-assert.equal(verifyOwnerReviews(valid, 'NatoandUSA', authority).digest, digest);
-assert.throws(() => verifyOwnerReviews([{ ...valid[0], state: 'COMMENTED' }], 'NatoandUSA', authority),
+assert.equal(verifyOwnerReviews(valid, 'NatoandUSA', authority, pullRequest).digest, digest);
+assert.throws(() => verifyOwnerReviews(valid, 'NatoandUSA', authority,
+  { head: { sha: '9'.repeat(40) }, base: { ref: 'main' } }), /PR_LINEAGE_INVALID/);
+assert.throws(() => verifyOwnerReviews(valid, 'NatoandUSA', authority,
+  { head: { sha: authority.targetSha }, base: { ref: 'develop' } }), /PR_LINEAGE_INVALID/);
+assert.throws(() => verifyOwnerReviews([{ ...valid[0], state: 'COMMENTED' }], 'NatoandUSA', authority, pullRequest),
   /OWNER_AUTHORIZATION_NOT_PROVEN/);
-assert.throws(() => verifyOwnerReviews([{ ...valid[0], commit_id: 'f'.repeat(40) }], 'NatoandUSA', authority),
+assert.throws(() => verifyOwnerReviews([{ ...valid[0], commit_id: '9'.repeat(40) }], 'NatoandUSA', authority, pullRequest),
   /OWNER_AUTHORIZATION_NOT_PROVEN/);
-assert.throws(() => verifyOwnerReviews([{ ...valid[0], user: { login: 'deploy-bot' } }], 'NatoandUSA', authority),
+assert.throws(() => verifyOwnerReviews([{ ...valid[0], user: { login: 'deploy-bot' } }], 'NatoandUSA', authority, pullRequest),
   /OWNER_AUTHORIZATION_NOT_PROVEN/);
-assert.throws(() => verifyOwnerReviews([{ ...valid[0], body: 'approved without exact digest' }], 'NatoandUSA', authority),
+assert.throws(() => verifyOwnerReviews([{ ...valid[0], body: 'approved without exact digest' }], 'NatoandUSA', authority, pullRequest),
   /OWNER_AUTHORIZATION_NOT_PROVEN/);
-assert.equal(verifyOwnerReviews([{
+assert.throws(() => verifyOwnerReviews([valid[0], {
+  ...valid[0], state: 'CHANGES_REQUESTED', submitted_at: '2026-09-15T13:00:00Z'
+}], 'NatoandUSA', authority, pullRequest), /OWNER_AUTHORIZATION_NOT_PROVEN/,
+'latest Owner review must control the effective authorization state');
+assert.throws(() => verifyOwnerReviews([valid[0], {
   kind: 'issue_comment', author_association: 'OWNER', user: { login: 'NatoandUSA' },
-  body: `OMNISELLER_OWNER_AUTHORIZATION_V1:${digest}`
-}], 'NatoandUSA', authority).digest, digest, 'GitHub Owner comment must support self-authored PRs');
+  body: `OMNISELLER_OWNER_AUTHORIZATION_REVOKED_V1:${digest}`
+}], 'NatoandUSA', authority, pullRequest), /OWNER_AUTHORIZATION_REVOKED/);
+assert.equal(verifyOwnerReviews([{
+  kind: 'issue_comment', author_association: 'OWNER', user: { login: 'NatoandUSA' }, body: marker
+}], 'NatoandUSA', authority, pullRequest).digest, digest, 'GitHub Owner comment supports self-authored PRs');
 assert.throws(() => verifyOwnerReviews([{
-  kind: 'issue_comment', author_association: 'CONTRIBUTOR', user: { login: 'NatoandUSA' },
-  body: `OMNISELLER_OWNER_AUTHORIZATION_V1:${digest}`
-}], 'NatoandUSA', authority), /OWNER_AUTHORIZATION_NOT_PROVEN/);
+  kind: 'issue_comment', author_association: 'CONTRIBUTOR', user: { login: 'NatoandUSA' }, body: marker
+}], 'NatoandUSA', authority, pullRequest), /OWNER_AUTHORIZATION_NOT_PROVEN/);
+
+assert.equal(nextLink('<https://api.github.com/example?page=2>; rel="next", <x>; rel="last"'),
+  'https://api.github.com/example?page=2');
+assert.equal(nextLink('<x>; rel="last"'), null);
+
 const verifierSource = fs.readFileSync(path.resolve(__dirname, '../scripts/verify_owner_authorization.cjs'), 'utf8');
 assert.equal(verifierSource.includes('GITHUB_TOKEN'), false,
   'deploy-host write credentials must not participate in Owner authorization verification');
-assert.equal(verifierSource.includes("const REPOSITORY = 'NatoandUSA/Factcheck'"), true,
-  'authorization repository authority must be pinned in reviewed source');
+assert.equal(verifierSource.includes("const REPOSITORY = 'NatoandUSA/Factcheck'"), true);
+assert.equal(verifierSource.includes('AbortSignal.timeout(REQUEST_TIMEOUT_MS)'), true,
+  'GitHub authorization fetch must be time-bounded');
 
 console.log('OWNER_AUTHORIZATION_TESTS_PASSED');

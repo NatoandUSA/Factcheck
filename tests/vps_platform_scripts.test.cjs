@@ -56,6 +56,8 @@ function runPlatformTests() {
     && setupScript.includes('Environment=OMNI_R43_SINGLE_PATH=1')
     && !setupScript.includes('${WORKTREE_REPO}/.env'),
   'Platform installer must pin production single-path mode and reject worktree-local secrets');
+  assert.ok(!/Target VPS Host|Authoritative Production VPS Topology|\b\w+@\d{1,3}(?:\.\d{1,3}){3}\b/.test(setupScript),
+    'Platform installer must not publish the production host identity');
   const deployScript = fs.readFileSync(path.resolve(__dirname, '../scripts/vps_deploy_and_verify.sh'), 'utf8');
   assert.ok(deployScript.includes('NODE_HOME="${OMNI_NODE_HOME:-${BASE_DIR}/.nvm/versions/node/v22.23.2}"'),
     'Deploy must resolve the pinned Node 22 runtime independently of the login shell PATH');
@@ -101,8 +103,18 @@ function runPlatformTests() {
     && !deployScript.includes('MIGRATION_PATHS='),
   'Migration-authority changes must require technical rehearsal plus exact GitHub Owner authorization');
   assert.ok(deployScript.includes('BASELINE_RELEASE_DIR}/scripts/schema_fingerprint.cjs')
-    && deployScript.includes('SCHEMA_COMPARATOR_DRIFT=1'),
-  'Baseline must compute its own fingerprint and comparator drift must fail into the migration gate');
+    && deployScript.includes('SCHEMA_COMPARATOR_DRIFT=1')
+    && deployScript.includes('scripts/release_gate_policy.cjs')
+    && deployScript.includes('if [ "${MIGRATION_REHEARSAL_REQUIRED}" = "true" ]; then')
+    && !deployScript.includes('if [ "${SCHEMA_COMPARATOR_DRIFT}" = "1" ] ||'),
+  'Comparator drift must require Owner review without fabricating a database migration');
+  assert.ok(deployScript.includes("trap 'rollback' ERR")
+    && deployScript.includes('mkdir -p "${BACKUP_SUBDIR}" || rollback')
+    && deployScript.includes('cp -p "${DB_PATH}" "${BACKUP_SUBDIR}/app.db" || rollback')
+    && deployScript.includes('> "${BACKUP_SUBDIR}/checksums.sha256" || rollback'),
+  'Every failure after service stop must restore the baseline service');
+  assert.ok(!/Target VPS Host|Authoritative Production VPS Topology|\b\w+@\d{1,3}(?:\.\d{1,3}){3}\b/.test(deployScript),
+    'Public deployment source must not publish the production host identity');
 
   // Test 2: Systemd Template Validity & Preserved Contract
   console.log('\nTest 2: Systemd service unit template validation...');

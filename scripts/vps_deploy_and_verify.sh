@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==============================================================================
 # OMNISELLER STUDIO — IMMUTABLE SYMLINK RELEASE & ROLLBACK RUNBOOK
-# Authoritative Production VPS Topology: etsy@51.79.200.65 (Ubuntu 22.04 LTS)
+# Production host identity is external configuration; do not publish it here.
 # ==============================================================================
 
 set -Eeuo pipefail
@@ -130,6 +130,7 @@ atomic_symlink_switch() {
 # NOTE: Deployment rollback ONLY swaps code symlinks to baseline.
 # Database restore is strictly a separate, explicit, migration-aware, owner-approved operation.
 rollback() {
+    trap - ERR
     echo -e "\n🔴 DEPLOYMENT OR LOCAL/PUBLIC HEALTH VALIDATION FAILED! INITIATING CODE-ONLY ROLLBACK..."
     echo "⚠️ This rollback changes the release symlink only; it does not restore the database."
     sudo systemctl stop omniseller-web || true
@@ -189,21 +190,30 @@ EOF
     echo "🟢 Atomic completion manifest written."
 fi
 
-SCHEMA_COMPARATOR_DRIFT=0
 BASELINE_SCHEMA_AS_SEEN_BY_TARGET=$("${NODE_BIN}" "${TARGET_RELEASE_DIR}/scripts/schema_fingerprint.cjs" "${BASELINE_RELEASE_DIR}") || exit 1
+BASELINE_SCHEMA_FINGERPRINT=$("${NODE_BIN}" -e "console.log(JSON.parse(process.argv[1]).schemaAuthorityFingerprint)" "${BASELINE_SCHEMA_AS_SEEN_BY_TARGET}")
+BASELINE_COMPARATOR_FINGERPRINT=$("${NODE_BIN}" -e "console.log('0'.repeat(64))")
+SCHEMA_COMPARATOR_DRIFT=0
 if [ -f "${BASELINE_RELEASE_DIR}/scripts/schema_fingerprint.cjs" ]; then
     BASELINE_SCHEMA=$("${NODE_BIN}" "${BASELINE_RELEASE_DIR}/scripts/schema_fingerprint.cjs" "${BASELINE_RELEASE_DIR}") || exit 1
-    BASELINE_NATIVE_FINGERPRINT=$("${NODE_BIN}" -e "console.log(JSON.parse(process.argv[1]).fingerprint)" "${BASELINE_SCHEMA}")
-    BASELINE_TARGET_VIEW_FINGERPRINT=$("${NODE_BIN}" -e "console.log(JSON.parse(process.argv[1]).fingerprint)" "${BASELINE_SCHEMA_AS_SEEN_BY_TARGET}")
-    [ "${BASELINE_NATIVE_FINGERPRINT}" != "${BASELINE_TARGET_VIEW_FINGERPRINT}" ] && SCHEMA_COMPARATOR_DRIFT=1
+    BASELINE_NATIVE_FINGERPRINT=$("${NODE_BIN}" -e "const v=JSON.parse(process.argv[1]); console.log(v.schemaAuthorityFingerprint || v.fingerprint)" "${BASELINE_SCHEMA}")
+    BASELINE_COMPARATOR_FINGERPRINT=$("${NODE_BIN}" -e "const v=JSON.parse(process.argv[1]); console.log(v.comparatorFingerprint || '0'.repeat(64))" "${BASELINE_SCHEMA}")
+    [ "${BASELINE_NATIVE_FINGERPRINT}" != "${BASELINE_SCHEMA_FINGERPRINT}" ] && SCHEMA_COMPARATOR_DRIFT=1
 else
-    BASELINE_SCHEMA="${BASELINE_SCHEMA_AS_SEEN_BY_TARGET}"
     SCHEMA_COMPARATOR_DRIFT=1
 fi
 TARGET_SCHEMA=$("${NODE_BIN}" "${TARGET_RELEASE_DIR}/scripts/schema_fingerprint.cjs" "${TARGET_RELEASE_DIR}") || exit 1
-BASELINE_SCHEMA_FINGERPRINT=$("${NODE_BIN}" -e "console.log(JSON.parse(process.argv[1]).fingerprint)" "${BASELINE_SCHEMA}")
-TARGET_SCHEMA_FINGERPRINT=$("${NODE_BIN}" -e "console.log(JSON.parse(process.argv[1]).fingerprint)" "${TARGET_SCHEMA}")
-if [ "${SCHEMA_COMPARATOR_DRIFT}" = "1" ] || [ "${BASELINE_SCHEMA_FINGERPRINT}" != "${TARGET_SCHEMA_FINGERPRINT}" ]; then
+TARGET_SCHEMA_FINGERPRINT=$("${NODE_BIN}" -e "console.log(JSON.parse(process.argv[1]).schemaAuthorityFingerprint)" "${TARGET_SCHEMA}")
+TARGET_COMPARATOR_FINGERPRINT=$("${NODE_BIN}" -e "console.log(JSON.parse(process.argv[1]).comparatorFingerprint)" "${TARGET_SCHEMA}")
+TARGET_RELEASE_CONTROL_FINGERPRINT=$("${NODE_BIN}" -e "console.log(JSON.parse(process.argv[1]).releaseControlFingerprint)" "${TARGET_SCHEMA}")
+RELEASE_GATE_DECISION=$("${NODE_BIN}" "${TARGET_RELEASE_DIR}/scripts/release_gate_policy.cjs" \
+  "${BASELINE_SCHEMA_FINGERPRINT}" "${TARGET_SCHEMA_FINGERPRINT}" \
+  "${BASELINE_COMPARATOR_FINGERPRINT}" "${TARGET_COMPARATOR_FINGERPRINT}") || exit 1
+MIGRATION_REHEARSAL_REQUIRED=$("${NODE_BIN}" -e "console.log(JSON.parse(process.argv[1]).migrationRehearsalRequired)" "${RELEASE_GATE_DECISION}")
+COMPARATOR_CHANGED=$("${NODE_BIN}" -e "console.log(JSON.parse(process.argv[1]).comparatorChanged)" "${RELEASE_GATE_DECISION}")
+[ "${COMPARATOR_CHANGED}" = "true" ] && SCHEMA_COMPARATOR_DRIFT=1
+MIGRATION_EVIDENCE_SHA="${TARGET_RELEASE_CONTROL_FINGERPRINT}"
+if [ "${MIGRATION_REHEARSAL_REQUIRED}" = "true" ]; then
     MIGRATION_RECEIPT="${STATE_DIR}/migration-compatibility/${BASELINE_SHA}_${TARGET_SHA}.json"
     MIGRATION_EVIDENCE_DIR="${STATE_DIR}/migration-compatibility/evidence"
     if [ ! -f "${MIGRATION_RECEIPT}" ]; then
@@ -214,18 +224,24 @@ if [ "${SCHEMA_COMPARATOR_DRIFT}" = "1" ] || [ "${BASELINE_SCHEMA_FINGERPRINT}" 
       "${MIGRATION_RECEIPT}" "${BASELINE_SHA}" "${TARGET_SHA}" \
       "${BASELINE_SCHEMA_FINGERPRINT}" "${TARGET_SCHEMA_FINGERPRINT}" "${MIGRATION_EVIDENCE_DIR}" || exit 1
     MIGRATION_EVIDENCE_SHA=$("${NODE_BIN}" -e "const r=require(process.argv[1]); console.log(r.evidenceSha256 || '')" "${MIGRATION_RECEIPT}")
-    OWNER_APPROVAL_PR_NUMBER=$(awk -F= '/^[[:space:]]*OMNI_OWNER_APPROVAL_PR_NUMBER[[:space:]]*=/ { count += 1; value=$2; gsub(/[[:space:]\r]/, "", value) } END { if (count == 1) print value }' "${ENV_FILE}")
-    if ! [[ "${OWNER_APPROVAL_PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
-        echo "🔴 ERROR: Schema authority changed; exact GitHub Owner approval PR number is required."
-        exit 1
-    fi
-    "${NODE_BIN}" "${TARGET_RELEASE_DIR}/scripts/verify_owner_authorization.cjs" \
-      "${OWNER_APPROVAL_PR_NUMBER}" "NatoandUSA" "${BASELINE_SHA}" "${TARGET_SHA}" \
-      "${BASELINE_SCHEMA_FINGERPRINT}" "${TARGET_SCHEMA_FINGERPRINT}" "${MIGRATION_EVIDENCE_SHA}" || exit 1
+fi
+OWNER_APPROVAL_PR_NUMBER=$(awk -F= '/^[[:space:]]*OMNI_OWNER_APPROVAL_PR_NUMBER[[:space:]]*=/ { count += 1; value=$2; gsub(/[[:space:]\r]/, "", value) } END { if (count == 1) print value }' "${ENV_FILE}")
+if ! [[ "${OWNER_APPROVAL_PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "🔴 ERROR: Exact GitHub Owner approval PR number is required for every release."
+    exit 1
+fi
+"${NODE_BIN}" "${TARGET_RELEASE_DIR}/scripts/verify_owner_authorization.cjs" \
+  "${OWNER_APPROVAL_PR_NUMBER}" "NatoandUSA" "${BASELINE_SHA}" "${TARGET_SHA}" \
+  "${BASELINE_SCHEMA_FINGERPRINT}" "${TARGET_SCHEMA_FINGERPRINT}" \
+  "${BASELINE_COMPARATOR_FINGERPRINT}" "${TARGET_COMPARATOR_FINGERPRINT}" \
+  "${TARGET_RELEASE_CONTROL_FINGERPRINT}" "${MIGRATION_EVIDENCE_SHA}" || exit 1
+if [ "${SCHEMA_COMPARATOR_DRIFT}" = "1" ]; then
+    echo "🟡 Comparator changed or was absent on baseline; exact Owner authorization accepted without fabricating a DB migration."
 fi
 
 # --- STEP 3: SAFE SERVICE STOP & WAL-SAFE DB BACKUP ---
 echo -e "\n[Step 3/7] Stopping systemd service 'omniseller-web' & snapshotting database..."
+trap 'rollback' ERR
 sudo systemctl stop omniseller-web
 
 if sudo systemctl is-active --quiet omniseller-web; then
@@ -236,13 +252,13 @@ echo "🟢 systemd service 'omniseller-web' is INACTIVE."
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 BACKUP_SUBDIR="${BACKUP_DIR}/backup_${TIMESTAMP}_${BASELINE_SHA:0:7}"
-mkdir -p "${BACKUP_SUBDIR}"
+mkdir -p "${BACKUP_SUBDIR}" || rollback
 BACKUP_INTEGRITY_CHECK="NOT_PRESENT"
 BACKUP_CHECKSUM_MANIFEST=""
 
 if [ -f "${DB_PATH}" ]; then
     echo "Snapshotting app.db, app.db-wal, and app.db-shm to ${BACKUP_SUBDIR}..."
-    cp -p "${DB_PATH}" "${BACKUP_SUBDIR}/app.db"
+    cp -p "${DB_PATH}" "${BACKUP_SUBDIR}/app.db" || rollback
     [ -f "${DB_PATH}-wal" ] && cp -p "${DB_PATH}-wal" "${BACKUP_SUBDIR}/app.db-wal"
     [ -f "${DB_PATH}-shm" ] && cp -p "${DB_PATH}-shm" "${BACKUP_SUBDIR}/app.db-shm"
     
@@ -261,7 +277,7 @@ if [ -f "${DB_PATH}" ]; then
     " || { echo "🔴 DB snapshot integrity check failed"; rollback; }
 
     echo "Calculating and verifying SHA-256 checksums after the read-only integrity probe..."
-    sha256sum "${BACKUP_SUBDIR}"/app.db* > "${BACKUP_SUBDIR}/checksums.sha256"
+    sha256sum "${BACKUP_SUBDIR}"/app.db* > "${BACKUP_SUBDIR}/checksums.sha256" || rollback
     (cd "${BACKUP_SUBDIR}" && sha256sum -c checksums.sha256) || {
         echo "🔴 DB snapshot checksum verification failed"; rollback;
     }

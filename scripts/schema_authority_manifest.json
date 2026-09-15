@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "includeTrees": [],
+  "includeFiles": [
+    "server/database/migrations.js",
+    "server/projectStateRegistry.js"
+  ],
+  "bootstrapExtraction": {
+    "path": "server/server.js",
+    "startMarker": "// Initialize DB schema",
+    "endMarker": "const ensureTestDatabaseFixtures"
+  }
+}

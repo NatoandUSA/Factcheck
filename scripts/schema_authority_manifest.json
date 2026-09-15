@@ -1,9 +1,14 @@
 {
   "schemaVersion": 1,
-  "includeTrees": [],
+  "includeTrees": [
+    "server/database"
+  ],
   "includeFiles": [
-    "server/database/migrations.js",
     "server/projectStateRegistry.js"
+  ],
+  "runtimeSchemaScanTrees": [
+    "server",
+    "shared"
   ],
   "bootstrapExtraction": {
     "path": "server/server.js",

@@ -225,3 +225,24 @@ Owner authorization schema v2 binds the baseline/target commits, both schema fin
 Required final-delta review: reproduce UI/test-only no-migration behavior, actual DDL requiring rehearsal, comparator-only Owner review, latest-review/revocation behavior, PR lineage/pagination/timeout, schema symlink rejection, and E-07 rollback under an unwritable backup destination. Production read-only DDL and stale-row receipts remain blocking evidence.
 
 The third-successor canonical inventory contains 103 suites. Focused controls and the Vite build pass locally; the unsupported Node 24/Windows run reports `102/103 PASS`, with only the previously isolated process-tree sentinel failing. The exact successor must still pass the Node 22 PR event before this section becomes certifying evidence.
+
+## 13. Independent review of `6c4a20a2`, production evidence and final P2 hardening
+
+GPT1 and Claude independently accepted the three-fingerprint correction and proved that the deployment deadlock and E-07 backup window are closed. Node 22 PR run `34980514149` and exact-head run `34981023771` both completed successfully with `103/103`, build PASS. Production remained on `d6642c2502071ba885da01b02f39a6f0ebc8a605` while this review occurred.
+
+The private production read-only receipt was captured through the configured administrative SSH port with SQLite `OPEN_READONLY` and `PRAGMA query_only=1`. It proves the project-state registry DDL and migration ledger entry are present and the aggregate of legacy listings with no head revision in `MANAGER_APPROVED` or `PUBLISH_READY` is empty. Receipt SHA-256: `62de306586862f85e5737774fe9c9085debde54bbc015be36aa9a393a1eebbd0`. The receipt remains outside the public repository because it contains production topology and full DDL.
+
+Final review disposition:
+
+| ID | Decision | Canonical response |
+|---|---|---|
+| GPT1 dynamic dependency | `ACCEPT — P2 PROVEN` | Reject non-literal `require()`/`import()` in schema authority. Intentional dynamic dependencies must be explicit manifest entries. |
+| F-01 unclassified DDL | `ACCEPT — P2 PROVEN` | Declare the complete `server/database` tree as schema authority and scan declared runtime roots for DDL outside the closure; test fixtures remain outside runtime scan roots. |
+| F-02 rollback self-abort | `ACCEPT — P2 PROVEN` | Make baseline symlink restoration and service restart best-effort so rollback cannot abort before restart/critical reporting. |
+| F-03 comment revocation | `ACCEPT — P2 PROVEN` | An Owner comment is valid only when timestamped after the latest Owner `CHANGES_REQUESTED` review. |
+| F-04 pagination origin | `ACCEPT — P3 PROVEN` | Follow pagination only on the exact `https://api.github.com` origin. |
+| F-05 service account/layout | `ACCEPT — P3 DEFERRED` | Do not mix a systemd identity/topology migration into this control hotfix. The public origin/IP is absent; service-account abstraction requires a separately rehearsed operations change. |
+
+Required final-successor delta review: attack runtime-root DDL classification, non-literal schema loads, rollback failure inside the rollback function, comment-then-change-request ordering, and cross-origin pagination. No Owner marker may be created until that exact successor is frozen and independently accepted.
+
+The final-successor inventory contains 104 suites, including an executable rollback fault-injection test. The unsupported local Node 24/Windows run reports `103/104 PASS`; only the previously isolated process-tree sentinel fails. Exact-head Node 22 `104/104` and build evidence remain mandatory.

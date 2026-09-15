@@ -50,8 +50,14 @@ function resolveDependency(root, fromFile, request) {
 function dependencyRequests(bytes) {
   const source = bytes.toString('utf8');
   const requests = [];
-  const patterns = [/(?:require\s*\(\s*|from\s+)["']([^"']+)["']/g,
-    /import\s*["']([^"']+)["']/g];
+  const callPattern = /\b(?:require|import)\s*\(([^)]*)\)/g;
+  let call;
+  while ((call = callPattern.exec(source))) {
+    const literal = call[1].trim().match(/^(["'])([^"']+)\1$/);
+    if (!literal) throw new Error('SCHEMA_DYNAMIC_DEPENDENCY_FORBIDDEN');
+    requests.push(literal[2]);
+  }
+  const patterns = [/\bfrom\s+["']([^"']+)["']/g, /\bimport\s*["']([^"']+)["']/g];
   for (const pattern of patterns) {
     let match;
     while ((match = pattern.exec(source))) requests.push(match[1]);
@@ -63,10 +69,37 @@ function loadManifest(manifestPath) {
   const bytes = fs.readFileSync(manifestPath);
   const manifest = JSON.parse(bytes.toString('utf8'));
   if (manifest?.schemaVersion !== 1 || !Array.isArray(manifest.includeTrees)
-    || !Array.isArray(manifest.includeFiles) || !manifest.bootstrapExtraction) {
+    || !Array.isArray(manifest.includeFiles) || !Array.isArray(manifest.runtimeSchemaScanTrees)
+    || !manifest.bootstrapExtraction) {
     throw new Error('SCHEMA_AUTHORITY_MANIFEST_INVALID');
   }
   return { bytes, manifest };
+}
+
+function assertNoUnclassifiedRuntimeDdl(root, selected, manifest) {
+  const bootstrapPath = path.resolve(root, manifest.bootstrapExtraction.path);
+  const visit = absolute => {
+    if (!fs.existsSync(absolute)) return;
+    const stat = fs.lstatSync(absolute);
+    if (stat.isSymbolicLink()) throw new Error(`SCHEMA_RUNTIME_SYMLINK_FORBIDDEN:${relativePath(root, absolute)}`);
+    if (stat.isDirectory()) {
+      for (const entry of fs.readdirSync(absolute)) visit(path.join(absolute, entry));
+      return;
+    }
+    if (!stat.isFile() || !/\.(?:js|cjs|mjs|sql|json)$/i.test(absolute)
+      || selected.has(absolute) || absolute === bootstrapPath) return;
+    if (DDL_PATTERN.test(fs.readFileSync(absolute, 'utf8'))) {
+      throw new Error(`UNCLASSIFIED_SCHEMA_AUTHORITY:${relativePath(root, absolute)}`);
+    }
+  };
+  for (const scanTree of manifest.runtimeSchemaScanTrees) {
+    const scanRoot = path.resolve(root, scanTree);
+    if (path.relative(root, scanRoot).startsWith('..')) throw new Error('SCHEMA_RUNTIME_SCAN_PATH_ESCAPE');
+    if (!fs.existsSync(scanRoot) || !fs.lstatSync(scanRoot).isDirectory()) {
+      throw new Error(`SCHEMA_RUNTIME_SCAN_TREE_MISSING:${scanTree}`);
+    }
+    visit(scanRoot);
+  }
 }
 
 function collectSchemaFiles(root, manifest) {
@@ -123,6 +156,7 @@ function schemaFingerprint(releaseRoot, options = {}) {
   const manifestPath = path.resolve(options.manifestPath || DEFAULT_MANIFEST);
   const { bytes: manifestBytes, manifest } = loadManifest(manifestPath);
   const selected = collectSchemaFiles(root, manifest);
+  assertNoUnclassifiedRuntimeDdl(root, selected, manifest);
   const files = [{ path: 'scripts/schema_authority_manifest.json', sha256: sha256(manifestBytes) }];
   for (const absolute of selected) {
     const relative = relativePath(root, absolute);

@@ -47,8 +47,11 @@ function verifyOwnerReviews(events, ownerLogin, authority, pullRequest) {
   const approvedReview = latestReview?.state === 'APPROVED'
     && latestReview?.commit_id === authority.targetSha
     && bodyLines(latestReview).includes(marker);
+  const latestChangeRequestAt = reviews.filter(review => review.state === 'CHANGES_REQUESTED')
+    .reduce((latest, review) => Math.max(latest, Date.parse(review.submitted_at)), Number.NEGATIVE_INFINITY);
   const ownerComment = ownerEvents.some(event => event?.kind === 'issue_comment'
-    && event?.author_association === 'OWNER' && bodyLines(event).includes(marker));
+    && event?.author_association === 'OWNER' && Number.isFinite(Date.parse(event?.created_at))
+    && Date.parse(event.created_at) > latestChangeRequestAt && bodyLines(event).includes(marker));
   if (!approvedReview && !ownerComment) throw new Error(`OWNER_AUTHORIZATION_NOT_PROVEN:${marker}`);
   return Object.freeze({ digest, marker, revokedMarker, ownerLogin });
 }
@@ -56,7 +59,10 @@ function verifyOwnerReviews(events, ownerLogin, authority, pullRequest) {
 function nextLink(value) {
   const match = String(value || '').split(',').map(item => item.trim())
     .map(item => item.match(/^<([^>]+)>;\s*rel="([^"]+)"$/)).find(item => item?.[2] === 'next');
-  return match?.[1] || null;
+  if (!match) return null;
+  const url = new URL(match[1]);
+  if (url.origin !== 'https://api.github.com') throw new Error('OWNER_AUTHORIZATION_GITHUB_PAGINATION_ORIGIN_INVALID');
+  return url.href;
 }
 
 async function fetchGitHubJson(url) {

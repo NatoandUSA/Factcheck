@@ -141,10 +141,11 @@ rollback() {
     fi
 
     echo "Restoring active symlink atomically to pre-built baseline release ${BASELINE_RELEASE_DIR}..."
-    atomic_symlink_switch "${BASELINE_RELEASE_DIR}"
+    atomic_symlink_switch "${BASELINE_RELEASE_DIR}" \
+      || echo "🔴 CRITICAL: Baseline symlink could not be restored. Manual intervention required."
     
     echo "Restarting systemd service 'omniseller-web' on baseline release..."
-    sudo systemctl restart omniseller-web
+    sudo systemctl restart omniseller-web || true
     
     sleep 3
     if sudo systemctl is-active --quiet omniseller-web; then

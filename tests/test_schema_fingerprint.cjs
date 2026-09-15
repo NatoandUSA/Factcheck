@@ -24,10 +24,12 @@ const ensureTestDatabaseFixtures = () => {};
 const unrelatedRoute = 2;`);
   write('src/Button.js', 'export default "blue";');
   write('tests/example.cjs', 'module.exports = "test one";');
+  write('shared/.keep', 'runtime schema scan root');
   const manifestPath = write('scripts/schema_authority_manifest.json', JSON.stringify({
     schemaVersion: 1,
-    includeTrees: [],
-    includeFiles: ['server/database/migrations.js', 'server/projectStateRegistry.js'],
+    includeTrees: ['server/database'],
+    includeFiles: ['server/projectStateRegistry.js'],
+    runtimeSchemaScanTrees: ['server', 'shared'],
     bootstrapExtraction: {
       path: 'server/server.js', startMarker: '// Initialize DB schema',
       endMarker: 'const ensureTestDatabaseFixtures'
@@ -86,9 +88,28 @@ const unrelatedRoute = 999;`);
   assert.notEqual(dependencyChange.schemaAuthorityFingerprint, dependency.schemaAuthorityFingerprint,
     'schema dependency must be fingerprinted regardless of extension or directory');
 
+  write('server/database/unreferenced.sql', 'CREATE TABLE declared_database_schema (id INTEGER);');
+  const databaseTreeChange = schemaFingerprint(root, { manifestPath });
+  assert.notEqual(databaseTreeChange.schemaAuthorityFingerprint, dependencyChange.schemaAuthorityFingerprint,
+    'every file under the declared database authority tree must trigger rehearsal');
+
+  write('server/unclassifiedStore.js', "db.run('CREATE TABLE unclassified (id INTEGER)');");
+  assert.throws(() => schemaFingerprint(root, { manifestPath }), /UNCLASSIFIED_SCHEMA_AUTHORITY/,
+    'DDL in runtime source outside the declared authority closure must fail closed');
+  fs.unlinkSync(path.join(root, 'server/unclassifiedStore.js'));
+
+  write('tests/sql-fixture.cjs', "const fixture = 'CREATE TABLE fixture_only (id INTEGER)';");
+  assert.doesNotThrow(() => schemaFingerprint(root, { manifestPath }),
+    'test fixtures must not be mistaken for runtime schema authority');
+
+  write('server/database/migrations.js', "const file = '../../shared/schema.ddl'; require(file);");
+  assert.throws(() => schemaFingerprint(root, { manifestPath }), /SCHEMA_DYNAMIC_DEPENDENCY_FORBIDDEN/,
+    'dynamic schema dependencies must be declared explicitly instead of escaping discovery');
+  write('server/database/migrations.js', "require('../../shared/schema.ddl');");
+
   write('notes/anything.extensionless', 'release-control change');
   const arbitraryExtension = schemaFingerprint(root, { manifestPath });
-  assert.notEqual(arbitraryExtension.releaseControlFingerprint, dependencyChange.releaseControlFingerprint,
+  assert.notEqual(arbitraryExtension.releaseControlFingerprint, databaseTreeChange.releaseControlFingerprint,
     'release-control digest must cover regular files without an extension allowlist');
 } finally {
   fs.rmSync(root, { recursive: true, force: true });

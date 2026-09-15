@@ -34,6 +34,7 @@
     "HARNESS_RELEASE_OPS": [
       "tests/test_canonical_test_authority.cjs",
       "tests/test_database_fixture_isolation.cjs",
+      "tests/test_deploy_rollback_faults.cjs",
       "tests/test_performance_and_latency.cjs",
       "tests/test_production_runtime_policy.cjs",
       "tests/test_release_retention.cjs",

@@ -58,7 +58,7 @@ async function tick(window) {
   await tick(dom.window);
   await tick(dom.window);
   check(document.documentElement.lang === 'vi', 'form must be Vietnamese');
-  check(document.querySelectorAll('#factRows tr').length === 56, 'form must expose every canonical Product Truth fact');
+  check(document.querySelectorAll('#factRows tr').length === FACT_KEYS.size, 'form must expose every canonical Product Truth fact');
   const formKeys = new Set([...document.querySelectorAll('#factRows tr')].map(row => row.dataset.key));
   check(formKeys.size === FACT_KEYS.size && [...FACT_KEYS].every(key => formKeys.has(key)),
     'HTML keys must exactly match the server canonical Product Truth registry');

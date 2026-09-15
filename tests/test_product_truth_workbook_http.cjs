@@ -7,6 +7,7 @@ const path = require('node:path');
 const ExcelJS = require('exceljs');
 const { app, db, databaseReady } = require('../server/server');
 const { createSessionRecord } = require('../server/security/session');
+const { FACT_KEYS } = require('../server/productTruthAttestation');
 
 const get = (sql, params = []) => new Promise((resolve, reject) => db.get(sql, params,
   (error, row) => error ? reject(error) : resolve(row || null)));
@@ -52,7 +53,7 @@ let server;
   assert.equal(preview.zeroWrite, true);
   assert.equal(preview.facts.productName.value, 'Workbook Test Product');
   assert.equal(preview.facts.materials.disposition, 'UNKNOWN');
-  assert.equal(preview.accounting.selectedRowCount, 56);
+  assert.equal(preview.accounting.selectedRowCount, FACT_KEYS.size);
   assert.match(preview.rawHash, /^[0-9a-f]{64}$/);
   assert.equal((await get('SELECT COUNT(*) AS n FROM product_truth_revisions')).n, before,
     'preview must not create a Product Truth revision');

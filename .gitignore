@@ -17,3 +17,11 @@ Mautheutest/
 data/imports/
 
 scratch/
+
+# Review receipts and agent scratch artifacts may contain private production
+# topology or database metadata. Keep them outside every public Git tree.
+/reports/
+
+# This repository is one npm workspace. The root package-lock.json is the only
+# dependency authority used by CI and production deployment.
+/server/package-lock.json

@@ -19,7 +19,7 @@ function authorizationDigest(authority) {
     || !AUTHORITY_FIELDS.slice(2).every(field => SHA256.test(String(authority[field] || '')))) {
     throw new Error('OWNER_AUTHORIZATION_AUTHORITY_INVALID');
   }
-  const payload = { schemaVersion: 2, repository: REPOSITORY };
+  const payload = { schemaVersion: 3, repository: REPOSITORY };
   for (const field of AUTHORITY_FIELDS) payload[field] = authority[field];
   return crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex');
 }
@@ -30,11 +30,13 @@ function bodyLines(event) {
 
 function verifyOwnerReviews(events, ownerLogin, authority, pullRequest) {
   if (!Array.isArray(events) || !String(ownerLogin || '').trim()) throw new Error('OWNER_AUTHORIZATION_INPUT_INVALID');
-  if (pullRequest?.head?.sha !== authority.targetSha || pullRequest?.base?.ref !== 'main') {
+  const mergedAt = Date.parse(pullRequest?.merged_at);
+  if (pullRequest?.merged !== true || pullRequest?.merge_commit_sha !== authority.targetSha
+    || pullRequest?.base?.ref !== 'main' || !Number.isFinite(mergedAt)) {
     throw new Error('OWNER_AUTHORIZATION_PR_LINEAGE_INVALID');
   }
   const digest = authorizationDigest(authority);
-  const marker = `OMNISELLER_OWNER_AUTHORIZATION_V2:${digest}`;
+  const marker = `OMNISELLER_OWNER_AUTHORIZATION_V3:${digest}`;
   const revokedMarker = `OMNISELLER_OWNER_AUTHORIZATION_REVOKED_V1:${digest}`;
   const ownerEvents = events.filter(event => String(event?.user?.login || '').toLowerCase() === ownerLogin.toLowerCase());
   if (ownerEvents.some(event => bodyLines(event).includes(revokedMarker))) {
@@ -43,16 +45,13 @@ function verifyOwnerReviews(events, ownerLogin, authority, pullRequest) {
 
   const reviews = ownerEvents.filter(event => event?.kind === 'review' && Number.isFinite(Date.parse(event?.submitted_at)))
     .sort((left, right) => Date.parse(right.submitted_at) - Date.parse(left.submitted_at));
-  const latestReview = reviews[0];
-  const approvedReview = latestReview?.state === 'APPROVED'
-    && latestReview?.commit_id === authority.targetSha
-    && bodyLines(latestReview).includes(marker);
   const latestChangeRequestAt = reviews.filter(review => review.state === 'CHANGES_REQUESTED')
     .reduce((latest, review) => Math.max(latest, Date.parse(review.submitted_at)), Number.NEGATIVE_INFINITY);
   const ownerComment = ownerEvents.some(event => event?.kind === 'issue_comment'
     && event?.author_association === 'OWNER' && Number.isFinite(Date.parse(event?.created_at))
-    && Date.parse(event.created_at) > latestChangeRequestAt && bodyLines(event).includes(marker));
-  if (!approvedReview && !ownerComment) throw new Error(`OWNER_AUTHORIZATION_NOT_PROVEN:${marker}`);
+    && Date.parse(event.created_at) > Math.max(latestChangeRequestAt, mergedAt)
+    && bodyLines(event).includes(marker));
+  if (!ownerComment) throw new Error(`OWNER_AUTHORIZATION_NOT_PROVEN:${marker}`);
   return Object.freeze({ digest, marker, revokedMarker, ownerLogin });
 }
 

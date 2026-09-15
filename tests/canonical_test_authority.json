@@ -39,6 +39,7 @@
       "tests/test_production_runtime_policy.cjs",
       "tests/test_release_retention.cjs",
       "tests/test_release_gate_policy.cjs",
+      "tests/test_repository_hygiene.cjs",
       "tests/test_runner_accounting.cjs",
       "tests/test_runtime_paths.cjs",
       "tests/test_schema_fingerprint.cjs",

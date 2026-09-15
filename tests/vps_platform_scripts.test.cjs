@@ -61,6 +61,13 @@ function runPlatformTests() {
   const deployScript = fs.readFileSync(path.resolve(__dirname, '../scripts/vps_deploy_and_verify.sh'), 'utf8');
   assert.ok(deployScript.includes('NODE_HOME="${OMNI_NODE_HOME:-${BASE_DIR}/.nvm/versions/node/v22.23.2}"'),
     'Deploy must resolve the pinned Node 22 runtime independently of the login shell PATH');
+  assert.ok(deployScript.includes('exec 9>"${DEPLOY_LOCK_FILE}"')
+    && deployScript.includes('flock -n 9'),
+  'Deploy must serialize the full lifecycle before touching shared release state');
+  assert.ok(deployScript.includes('[ "${TARGET_SHA}" != "${REMOTE_MAIN_SHA}" ]')
+    && deployScript.includes('merge-base --is-ancestor "${BASELINE_SHA}" "${TARGET_SHA}"')
+    && deployScript.includes('refusing to deploy a potentially stale ref'),
+  'Production deploy must use the exact fetched main commit and reject non-forward lineage');
   assert.ok(deployScript.includes('MAKEFLAGS=-j1 npm_config_jobs=1'),
     'Native dependency build must use bounded parallelism on the production VPS');
   assert.ok(deployScript.includes("sqlite3.OPEN_READONLY"),
@@ -115,9 +122,11 @@ function runPlatformTests() {
   'Every failure after service stop must restore the baseline service');
   assert.ok(deployScript.includes('SYMLINK_RESTORED=0')
     && deployScript.includes('[ "${SYMLINK_RESTORED}" = "1" ]')
+    && deployScript.includes('[ "${ROLLBACK_HEALTH_VERIFIED}" = "1" ]')
     && deployScript.includes('ACTIVE_RELEASE_AFTER_ROLLBACK="$(readlink -f')
-    && deployScript.includes('sudo systemctl restart omniseller-web || true'),
-  'Rollback itself must remain best-effort when symlink restoration or service restart fails');
+    && deployScript.includes('sudo systemctl restart omniseller-web || true')
+    && deployScript.indexOf('ROLLBACK_HEALTH_VERIFIED=1') < deployScript.indexOf('rm -rf -- "${TARGET_RELEASE_DIR}"'),
+  'Rollback must verify baseline symlink and health before deleting the failed target');
   assert.ok(!/Target VPS Host|Authoritative Production VPS Topology|\b\w+@\d{1,3}(?:\.\d{1,3}){3}\b/.test(deployScript),
     'Public deployment source must not publish the production host identity');
 

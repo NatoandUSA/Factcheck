@@ -10,6 +10,7 @@ DEPLOY_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 TARGET_BRANCH="main"
 PUBLIC_DOMAIN="https://omniseller.theglobalserviceteam.site"
+PORT="${PORT:-3001}"
 
 # Production Base Paths
 BASE_DIR="/home/etsy"
@@ -36,6 +37,19 @@ echo "========================================================================"
 echo -e "\n[Step 1/7] Capturing Baseline SHA & Resolving Target Release..."
 
 mkdir -p "${RELEASES_DIR}" "${STATE_DIR}/db" "${STATE_DIR}/imports" "${BACKUP_DIR}" "${RECEIPT_DIR}"
+
+# Serialize the entire deployment lifecycle. A second operator/process must not
+# race the shared temporary symlink, service state, backup, retention or receipt.
+DEPLOY_LOCK_FILE="${STATE_DIR}/omniseller-deploy.lock"
+if ! command -v flock >/dev/null 2>&1; then
+    echo "🔴 ERROR: util-linux flock is required for serialized deployment."
+    exit 1
+fi
+exec 9>"${DEPLOY_LOCK_FILE}"
+if ! flock -n 9; then
+    echo "🔴 ERROR: Another OmniSeller deployment already holds ${DEPLOY_LOCK_FILE}."
+    exit 1
+fi
 
 if [ ! -x "${NODE_BIN}" ] || [ ! -f "${NPM_CLI}" ]; then
     echo "🔴 ERROR: Required Node 22 runtime not found under ${NODE_HOME}."
@@ -86,10 +100,12 @@ BASELINE_SHA=$(tr -d '\r\n' < "${BASELINE_RELEASE_DIR}/REVISION")
 
 echo "🟢 Active Baseline SHA: ${BASELINE_SHA}"
 
-# Fetch remote tracking branch first before resolving target SHA (Fail-Closed)
+# Fetch remote tracking branch before resolving target SHA. A stale local ref is
+# not release authority, so network/authentication failure is fail-closed.
 echo "Fetching origin/${TARGET_BRANCH}..."
 git -C "${WORKTREE_REPO}" fetch origin "${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}" || {
-    echo "⚠️ Warning: git fetch origin ${TARGET_BRANCH} failed. Proceeding with local object check for target SHA..."
+    echo "🔴 ERROR: Cannot refresh origin/${TARGET_BRANCH}; refusing to deploy a potentially stale ref."
+    exit 1
 }
 
 TARGET_SHA="${1:-$(git -C "${WORKTREE_REPO}" rev-parse origin/${TARGET_BRANCH} 2>/dev/null || git -C "${WORKTREE_REPO}" rev-parse HEAD)}"
@@ -97,6 +113,13 @@ echo "🟢 Target Release SHA: ${TARGET_SHA}"
 
 if [[ ! "${TARGET_SHA}" =~ ^[a-f0-9]{40}$ ]]; then
     echo "🔴 ERROR: Target SHA must be a valid 40-character git commit hash."
+    exit 1
+fi
+
+REMOTE_MAIN_SHA=$(git -C "${WORKTREE_REPO}" rev-parse "refs/remotes/origin/${TARGET_BRANCH}")
+if [ "${TARGET_SHA}" != "${REMOTE_MAIN_SHA}" ]; then
+    echo "🔴 ERROR: Release target must equal the fetched origin/${TARGET_BRANCH} commit ${REMOTE_MAIN_SHA}."
+    echo "    Branch-head candidates and historical commits require merge/rollback workflows, not production deploy."
     exit 1
 fi
 
@@ -109,6 +132,11 @@ git -C "${WORKTREE_REPO}" cat-file -e "${TARGET_SHA}^{commit}" || {
 if [[ ! "${BASELINE_SHA}" =~ ^[a-f0-9]{40}$ ]] \
   || ! git -C "${WORKTREE_REPO}" cat-file -e "${BASELINE_SHA}^{commit}" 2>/dev/null; then
     echo "🔴 ERROR: Captured baseline must resolve to an exact 40-character commit before rollback can be claimed."
+    exit 1
+fi
+
+if ! git -C "${WORKTREE_REPO}" merge-base --is-ancestor "${BASELINE_SHA}" "${TARGET_SHA}"; then
+    echo "🔴 ERROR: Active baseline is not an ancestor of target main. Use the explicit migration-aware rollback process."
     exit 1
 fi
 
@@ -135,22 +163,13 @@ rollback() {
     echo "⚠️ This rollback changes the release symlink only; it does not restore the database."
     sudo systemctl stop omniseller-web || true
     
-    # Remove incomplete / failed release directory to reclaim disk space
-    if [ "${TARGET_RELEASE_CREATED:-0}" = "1" ] && [ -n "${TARGET_RELEASE_DIR}" ] && [ "${TARGET_RELEASE_DIR}" != "${BASELINE_RELEASE_DIR}" ]; then
-        rm -rf "${TARGET_RELEASE_DIR}" 2>/dev/null || true
-    fi
-
     echo "Restoring active symlink atomically to pre-built baseline release ${BASELINE_RELEASE_DIR}..."
     SYMLINK_RESTORED=0
-    if atomic_symlink_switch "${BASELINE_RELEASE_DIR}"; then
-        ACTIVE_RELEASE_AFTER_ROLLBACK="$(readlink -f "${CURRENT_SYMLINK}" 2>/dev/null || true)"
-        if [ "${ACTIVE_RELEASE_AFTER_ROLLBACK}" = "${BASELINE_RELEASE_DIR}" ]; then
-            SYMLINK_RESTORED=1
-        else
-            echo "🔴 CRITICAL: Symlink switch returned success but active target is '${ACTIVE_RELEASE_AFTER_ROLLBACK:-UNRESOLVED}'."
-        fi
+    atomic_symlink_switch "${BASELINE_RELEASE_DIR}" || true
+    ACTIVE_RELEASE_AFTER_ROLLBACK="$(readlink -f "${CURRENT_SYMLINK}" 2>/dev/null || true)"
+    if [ "${ACTIVE_RELEASE_AFTER_ROLLBACK}" = "${BASELINE_RELEASE_DIR}" ]; then
+        SYMLINK_RESTORED=1
     else
-        ACTIVE_RELEASE_AFTER_ROLLBACK="$(readlink -f "${CURRENT_SYMLINK}" 2>/dev/null || true)"
         echo "🔴 CRITICAL: Baseline symlink could not be restored. Active target is '${ACTIVE_RELEASE_AFTER_ROLLBACK:-UNRESOLVED}'."
     fi
     
@@ -158,11 +177,38 @@ rollback() {
     sudo systemctl restart omniseller-web || true
     
     sleep 3
+    ROLLBACK_HEALTH_VERIFIED=0
     if [ "${SYMLINK_RESTORED}" = "1" ] && sudo systemctl is-active --quiet omniseller-web; then
-        echo "🟢 System successfully rolled back to baseline release ${BASELINE_SHA} (active: ${ACTIVE_RELEASE_AFTER_ROLLBACK})."
+        for i in {1..5}; do
+            ROLLBACK_RESPONSE=$(curl -fsS "http://127.0.0.1:${PORT}/api/health" 2>/dev/null || true)
+            ROLLBACK_REVISION=$("${NODE_BIN}" -e "try { console.log(JSON.parse(process.argv[1]).revision || ''); } catch(_) {}" "${ROLLBACK_RESPONSE}" 2>/dev/null || true)
+            if [ "${ROLLBACK_REVISION}" = "${BASELINE_SHA}" ]; then
+                ROLLBACK_HEALTH_VERIFIED=1
+                break
+            fi
+            sleep 2
+        done
+    fi
+
+    if [ "${SYMLINK_RESTORED}" = "1" ] && [ "${ROLLBACK_HEALTH_VERIFIED}" = "1" ]; then
+        # A failed target is removable only after baseline code and health are
+        # independently proven. Preserving it is safer than deleting the only
+        # runnable code when symlink recovery is incomplete.
+        if [ "${TARGET_RELEASE_CREATED:-0}" = "1" ] && [ -n "${TARGET_RELEASE_DIR}" ] \
+          && [ "${TARGET_RELEASE_DIR}" != "${BASELINE_RELEASE_DIR}" ]; then
+            TARGET_RELEASE_NAME=$(basename "${TARGET_RELEASE_DIR}")
+            if [ "$(dirname "${TARGET_RELEASE_DIR}")" = "${RELEASES_DIR}" ] \
+              && [[ "${TARGET_RELEASE_NAME}" =~ ^[a-f0-9]{40}$ ]]; then
+                rm -rf -- "${TARGET_RELEASE_DIR}" 2>/dev/null \
+                  || echo "⚠️ Baseline recovered; failed target could not be removed: ${TARGET_RELEASE_DIR}"
+            else
+                echo "🔴 CRITICAL: Unsafe rollback cleanup target retained: ${TARGET_RELEASE_DIR}"
+            fi
+        fi
+        echo "🟢 System successfully rolled back to baseline release ${BASELINE_SHA}; symlink and local health revision are verified."
     else
         SERVICE_STATE_AFTER_ROLLBACK="$(sudo systemctl is-active omniseller-web 2>/dev/null || true)"
-        echo "🔴 CRITICAL: Baseline rollback is NOT verified (service=${SERVICE_STATE_AFTER_ROLLBACK:-UNKNOWN}, active=${ACTIVE_RELEASE_AFTER_ROLLBACK:-UNRESOLVED}). Manual intervention required."
+        echo "🔴 CRITICAL: Baseline rollback is NOT verified (service=${SERVICE_STATE_AFTER_ROLLBACK:-UNKNOWN}, active=${ACTIVE_RELEASE_AFTER_ROLLBACK:-UNRESOLVED}, health_revision=${ROLLBACK_REVISION:-UNVERIFIED}). Failed target was retained for recovery. Manual intervention required."
     fi
     exit 1
 }
@@ -327,7 +373,6 @@ echo "🟢 Active service process confirms OMNI_R43_SINGLE_PATH=1."
 # --- STEP 6: DUAL HEALTH & REVISION PROBE VALIDATION ---
 echo -e "\n[Step 6/7] Validating Local & Public Health Endpoints & Revision Provenance..."
 
-PORT="${PORT:-3001}"
 LOCAL_STATUS="000"
 LOCAL_REVISION=""
 

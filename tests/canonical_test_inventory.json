@@ -84,6 +84,7 @@
   "tests/test_real_child_asin_batcher.cjs",
   "tests/test_release_retention.cjs",
   "tests/test_release_gate_policy.cjs",
+  "tests/test_repository_hygiene.cjs",
   "tests/test_runner_accounting.cjs",
   "tests/test_rr01_production_state_lineage.cjs",
   "tests/test_runtime_paths.cjs",

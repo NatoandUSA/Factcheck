@@ -6,7 +6,8 @@ const path = require('node:path');
 
 const EXCLUDED_DIRECTORIES = new Set(['.git', 'node_modules', 'dist', 'coverage', '.cache']);
 const EXCLUDED_RELEASE_ROOT_FILES = new Set(['MANIFEST.json', 'REVISION']);
-const DDL_PATTERN = /\b(?:CREATE|ALTER|DROP)\s+(?:TABLE|INDEX|TRIGGER)\b|\bstateColumnSql\b/i;
+const MAX_RUNTIME_SCAN_BYTES = 2 * 1024 * 1024;
+const DDL_PATTERN = /\b(?:CREATE\s+(?:(?:TEMP|TEMPORARY)\s+)?(?:(?:VIRTUAL\s+)?TABLE|VIEW|(?:UNIQUE\s+)?INDEX|TRIGGER)|ALTER\s+(?:TABLE|VIEW)|DROP\s+(?:TABLE|VIEW|INDEX|TRIGGER))\b|\bPRAGMA\s+(?:writable_schema|legacy_alter_table)\b|\bstateColumnSql\b/i;
 const DEFAULT_MANIFEST = path.join(__dirname, 'schema_authority_manifest.json');
 
 const sha256 = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
@@ -84,12 +85,19 @@ function assertNoUnclassifiedRuntimeDdl(root, selected, manifest) {
     const stat = fs.lstatSync(absolute);
     if (stat.isSymbolicLink()) throw new Error(`SCHEMA_RUNTIME_SYMLINK_FORBIDDEN:${relativePath(root, absolute)}`);
     if (stat.isDirectory()) {
+      if (EXCLUDED_DIRECTORIES.has(path.basename(absolute))) return;
       for (const entry of fs.readdirSync(absolute)) visit(path.join(absolute, entry));
       return;
     }
-    if (!stat.isFile() || !/\.(?:js|cjs|mjs|sql|json)$/i.test(absolute)
-      || selected.has(absolute) || absolute === bootstrapPath) return;
-    if (DDL_PATTERN.test(fs.readFileSync(absolute, 'utf8'))) {
+    if (!stat.isFile() || selected.has(absolute) || absolute === bootstrapPath) return;
+    if (stat.size > MAX_RUNTIME_SCAN_BYTES) {
+      throw new Error(`SCHEMA_RUNTIME_FILE_TOO_LARGE:${relativePath(root, absolute)}`);
+    }
+    const bytes = fs.readFileSync(absolute);
+    if (bytes.includes(0)) {
+      throw new Error(`SCHEMA_RUNTIME_BINARY_FORBIDDEN:${relativePath(root, absolute)}`);
+    }
+    if (DDL_PATTERN.test(bytes.toString('utf8'))) {
       throw new Error(`UNCLASSIFIED_SCHEMA_AUTHORITY:${relativePath(root, absolute)}`);
     }
   };
@@ -197,4 +205,10 @@ if (require.main === module) {
   catch (error) { process.stderr.write(`${error.message}\n`); process.exitCode = 1; }
 }
 
-module.exports = Object.freeze({ DDL_PATTERN, EXCLUDED_DIRECTORIES, EXCLUDED_RELEASE_ROOT_FILES, schemaFingerprint });
+module.exports = Object.freeze({
+  DDL_PATTERN,
+  EXCLUDED_DIRECTORIES,
+  EXCLUDED_RELEASE_ROOT_FILES,
+  MAX_RUNTIME_SCAN_BYTES,
+  schemaFingerprint
+});

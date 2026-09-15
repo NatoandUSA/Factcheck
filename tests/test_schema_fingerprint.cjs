@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { schemaFingerprint } = require('../scripts/schema_fingerprint.cjs');
+const { MAX_RUNTIME_SCAN_BYTES, schemaFingerprint } = require('../scripts/schema_fingerprint.cjs');
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'omni-schema-fingerprint-'));
 const write = (name, value) => {
@@ -115,6 +115,30 @@ const unrelatedRoute = 999;`);
   assert.throws(() => schemaFingerprint(root, { manifestPath }), /UNCLASSIFIED_SCHEMA_AUTHORITY:scripts\/runtime-schema\.cjs/,
     'DDL in production-host scripts must not escape schema rehearsal');
   fs.unlinkSync(path.join(root, 'scripts/runtime-schema.cjs'));
+
+  const extensionBypasses = [
+    ['scripts/runtime-schema.sh', 'sqlite3 "$DB" "CREATE VIEW active_listing AS SELECT 1"'],
+    ['scripts/runtime-schema.bash', 'sqlite3 "$DB" "CREATE UNIQUE INDEX idx_listing ON listings(id)"'],
+    ['scripts/runtime-schema.py', 'db.execute("CREATE VIRTUAL TABLE search USING fts5(body)")'],
+    ['scripts/runtime-schema', 'sqlite3 "$DB" "DROP VIEW active_listing"']
+  ];
+  for (const [name, source] of extensionBypasses) {
+    write(name, source);
+    assert.throws(() => schemaFingerprint(root, { manifestPath }),
+      new RegExp(`UNCLASSIFIED_SCHEMA_AUTHORITY:${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`),
+      `${name} must be content-scanned regardless of filename extension`);
+    fs.unlinkSync(path.join(root, name));
+  }
+
+  write('scripts/runtime-binary', Buffer.from([0, 67, 82, 69, 65, 84, 69]));
+  assert.throws(() => schemaFingerprint(root, { manifestPath }), /SCHEMA_RUNTIME_BINARY_FORBIDDEN/,
+    'binary files in an executable runtime tree must be explicitly classified, never silently skipped');
+  fs.unlinkSync(path.join(root, 'scripts/runtime-binary'));
+
+  write('scripts/runtime-oversized', Buffer.alloc(MAX_RUNTIME_SCAN_BYTES + 1, 65));
+  assert.throws(() => schemaFingerprint(root, { manifestPath }), /SCHEMA_RUNTIME_FILE_TOO_LARGE/,
+    'oversized runtime files must fail closed instead of escaping bounded content scanning');
+  fs.unlinkSync(path.join(root, 'scripts/runtime-oversized'));
 
   write('tests/sql-fixture.cjs', "const fixture = 'CREATE TABLE fixture_only (id INTEGER)';");
   assert.doesNotThrow(() => schemaFingerprint(root, { manifestPath }),

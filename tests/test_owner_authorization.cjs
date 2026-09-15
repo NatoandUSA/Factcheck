@@ -11,56 +11,53 @@ const authority = {
   baselineComparatorFingerprint: 'e'.repeat(64), targetComparatorFingerprint: 'f'.repeat(64),
   releaseControlFingerprint: '1'.repeat(64), evidenceSha256: '2'.repeat(64)
 };
-const pullRequest = { head: { sha: authority.targetSha }, base: { ref: 'main' } };
+const pullRequest = {
+  merged: true,
+  merged_at: '2026-09-15T12:00:00Z',
+  merge_commit_sha: authority.targetSha,
+  head: { sha: '9'.repeat(40) },
+  base: { ref: 'main' }
+};
 const digest = authorizationDigest(authority);
-const marker = `OMNISELLER_OWNER_AUTHORIZATION_V2:${digest}`;
-const valid = [{
-  kind: 'review', state: 'APPROVED', commit_id: authority.targetSha, user: { login: 'NatoandUSA' },
-  submitted_at: '2026-09-15T12:00:00Z', body: `Reviewed exact evidence.\n${marker}`
-}];
-assert.equal(verifyOwnerReviews(valid, 'NatoandUSA', authority, pullRequest).digest, digest);
-assert.throws(() => verifyOwnerReviews(valid, 'NatoandUSA', authority,
-  { head: { sha: '9'.repeat(40) }, base: { ref: 'main' } }), /PR_LINEAGE_INVALID/);
-assert.throws(() => verifyOwnerReviews(valid, 'NatoandUSA', authority,
-  { head: { sha: authority.targetSha }, base: { ref: 'develop' } }), /PR_LINEAGE_INVALID/);
-assert.throws(() => verifyOwnerReviews([{ ...valid[0], state: 'COMMENTED' }], 'NatoandUSA', authority, pullRequest),
-  /OWNER_AUTHORIZATION_NOT_PROVEN/);
-assert.throws(() => verifyOwnerReviews([{ ...valid[0], commit_id: '9'.repeat(40) }], 'NatoandUSA', authority, pullRequest),
-  /OWNER_AUTHORIZATION_NOT_PROVEN/);
-assert.throws(() => verifyOwnerReviews([{ ...valid[0], user: { login: 'deploy-bot' } }], 'NatoandUSA', authority, pullRequest),
-  /OWNER_AUTHORIZATION_NOT_PROVEN/);
-assert.throws(() => verifyOwnerReviews([{ ...valid[0], body: 'approved without exact digest' }], 'NatoandUSA', authority, pullRequest),
-  /OWNER_AUTHORIZATION_NOT_PROVEN/);
-assert.throws(() => verifyOwnerReviews([valid[0], {
-  ...valid[0], state: 'CHANGES_REQUESTED', submitted_at: '2026-09-15T13:00:00Z'
-}], 'NatoandUSA', authority, pullRequest), /OWNER_AUTHORIZATION_NOT_PROVEN/,
-'latest Owner review must control the effective authorization state');
-assert.throws(() => verifyOwnerReviews([valid[0], {
+const marker = `OMNISELLER_OWNER_AUTHORIZATION_V3:${digest}`;
+const ownerComment = {
   kind: 'issue_comment', author_association: 'OWNER', user: { login: 'NatoandUSA' },
-  body: `OMNISELLER_OWNER_AUTHORIZATION_REVOKED_V1:${digest}`
+  created_at: '2026-09-15T13:00:00Z', body: `Authorize exact merged release.\n${marker}`
+};
+
+assert.equal(verifyOwnerReviews([ownerComment], 'NatoandUSA', authority, pullRequest).digest, digest);
+for (const invalidPullRequest of [
+  { ...pullRequest, merged: false },
+  { ...pullRequest, merged_at: null },
+  { ...pullRequest, merge_commit_sha: '8'.repeat(40) },
+  { ...pullRequest, base: { ref: 'develop' } }
+]) {
+  assert.throws(() => verifyOwnerReviews([ownerComment], 'NatoandUSA', authority, invalidPullRequest),
+    /PR_LINEAGE_INVALID/, 'authorization must bind the exact commit created on main by the merged PR');
+}
+assert.throws(() => verifyOwnerReviews([{ ...ownerComment, created_at: '2026-09-15T11:59:59Z' }],
+  'NatoandUSA', authority, pullRequest), /OWNER_AUTHORIZATION_NOT_PROVEN/,
+'a pre-merge marker cannot authorize a merge commit that did not yet exist');
+assert.throws(() => verifyOwnerReviews([{ ...ownerComment, author_association: 'CONTRIBUTOR' }],
+  'NatoandUSA', authority, pullRequest), /OWNER_AUTHORIZATION_NOT_PROVEN/);
+assert.throws(() => verifyOwnerReviews([{ ...ownerComment, user: { login: 'deploy-bot' } }],
+  'NatoandUSA', authority, pullRequest), /OWNER_AUTHORIZATION_NOT_PROVEN/);
+assert.throws(() => verifyOwnerReviews([{ ...ownerComment, body: 'approved without exact digest' }],
+  'NatoandUSA', authority, pullRequest), /OWNER_AUTHORIZATION_NOT_PROVEN/);
+assert.throws(() => verifyOwnerReviews([ownerComment, {
+  kind: 'review', state: 'CHANGES_REQUESTED', user: { login: 'NatoandUSA' },
+  submitted_at: '2026-09-15T14:00:00Z', body: 'stop'
+}], 'NatoandUSA', authority, pullRequest), /OWNER_AUTHORIZATION_NOT_PROVEN/,
+'a later Owner change request must invalidate an older deployment marker');
+assert.equal(verifyOwnerReviews([{
+  kind: 'review', state: 'CHANGES_REQUESTED', user: { login: 'NatoandUSA' },
+  submitted_at: '2026-09-15T13:00:00Z', body: 'stop'
+}, { ...ownerComment, created_at: '2026-09-15T14:00:00Z' }],
+'NatoandUSA', authority, pullRequest).digest, digest,
+'a newer exact post-merge Owner comment may re-authorize deployment');
+assert.throws(() => verifyOwnerReviews([ownerComment, {
+  ...ownerComment, body: `OMNISELLER_OWNER_AUTHORIZATION_REVOKED_V1:${digest}`
 }], 'NatoandUSA', authority, pullRequest), /OWNER_AUTHORIZATION_REVOKED/);
-assert.equal(verifyOwnerReviews([{
-  kind: 'issue_comment', author_association: 'OWNER', user: { login: 'NatoandUSA' },
-  created_at: '2026-09-15T12:00:00Z', body: marker
-}], 'NatoandUSA', authority, pullRequest).digest, digest, 'GitHub Owner comment supports self-authored PRs');
-assert.throws(() => verifyOwnerReviews([{
-  kind: 'issue_comment', author_association: 'CONTRIBUTOR', user: { login: 'NatoandUSA' },
-  created_at: '2026-09-15T12:00:00Z', body: marker
-}], 'NatoandUSA', authority, pullRequest), /OWNER_AUTHORIZATION_NOT_PROVEN/);
-assert.throws(() => verifyOwnerReviews([{
-  kind: 'issue_comment', author_association: 'OWNER', user: { login: 'NatoandUSA' },
-  created_at: '2026-09-15T12:00:00Z', body: marker
-}, {
-  ...valid[0], state: 'CHANGES_REQUESTED', submitted_at: '2026-09-15T13:00:00Z'
-}], 'NatoandUSA', authority, pullRequest), /OWNER_AUTHORIZATION_NOT_PROVEN/,
-'a later Owner change request must revoke an older comment authorization');
-assert.equal(verifyOwnerReviews([{
-  ...valid[0], state: 'CHANGES_REQUESTED', submitted_at: '2026-09-15T12:00:00Z'
-}, {
-  kind: 'issue_comment', author_association: 'OWNER', user: { login: 'NatoandUSA' },
-  created_at: '2026-09-15T13:00:00Z', body: marker
-}], 'NatoandUSA', authority, pullRequest).digest, digest,
-'a newer exact Owner comment may re-authorize a self-authored PR');
 
 assert.equal(nextLink('<https://api.github.com/example?page=2>; rel="next", <x>; rel="last"'),
   'https://api.github.com/example?page=2');

@@ -83,7 +83,7 @@ Pre-cutover requirements:
    - forward migration;
    - baseline read after forward migration;
    - restore from the immutable backup.
-5. A separate GitHub Owner authorization must bind the exact baseline SHA, target SHA, both fingerprints and technical-evidence SHA-256. Local file ownership is not authorization evidence.
+5. After merge, a separate GitHub Owner authorization must bind the exact baseline SHA, merged `main` target SHA, both fingerprints and technical-evidence SHA-256. Local file ownership and a pre-merge marker are not authorization evidence.
 6. Target build and native SQLite load pass before stopping the service.
 7. WAL-safe backup integrity and checksums pass before cutover.
 
@@ -214,13 +214,13 @@ Canonical disposition:
 | GPT1 deploy deadlock | `ACCEPT — P0 PROVEN` | Split schema authority, release-control integrity and comparator identity. Only schema change requires migration rehearsal. Comparator-only change requires exact Owner authorization and must not fabricate a DB migration. |
 | E-07 backup failure window | `ACCEPT — P1 PROVEN` | Arm inherited `ERR` rollback immediately before service stop, disable it inside rollback, and explicitly guard backup directory creation, primary DB copy and checksum creation. |
 | E-03 authorization revocation | `ACCEPT — P2 PROVEN` | Use the Owner's latest timestamped review and reject an explicit digest-bound revocation marker. |
-| E-04 GitHub verification | `ACCEPT — P2 PROVEN` | Verify PR head equals target SHA and base is `main`; paginate with a hard page bound and a ten-second request timeout. Keep the repository public for read-only verification while removing committed host identity. |
+| E-04 GitHub verification | `SUPERSEDED BY V3` | V2 bound the PR head to the target, which deadlocks when GitHub creates a distinct merge/squash commit on `main`. V3 requires a merged PR, exact `merge_commit_sha`, base `main`, and a post-merge Owner comment. |
 | E-05 local CRLF | `ACCEPT — WORKTREE HYGIENE` | Renormalize tracked shell/template paths; never weaken raw-byte LF assertions. |
 | E-01/E-02 extension/symlink | `ACCEPT — DEFENSE IN DEPTH` | Release-control digest covers every regular file and committed symlink without an extension allowlist. Schema dependencies are recursively resolved regardless of extension; schema-authority symlinks are rejected. |
 
 The schema-authority manifest seeds `server/database/migrations.js` and `server/projectStateRegistry.js`, recursively includes their relative dependencies, and hashes only the marked bootstrap-schema region of `server/server.js`. Any additional DDL elsewhere in `server/server.js` fails closed. UI, test and route-only edits change `releaseControlFingerprint` but not `schemaAuthorityFingerprint`; actual migration/bootstrap/dependency edits change the schema fingerprint. `release_gate_policy.cjs` makes this decision executable and independently tested.
 
-Owner authorization schema v2 binds the baseline/target commits, both schema fingerprints, both comparator fingerprints, the target release-control fingerprint and the technical-evidence hash. It is required for every release. When schema is unchanged, the release-control fingerprint is the evidence binding; when schema changes, the verified migration evidence SHA replaces it.
+Owner authorization schema v3 binds the baseline/target commits, both schema fingerprints, both comparator fingerprints, the target release-control fingerprint and the technical-evidence hash. It is required for every release and can only be issued after GitHub has created the exact merged commit on `main`. When schema is unchanged, the release-control fingerprint is the evidence binding; when schema changes, the verified migration evidence SHA replaces it.
 
 Required final-delta review: reproduce UI/test-only no-migration behavior, actual DDL requiring rehearsal, comparator-only Owner review, latest-review/revocation behavior, PR lineage/pagination/timeout, schema symlink rejection, and E-07 rollback under an unwritable backup destination. Production read-only DDL and stale-row receipts remain blocking evidence.
 
@@ -262,4 +262,38 @@ Canonical response:
 
 Production evidence correction: the current registry contains **10 states**, not nine. `PRE_H0_NINE_STATE` is the historical lineage that omits `PRODUCT_TRUTH_VERIFIED`; it is not the current expected schema. The private receipt DDL contains the exact current 10-state set exported by `projectStateRegistry.js`, records migration `2026-09-02_project_state_registry`, and reports zero stale legacy approval/publish rows. A byte-identical receipt copy is available under the private connected `reports` workspace for independent review; it must not be committed to the public repository.
 
-Final review must attack the exact successor only: DDL under `scripts`, excluded fixture files containing DDL, post-cutover symlink-restore failure, false success suppression, actual active-target reporting, and manifest symlink-policy enforcement. Owner authorization remains prohibited until exact-SHA review closes.
+Final review must attack the exact successor only: DDL under `scripts`, excluded fixture files containing DDL, post-cutover symlink-restore failure, false success suppression, actual active-target reporting, and manifest symlink-policy enforcement. Pre-merge deployment authorization remains prohibited; the V3 marker is issued only for the exact merged `main` commit after review and merge.
+
+## 15. Whole-control-plane self-audit after final independent review
+
+GPT1 and Claude independently accepted the `754f798e` direction and verified the private production receipt. The canonical writer then audited failure classes across the full release control plane rather than limiting remediation to their last findings.
+
+| ID | Severity | Proven failure class | Systemic correction |
+|---|---:|---|---|
+| G-01 evidence leakage | P2 | `reports/` was a tracked public-tree location while private receipts and agent probes were stored there locally. | Ignore the entire root, remove the tracked debug probe, and add a canonical test that rejects any tracked `reports/` path. Private evidence remains local and recoverable. |
+| S-01 extension blind spot | P1 | Runtime DDL discovery skipped shell, Python and extensionless files; it also missed `CREATE VIEW`, virtual tables and unique indexes. | Content-scan every regular file in all runtime roots, independent of extension; reject NUL/binary and oversized files fail-closed; broaden SQLite schema verbs; retain explicit authority closure. |
+| S-02 destructive rollback ordering | P1 | Rollback deleted the failed target before baseline symlink and service recovery were proven. A symlink failure could leave the service pointing at deleted code. | Restore and resolve baseline symlink, restart, verify local health reports the exact baseline SHA, then and only then delete a validated target directory. Otherwise retain target and emit CRITICAL. |
+| S-03 head/merge authorization mismatch | P0 | Deploy resolves `origin/main`, while V2 required `pull_request.head.sha == targetSha`. A normal merge commit such as PR #42 makes both conditions impossible. | Authorization V3 binds `pull_request.merge_commit_sha` after the PR is merged to `main`; only a timestamped Owner comment newer than merge and any change request can authorize deployment. |
+| S-04 concurrent deployment race | P1 | No process lock protected the fixed temporary symlink, systemd state, backup, retention and receipt paths. | Acquire a non-blocking `flock` for the complete lifecycle before preflight; concurrent deploys fail before mutation. |
+| S-05 stale/non-main release | P1 | A failed fetch was only a warning, and an explicit argument could select any locally available commit. | Fetch failure is fatal; target must equal refreshed `origin/main`; baseline must be an ancestor of target. Historical rollback remains a separate migration-aware workflow. |
+| S-06 dependency authority drift | P1 | The root workspace lock used by CI/deploy was clean, but a stale nested `server/package-lock.json` pinned vulnerable Multer/qs versions and contradicted `server/package.json`. | Retain one root workspace lockfile, ignore/reject the nested lock, mirror security overrides in the server package contract, and require both root and server-scoped production audits to report zero vulnerabilities. |
+| S-07 CI action runtime drift | P2 | CI still referenced Node-20-based `checkout@v4` and `setup-node@v4`, producing platform deprecation warnings despite testing the application on Node 22. | Pin the current Node-24 action implementations by immutable commit SHA, preserve the Node 22 job matrix, and set workflow permissions explicitly to read-only. |
+
+The corrected release sequence is now:
+
+1. freeze and independently review the branch head;
+2. pass exact-head Node 22 CI;
+3. Owner explicitly merges the accepted PR to `main` (this is merge authority, not deploy authority);
+4. freeze the resulting `main` merge/squash SHA and compute the eight-field V3 digest;
+5. Owner posts the exact V3 marker on the merged PR after the merge timestamp;
+6. deploy only that refreshed `origin/main` SHA; collect frozen runtime receipt; perform supervised draft-only UAT.
+
+Any code change after branch review requires a new branch-head review. Any change to the merged target or fingerprints invalidates the V3 marker. No marker, merge, deploy, approval/export enablement or marketplace publication is performed by this audit.
+
+Local verification receipt for this successor:
+
+- target comparator successfully scanned a clean Git archive of production baseline `d6642c2502071ba885da01b02f39a6f0ebc8a605`; baseline-as-seen-by-target and target schema-authority fingerprints are identical (`e69e24a36dbddf7bd298052f955e317277bda83e1d9643f67e18b5847712ce04`), so this control-only delta does not fabricate a migration requirement;
+- focused schema, rollback, Owner V3, migration receipt, release gate, repository hygiene, authority accounting, platform and shell-syntax checks pass;
+- Vite production build passes with 1,827 modules transformed;
+- root and server-workspace npm audits report zero known vulnerabilities after resolving Multer `2.4.0`, qs `6.16.0` and uuid `11.1.1` through the single root lockfile;
+- the canonical inventory is 105 suites. On unsupported local Node `24.18.0`, `104/105` pass; only the pre-existing Windows detached-descendant runner sentinel fails. This remains non-certifying. Exact-successor Node 22 PR CI is mandatory.

@@ -27,7 +27,9 @@ const assert = require('assert');
       : { ok: false, status: 401, json: async () => ({ error: 'INVALID_SESSION' }) };
     if (String(url).endsWith('/commerce-state')) return response({ success: true, heads: {
       productTruthRevisionId: null, researchSnapshotId: activeMockMarketplace === 'ETSY' ? 21 : null, intelligenceSnapshotId: null
-    }, imports: activeMockMarketplace === 'ETSY'
+    }, policyCapability: { status: 'DRAFT_ONLY', approvalEligible: false,
+      blockers: [{ code: 'POLICY_CONTRACT_DRAFT_ONLY' }], policyContractId: `${activeMockMarketplace.toLowerCase()}-draft-policy` },
+    imports: activeMockMarketplace === 'ETSY'
       ? [{ id: 8, kind: 'ETSY_SEARCH', file_name: 'etsy-live.csv', byte_length: 12500, raw_hash: 'e'.repeat(64) }]
       : [{ id: 4, kind: 'AMAZON_CEREBRO', file_name: 'Existing-Cerebro.xlsx', byte_length: 260477, raw_hash: 'c'.repeat(64) }],
     researchSnapshots: [], intelligenceSnapshots: [] });
@@ -91,6 +93,10 @@ const assert = require('assert');
 
   check(document.body.textContent.includes('Luồng Staff Canonical — AMAZON US'), 'Amazon workflow must render');
   check(document.body.textContent.includes('không tự đăng'), 'workflow must disclose its stop boundary');
+  check(document.querySelector('[data-testid="policy-capability-banner"]')
+    && document.body.textContent.includes('Policy capability: DRAFT_ONLY')
+    && document.body.textContent.includes('Manager approval, Owner authorization và exact export bị vô hiệu hóa'),
+  'DRAFT_ONLY must be prominent before staff invests in the workflow');
   check(!document.body.textContent.includes('Manager xác nhận'), 'Seller must not receive Manager confirmation action');
   check(document.querySelector('[data-testid="amazon-xray-upload-lane"]')
     && document.querySelector('[data-testid="amazon-cerebro-upload-lane"]'),

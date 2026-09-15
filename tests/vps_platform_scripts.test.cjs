@@ -40,7 +40,7 @@ function runPlatformTests() {
       try {
         // Feed the script through stdin so Git Bash on Windows does not have
         // to interpret a drive-letter path such as D:\\... as a POSIX path.
-        execFileSync('bash', ['-n'], { input: fs.readFileSync(fullPath) });
+        execFileSync('bash', ['-n'], { input: fs.readFileSync(fullPath, 'utf8').replace(/\r\n/g, '\n') });
         console.log(`  🟢 Bash syntax valid: ${scriptPath}`);
       } catch (err) {
         assert.fail(`Syntax check failed for ${scriptPath}: ${err.message}`);
@@ -60,6 +60,25 @@ function runPlatformTests() {
     'Backup checksum must be recorded after the read-only integrity probe');
   assert.ok(deployScript.includes('sha256sum -c checksums.sha256'),
     'Recorded backup checksums must be verified before cutover');
+  assert.ok(deployScript.includes('BASELINE_RELEASE_DIR=$(readlink -f "${CURRENT_SYMLINK}")')
+    && deployScript.includes('[ ! -d "${BASELINE_RELEASE_DIR}/node_modules" ]')
+    && !deployScript.includes('Preparing baseline release directory'),
+  'Rollback baseline must be the already-built active release, never a reconstructed Git archive');
+  assert.ok(deployScript.includes('OMNI_R43_SINGLE_PATH=1'),
+    'Deploy must require the R4.3 single-path runtime policy before cutover');
+  assert.ok(deployScript.includes("/proc/${SERVICE_PID}/environ"),
+    'Deploy must verify the flag on the active service process, not merely in a config file');
+  assert.ok(deployScript.includes('scripts/release_retention.cjs'),
+    'Release pruning must use the validated manifest-time retention planner');
+  assert.ok(!deployScript.includes('find "${RELEASES_DIR}" -mindepth 1 -maxdepth 1 -type d | sort -r'),
+    'Release pruning must never use lexicographic SHA ordering');
+  assert.ok(deployScript.includes("rollbackScope: 'CODE_SYMLINK_ONLY_DATABASE_RESTORE_REQUIRES_OWNER_APPROVAL'"),
+    'Receipt must state that automatic rollback is code-only');
+  assert.ok(deployScript.includes('journalctl -u omniseller-web --since "${DEPLOY_STARTED_AT}"'),
+    'Service error evidence must have an explicit deployment time boundary');
+  assert.ok(deployScript.includes('verify_migration_compatibility_receipt.cjs')
+    && deployScript.includes('MIGRATION_PATHS='),
+  'Migration-authority changes must require an exact two-direction compatibility receipt');
 
   // Test 2: Systemd Template Validity & Preserved Contract
   console.log('\nTest 2: Systemd service unit template validation...');
@@ -67,7 +86,12 @@ function runPlatformTests() {
   assert.ok(fs.existsSync(templatePath), 'deploy/omniseller-web.service.template must exist in repository');
   const templateContent = fs.readFileSync(templatePath, 'utf8');
   assert.ok(templateContent.includes('WorkingDirectory=/home/etsy/omniseller-current/server'), 'Template must specify omniseller-current WorkingDirectory');
+  assert.ok(templateContent.includes('EnvironmentFile=/home/etsy/omniseller-state/env/omniseller.env')
+    && templateContent.includes('Environment=OMNI_DB_PATH=/home/etsy/omniseller-state/db/app.db')
+    && templateContent.includes('Environment=OMNI_IMPORTS_DIR=/home/etsy/omniseller-state/imports'),
+  'Template must keep secrets, database and imports outside Git-controlled release trees');
   assert.ok(templateContent.includes('ExecStart=/home/etsy/.nvm/versions/node/v22.23.2/bin/node /home/etsy/omniseller-current/server/server.js'), 'Template must specify omniseller-current ExecStart');
+  assert.ok(templateContent.includes('Environment=OMNI_R43_SINGLE_PATH=1'), 'Template must pin the R4.3 single-path production policy');
   console.log('  🟢 Systemd unit template validated.');
 
   // Test 3: Disposable Temp Folder Manifest Packaging

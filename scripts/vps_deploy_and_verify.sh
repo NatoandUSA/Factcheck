@@ -6,6 +6,8 @@
 
 set -Eeuo pipefail
 
+DEPLOY_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
 TARGET_BRANCH="main"
 PUBLIC_DOMAIN="https://omniseller.theglobalserviceteam.site"
 
@@ -21,6 +23,7 @@ DB_PATH="${OMNI_DB_PATH:-${STATE_DIR}/db/app.db}"
 ENV_FILE="${DOTENV_PATH:-${STATE_DIR}/env/omniseller.env}"
 [ ! -f "${ENV_FILE}" ] && ENV_FILE="${STATE_DIR}/omniseller.env"
 BACKUP_DIR="${STATE_DIR}/backups"
+RECEIPT_DIR="${STATE_DIR}/release-receipts"
 NODE_HOME="${OMNI_NODE_HOME:-${BASE_DIR}/.nvm/versions/node/v22.23.2}"
 NODE_BIN="${NODE_HOME}/bin/node"
 NPM_CLI="${NODE_HOME}/lib/node_modules/npm/bin/npm-cli.js"
@@ -32,7 +35,7 @@ echo "========================================================================"
 # --- STEP 1: PREFLIGHT & BASELINE SHA CAPTURE ---
 echo -e "\n[Step 1/7] Capturing Baseline SHA & Resolving Target Release..."
 
-mkdir -p "${RELEASES_DIR}" "${STATE_DIR}/db" "${STATE_DIR}/imports" "${BACKUP_DIR}"
+mkdir -p "${RELEASES_DIR}" "${STATE_DIR}/db" "${STATE_DIR}/imports" "${BACKUP_DIR}" "${RECEIPT_DIR}"
 
 if [ ! -x "${NODE_BIN}" ] || [ ! -f "${NPM_CLI}" ]; then
     echo "🔴 ERROR: Required Node 22 runtime not found under ${NODE_HOME}."
@@ -46,24 +49,39 @@ if [ "${NODE_MAJOR}" != "22" ]; then
 fi
 echo "🟢 Deployment runtime: $("${NODE_BIN}" --version) (${NODE_BIN})"
 
+if [ ! -f "${ENV_FILE}" ]; then
+    echo "🔴 ERROR: Production environment file ${ENV_FILE} does not exist."
+    exit 1
+fi
+R43_FLAG_COUNT=$(awk -F= '/^[[:space:]]*OMNI_R43_SINGLE_PATH[[:space:]]*=/ { count += 1; value=$2; gsub(/[[:space:]\r]/, "", value) } END { print count ":" value }' "${ENV_FILE}")
+if [ "${R43_FLAG_COUNT}" != "1:1" ]; then
+    echo "🔴 ERROR: ${ENV_FILE} must contain exactly one OMNI_R43_SINGLE_PATH=1 assignment."
+    exit 1
+fi
+echo "🟢 R4.3 single-path production policy is explicitly configured."
+
 if [ ! -d "${WORKTREE_REPO}" ]; then
     echo "🔴 ERROR: Repository worktree ${WORKTREE_REPO} does not exist."
     exit 1
 fi
 
-# Capture Baseline SHA BEFORE any fetch or checkout from active symlink REVISION file
-BASELINE_SHA=""
-if [ -f "${CURRENT_SYMLINK}/REVISION" ]; then
-    BASELINE_SHA=$(cat "${CURRENT_SYMLINK}/REVISION" | tr -d '\r\n')
+# A rollback target must be the exact currently running, already built release.
+# Reconstructing one from Git after the fact would not prove its dependencies,
+# build output or runtime compatibility.
+if [ ! -L "${CURRENT_SYMLINK}" ]; then
+    echo "🔴 ERROR: ${CURRENT_SYMLINK} must be an existing release symlink before deployment."
+    exit 1
 fi
-
-if [ -z "${BASELINE_SHA}" ] && [ -L "${CURRENT_SYMLINK}" ]; then
-    BASELINE_SHA=$(git -C "${CURRENT_SYMLINK}" rev-parse HEAD 2>/dev/null || echo "")
+BASELINE_RELEASE_DIR=$(readlink -f "${CURRENT_SYMLINK}")
+if [ "$(dirname "${BASELINE_RELEASE_DIR}")" != "${RELEASES_DIR}" ] \
+  || [ ! -f "${BASELINE_RELEASE_DIR}/REVISION" ] \
+  || [ ! -f "${BASELINE_RELEASE_DIR}/MANIFEST.json" ] \
+  || [ ! -d "${BASELINE_RELEASE_DIR}/node_modules" ] \
+  || [ ! -f "${BASELINE_RELEASE_DIR}/dist/index.html" ]; then
+    echo "🔴 ERROR: Active baseline is not a complete immutable release under ${RELEASES_DIR}."
+    exit 1
 fi
-
-if [ -z "${BASELINE_SHA}" ]; then
-    BASELINE_SHA=$(git -C "${WORKTREE_REPO}" rev-parse HEAD 2>/dev/null || echo "e6df541c4a5d7fbc9d6e5bbca18b48d442039b96")
-fi
+BASELINE_SHA=$(tr -d '\r\n' < "${BASELINE_RELEASE_DIR}/REVISION")
 
 echo "🟢 Active Baseline SHA: ${BASELINE_SHA}"
 
@@ -76,7 +94,7 @@ git -C "${WORKTREE_REPO}" fetch origin "${TARGET_BRANCH}:refs/remotes/origin/${T
 TARGET_SHA="${1:-$(git -C "${WORKTREE_REPO}" rev-parse origin/${TARGET_BRANCH} 2>/dev/null || git -C "${WORKTREE_REPO}" rev-parse HEAD)}"
 echo "🟢 Target Release SHA: ${TARGET_SHA}"
 
-if [ -z "${TARGET_SHA}" ] || [ ${#TARGET_SHA} -ne 40 ]; then
+if [[ ! "${TARGET_SHA}" =~ ^[a-f0-9]{40}$ ]]; then
     echo "🔴 ERROR: Target SHA must be a valid 40-character git commit hash."
     exit 1
 fi
@@ -87,20 +105,17 @@ git -C "${WORKTREE_REPO}" cat-file -e "${TARGET_SHA}^{commit}" || {
     exit 1
 }
 
-BASELINE_RELEASE_DIR="${RELEASES_DIR}/${BASELINE_SHA}"
-if [ ! -d "${BASELINE_RELEASE_DIR}" ] || [ ! -f "${BASELINE_RELEASE_DIR}/MANIFEST.json" ]; then
-    echo "Preparing baseline release directory ${BASELINE_RELEASE_DIR}..."
-    mkdir -p "${BASELINE_RELEASE_DIR}"
-    git -C "${WORKTREE_REPO}" archive "${BASELINE_SHA}" | tar -x -C "${BASELINE_RELEASE_DIR}"
-    echo "${BASELINE_SHA}" > "${BASELINE_RELEASE_DIR}/REVISION"
-    cat << EOF > "${BASELINE_RELEASE_DIR}/MANIFEST.json"
-{
-  "sha": "${BASELINE_SHA}",
-  "built_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-  "status": "COMPLETE"
-}
-EOF
+if [[ ! "${BASELINE_SHA}" =~ ^[a-f0-9]{40}$ ]] \
+  || ! git -C "${WORKTREE_REPO}" cat-file -e "${BASELINE_SHA}^{commit}" 2>/dev/null; then
+    echo "🔴 ERROR: Captured baseline must resolve to an exact 40-character commit before rollback can be claimed."
+    exit 1
 fi
+
+"${NODE_BIN}" -e "const fs=require('node:fs');const p=JSON.parse(fs.readFileSync(process.argv[1],'utf8'));if(p.sha!==process.argv[2]||p.status!=='COMPLETE'||!Number.isFinite(Date.parse(p.built_at)))process.exit(1);" \
+  "${BASELINE_RELEASE_DIR}/MANIFEST.json" "${BASELINE_SHA}" || {
+    echo "🔴 ERROR: Active baseline manifest does not bind the exact baseline SHA as COMPLETE."
+    exit 1
+}
 
 # Function for Atomic Symlink Swap
 atomic_symlink_switch() {
@@ -114,11 +129,12 @@ atomic_symlink_switch() {
 # NOTE: Deployment rollback ONLY swaps code symlinks to baseline.
 # Database restore is strictly a separate, explicit, migration-aware, owner-approved operation.
 rollback() {
-    echo -e "\n🔴 DEPLOYMENT OR LOCAL/PUBLIC HEALTH VALIDATION FAILED! INITIATING FAIL-CLOSED ROLLBACK..."
+    echo -e "\n🔴 DEPLOYMENT OR LOCAL/PUBLIC HEALTH VALIDATION FAILED! INITIATING CODE-ONLY ROLLBACK..."
+    echo "⚠️ This rollback changes the release symlink only; it does not restore the database."
     sudo systemctl stop omniseller-web || true
     
     # Remove incomplete / failed release directory to reclaim disk space
-    if [ -n "${TARGET_RELEASE_DIR}" ] && [ "${TARGET_RELEASE_DIR}" != "${BASELINE_RELEASE_DIR}" ]; then
+    if [ "${TARGET_RELEASE_CREATED:-0}" = "1" ] && [ -n "${TARGET_RELEASE_DIR}" ] && [ "${TARGET_RELEASE_DIR}" != "${BASELINE_RELEASE_DIR}" ]; then
         rm -rf "${TARGET_RELEASE_DIR}" 2>/dev/null || true
     fi
 
@@ -140,11 +156,13 @@ rollback() {
 # --- STEP 2: ISOLATED RELEASE BUILDING (0s Downtime) ---
 TARGET_RELEASE_DIR="${RELEASES_DIR}/${TARGET_SHA}"
 MANIFEST_FILE="${TARGET_RELEASE_DIR}/MANIFEST.json"
+TARGET_RELEASE_CREATED=0
 
 echo -e "\n[Step 2/7] Preparing isolated release directory at ${TARGET_RELEASE_DIR}..."
 
 if [ ! -f "${MANIFEST_FILE}" ]; then
     mkdir -p "${TARGET_RELEASE_DIR}"
+    TARGET_RELEASE_CREATED=1
     git -C "${WORKTREE_REPO}" archive "${TARGET_SHA}" | tar -x -C "${TARGET_RELEASE_DIR}"
     
     echo "${TARGET_SHA}" > "${TARGET_RELEASE_DIR}/REVISION"
@@ -168,6 +186,17 @@ if [ ! -f "${MANIFEST_FILE}" ]; then
 }
 EOF
     echo "🟢 Atomic completion manifest written."
+fi
+
+MIGRATION_PATHS=(server/database/migrations.js server/database/projectStateMigration.js server/projectStateRegistry.js)
+if ! git -C "${WORKTREE_REPO}" diff --quiet "${BASELINE_SHA}" "${TARGET_SHA}" -- "${MIGRATION_PATHS[@]}"; then
+    MIGRATION_RECEIPT="${STATE_DIR}/migration-compatibility/${BASELINE_SHA}_${TARGET_SHA}.json"
+    if [ ! -f "${MIGRATION_RECEIPT}" ]; then
+        echo "🔴 ERROR: Migration authority changed; exact compatibility receipt is required at ${MIGRATION_RECEIPT}."
+        exit 1
+    fi
+    "${NODE_BIN}" "${TARGET_RELEASE_DIR}/scripts/verify_migration_compatibility_receipt.cjs" \
+      "${MIGRATION_RECEIPT}" "${BASELINE_SHA}" "${TARGET_SHA}" || exit 1
 fi
 
 # --- STEP 3: SAFE SERVICE STOP & WAL-SAFE DB BACKUP ---
@@ -229,6 +258,14 @@ if ! sudo systemctl is-active --quiet omniseller-web; then
 fi
 echo "🟢 systemd service 'omniseller-web' is ACTIVE."
 
+SERVICE_PID=$(sudo systemctl show -p MainPID --value omniseller-web)
+if [ -z "${SERVICE_PID}" ] || [ "${SERVICE_PID}" = "0" ] \
+  || ! sudo tr '\0' '\n' < "/proc/${SERVICE_PID}/environ" | grep -qx 'OMNI_R43_SINGLE_PATH=1'; then
+    echo "🔴 Runtime policy receipt failed: active service process does not expose OMNI_R43_SINGLE_PATH=1."
+    rollback
+fi
+echo "🟢 Active service process confirms OMNI_R43_SINGLE_PATH=1."
+
 # --- STEP 6: DUAL HEALTH & REVISION PROBE VALIDATION ---
 echo -e "\n[Step 6/7] Validating Local & Public Health Endpoints & Revision Provenance..."
 
@@ -282,14 +319,71 @@ fi
 
 echo "🟢 Public Cloudflare health probe ${PUBLIC_DOMAIN}/api/health returned 200 OK (Revision: ${PUBLIC_REVISION})."
 
-# Prune old releases (keep only the 2 most recent releases) to prevent ENOSPC disk exhaustion
-echo "Pruning old releases from ${RELEASES_DIR}..."
-find "${RELEASES_DIR}" -mindepth 1 -maxdepth 1 -type d | sort -r | tail -n +3 | while read -r old_release; do
-    if [ "${old_release}" != "${TARGET_RELEASE_DIR}" ] && [ "${old_release}" != "${BASELINE_RELEASE_DIR}" ]; then
-        echo "Removing obsolete release: ${old_release}"
-        rm -rf "${old_release}"
+# Retention is based on validated manifest timestamps, never SHA sort order.
+# The active target and captured baseline are always retained in addition to
+# the two newest complete releases. Invalid/missing manifests fail safe: warn
+# and retain for manual inspection.
+echo "Planning release retention from validated manifests..."
+RETENTION_PLAN_FILE=$(mktemp)
+"${NODE_BIN}" "${TARGET_RELEASE_DIR}/scripts/release_retention.cjs" \
+  "${RELEASES_DIR}" "${TARGET_SHA}" "${BASELINE_SHA}" 2 > "${RETENTION_PLAN_FILE}" || rollback
+"${NODE_BIN}" -e "const p=require(process.argv[1]); for(const w of p.warnings) console.error('⚠️ Retained for manual review: '+w.sha+' '+w.code);" "${RETENTION_PLAN_FILE}"
+mapfile -t PRUNE_RELEASES < <("${NODE_BIN}" -e "const p=require(process.argv[1]); for(const item of p.prune) console.log(item);" "${RETENTION_PLAN_FILE}")
+for old_release in "${PRUNE_RELEASES[@]}"; do
+    release_name=$(basename "${old_release}")
+    if [[ "${old_release}" != "${RELEASES_DIR}/"* ]] || [[ ! "${release_name}" =~ ^[a-f0-9]{40}$ ]] \
+      || [ "${old_release}" = "${TARGET_RELEASE_DIR}" ] || [ "${old_release}" = "${BASELINE_RELEASE_DIR}" ]; then
+        echo "🔴 Unsafe retention target rejected: ${old_release}"
+        rollback
     fi
+    echo "Removing obsolete validated release: ${old_release}"
+    rm -rf -- "${old_release}"
 done
+rm -f "${RETENTION_PLAN_FILE}"
+
+# Freeze a machine-readable, secret-free receipt for independent review.
+SERVICE_EXEC=$(sudo systemctl show -p ExecStart --value omniseller-web)
+SERVICE_WORKDIR=$(sudo systemctl show -p WorkingDirectory --value omniseller-web)
+ACTIVE_RELEASE=$(readlink -f "${CURRENT_SYMLINK}")
+JOURNAL_ERROR_COUNT=$(sudo journalctl -u omniseller-web --since "${DEPLOY_STARTED_AT}" -p err --no-pager -q | wc -l | tr -d ' ') || rollback
+RECEIPT_FILE="${RECEIPT_DIR}/${TARGET_SHA}_${TIMESTAMP}.json"
+RECEIPT_TARGET_SHA="${TARGET_SHA}" RECEIPT_BASELINE_SHA="${BASELINE_SHA}" \
+RECEIPT_STARTED_AT="${DEPLOY_STARTED_AT}" RECEIPT_FINISHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+RECEIPT_NODE_VERSION="$("${NODE_BIN}" --version)" RECEIPT_ACTIVE_RELEASE="${ACTIVE_RELEASE}" \
+RECEIPT_BACKUP_DIR="${BACKUP_SUBDIR}" RECEIPT_LOCAL_STATUS="${LOCAL_STATUS}" \
+RECEIPT_LOCAL_REVISION="${LOCAL_REVISION}" RECEIPT_PUBLIC_STATUS="${PUBLIC_STATUS}" \
+RECEIPT_PUBLIC_REVISION="${PUBLIC_REVISION}" RECEIPT_SERVICE_PID="${SERVICE_PID}" \
+RECEIPT_SERVICE_EXEC="${SERVICE_EXEC}" RECEIPT_SERVICE_WORKDIR="${SERVICE_WORKDIR}" \
+RECEIPT_JOURNAL_ERRORS="${JOURNAL_ERROR_COUNT}" RECEIPT_FILE="${RECEIPT_FILE}" \
+"${NODE_BIN}" - <<'NODE'
+const fs = require('node:fs');
+const receipt = {
+  schemaVersion: 1,
+  targetSha: process.env.RECEIPT_TARGET_SHA,
+  baselineSha: process.env.RECEIPT_BASELINE_SHA,
+  startedAt: process.env.RECEIPT_STARTED_AT,
+  finishedAt: process.env.RECEIPT_FINISHED_AT,
+  nodeVersion: process.env.RECEIPT_NODE_VERSION,
+  activeRelease: process.env.RECEIPT_ACTIVE_RELEASE,
+  backupDirectory: process.env.RECEIPT_BACKUP_DIR,
+  health: {
+    local: { status: Number(process.env.RECEIPT_LOCAL_STATUS), revision: process.env.RECEIPT_LOCAL_REVISION },
+    public: { status: Number(process.env.RECEIPT_PUBLIC_STATUS), revision: process.env.RECEIPT_PUBLIC_REVISION }
+  },
+  service: {
+    active: true,
+    pid: Number(process.env.RECEIPT_SERVICE_PID),
+    execStart: process.env.RECEIPT_SERVICE_EXEC,
+    workingDirectory: process.env.RECEIPT_SERVICE_WORKDIR,
+    r43SinglePath: true,
+    journalErrorCountSinceDeployStart: Number(process.env.RECEIPT_JOURNAL_ERRORS)
+  },
+  rollbackScope: 'CODE_SYMLINK_ONLY_DATABASE_RESTORE_REQUIRES_OWNER_APPROVAL'
+};
+fs.writeFileSync(process.env.RECEIPT_FILE, `${JSON.stringify(receipt, null, 2)}\n`, { flag: 'wx' });
+NODE
+sha256sum "${RECEIPT_FILE}" > "${RECEIPT_FILE}.sha256"
+echo "🟢 Frozen deployment receipt: ${RECEIPT_FILE}"
 
 # --- STEP 7: DEPLOYMENT SUCCESS DECLARATION ---
 echo -e "\n========================================================================"

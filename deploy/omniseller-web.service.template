@@ -6,7 +6,11 @@ Wants=network-online.target
 [Service]
 User=etsy
 WorkingDirectory=/home/etsy/omniseller-current/server
-EnvironmentFile=/home/etsy/omniseller/.env
+EnvironmentFile=/home/etsy/omniseller-state/env/omniseller.env
+Environment=DOTENV_PATH=/home/etsy/omniseller-state/env/omniseller.env
+Environment=OMNI_DB_PATH=/home/etsy/omniseller-state/db/app.db
+Environment=OMNI_IMPORTS_DIR=/home/etsy/omniseller-state/imports
+Environment=OMNI_R43_SINGLE_PATH=1
 ExecStart=/home/etsy/.nvm/versions/node/v22.23.2/bin/node /home/etsy/omniseller-current/server/server.js
 Restart=always
 RestartSec=5

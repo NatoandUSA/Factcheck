@@ -718,6 +718,9 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
   const masterKeywordHead = workflowState?.heads?.[marketplace === 'AMAZON' ? 'AMAZON_MASTER_KEYWORDS' : 'ETSY_MASTER_KEYWORDS'];
   const displayedMaster = masterPreview || masterKeywordHead;
   const displayedEtsyPattern = etsyPatternPreview || workflowState?.heads?.ETSY_PATTERN_SNAPSHOT;
+  const ytrendsSupplement = displayedEtsyPattern?.payload?.ytrendsSupplement || null;
+  const ytrendsPhraseCount = ytrendsSupplement?.phrases?.length || 0;
+  const ytrendsPullLimit = ytrendsSupplement?.pullLimit || 10;
   const visibleMasterKeywords = (displayedMaster?.payload?.keywords || []).filter(item => !keywordQuery.trim()
     || item.phrase.toLowerCase().includes(keywordQuery.trim().toLowerCase())).slice(0, 200);
   const truthReady = Boolean(head(state, 'productTruthRevisionId'));
@@ -964,16 +967,36 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
           <p style={{ margin: '4px 0 9px', color: '#475569', fontSize: '.77rem' }}>Học title head, 40 ký tự đầu, phrase lặp, tag thực, personalization/gift và shop concentration. Pattern không phải Product Truth.</p>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}><ActionButton accent={accent} disabled={busy} onClick={previewEtsyPatterns}>Chạy Pattern Miner</ActionButton>
             {etsyPatternPreview && <ActionButton accent="#166534" disabled={busy} onClick={saveEtsyPatterns}>Lưu Pattern Snapshot</ActionButton>}
-            {workflowState?.heads?.ETSY_PATTERN_SNAPSHOT && <ActionButton accent="#475569" disabled={busy} onClick={supplementEtsyPatterns}>Bổ sung YTrends E3 (tùy chọn)</ActionButton>}
             {workflowState?.heads?.ETSY_PATTERN_SNAPSHOT && <span style={{ alignSelf: 'center', color: '#166534', fontWeight: 800 }}>Pattern v{workflowState.heads.ETSY_PATTERN_SNAPSHOT.revisionNumber}</span>}
           </div>
+          {workflowState?.heads?.ETSY_PATTERN_SNAPSHOT && <div data-testid="etsy-ytrends-e3-panel" style={{ marginTop: 10, padding: 12, border: '1px solid #c4b5fd', borderRadius: 12, background: 'linear-gradient(135deg,#faf5ff 0%,#eef2ff 100%)', boxShadow: '0 1px 2px rgba(15,23,42,.06)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+              <div>
+                <div style={{ display: 'flex', gap: 7, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <b style={{ color: '#5b21b6' }}>YTrends E3 · tín hiệu bổ sung</b>
+                  <span style={{ padding: '2px 7px', borderRadius: 999, background: ytrendsSupplement ? '#dcfce7' : '#e2e8f0', color: ytrendsSupplement ? '#166534' : '#475569', fontSize: '.68rem', fontWeight: 900 }}>{ytrendsSupplement ? 'ĐÃ PULL' : 'CHƯA PULL'}</span>
+                </div>
+                <p style={{ margin: '4px 0 0', color: '#475569', fontSize: '.75rem', maxWidth: 760 }}>Mỗi lượt VPS nhận tối đa 10 keyword theo giới hạn YTrends/22EtsyAgent. Live CSV và HeyEtsy vẫn là nguồn chính; E3 không phải Product Truth.</p>
+              </div>
+              <ActionButton accent="#6d28d9" disabled={busy} onClick={supplementEtsyPatterns}>{busy === 'etsy-ytrends-supplement' ? 'Đang pull YTrends…' : 'Pull tối đa 10 KW từ YTrends'}</ActionButton>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(135px,1fr))', gap: 7, marginTop: 10 }}>
+              <Metric label="KW LƯỢT HIỆN TẠI" value={`${ytrendsPhraseCount}/${ytrendsPullLimit}`} />
+              <Metric label="KÊNH KẾT NỐI" value={ytrendsSupplement?.transport || 'Chưa xác định'} />
+              <Metric label="SEED ĐƯỢC DÙNG" value={ytrendsSupplement?.providerSeed || '—'} />
+              <Metric label="EVIDENCE" value="E3_SUPPLEMENTAL_INDEX" />
+            </div>
+            <div aria-label={`YTrends ${ytrendsPhraseCount} trên ${ytrendsPullLimit} keyword`} style={{ height: 7, marginTop: 9, background: '#ddd6fe', borderRadius: 999, overflow: 'hidden' }}><div style={{ width: `${Math.min(100, Math.round((ytrendsPhraseCount / Math.max(1, ytrendsPullLimit)) * 100))}%`, height: '100%', background: '#7c3aed', transition: 'width .2s ease' }} /></div>
+            {ytrendsSupplement?.fetchedAt && <div style={{ marginTop: 6, color: '#64748b', fontSize: '.68rem' }}>Cập nhật: {new Date(ytrendsSupplement.fetchedAt).toLocaleString('vi-VN')} · requested seed: {ytrendsSupplement.seedPhrase || '—'}</div>}
+          </div>}
           {displayedEtsyPattern && <div style={{ marginTop: 9 }}>
             <div style={{ overflowX: 'auto', maxHeight: 430, border: '1px solid #fed7aa', borderRadius: 8, background: '#fff' }}><table data-testid="etsy-pattern-table" style={{ width: '100%', borderCollapse: 'collapse', fontSize: '.73rem' }}>
               <thead><tr><th style={{ textAlign: 'left', padding: 7 }}>Pattern / phrase</th><th>Loại</th><th>Listing</th><th>Độ phủ</th><th>Shop</th><th>Evidence</th></tr></thead>
               <tbody>{[
                 ...(displayedEtsyPattern.payload?.leadingWords || []).map(item => ({ ...item, type: 'TITLE_HEAD', listings: item.count })),
                 ...(displayedEtsyPattern.payload?.repeatedPhrases || []).map(item => ({ ...item, type: 'REPEATED_PHRASE', listings: item.count })),
-                ...(displayedEtsyPattern.payload?.observedTags || []).map(item => ({ ...item, type: 'OBSERVED_TAG', listings: item.listingSpread, share: item.listingSpread / Math.max(1, displayedEtsyPattern.payload?.sampleSize || 1), shops: item.shopSpread }))
+                ...(displayedEtsyPattern.payload?.observedTags || []).map(item => ({ ...item, type: 'OBSERVED_TAG', listings: item.listingSpread, share: item.listingSpread / Math.max(1, displayedEtsyPattern.payload?.sampleSize || 1), shops: item.shopSpread })),
+                ...(displayedEtsyPattern.payload?.ytrendsSupplement?.phrases || []).map(item => ({ ...item, type: 'YTRENDS_E3', evidenceTier: 'E3_SUPPLEMENTAL_INDEX' }))
               ].sort((a, b) => (b.share || 0) - (a.share || 0) || (b.listings || 0) - (a.listings || 0)).slice(0, 100).map((item, index) => <tr key={`${item.type}-${item.phrase}-${index}`} style={{ borderTop: '1px solid #ffedd5' }}>
                 <td style={{ padding: 6 }}>{item.phrase}</td><td style={{ textAlign: 'center' }}>{item.type}</td><td style={{ textAlign: 'center' }}>{item.listings ?? '—'}</td><td style={{ textAlign: 'center' }}>{item.share == null ? '—' : `${Math.round(item.share * 100)}%`}</td><td style={{ textAlign: 'center' }}>{item.shops ?? '—'}</td><td style={{ textAlign: 'center' }}>{item.evidenceTier || 'E1_OBSERVED_PUBLIC'}</td>
               </tr>)}</tbody>

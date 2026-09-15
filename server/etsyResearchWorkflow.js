@@ -295,6 +295,8 @@ async function savePatterns(db, scope, projectId, input) {
     payload: preview.payload, accounting: preview.accounting, bindings: preview.bindings });
 }
 
+const YTRENDS_PHRASES_PER_PULL = 10;
+
 function normalizeYtrendsSupplement(raw, seedPhrase, fetchedAt = new Date().toISOString()) {
   const data = raw?.data && typeof raw.data === 'object' ? raw.data : (raw && typeof raw === 'object' ? raw : {});
   const phrases = new Map();
@@ -313,7 +315,8 @@ function normalizeYtrendsSupplement(raw, seedPhrase, fetchedAt = new Date().toIS
   return { provider: 'YTRENDS_MCP', evidenceTier: 'E3_SUPPLEMENTAL_INDEX', transport,
     serverVerifiedTransport: transport === 'SERVER_DIRECT', providerTools: Array.isArray(raw?._omniTools) ? raw._omniTools.slice(0, 10) : [],
     seedPhrase: text(seedPhrase), providerSeed: text(raw?._omniSeedUsed || seedPhrase), fetchedAt,
-    phrases: [...phrases.values()], overview: data.overview && typeof data.overview === 'object' ? data.overview : null,
+    pullLimit: YTRENDS_PHRASES_PER_PULL, availablePhraseCount: phrases.size,
+    phrases: [...phrases.values()].slice(0, YTRENDS_PHRASES_PER_PULL), overview: data.overview && typeof data.overview === 'object' ? data.overview : null,
     responseHash: hashBytes(canonicalJson(raw == null ? null : raw)) };
 }
 
@@ -439,4 +442,5 @@ async function saveMasterKeywords(db, scope, projectId, input) {
 
 module.exports = Object.freeze({ EtsyWorkflowError, bindings, evidenceTier, mergeEntities, relevance, rankEntities,
   previewWinners, saveWinners, minePatterns, previewPatterns, savePatterns, buildMaster, previewMasterKeywords,
-  saveMasterKeywords, normalizeYtrendsSupplement, validateBrowserYtrendsPayload, supplementPatternsWithYtrends });
+  saveMasterKeywords, normalizeYtrendsSupplement, validateBrowserYtrendsPayload, supplementPatternsWithYtrends,
+  YTRENDS_PHRASES_PER_PULL });

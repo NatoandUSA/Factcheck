@@ -4,7 +4,7 @@ const assert = require('node:assert');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const clientModule = require('../server/ytuongMcpClient');
-const { normalizeYtrendsSupplement, validateBrowserYtrendsPayload } = require('../server/etsyResearchWorkflow');
+const { normalizeYtrendsSupplement, validateBrowserYtrendsPayload, YTRENDS_PHRASES_PER_PULL } = require('../server/etsyResearchWorkflow');
 const { YTrendsMcpClient } = clientModule;
 
 const sse = payload => `event: message\ndata: ${JSON.stringify(payload)}\n\n`;
@@ -84,6 +84,11 @@ class FakeClient extends YTrendsMcpClient {
     assert.equal(supplement.serverVerifiedTransport, false);
     assert.equal(supplement.providerSeed, 'daughter necklace');
     assert.equal(supplement.phrases[0].phrase, 'gift for daughter');
+    const bounded = normalizeYtrendsSupplement({ data: { adjacent_tags: Array.from({ length: 14 }, (_, index) => `keyword ${index + 1}`) } }, 'daughter necklace');
+    assert.equal(YTRENDS_PHRASES_PER_PULL, 10);
+    assert.equal(bounded.pullLimit, 10, 'artifact must disclose the provider pull limit');
+    assert.equal(bounded.availablePhraseCount, 14, 'artifact must retain transparent pre-limit accounting');
+    assert.equal(bounded.phrases.length, 10, 'one YTrends supplement must accept at most 10 phrases');
   } finally { global.fetch = originalFetch; }
   console.log('🟢 YTrends stateless transport and bounded browser fallback contract passed.');
 })().catch(error => { console.error(error); process.exit(1); });

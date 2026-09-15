@@ -36,6 +36,10 @@ assert.ok(canonical.indexOf('1. Upload Xray từ seed') < canonical.indexOf('2. 
   'Amazon source order must remain Xray -> editable ASIN plan -> Cerebro');
 assert.strictEqual(canonical.includes('Chứng minh file Cerebro thuộc batch nào'), false,
   'Cerebro ancestry proof must not return to the active staff workflow');
+assert.ok(canonical.includes('data-testid="etsy-ytrends-e3-panel"'), 'Etsy must expose a readable YTrends E3 status panel');
+assert.ok(canonical.includes('Pull tối đa 10 KW từ YTrends'), 'Etsy must disclose the 10-keyword provider limit at the action');
+assert.ok(canonical.includes('E3_SUPPLEMENTAL_INDEX'), 'Etsy YTrends UI must retain the E3 evidence label');
+assert.ok(canonical.includes("type: 'YTRENDS_E3'"), 'YTrends phrases must be visible in the Pattern table');
 
 assert.strictEqual(etsy.includes("const transitioned = await handleTransition('RESEARCH_ACCEPTED')"), false, 'Opening Etsy research must not attempt a legacy server transition');
 assert.ok(etsy.includes("await handleTransition('DNA_ACCEPTED')"), 'Etsy DNA acceptance must call the server transition');

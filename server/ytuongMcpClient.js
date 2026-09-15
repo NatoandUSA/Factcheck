@@ -8,6 +8,14 @@ const PROTOCOL_VERSION = '2025-06-18';
 const MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
 const REQUIRED_TOOLS = new Set(['ytrends_explore_niche', 'ytrends_research_keyword', 'ytrends_find_trending_keywords', 'ytrends_search']);
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+const dataOf = value => value?.data && typeof value.data === 'object' ? value.data : {};
+const hasKeywordPhrases = value => {
+  const data = dataOf(value);
+  return Boolean((data.adjacent_tags || []).length || (data.related_keywords || []).length
+    || (data.top_listings || []).some(row => Array.isArray(row?.tags) && row.tags.length));
+};
+const sourcedRows = (rows, sourceField) => (Array.isArray(rows) ? rows : []).map(item =>
+  typeof item === 'string' ? { tag: item, _omniSourceField: sourceField } : { ...item, _omniSourceField: sourceField });
 
 class YTrendsMcpError extends Error {
   constructor(code, message, details = {}) {
@@ -170,45 +178,47 @@ class YTrendsMcpClient {
     return parsed?.result;
   }
 
-  async exploreNiche(seed) { return this.callTool('ytrends_explore_niche', { seed, response_format: 'concise' }); }
+  async exploreNiche(seed) { return this.callTool('ytrends_explore_niche', { seed, depth: 'deep', response_format: 'detailed' }); }
 
   async pullKeywordEcosystem(seed, alternateSeeds = []) {
-    const explored = await this.exploreNiche(seed);
-    const exploredData = explored?.data && typeof explored.data === 'object' ? explored.data : {};
-    const hasPhrases = (Array.isArray(exploredData.adjacent_tags) && exploredData.adjacent_tags.length)
-      || (Array.isArray(exploredData.related_keywords) && exploredData.related_keywords.length)
-      || (Array.isArray(exploredData.top_listings) && exploredData.top_listings.some(row => Array.isArray(row?.tags) && row.tags.length));
-    if (hasPhrases) return { ...explored, _omniTransport: 'SERVER_DIRECT', _omniRequestedSeed: seed,
-      _omniSeedUsed: seed, _omniTools: ['ytrends_explore_niche'] };
-    const [researched, trending, searched] = await Promise.all([
-      this.callTool('ytrends_research_keyword', { keyword: seed, response_format: 'concise' }),
-      this.callTool('ytrends_find_trending_keywords', { search: seed, limit: 25, response_format: 'concise' }),
-      this.callTool('ytrends_search', { query: seed, limit: 25 })
-    ]);
-    const researchData = researched?.data && typeof researched.data === 'object' ? researched.data : {};
-    const trendingRows = Array.isArray(trending?.data?.tags) ? trending.data.tags : [];
-    const searchRows = Array.isArray(searched?.data?.results) ? searched.data.results : [];
-    const searchKeywords = searchRows.filter(row => row?.kind === 'keyword' || row?.type === 'keyword')
-      .map(row => row.keyword || row.tag || row.name).filter(Boolean);
-    const combined = { data: { overview: exploredData.overview || researchData.stats || null,
-      adjacent_tags: [...(exploredData.adjacent_tags || []), ...trendingRows, ...searchKeywords],
-      related_keywords: researchData.related_keywords || [], top_listings: researchData.top_listings || [] },
-    _omniTransport: 'SERVER_DIRECT', _omniRequestedSeed: seed, _omniSeedUsed: seed,
-    _omniTools: ['ytrends_explore_niche', 'ytrends_research_keyword', 'ytrends_find_trending_keywords', 'ytrends_search'] };
-    const combinedHasPhrases = combined.data.adjacent_tags.length || combined.data.related_keywords.length
-      || combined.data.top_listings.some(row => Array.isArray(row?.tags) && row.tags.length);
-    if (combinedHasPhrases) return combined;
+    let providerSeed = seed;
+    let explored = await this.exploreNiche(seed);
     const candidates = [...new Set((alternateSeeds || []).map(value => String(value || '').trim())
       .filter(value => value && value !== seed))].slice(0, 2);
-    for (const candidate of candidates) {
-      const alternative = await this.exploreNiche(candidate);
-      const data = alternative?.data && typeof alternative.data === 'object' ? alternative.data : {};
-      const useful = (data.adjacent_tags || []).length || (data.related_keywords || []).length
-        || (data.top_listings || []).some(row => Array.isArray(row?.tags) && row.tags.length);
-      if (useful) return { ...alternative, _omniTransport: 'SERVER_DIRECT', _omniRequestedSeed: seed,
-        _omniSeedUsed: candidate, _omniTools: ['ytrends_explore_niche', 'pattern-derived-seed-fallback'] };
+    if (!hasKeywordPhrases(explored)) {
+      for (const candidate of candidates) {
+        const alternative = await this.exploreNiche(candidate);
+        if (!hasKeywordPhrases(alternative)) continue;
+        providerSeed = candidate; explored = alternative; break;
+      }
     }
-    return combined;
+    const specs = [
+      ['ytrends_research_keyword', { keyword: providerSeed, response_format: 'detailed' }],
+      ['ytrends_find_trending_keywords', { search: providerSeed, limit: 50, response_format: 'detailed' }],
+      ['ytrends_search', { query: providerSeed, limit: 30, kinds: ['keyword', 'listing'] }],
+      ['ytrends_find_hidden_gems', { search: providerSeed, limit: 50, response_format: 'detailed' }],
+      ['ytrends_scout_opportunities', { search: providerSeed, limit: 50, response_format: 'detailed' }]
+    ].filter(([name]) => this.toolNames?.has(name));
+    const settled = await Promise.allSettled(specs.map(([name, args]) => this.callTool(name, args)));
+    const pulls = [{ tool: 'ytrends_explore_niche', status: 'SUCCESS' }];
+    const results = new Map();
+    settled.forEach((entry, index) => {
+      const name = specs[index][0];
+      if (entry.status === 'fulfilled') { pulls.push({ tool: name, status: 'SUCCESS' }); results.set(name, entry.value); }
+      else pulls.push({ tool: name, status: 'FAILED', code: entry.reason?.code || 'YTRENDS_TOOL_ERROR' });
+    });
+    const exploredData = dataOf(explored); const researchData = dataOf(results.get('ytrends_research_keyword'));
+    const trendingData = dataOf(results.get('ytrends_find_trending_keywords'));
+    const searchData = dataOf(results.get('ytrends_search')); const gemsData = dataOf(results.get('ytrends_find_hidden_gems'));
+    const scoutData = dataOf(results.get('ytrends_scout_opportunities'));
+    const searchRows = (searchData.results || []).filter(row => !row?.kind || row.kind === 'keyword' || row.type === 'keyword');
+    return { data: { overview: exploredData.overview || researchData.stats || null,
+      adjacent_tags: exploredData.adjacent_tags || [], related_keywords: researchData.related_keywords || exploredData.related_keywords || [],
+      top_listings: researchData.top_listings || exploredData.top_listings || [], discovery_keywords: [
+        ...sourcedRows(trendingData.tags, 'trending.tags'), ...sourcedRows(searchRows, 'search.results'),
+        ...sourcedRows(gemsData.tags, 'hidden_gems.tags'), ...sourcedRows(scoutData.results, 'opportunities.results')
+      ] }, _omniTransport: 'SERVER_DIRECT', _omniRequestedSeed: seed, _omniSeedUsed: providerSeed,
+      _omniTools: pulls.filter(item => item.status === 'SUCCESS').map(item => item.tool), _omniPulls: pulls };
   }
 
   async researchKeyword(keyword) { return this.callTool('ytrends_research_keyword', { keyword }); }

@@ -37,9 +37,13 @@ assert.ok(canonical.indexOf('1. Upload Xray từ seed') < canonical.indexOf('2. 
 assert.strictEqual(canonical.includes('Chứng minh file Cerebro thuộc batch nào'), false,
   'Cerebro ancestry proof must not return to the active staff workflow');
 assert.ok(canonical.includes('data-testid="etsy-ytrends-e3-panel"'), 'Etsy must expose a readable YTrends E3 status panel');
-assert.ok(canonical.includes('Pull tối đa 10 KW từ YTrends'), 'Etsy must disclose the 10-keyword provider limit at the action');
+assert.ok(canonical.includes('Pull mở rộng YTrends E3'), 'Etsy must expose the multi-tool YTrends research action');
+assert.ok(canonical.includes('Tool lỗi riêng không làm mất kết quả từ tool khác'), 'Etsy must explain partial multi-tool resilience');
 assert.ok(canonical.includes('E3_SUPPLEMENTAL_INDEX'), 'Etsy YTrends UI must retain the E3 evidence label');
 assert.ok(canonical.includes("type: 'YTRENDS_E3'"), 'YTrends phrases must be visible in the Pattern table');
+assert.ok(canonical.includes('data-testid="canonical-progress-rail"'), 'both canonical workspaces must share the progress rail');
+assert.ok(canonical.includes('data-testid="product-truth-scope"'), 'Product Truth must explain its per-project product scope');
+assert.ok(canonical.includes('Không chỉ Jewelry'), 'Product Truth UI must disclose support beyond jewelry');
 
 assert.strictEqual(etsy.includes("const transitioned = await handleTransition('RESEARCH_ACCEPTED')"), false, 'Opening Etsy research must not attempt a legacy server transition');
 assert.ok(etsy.includes("await handleTransition('DNA_ACCEPTED')"), 'Etsy DNA acceptance must call the server transition');

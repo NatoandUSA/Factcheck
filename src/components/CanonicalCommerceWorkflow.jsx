@@ -61,9 +61,15 @@ const resultSummary = result => !result || typeof result !== 'object' ? null : O
 }).filter(([, value]) => value !== undefined));
 
 function Step({ number, title, children, accent, done }) {
-  return <section style={{ border: `1px solid ${done ? '#86efac' : '#cbd5e1'}`, borderRadius: 12, padding: 16, background: done ? '#f0fdf4' : '#fff' }}>
-    <h3 style={{ margin: '0 0 12px', fontSize: '1rem', color: done ? '#166534' : '#0f172a' }}>
-      {done ? '✓' : number}. {title}
+  return <section style={{ border: `1px solid ${done ? '#86efac' : '#cbd5e1'}`, borderRadius: 16, padding: 17,
+    background: done ? 'linear-gradient(145deg,#f0fdf4 0%,#ffffff 72%)' : 'linear-gradient(145deg,#ffffff 0%,#f8fafc 100%)',
+    boxShadow: '0 8px 24px rgba(15,23,42,.055)', position: 'relative', overflow: 'hidden' }}>
+    <div aria-hidden="true" style={{ position: 'absolute', inset: '0 auto 0 0', width: 4, background: done ? '#22c55e' : accent }} />
+    <h3 style={{ margin: '0 0 12px', fontSize: '1rem', color: done ? '#166534' : '#0f172a', display: 'flex', alignItems: 'center', gap: 8 }}>
+      <span style={{ display: 'inline-grid', placeItems: 'center', minWidth: 27, height: 27, padding: '0 5px', borderRadius: 9,
+        background: done ? '#dcfce7' : `${accent}14`, color: done ? '#15803d' : accent, fontSize: '.78rem', fontWeight: 900 }}>{done ? '✓' : number}</span>
+      <span>{done ? '✓' : number}. {title}</span>
+      <span style={{ marginLeft: 'auto', padding: '3px 8px', borderRadius: 999, background: done ? '#dcfce7' : '#e2e8f0', color: done ? '#166534' : '#475569', fontSize: '.63rem', letterSpacing: '.04em' }}>{done ? 'HOÀN TẤT' : 'ĐANG CHỜ'}</span>
     </h3>
     {children}
   </section>;
@@ -720,7 +726,8 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
   const displayedEtsyPattern = etsyPatternPreview || workflowState?.heads?.ETSY_PATTERN_SNAPSHOT;
   const ytrendsSupplement = displayedEtsyPattern?.payload?.ytrendsSupplement || null;
   const ytrendsPhraseCount = ytrendsSupplement?.phrases?.length || 0;
-  const ytrendsPullLimit = ytrendsSupplement?.pullLimit || 10;
+  const ytrendsRequestCount = ytrendsSupplement?.requestCount || 0;
+  const ytrendsSuccessfulRequestCount = ytrendsSupplement?.successfulRequestCount || 0;
   const visibleMasterKeywords = (displayedMaster?.payload?.keywords || []).filter(item => !keywordQuery.trim()
     || item.phrase.toLowerCase().includes(keywordQuery.trim().toLowerCase())).slice(0, 200);
   const truthReady = Boolean(head(state, 'productTruthRevisionId'));
@@ -761,6 +768,13 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
           : !draft?.content
             ? 'Bước 4A: tạo draft zero-write'
             : 'Bước 4B: đọc/sửa draft rồi lưu ở NEEDS_QA';
+  const workflowProgress = [
+    { number: 1, label: marketplace === 'AMAZON' ? 'Research & Master KW' : 'Live data → Pattern → MKL', done: researchReady && Boolean(masterKeywordHead) },
+    { number: 2, label: 'Product Truth', done: truthReady },
+    { number: 3, label: 'Keyword Intelligence', done: intelligenceReady },
+    { number: 4, label: 'Draft & Creative', done: Boolean(listing) },
+    { number: 5, label: 'QA & Handoff', done: latestListing?.status === 'OPERATOR_REPORTED_SUBMITTED' }
+  ];
 
   const previewGrid = (entries, testId) => entries.length > 0 && <div data-testid={testId} style={{ display: 'grid', gap: 8, marginTop: 10 }}>
     {entries.map((entry, index) => entry.error
@@ -776,15 +790,31 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
 
   if (!activeProject) return null;
 
-  return <div data-testid={`canonical-commerce-${marketplace.toLowerCase()}`} style={{ border: `2px solid ${accent}`, borderRadius: 16, padding: 18, background: '#f8fafc', display: 'grid', gap: 14 }}>
-    <div>
-      <h2 style={{ margin: 0, color: accent }}>Luồng Staff Canonical — {marketplace} US</h2>
+  return <div data-testid={`canonical-commerce-${marketplace.toLowerCase()}`} style={{ border: `1px solid ${accent}55`, borderRadius: 20, padding: 18,
+    background: `radial-gradient(circle at top right,${accent}12,transparent 28%),#f8fafc`, display: 'grid', gap: 14, boxShadow: '0 18px 46px rgba(15,23,42,.08)' }}>
+    <div style={{ padding: 2 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+        <div><div style={{ color: accent, fontSize: '.67rem', fontWeight: 900, letterSpacing: '.12em' }}>OMNISELLER · SINGLE STAFF PATH</div>
+          <h2 style={{ margin: '3px 0 0', color: '#0f172a' }}>Luồng Staff Canonical — {marketplace} US</h2></div>
+        <span style={{ border: `1px solid ${accent}55`, color: accent, background: '#fff', borderRadius: 999, padding: '6px 10px', fontSize: '.7rem', fontWeight: 900 }}>{activeProject?.name || `Project #${projectId}`}</span>
+      </div>
       <p style={{ margin: '6px 0 0', color: '#475569' }}>Research/Master KW và Product Truth chạy song song → safe compose → QA → exact export. OmniSeller không tự đăng và chỉ ghi nhận thao tác submit thủ công.</p>
       <div data-testid="canonical-next-action" style={{ marginTop: 10, padding: '10px 12px', borderRadius: 9, background: '#ecfeff', border: '1px solid #67e8f9', color: '#164e63', fontWeight: 800 }}>
         Việc cần làm tiếp: {nextAction}
         <div style={{ marginTop: 4, fontSize: '.72rem', fontWeight: 600 }}>
           Research #{head(state, 'researchSnapshotId') || 'chưa có'} · Product Truth #{head(state, 'productTruthRevisionId') || 'chưa có'} · Intelligence #{head(state, 'intelligenceSnapshotId') || 'chưa có'}
         </div>
+      </div>
+      <div data-testid="canonical-progress-rail" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(145px,1fr))', gap: 7, marginTop: 9 }}>
+        {workflowProgress.map((item, index) => {
+          const active = !item.done && (item.number <= 2 || workflowProgress.slice(0, index).every(previous => previous.done));
+          return <div key={item.number} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '8px 9px', borderRadius: 10,
+            border: `1px solid ${item.done ? '#86efac' : active ? `${accent}66` : '#e2e8f0'}`, background: item.done ? '#f0fdf4' : active ? '#fff' : '#f8fafc' }}>
+            <span style={{ display: 'grid', placeItems: 'center', width: 23, height: 23, flex: '0 0 23px', borderRadius: 8,
+              background: item.done ? '#22c55e' : active ? accent : '#cbd5e1', color: '#fff', fontWeight: 900, fontSize: '.68rem' }}>{item.done ? '✓' : item.number}</span>
+            <span style={{ color: item.done ? '#166534' : '#334155', fontSize: '.68rem', fontWeight: 800, lineHeight: 1.25 }}>{item.label}</span>
+          </div>;
+        })}
       </div>
       {activeProject?.state === 'EVIDENCE_INTAKE' && <div style={{ marginTop: 8, padding: 9, borderRadius: 8, background: '#dcfce7', color: '#166534', fontSize: '.8rem', fontWeight: 800 }}>
         Project đang mang trạng thái legacy EVIDENCE_INTAKE, nhưng trạng thái này không chặn luồng R3 bên dưới. Staff có thể nhập Product Truth và import research ngay trong project hiện tại.
@@ -976,17 +1006,20 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
                   <b style={{ color: '#5b21b6' }}>YTrends E3 · tín hiệu bổ sung</b>
                   <span style={{ padding: '2px 7px', borderRadius: 999, background: ytrendsSupplement ? '#dcfce7' : '#e2e8f0', color: ytrendsSupplement ? '#166534' : '#475569', fontSize: '.68rem', fontWeight: 900 }}>{ytrendsSupplement ? 'ĐÃ PULL' : 'CHƯA PULL'}</span>
                 </div>
-                <p style={{ margin: '4px 0 0', color: '#475569', fontSize: '.75rem', maxWidth: 760 }}>Mỗi lượt VPS nhận tối đa 10 keyword theo giới hạn YTrends/22EtsyAgent. Live CSV và HeyEtsy vẫn là nguồn chính; E3 không phải Product Truth.</p>
+                <p style={{ margin: '4px 0 0', color: '#475569', fontSize: '.75rem', maxWidth: 760 }}>Một lượt research gom Explore, Detailed Research, Search, Trending, Hidden Gems và Opportunity trong giới hạn chính thức của từng tool, sau đó dedupe. Tool lỗi riêng không làm mất kết quả từ tool khác. Live CSV và HeyEtsy vẫn là nguồn chính; E3 không phải Product Truth.</p>
               </div>
-              <ActionButton accent="#6d28d9" disabled={busy} onClick={supplementEtsyPatterns}>{busy === 'etsy-ytrends-supplement' ? 'Đang pull YTrends…' : 'Pull tối đa 10 KW từ YTrends'}</ActionButton>
+              <ActionButton accent="#6d28d9" disabled={busy} onClick={supplementEtsyPatterns}>{busy === 'etsy-ytrends-supplement' ? 'Đang gom nhiều nguồn YTrends…' : 'Pull mở rộng YTrends E3'}</ActionButton>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(135px,1fr))', gap: 7, marginTop: 10 }}>
-              <Metric label="KW LƯỢT HIỆN TẠI" value={`${ytrendsPhraseCount}/${ytrendsPullLimit}`} />
+              <Metric label="KW ĐÃ DEDUPE" value={ytrendsPhraseCount} />
+              <Metric label="TOOL THÀNH CÔNG" value={ytrendsRequestCount ? `${ytrendsSuccessfulRequestCount}/${ytrendsRequestCount}` : '—'} />
               <Metric label="KÊNH KẾT NỐI" value={ytrendsSupplement?.transport || 'Chưa xác định'} />
               <Metric label="SEED ĐƯỢC DÙNG" value={ytrendsSupplement?.providerSeed || '—'} />
-              <Metric label="EVIDENCE" value="E3_SUPPLEMENTAL_INDEX" />
             </div>
-            <div aria-label={`YTrends ${ytrendsPhraseCount} trên ${ytrendsPullLimit} keyword`} style={{ height: 7, marginTop: 9, background: '#ddd6fe', borderRadius: 999, overflow: 'hidden' }}><div style={{ width: `${Math.min(100, Math.round((ytrendsPhraseCount / Math.max(1, ytrendsPullLimit)) * 100))}%`, height: '100%', background: '#7c3aed', transition: 'width .2s ease' }} /></div>
+            {ytrendsPhraseCount > 0 && <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginTop: 9 }}>
+              {ytrendsSupplement.phrases.slice(0, 30).map(item => <span key={item.phrase} title={(item.sourceFields || []).join(', ')} style={{ padding: '3px 7px', borderRadius: 999, background: '#fff', border: '1px solid #c4b5fd', color: '#4c1d95', fontSize: '.68rem' }}>{item.phrase}</span>)}
+              {ytrendsPhraseCount > 30 && <span style={{ padding: '3px 7px', color: '#5b21b6', fontSize: '.68rem', fontWeight: 900 }}>+{ytrendsPhraseCount - 30} KW khác trong artifact</span>}
+            </div>}
             {ytrendsSupplement?.fetchedAt && <div style={{ marginTop: 6, color: '#64748b', fontSize: '.68rem' }}>Cập nhật: {new Date(ytrendsSupplement.fetchedAt).toLocaleString('vi-VN')} · requested seed: {ytrendsSupplement.seedPhrase || '—'}</div>}
           </div>}
           {displayedEtsyPattern && <div style={{ marginTop: 9 }}>
@@ -1025,6 +1058,11 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
     </Step>
 
     <Step number="2" title="Product Truth do Seller nhập và kiểm" accent={accent} done={Boolean(head(state, 'productTruthRevisionId'))}>
+      <div data-testid="product-truth-scope" style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: 9, alignItems: 'start', padding: 10, marginBottom: 10, borderRadius: 10, border: '1px solid #bae6fd', background: '#f0f9ff' }}>
+        <span aria-hidden="true" style={{ display: 'grid', placeItems: 'center', width: 28, height: 28, borderRadius: 9, background: '#0284c7', color: '#fff', fontWeight: 900 }}>i</span>
+        <div><b style={{ color: '#075985' }}>Product Truth thuộc từng project/sản phẩm — không dùng chung cho toàn catalog.</b>
+          <div style={{ marginTop: 3, color: '#475569', fontSize: '.74rem' }}>Không chỉ Jewelry: biểu mẫu hỗ trợ hàng vật lý và digital. Safe Composer hiện có policy đã cấu hình cho Necklace, Embroidery, Acrylic, Blanket, Sweatshirt, Shirt, Hoodie và Mug; loại khác cần thêm policy trước khi phát hành.</div></div>
+      </div>
       <div style={{ border: '1px solid #bfdbfe', borderRadius: 10, padding: 12, background: '#eff6ff', marginBottom: 12 }}>
         <b>Điền nhanh từ một listing cùng supplier / nguồn hàng</b>
         <p style={{ margin: '5px 0 9px', fontSize: '.78rem', color: '#475569' }}>Dùng ngay tài khoản, workspace và project đang mở. Preview chỉ điền biểu mẫu; chưa ghi database.</p>

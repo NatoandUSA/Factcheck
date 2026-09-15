@@ -6,10 +6,16 @@
   "includeFiles": [
     "server/projectStateRegistry.js"
   ],
+  "excludeFiles": [
+    "server/database/defaultAgents.js",
+    "server/database/testFixtures.js"
+  ],
   "runtimeSchemaScanTrees": [
     "server",
-    "shared"
+    "shared",
+    "scripts"
   ],
+  "runtimeSchemaSymlinkPolicy": "FORBID",
   "bootstrapExtraction": {
     "path": "server/server.js",
     "startMarker": "// Initialize DB schema",

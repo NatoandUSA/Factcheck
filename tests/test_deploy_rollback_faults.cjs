@@ -53,6 +53,10 @@ rollback
       `${fault} rollback fault must still attempt baseline service restart`);
     assert.match(`${result.stdout}\n${result.stderr}`, /CRITICAL: Baseline symlink could not be restored/,
       `${fault} rollback fault must emit a visible critical operator message`);
+    assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /successfully rolled back to baseline/,
+      `${fault} rollback fault must never end with a false baseline-success claim`);
+    assert.match(`${result.stdout}\n${result.stderr}`, /Active target is '[^']*\/target'/,
+      `${fault} injection control must report the actual target instead of assuming baseline`);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

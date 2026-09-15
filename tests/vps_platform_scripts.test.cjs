@@ -113,8 +113,9 @@ function runPlatformTests() {
     && deployScript.includes('cp -p "${DB_PATH}" "${BACKUP_SUBDIR}/app.db" || rollback')
     && deployScript.includes('> "${BACKUP_SUBDIR}/checksums.sha256" || rollback'),
   'Every failure after service stop must restore the baseline service');
-  assert.ok(deployScript.includes('atomic_symlink_switch "${BASELINE_RELEASE_DIR}" \\')
-    && deployScript.includes('|| echo "🔴 CRITICAL: Baseline symlink could not be restored. Manual intervention required."')
+  assert.ok(deployScript.includes('SYMLINK_RESTORED=0')
+    && deployScript.includes('[ "${SYMLINK_RESTORED}" = "1" ]')
+    && deployScript.includes('ACTIVE_RELEASE_AFTER_ROLLBACK="$(readlink -f')
     && deployScript.includes('sudo systemctl restart omniseller-web || true'),
   'Rollback itself must remain best-effort when symlink restoration or service restart fails');
   assert.ok(!/Target VPS Host|Authoritative Production VPS Topology|\b\w+@\d{1,3}(?:\.\d{1,3}){3}\b/.test(deployScript),

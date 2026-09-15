@@ -141,17 +141,28 @@ rollback() {
     fi
 
     echo "Restoring active symlink atomically to pre-built baseline release ${BASELINE_RELEASE_DIR}..."
-    atomic_symlink_switch "${BASELINE_RELEASE_DIR}" \
-      || echo "🔴 CRITICAL: Baseline symlink could not be restored. Manual intervention required."
+    SYMLINK_RESTORED=0
+    if atomic_symlink_switch "${BASELINE_RELEASE_DIR}"; then
+        ACTIVE_RELEASE_AFTER_ROLLBACK="$(readlink -f "${CURRENT_SYMLINK}" 2>/dev/null || true)"
+        if [ "${ACTIVE_RELEASE_AFTER_ROLLBACK}" = "${BASELINE_RELEASE_DIR}" ]; then
+            SYMLINK_RESTORED=1
+        else
+            echo "🔴 CRITICAL: Symlink switch returned success but active target is '${ACTIVE_RELEASE_AFTER_ROLLBACK:-UNRESOLVED}'."
+        fi
+    else
+        ACTIVE_RELEASE_AFTER_ROLLBACK="$(readlink -f "${CURRENT_SYMLINK}" 2>/dev/null || true)"
+        echo "🔴 CRITICAL: Baseline symlink could not be restored. Active target is '${ACTIVE_RELEASE_AFTER_ROLLBACK:-UNRESOLVED}'."
+    fi
     
     echo "Restarting systemd service 'omniseller-web' on baseline release..."
     sudo systemctl restart omniseller-web || true
     
     sleep 3
-    if sudo systemctl is-active --quiet omniseller-web; then
-        echo "🟢 System successfully rolled back to baseline release ${BASELINE_SHA}."
+    if [ "${SYMLINK_RESTORED}" = "1" ] && sudo systemctl is-active --quiet omniseller-web; then
+        echo "🟢 System successfully rolled back to baseline release ${BASELINE_SHA} (active: ${ACTIVE_RELEASE_AFTER_ROLLBACK})."
     else
-        echo "🔴 CRITICAL: Systemd service failed to restart during rollback. Manual intervention required."
+        SERVICE_STATE_AFTER_ROLLBACK="$(sudo systemctl is-active omniseller-web 2>/dev/null || true)"
+        echo "🔴 CRITICAL: Baseline rollback is NOT verified (service=${SERVICE_STATE_AFTER_ROLLBACK:-UNKNOWN}, active=${ACTIVE_RELEASE_AFTER_ROLLBACK:-UNRESOLVED}). Manual intervention required."
     fi
     exit 1
 }

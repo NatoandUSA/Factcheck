@@ -16,6 +16,8 @@ const write = (name, value) => {
 
 try {
   write('server/database/migrations.js', 'module.exports = `ALTER TABLE listings ADD COLUMN name TEXT`;');
+  write('server/database/testFixtures.js', 'module.exports = { fixture: 1 };');
+  write('server/database/defaultAgents.js', 'module.exports = { agents: [] };');
   write('server/projectStateRegistry.js', 'module.exports = { stateColumnSql: "state TEXT" };');
   write('server/server.js', `const route = 1;
 // Initialize DB schema
@@ -29,7 +31,9 @@ const unrelatedRoute = 2;`);
     schemaVersion: 1,
     includeTrees: ['server/database'],
     includeFiles: ['server/projectStateRegistry.js'],
-    runtimeSchemaScanTrees: ['server', 'shared'],
+    excludeFiles: ['server/database/testFixtures.js', 'server/database/defaultAgents.js'],
+    runtimeSchemaScanTrees: ['server', 'shared', 'scripts'],
+    runtimeSchemaSymlinkPolicy: 'FORBID',
     bootstrapExtraction: {
       path: 'server/server.js', startMarker: '// Initialize DB schema',
       endMarker: 'const ensureTestDatabaseFixtures'
@@ -56,6 +60,15 @@ const unrelatedRoute = 2;`);
   const testOnly = schemaFingerprint(root, { manifestPath });
   assert.equal(testOnly.schemaAuthorityFingerprint, before.schemaAuthorityFingerprint,
     'test-only change must not trigger migration rehearsal');
+
+  write('server/database/testFixtures.js', 'module.exports = { fixture: 2 };');
+  const fixtureOnly = schemaFingerprint(root, { manifestPath });
+  assert.equal(fixtureOnly.schemaAuthorityFingerprint, before.schemaAuthorityFingerprint,
+    'non-DDL database fixtures must not trigger migration rehearsal');
+  write('server/database/testFixtures.js', "db.run('CREATE TABLE fixture_escape (id INTEGER)');");
+  assert.throws(() => schemaFingerprint(root, { manifestPath }), /UNCLASSIFIED_SCHEMA_AUTHORITY/,
+    'an excluded fixture that gains DDL must fail closed through runtime scanning');
+  write('server/database/testFixtures.js', 'module.exports = { fixture: 2 };');
 
   write('server/server.js', `const route = 1;
 // Initialize DB schema
@@ -97,6 +110,11 @@ const unrelatedRoute = 999;`);
   assert.throws(() => schemaFingerprint(root, { manifestPath }), /UNCLASSIFIED_SCHEMA_AUTHORITY/,
     'DDL in runtime source outside the declared authority closure must fail closed');
   fs.unlinkSync(path.join(root, 'server/unclassifiedStore.js'));
+
+  write('scripts/runtime-schema.cjs', "db.run('CREATE TABLE script_schema (id INTEGER)');");
+  assert.throws(() => schemaFingerprint(root, { manifestPath }), /UNCLASSIFIED_SCHEMA_AUTHORITY:scripts\/runtime-schema\.cjs/,
+    'DDL in production-host scripts must not escape schema rehearsal');
+  fs.unlinkSync(path.join(root, 'scripts/runtime-schema.cjs'));
 
   write('tests/sql-fixture.cjs', "const fixture = 'CREATE TABLE fixture_only (id INTEGER)';");
   assert.doesNotThrow(() => schemaFingerprint(root, { manifestPath }),

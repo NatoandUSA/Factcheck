@@ -69,7 +69,8 @@ function loadManifest(manifestPath) {
   const bytes = fs.readFileSync(manifestPath);
   const manifest = JSON.parse(bytes.toString('utf8'));
   if (manifest?.schemaVersion !== 1 || !Array.isArray(manifest.includeTrees)
-    || !Array.isArray(manifest.includeFiles) || !Array.isArray(manifest.runtimeSchemaScanTrees)
+    || !Array.isArray(manifest.includeFiles) || !Array.isArray(manifest.excludeFiles)
+    || !Array.isArray(manifest.runtimeSchemaScanTrees) || manifest.runtimeSchemaSymlinkPolicy !== 'FORBID'
     || !manifest.bootstrapExtraction) {
     throw new Error('SCHEMA_AUTHORITY_MANIFEST_INVALID');
   }
@@ -104,9 +105,15 @@ function assertNoUnclassifiedRuntimeDdl(root, selected, manifest) {
 
 function collectSchemaFiles(root, manifest) {
   const selected = new Set();
+  const excluded = new Set(manifest.excludeFiles.map(file => {
+    const absolute = path.resolve(root, file);
+    if (path.relative(root, absolute).startsWith('..')) throw new Error('SCHEMA_AUTHORITY_EXCLUDE_PATH_ESCAPE');
+    return absolute;
+  }));
   const add = absolute => {
     const resolved = path.resolve(absolute);
     if (path.relative(root, resolved).startsWith('..')) throw new Error('SCHEMA_AUTHORITY_PATH_ESCAPE');
+    if (excluded.has(resolved)) return;
     if (!fs.existsSync(resolved)) {
       selected.add(resolved);
       return;

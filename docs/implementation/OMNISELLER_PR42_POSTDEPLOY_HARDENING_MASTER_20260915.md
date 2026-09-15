@@ -246,3 +246,20 @@ Final review disposition:
 Required final-successor delta review: attack runtime-root DDL classification, non-literal schema loads, rollback failure inside the rollback function, comment-then-change-request ordering, and cross-origin pagination. No Owner marker may be created until that exact successor is frozen and independently accepted.
 
 The final-successor inventory contains 104 suites, including an executable rollback fault-injection test. The unsupported local Node 24/Windows run reports `103/104 PASS`; only the previously isolated process-tree sentinel fails. Exact-head Node 22 `104/104` and build evidence remain mandatory.
+
+## 14. Independent review of `21eecf6d` and rollback-evidence correction
+
+Claude executed 47 adversarial cases plus seven fault injections and accepted F-01 through F-04 and the dynamic-dependency guard. Two additional P2 findings were accepted: production-host scripts were outside runtime DDL classification, and rollback could print a false baseline-success line after symlink restoration failed post-cutover.
+
+Canonical response:
+
+| ID | Decision | Correction |
+|---|---|---|
+| F-prime-01 scripts DDL gap | `ACCEPT — P2 PROVEN` | Add `scripts` to runtime schema scan roots and regress a DDL-bearing production script as unclassified authority. |
+| F-prime-02 false rollback success | `ACCEPT — P2 PROVEN` | Track symlink restoration, resolve the actual active target, and emit success only when the symlink equals the baseline and the service is active. Fault cases must end with CRITICAL and no success claim. |
+| F-prime-03 fixture over-trigger | `ACCEPT — P3 PROVEN` | Exclude non-DDL database fixtures from the schema digest while preserving runtime DDL scanning over those files. |
+| F-prime-04 blanket symlink policy | `ACCEPT — P3 DOCUMENTED` | Preserve fail-closed behavior and declare `FORBID` explicitly in the schema-authority manifest. |
+
+Production evidence correction: the current registry contains **10 states**, not nine. `PRE_H0_NINE_STATE` is the historical lineage that omits `PRODUCT_TRUTH_VERIFIED`; it is not the current expected schema. The private receipt DDL contains the exact current 10-state set exported by `projectStateRegistry.js`, records migration `2026-09-02_project_state_registry`, and reports zero stale legacy approval/publish rows. A byte-identical receipt copy is available under the private connected `reports` workspace for independent review; it must not be committed to the public repository.
+
+Final review must attack the exact successor only: DDL under `scripts`, excluded fixture files containing DDL, post-cutover symlink-restore failure, false success suppression, actual active-target reporting, and manifest symlink-policy enforcement. Owner authorization remains prohibited until exact-SHA review closes.

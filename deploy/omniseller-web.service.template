@@ -7,6 +7,7 @@ Wants=network-online.target
 User=etsy
 WorkingDirectory=/home/etsy/omniseller-current/server
 EnvironmentFile=/home/etsy/omniseller-state/env/omniseller.env
+Environment=NODE_ENV=production
 Environment=DOTENV_PATH=/home/etsy/omniseller-state/env/omniseller.env
 Environment=OMNI_DB_PATH=/home/etsy/omniseller-state/db/app.db
 Environment=OMNI_IMPORTS_DIR=/home/etsy/omniseller-state/imports

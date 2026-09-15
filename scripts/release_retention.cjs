@@ -5,7 +5,7 @@ const path = require('node:path');
 
 const SHA40 = /^[a-f0-9]{40}$/;
 
-function planReleaseRetention(releasesDir, { targetSha, baselineSha, keepRecent = 2 } = {}) {
+function planReleaseRetention(releasesDir, { targetSha, baselineSha, keepRecent = 2, nowMs = Date.now() } = {}) {
   const root = path.resolve(releasesDir);
   if (!SHA40.test(String(targetSha || '')) || !SHA40.test(String(baselineSha || ''))) {
     throw new Error('RELEASE_RETENTION_SHA_REQUIRED');
@@ -24,7 +24,8 @@ function planReleaseRetention(releasesDir, { targetSha, baselineSha, keepRecent 
     try { manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')); }
     catch (_) { warnings.push({ sha: entry.name, code: 'INVALID_OR_MISSING_MANIFEST' }); continue; }
     const builtAtMs = Date.parse(manifest.built_at);
-    if (manifest.sha !== entry.name || manifest.status !== 'COMPLETE' || !Number.isFinite(builtAtMs)) {
+    if (manifest.sha !== entry.name || manifest.status !== 'COMPLETE' || !Number.isFinite(builtAtMs)
+      || builtAtMs > nowMs + (24 * 60 * 60 * 1000)) {
       warnings.push({ sha: entry.name, code: 'UNTRUSTED_RELEASE_MANIFEST' });
       continue;
     }

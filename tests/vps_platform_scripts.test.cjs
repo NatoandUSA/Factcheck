@@ -49,6 +49,11 @@ function runPlatformTests() {
       console.log(`  ℹ️ bash binary unavailable in host environment; file existence verified: ${scriptPath}`);
     }
   }
+  const setupScript = fs.readFileSync(path.resolve(__dirname, '../scripts/vps_migrate_and_setup_platform.sh'), 'utf8');
+  assert.ok(setupScript.includes('Environment=NODE_ENV=production')
+    && setupScript.includes('Environment=OMNI_R43_SINGLE_PATH=1')
+    && !setupScript.includes('${WORKTREE_REPO}/.env'),
+  'Platform installer must pin production single-path mode and reject worktree-local secrets');
   const deployScript = fs.readFileSync(path.resolve(__dirname, '../scripts/vps_deploy_and_verify.sh'), 'utf8');
   assert.ok(deployScript.includes('NODE_HOME="${OMNI_NODE_HOME:-${BASE_DIR}/.nvm/versions/node/v22.23.2}"'),
     'Deploy must resolve the pinned Node 22 runtime independently of the login shell PATH');
@@ -68,6 +73,9 @@ function runPlatformTests() {
     'Deploy must require the R4.3 single-path runtime policy before cutover');
   assert.ok(deployScript.includes("/proc/${SERVICE_PID}/environ"),
     'Deploy must verify the flag on the active service process, not merely in a config file');
+  assert.ok(deployScript.includes("grep -qx 'NODE_ENV=production'")
+    && deployScript.includes("grep -qx 'OMNI_R43_SINGLE_PATH=1'"),
+  'Deploy must verify both production mode and R4.3 mode in the active process environment');
   assert.ok(deployScript.includes('scripts/release_retention.cjs'),
     'Release pruning must use the validated manifest-time retention planner');
   assert.ok(!deployScript.includes('find "${RELEASES_DIR}" -mindepth 1 -maxdepth 1 -type d | sort -r'),
@@ -76,8 +84,13 @@ function runPlatformTests() {
     'Receipt must state that automatic rollback is code-only');
   assert.ok(deployScript.includes('journalctl -u omniseller-web --since "${DEPLOY_STARTED_AT}"'),
     'Service error evidence must have an explicit deployment time boundary');
+  assert.ok(deployScript.includes("deploymentStatus: 'ACTIVE_VERIFIED'")
+    && deployScript.includes('fs.renameSync(temporary, target)')
+    && deployScript.includes('RELEASE_ACTIVE_BUT_UNRECEIPTED'),
+  'Deployment receipt must land atomically and fail with an explicit post-cutover state');
   assert.ok(deployScript.includes('verify_migration_compatibility_receipt.cjs')
-    && deployScript.includes('MIGRATION_PATHS='),
+    && deployScript.includes('scripts/schema_fingerprint.cjs')
+    && !deployScript.includes('MIGRATION_PATHS='),
   'Migration-authority changes must require an exact two-direction compatibility receipt');
 
   // Test 2: Systemd Template Validity & Preserved Contract
@@ -85,6 +98,7 @@ function runPlatformTests() {
   const templatePath = path.resolve(__dirname, '../deploy/omniseller-web.service.template');
   assert.ok(fs.existsSync(templatePath), 'deploy/omniseller-web.service.template must exist in repository');
   const templateContent = fs.readFileSync(templatePath, 'utf8');
+  assert.ok(templateContent.includes('Environment=NODE_ENV=production'), 'Template must pin production mode');
   assert.ok(templateContent.includes('WorkingDirectory=/home/etsy/omniseller-current/server'), 'Template must specify omniseller-current WorkingDirectory');
   assert.ok(templateContent.includes('EnvironmentFile=/home/etsy/omniseller-state/env/omniseller.env')
     && templateContent.includes('Environment=OMNI_DB_PATH=/home/etsy/omniseller-state/db/app.db')
@@ -92,6 +106,8 @@ function runPlatformTests() {
   'Template must keep secrets, database and imports outside Git-controlled release trees');
   assert.ok(templateContent.includes('ExecStart=/home/etsy/.nvm/versions/node/v22.23.2/bin/node /home/etsy/omniseller-current/server/server.js'), 'Template must specify omniseller-current ExecStart');
   assert.ok(templateContent.includes('Environment=OMNI_R43_SINGLE_PATH=1'), 'Template must pin the R4.3 single-path production policy');
+  assert.ok(!fs.existsSync(path.resolve(__dirname, '../ecosystem.config.cjs')),
+    'Deprecated PM2 entry point must not remain as a second production launcher');
   console.log('  🟢 Systemd unit template validated.');
 
   // Test 3: Disposable Temp Folder Manifest Packaging

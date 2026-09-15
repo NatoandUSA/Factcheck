@@ -37,7 +37,7 @@ git -C "${WORKTREE_REPO}" cat-file -e "${BASELINE_SHA}^{commit}" || {
     exit 1
 }
 
-mkdir -p "${RELEASES_DIR}" "${STATE_DIR}/db" "${STATE_DIR}/imports" "${STATE_DIR}/backups"
+mkdir -p "${RELEASES_DIR}" "${STATE_DIR}/db" "${STATE_DIR}/imports" "${STATE_DIR}/backups" "${STATE_DIR}/env"
 
 # Dynamically extract EnvironmentFile from active systemd unit & drop-ins
 DETECTED_ENV=""
@@ -46,12 +46,10 @@ if [ -f "${SYSTEMD_UNIT_PATH}" ]; then
 fi
 
 if [ -z "${DETECTED_ENV}" ] || [ ! -f "${DETECTED_ENV}" ]; then
-    if [ -f "${STATE_DIR}/omniseller.env" ]; then
-        DETECTED_ENV="${STATE_DIR}/omniseller.env"
-    elif [ -f "${STATE_DIR}/env/omniseller.env" ]; then
+    if [ -f "${STATE_DIR}/env/omniseller.env" ]; then
         DETECTED_ENV="${STATE_DIR}/env/omniseller.env"
-    elif [ -f "${WORKTREE_REPO}/.env" ]; then
-        DETECTED_ENV="${WORKTREE_REPO}/.env"
+    elif [ -f "${STATE_DIR}/omniseller.env" ]; then
+        DETECTED_ENV="${STATE_DIR}/omniseller.env"
     fi
 fi
 
@@ -61,6 +59,13 @@ if [ -z "${DETECTED_ENV}" ] || [ ! -f "${DETECTED_ENV}" ]; then
 fi
 
 echo "🟢 Preserved Active Environment File: ${DETECTED_ENV}"
+
+R43_FLAG_COUNT=$(awk -F= '/^[[:space:]]*OMNI_R43_SINGLE_PATH[[:space:]]*=/ { count += 1; value=$2; gsub(/[[:space:]\r]/, "", value) } END { print count ":" value }' "${DETECTED_ENV}")
+NODE_ENV_COUNT=$(awk -F= '/^[[:space:]]*NODE_ENV[[:space:]]*=/ { count += 1; value=$2; gsub(/[[:space:]\r]/, "", value) } END { print count ":" value }' "${DETECTED_ENV}")
+if [ "${R43_FLAG_COUNT}" != "1:1" ] || [ "${NODE_ENV_COUNT}" != "1:production" ]; then
+    echo "🔴 ERROR: Environment file must contain exactly one NODE_ENV=production and OMNI_R43_SINGLE_PATH=1 assignment."
+    exit 1
+fi
 
 # Idempotency Guard for Unit Backup (never overwrite initial .bak)
 if [ -f "${SYSTEMD_UNIT_PATH}" ] && [ ! -f "${SYSTEMD_BAK_PATH}" ]; then
@@ -122,6 +127,11 @@ Wants=network-online.target
 User=etsy
 WorkingDirectory=/home/etsy/omniseller-current/server
 EnvironmentFile=${DETECTED_ENV}
+Environment=NODE_ENV=production
+Environment=DOTENV_PATH=${DETECTED_ENV}
+Environment=OMNI_DB_PATH=${STATE_DIR}/db/app.db
+Environment=OMNI_IMPORTS_DIR=${STATE_DIR}/imports
+Environment=OMNI_R43_SINGLE_PATH=1
 ExecStart=/home/etsy/.nvm/versions/node/v22.23.2/bin/node /home/etsy/omniseller-current/server/server.js
 Restart=always
 RestartSec=5

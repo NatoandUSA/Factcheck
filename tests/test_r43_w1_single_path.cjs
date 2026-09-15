@@ -23,11 +23,11 @@ const uuid = () => crypto.randomUUID();
 let server; let passed = 0;
 function check(value, message) { assert.ok(value, message); passed++; }
 
-async function sessionFor(marketplace) {
+async function sessionFor(marketplace, email = 'seller@omniseller.local') {
   const row = await get(`SELECT u.id AS userId,w.id AS workspaceId,w.tenant_id AS tenantId,w.marketplace
     FROM users u JOIN workspace_memberships m ON m.user_id=u.id JOIN workspaces w ON w.id=m.workspace_id
-    WHERE u.email='seller@omniseller.local' AND m.role='SELLER' AND w.marketplace=? LIMIT 1`, [marketplace]);
-  assert.ok(row, `Missing SELLER ${marketplace} fixture`);
+    WHERE u.email=? AND w.marketplace=? LIMIT 1`, [email, marketplace]);
+  assert.ok(row, `Missing ${email} ${marketplace} fixture`);
   const session = await new Promise((resolve, reject) => createSessionRecord(db, row.userId, row.workspaceId,
     row.tenantId, (error, value) => error ? reject(error) : resolve(value)));
   return { ...row, rawToken: session.rawToken };
@@ -130,6 +130,10 @@ async function main() {
   });
   check(legacy.status === 410 && legacy.body.error === 'LEGACY_WRITE_ROUTE_RETIRED',
     'R4.3 runtime denies direct legacy Smart Pull writes');
+  const owner = await sessionFor('AMAZON', 'owner@omniseller.local');
+  const legacyExport = await requestFor(owner.rawToken)('/api/listings/999/export');
+  check(legacyExport.status === 410 && legacyExport.body.error === 'LEGACY_WRITE_ROUTE_RETIRED',
+    'R4.3 runtime retires the legacy export surface before stale legacy status can grant authority');
 
   const etsy = await sessionFor('ETSY');
   const etsyRequest = requestFor(etsy.rawToken);

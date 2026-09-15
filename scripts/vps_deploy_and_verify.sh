@@ -54,8 +54,9 @@ if [ ! -f "${ENV_FILE}" ]; then
     exit 1
 fi
 R43_FLAG_COUNT=$(awk -F= '/^[[:space:]]*OMNI_R43_SINGLE_PATH[[:space:]]*=/ { count += 1; value=$2; gsub(/[[:space:]\r]/, "", value) } END { print count ":" value }' "${ENV_FILE}")
-if [ "${R43_FLAG_COUNT}" != "1:1" ]; then
-    echo "🔴 ERROR: ${ENV_FILE} must contain exactly one OMNI_R43_SINGLE_PATH=1 assignment."
+NODE_ENV_COUNT=$(awk -F= '/^[[:space:]]*NODE_ENV[[:space:]]*=/ { count += 1; value=$2; gsub(/[[:space:]\r]/, "", value) } END { print count ":" value }' "${ENV_FILE}")
+if [ "${R43_FLAG_COUNT}" != "1:1" ] || [ "${NODE_ENV_COUNT}" != "1:production" ]; then
+    echo "🔴 ERROR: ${ENV_FILE} must contain exactly one NODE_ENV=production and one OMNI_R43_SINGLE_PATH=1 assignment."
     exit 1
 fi
 echo "🟢 R4.3 single-path production policy is explicitly configured."
@@ -188,15 +189,20 @@ EOF
     echo "🟢 Atomic completion manifest written."
 fi
 
-MIGRATION_PATHS=(server/database/migrations.js server/database/projectStateMigration.js server/projectStateRegistry.js)
-if ! git -C "${WORKTREE_REPO}" diff --quiet "${BASELINE_SHA}" "${TARGET_SHA}" -- "${MIGRATION_PATHS[@]}"; then
+BASELINE_SCHEMA=$("${NODE_BIN}" "${TARGET_RELEASE_DIR}/scripts/schema_fingerprint.cjs" "${BASELINE_RELEASE_DIR}") || exit 1
+TARGET_SCHEMA=$("${NODE_BIN}" "${TARGET_RELEASE_DIR}/scripts/schema_fingerprint.cjs" "${TARGET_RELEASE_DIR}") || exit 1
+BASELINE_SCHEMA_FINGERPRINT=$("${NODE_BIN}" -e "console.log(JSON.parse(process.argv[1]).fingerprint)" "${BASELINE_SCHEMA}")
+TARGET_SCHEMA_FINGERPRINT=$("${NODE_BIN}" -e "console.log(JSON.parse(process.argv[1]).fingerprint)" "${TARGET_SCHEMA}")
+if [ "${BASELINE_SCHEMA_FINGERPRINT}" != "${TARGET_SCHEMA_FINGERPRINT}" ]; then
     MIGRATION_RECEIPT="${STATE_DIR}/migration-compatibility/${BASELINE_SHA}_${TARGET_SHA}.json"
+    MIGRATION_EVIDENCE_DIR="${STATE_DIR}/migration-compatibility/evidence"
     if [ ! -f "${MIGRATION_RECEIPT}" ]; then
         echo "🔴 ERROR: Migration authority changed; exact compatibility receipt is required at ${MIGRATION_RECEIPT}."
         exit 1
     fi
     "${NODE_BIN}" "${TARGET_RELEASE_DIR}/scripts/verify_migration_compatibility_receipt.cjs" \
-      "${MIGRATION_RECEIPT}" "${BASELINE_SHA}" "${TARGET_SHA}" || exit 1
+      "${MIGRATION_RECEIPT}" "${BASELINE_SHA}" "${TARGET_SHA}" \
+      "${BASELINE_SCHEMA_FINGERPRINT}" "${TARGET_SCHEMA_FINGERPRINT}" "${MIGRATION_EVIDENCE_DIR}" || exit 1
 fi
 
 # --- STEP 3: SAFE SERVICE STOP & WAL-SAFE DB BACKUP ---
@@ -260,8 +266,9 @@ echo "🟢 systemd service 'omniseller-web' is ACTIVE."
 
 SERVICE_PID=$(sudo systemctl show -p MainPID --value omniseller-web)
 if [ -z "${SERVICE_PID}" ] || [ "${SERVICE_PID}" = "0" ] \
+  || ! sudo tr '\0' '\n' < "/proc/${SERVICE_PID}/environ" | grep -qx 'NODE_ENV=production' \
   || ! sudo tr '\0' '\n' < "/proc/${SERVICE_PID}/environ" | grep -qx 'OMNI_R43_SINGLE_PATH=1'; then
-    echo "🔴 Runtime policy receipt failed: active service process does not expose OMNI_R43_SINGLE_PATH=1."
+    echo "🔴 Runtime policy receipt failed: active service process must expose NODE_ENV=production and OMNI_R43_SINGLE_PATH=1."
     rollback
 fi
 echo "🟢 Active service process confirms OMNI_R43_SINGLE_PATH=1."
@@ -347,9 +354,14 @@ SERVICE_WORKDIR=$(sudo systemctl show -p WorkingDirectory --value omniseller-web
 ACTIVE_RELEASE=$(readlink -f "${CURRENT_SYMLINK}")
 JOURNAL_ERROR_COUNT=$(sudo journalctl -u omniseller-web --since "${DEPLOY_STARTED_AT}" -p err --no-pager -q | wc -l | tr -d ' ') || rollback
 RECEIPT_FILE="${RECEIPT_DIR}/${TARGET_SHA}_${TIMESTAMP}.json"
-RECEIPT_TARGET_SHA="${TARGET_SHA}" RECEIPT_BASELINE_SHA="${BASELINE_SHA}" \
+receipt_failure() {
+    echo "🔴 RELEASE_ACTIVE_BUT_UNRECEIPTED: target remains active and health-verified, but atomic receipt creation failed."
+    echo "🔴 Deployment is incomplete and must not be declared successful; inspect ${RECEIPT_DIR} before any next deploy."
+    exit 2
+}
+if ! RECEIPT_TARGET_SHA="${TARGET_SHA}" RECEIPT_BASELINE_SHA="${BASELINE_SHA}" \
 RECEIPT_STARTED_AT="${DEPLOY_STARTED_AT}" RECEIPT_FINISHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-RECEIPT_NODE_VERSION="$("${NODE_BIN}" --version)" RECEIPT_ACTIVE_RELEASE="${ACTIVE_RELEASE}" \
+RECEIPT_NODE_VERSION="$("${NODE_BIN}" --version)" RECEIPT_NODE_ENV="production" RECEIPT_ACTIVE_RELEASE="${ACTIVE_RELEASE}" \
 RECEIPT_BACKUP_DIR="${BACKUP_SUBDIR}" RECEIPT_LOCAL_STATUS="${LOCAL_STATUS}" \
 RECEIPT_LOCAL_REVISION="${LOCAL_REVISION}" RECEIPT_PUBLIC_STATUS="${PUBLIC_STATUS}" \
 RECEIPT_PUBLIC_REVISION="${PUBLIC_REVISION}" RECEIPT_SERVICE_PID="${SERVICE_PID}" \
@@ -359,11 +371,13 @@ RECEIPT_JOURNAL_ERRORS="${JOURNAL_ERROR_COUNT}" RECEIPT_FILE="${RECEIPT_FILE}" \
 const fs = require('node:fs');
 const receipt = {
   schemaVersion: 1,
+  deploymentStatus: 'ACTIVE_VERIFIED',
   targetSha: process.env.RECEIPT_TARGET_SHA,
   baselineSha: process.env.RECEIPT_BASELINE_SHA,
   startedAt: process.env.RECEIPT_STARTED_AT,
   finishedAt: process.env.RECEIPT_FINISHED_AT,
   nodeVersion: process.env.RECEIPT_NODE_VERSION,
+  nodeEnvironment: process.env.RECEIPT_NODE_ENV,
   activeRelease: process.env.RECEIPT_ACTIVE_RELEASE,
   backupDirectory: process.env.RECEIPT_BACKUP_DIR,
   health: {
@@ -380,9 +394,28 @@ const receipt = {
   },
   rollbackScope: 'CODE_SYMLINK_ONLY_DATABASE_RESTORE_REQUIRES_OWNER_APPROVAL'
 };
-fs.writeFileSync(process.env.RECEIPT_FILE, `${JSON.stringify(receipt, null, 2)}\n`, { flag: 'wx' });
+const target = process.env.RECEIPT_FILE;
+const temporary = `${target}.tmp-${process.pid}`;
+let descriptor;
+try {
+  descriptor = fs.openSync(temporary, 'wx', 0o600);
+  fs.writeFileSync(descriptor, `${JSON.stringify(receipt, null, 2)}\n`);
+  fs.fsyncSync(descriptor);
+  fs.closeSync(descriptor); descriptor = undefined;
+  fs.renameSync(temporary, target);
+  const directory = fs.openSync(require('node:path').dirname(target), 'r');
+  try { fs.fsyncSync(directory); } finally { fs.closeSync(directory); }
+} catch (error) {
+  if (descriptor !== undefined) fs.closeSync(descriptor);
+  try { fs.unlinkSync(temporary); } catch (_) {}
+  throw error;
+}
 NODE
-sha256sum "${RECEIPT_FILE}" > "${RECEIPT_FILE}.sha256"
+then
+    receipt_failure
+fi
+sha256sum "${RECEIPT_FILE}" > "${RECEIPT_FILE}.sha256.tmp" || receipt_failure
+mv "${RECEIPT_FILE}.sha256.tmp" "${RECEIPT_FILE}.sha256" || receipt_failure
 echo "🟢 Frozen deployment receipt: ${RECEIPT_FILE}"
 
 # --- STEP 7: DEPLOYMENT SUCCESS DECLARATION ---

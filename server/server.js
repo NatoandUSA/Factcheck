@@ -3109,7 +3109,7 @@ app.patch('/api/listings/:id/approve', requireAuth(db), requireRole(['OWNER', 'M
 
 
 // Export a listing (Gated server-side by Canonical Publish Gate)
-app.get('/api/listings/:id/export', requireAuth(db), requireRole(['OWNER', 'MANAGER']), (req, res) => {
+app.get('/api/listings/:id/export', requireAuth(db), requireRole(['OWNER', 'MANAGER']), denyLegacyWriteInR43, (req, res) => {
   const { id } = req.params;
 
   db.get(

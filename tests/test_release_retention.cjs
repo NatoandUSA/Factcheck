@@ -27,6 +27,18 @@ try {
     'target and baseline must survive even when lexicographic order disagrees with build chronology');
   assert.deepEqual(pruned, [shas[3]]);
   assert.deepEqual(plan.warnings, [{ sha: invalidSha, code: 'INVALID_OR_MISSING_MANIFEST' }]);
+  const futureSha = 'e'.repeat(40);
+  const futureDirectory = path.join(root, futureSha);
+  fs.mkdirSync(futureDirectory);
+  fs.writeFileSync(path.join(futureDirectory, 'MANIFEST.json'), JSON.stringify({
+    sha: futureSha, built_at: '2099-01-01T00:00:00Z', status: 'COMPLETE'
+  }));
+  const futurePlan = planReleaseRetention(root, {
+    targetSha: shas[1], baselineSha: shas[4], keepRecent: 1, nowMs: Date.parse('2026-09-15T00:00:00Z')
+  });
+  assert.deepEqual(futurePlan.warnings.find(item => item.sha === futureSha),
+    { sha: futureSha, code: 'UNTRUSTED_RELEASE_MANIFEST' });
+  assert.equal(futurePlan.prune.includes(futureDirectory), false, 'far-future manifest must be retained for manual review');
   assert.throws(() => planReleaseRetention(root, { targetSha: '../escape', baselineSha: shas[0] }),
     /RELEASE_RETENTION_SHA_REQUIRED/);
 } finally {

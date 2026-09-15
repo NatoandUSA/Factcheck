@@ -31,12 +31,14 @@
       "tests/test_workspace_switching_and_auth_security.cjs"
     ],
     "HARNESS_RELEASE_OPS": [
+      "tests/test_canonical_test_authority.cjs",
       "tests/test_database_fixture_isolation.cjs",
       "tests/test_performance_and_latency.cjs",
       "tests/test_production_runtime_policy.cjs",
       "tests/test_release_retention.cjs",
       "tests/test_runner_accounting.cjs",
       "tests/test_runtime_paths.cjs",
+      "tests/test_schema_fingerprint.cjs",
       "tests/test_vite_dev_runtime_smoke.test.cjs",
       "tests/test_vite_process_shutdown.cjs",
       "tests/test_white_screen_failsafe.cjs",

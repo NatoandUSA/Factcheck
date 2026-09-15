@@ -1,9 +1,9 @@
 # OMNISELLER PR #42 — POST-DEPLOY HARDENING MASTER
 
-Date: 2026-09-15  
-Canonical baseline: `d6642c2502071ba885da01b02f39a6f0ebc8a605`  
-Implementation branch: `codex/pr42-production-hardening`  
-Writer authority: GPT3/Codex only  
+Date: 2026-09-15
+Canonical baseline: `d6642c2502071ba885da01b02f39a6f0ebc8a605`
+Implementation branch: `codex/pr42-production-hardening`
+Writer authority: GPT3/Codex only
 Review agents: reproduce, challenge and propose; do not mutate canonical code
 
 ## 1. Executive verdict
@@ -86,6 +86,8 @@ Pre-cutover requirements:
 5. Target build and native SQLite load pass before stopping the service.
 6. WAL-safe backup integrity and checksums pass before cutover.
 
+The supported systemd process and the external environment file must both pin `NODE_ENV=production` and `OMNI_R43_SINGLE_PATH=1`. The former PM2 entry point has been removed; the old PM2/Nginx guide is a non-executable tombstone.
+
 Post-cutover requirements:
 
 1. systemd is active;
@@ -142,7 +144,7 @@ Agents may not merge, deploy, clean the dirty root, mutate production data or ce
 
 Until these gates pass, this branch is a hardening candidate, not a production-ready release.
 
-## 9. Local implementation receipt
+## 9. Predecessor implementation receipt — `172bc625`
 
 Environment: Windows, Node `v24.18.0` (unsupported by package engine; audit only).
 
@@ -159,4 +161,23 @@ Environment: Windows, Node `v24.18.0` (unsupported by package engine; audit only
 | Vite production build | `PASS`, 1,827 modules |
 | Full canonical inventory | `99/100 PASS`, `0 unexecuted`, `0 harness errors` |
 
-The sole full-suite failure is `test_runner_accounting.cjs`: its Windows child-process sentinel survives under Node 24. This repository explicitly supports Node 22 only. The failure is recorded and not weakened or hidden; clean Node 22 CI must rerun all 100 suites on the exact candidate commit.
+The sole full-suite failure is `test_runner_accounting.cjs`: its Windows child-process sentinel survives under Node 24. This repository explicitly supports Node 22 only. The failure is recorded and not weakened or hidden. This receipt belongs to predecessor `172bc625`; it does not certify the successor remediation.
+
+## 10. Claude review of `172bc625` and canonical disposition
+
+| ID | Severity | Decision | Successor remediation |
+|---|---|---|---|
+| C-01 | P0 | `ACCEPT — PROVEN` | Pin and verify `NODE_ENV=production` together with `OMNI_R43_SINGLE_PATH=1` in environment preflight, systemd template, platform installer and live `/proc/PID/environ`. |
+| C-02 | P1 | `ACCEPT — PROVEN` | Remove `ecosystem.config.cjs`; replace the former PM2 guide with a non-executable tombstone. |
+| C-03 | P1 | `ACCEPT — PROVEN` | Replace the three-file allowlist with a deterministic fingerprint that discovers every DDL/schema-authority JavaScript file, including inline DDL in `server/server.js`. |
+| C-04 | P1 | `ACCEPT — PROVEN` | Receipt schema v2 binds exact baseline/target schema fingerprints to the SHA-256 of a real, bounded, regular non-symlink evidence file; verifier checks timestamps, three executed checks, DB checksums, row counts and independent file ownership. |
+| C-05 | P1 | `ACCEPT — PROVEN` | Retire the entire legacy GET export route under R4.3 before row lookup; canonical submission/export continues through the policy-gated route. |
+| C-06 | P2 | `ACCEPT — PROVEN` | Treat manifest `built_at` more than 24 hours in the future as untrusted and retain it for manual review. |
+| C-07 | P2 | `ACCEPT — PROVEN` | Classify the authority-manifest test explicitly as `HARNESS_RELEASE_OPS`. |
+| A-05 code claim | — | `WITHDRAWN` | Preserve project-state registry migration; production DDL remains a read-only runtime verification requirement. |
+
+Additional canonical finding: `scripts/vps_migrate_and_setup_platform.sh` was another unit generator with the same C-01 root cause and a worktree-local `.env` fallback. It now enforces the external state environment and pins both production controls.
+
+Focused successor checks pass: runtime policy, retention, schema fingerprint, evidence-bound migration receipt, test authority, both VPS shell scripts, platform contract, production smoke preflight, R4.3 single path (`19/19`), canonical UI (`39/39`) and canonical research HTTP (`79/79`). Vite build passes with 1,827 modules.
+
+The successor canonical inventory contains 101 suites. The unsupported local Node 24 run reports `100/101 PASS`, `0 unexecuted`, `0 harness errors`; the only failure remains the already-isolated Windows child-process sentinel in `test_runner_accounting.cjs`. Clean Node 22 full-suite/build evidence remains mandatory on the exact successor commit.

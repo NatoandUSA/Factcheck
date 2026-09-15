@@ -212,6 +212,10 @@ async function main() {
     && item.raw_hash === committed.body.rawHash), 'commerce state returns immutable import metadata');
   check(stateResponse.body.researchSnapshots.length === 1 && stateResponse.body.intelligenceSnapshots.length === 1,
     'commerce state returns snapshot history');
+  check(stateResponse.body.policyCapability?.status === 'DRAFT_ONLY'
+    && stateResponse.body.policyCapability?.approvalEligible === false
+    && stateResponse.body.policyCapability?.blockers?.[0]?.code === 'POLICY_CONTRACT_DRAFT_ONLY',
+  'commerce state discloses the server-resolved approval boundary before review');
 
   const sellerApproval = await jsonAsSeller(`/api/listings/${listing.body.listingId}/canonical-review`, 'POST', {
     decision: 'APPROVED', reason: 'forged Seller approval', idempotencyKey: key(13)

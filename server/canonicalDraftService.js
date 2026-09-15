@@ -171,6 +171,35 @@ function serverPolicyContext(project, scope) {
   return createServerPolicyContext({ ...stablePolicyContext(project, scope), effectiveAt: new Date().toISOString() });
 }
 
+async function describePolicyCapability(db, scope, projectId) {
+  let project;
+  try { project = await projectPolicyContext(db, scope, projectId); }
+  catch (error) {
+    if (error?.code === 'PROJECT_POLICY_CONTEXT_INCOMPLETE') {
+      return Object.freeze({ status: 'CONTEXT_INCOMPLETE', approvalEligible: false,
+        blockers: Object.freeze([{ code: 'PROJECT_POLICY_CONTEXT_INCOMPLETE', ...(error.details || {}) }]) });
+    }
+    throw error;
+  }
+  const context = serverPolicyContext(project, scope);
+  try {
+    const resolution = draftPolicyRegistry.resolve(context, { purpose: 'DRAFT' });
+    const eligibility = resolution.contract.approvalEligibility;
+    return Object.freeze({
+      status: eligibility,
+      approvalEligible: eligibility === 'APPROVAL_ELIGIBLE',
+      blockers: Object.freeze(eligibility === 'APPROVAL_ELIGIBLE' ? [] : [{ code: 'POLICY_CONTRACT_DRAFT_ONLY' }]),
+      policyContractId: resolution.policyContractId,
+      policyContractArtifactHash: resolution.policyContractArtifactHash,
+      checkedAt: resolution.contract.checkedAt,
+      effectiveFrom: resolution.contract.effectiveFrom
+    });
+  } catch (error) {
+    return Object.freeze({ status: 'POLICY_UNAVAILABLE', approvalEligible: false,
+      blockers: Object.freeze([{ code: error?.code || 'POLICY_CONTRACT_UNAVAILABLE' }]) });
+  }
+}
+
 async function validateCanonicalDraft(db, scope, projectId, selectedTruthRevisionId, rawContent,
   selectedIntelligenceSnapshotId = null, purpose = 'DRAFT') {
   const project = await projectPolicyContext(db, scope, projectId);
@@ -300,5 +329,6 @@ module.exports = Object.freeze({
   assertCanonicalDependenciesCurrent,
   composeCommerceDraft,
   composeTruthOnlyDraft,
+  describePolicyCapability,
   validateCanonicalDraft
 });

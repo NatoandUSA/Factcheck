@@ -37,7 +37,7 @@
   ],
   "root_cause": "Two independent root causes closed this session: (1) Issue #3's P0 security gaps (already closed across PR #5's 5 review rounds -- auth gating, SSRF, workspace/marketplace scoping, fail-closed background agents). (2) An operational root cause discovered only during deployment: the VPS had silently drifted from git history because a prior session's live-debugging hotfixes were applied directly via SSH and never reconciled back into a commit, while the repo's own history moved on independently via separately-authored commits covering similar ground. This is exactly the 'second source of truth' failure mode Golden Rule 16 warns against, and it meant production was still running actively-vulnerable code (live AI Drafter Gemini calls, no marketplace guards) well after the fix had already been reviewed, tested, and sitting in git.",
   "impact_surface": [
-    "production VPS (51.79.200.65) -- omniseller-web, omniseller-tunnel systemd services",
+    "production VPS from external operations inventory -- omniseller-web, omniseller-tunnel systemd services",
     "server/app.db (live production database) -- briefly deleted and fully recovered, see what_changed",
     "database migrations 002-006, all confirmed applied on the live DB",
     "dist/ frontend build -- rebuilt and swapped in",

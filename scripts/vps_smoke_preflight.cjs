@@ -14,6 +14,7 @@ fs.mkdirSync(extImports, { recursive: true });
 fs.writeFileSync(extDotenv, 'GEMINI_API_KEY=test_key\n');
 
 process.env.NODE_ENV = 'production';
+process.env.OMNI_R43_SINGLE_PATH = '1';
 process.env.DOTENV_PATH = extDotenv;
 process.env.OMNI_DB_PATH = extDb;
 process.env.OMNI_IMPORTS_DIR = extImports;

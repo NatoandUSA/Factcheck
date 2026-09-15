@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "defaultAuthority": "ACTIVE_R43",
+  "authorities": {
+    "HISTORICAL_COMPATIBILITY": [
+      "tests/server_revision.test.cjs",
+      "tests/spec_canonical_business_workflow.test.cjs",
+      "tests/test_project_scoped_evidence_workflow.test.cjs",
+      "tests/test_workflow_state_machine.test.cjs"
+    ],
+    "MIGRATION_LINEAGE": [
+      "tests/listing_scope_migration.test.cjs",
+      "tests/test_backup_restore_and_migrations.cjs",
+      "tests/test_g4_submission_migration_upgrade.cjs",
+      "tests/test_h0_state_migration.cjs",
+      "tests/test_legacy_migration_integrity.test.cjs",
+      "tests/test_migration_compatibility_receipt.cjs",
+      "tests/test_owner_authorization.cjs",
+      "tests/test_r43_production_db_upgrade.cjs",
+      "tests/test_r43_w2_artifact_migration.cjs",
+      "tests/test_rr01_production_state_lineage.cjs"
+    ],
+    "SECURITY_CONTROL": [
+      "tests/p0_route_security.test.cjs",
+      "tests/route_registry_coverage.test.cjs",
+      "tests/sec_auth_foundation.test.cjs",
+      "tests/security_controls_unit.test.cjs",
+      "tests/ssrf_url_guard.test.cjs",
+      "tests/test_cross_tenant_isolation.cjs",
+      "tests/test_login_rate_limiter_http.test.cjs",
+      "tests/test_truth_evidence_ownership.test.cjs",
+      "tests/test_workspace_switching_and_auth_security.cjs"
+    ],
+    "HARNESS_RELEASE_OPS": [
+      "tests/test_canonical_test_authority.cjs",
+      "tests/test_database_fixture_isolation.cjs",
+      "tests/test_deploy_rollback_faults.cjs",
+      "tests/test_performance_and_latency.cjs",
+      "tests/test_production_runtime_policy.cjs",
+      "tests/test_release_retention.cjs",
+      "tests/test_release_gate_policy.cjs",
+      "tests/test_repository_hygiene.cjs",
+      "tests/test_runner_accounting.cjs",
+      "tests/test_runtime_paths.cjs",
+      "tests/test_schema_fingerprint.cjs",
+      "tests/test_vite_dev_runtime_smoke.test.cjs",
+      "tests/test_vite_process_shutdown.cjs",
+      "tests/test_white_screen_failsafe.cjs",
+      "tests/vps_platform_scripts.test.cjs"
+    ]
+  }
+}

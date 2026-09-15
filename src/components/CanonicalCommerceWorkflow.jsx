@@ -746,6 +746,10 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
   const intelligenceReady = Boolean(head(state, 'intelligenceSnapshotId'));
   const policyReady = ['locale', 'media_class', 'product_type_id', 'category_id', 'product_family_version']
     .every(field => String(policyContext?.[field] || '').trim());
+  const policyCapability = state?.policyCapability || null;
+  const policyAllowsApproval = policyCapability?.approvalEligible === true;
+  const policyCapabilityCode = policyCapability?.blockers?.[0]?.code
+    || (policyCapability ? 'POLICY_APPROVAL_BLOCKED' : 'POLICY_CAPABILITY_LOADING');
   const latestListing = listingQueue[0];
   const nextAction = !policyReady
     ? 'Bước 0B: xác nhận loại sản phẩm và ngôn ngữ cho project cũ'
@@ -765,6 +769,8 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
         ? 'Bước 2: nhập tối thiểu tên/loại sản phẩm rồi lưu Product Truth'
       : !intelligenceReady
           ? (intelligencePreview?.zeroWrite ? 'Bước 3B: khóa Intelligence Snapshot' : 'Bước 3A: chạy preview phân bổ keyword')
+          : latestListing && !policyAllowsApproval
+            ? `Trial chỉ tạo draft: approval/export bị khóa (${policyCapabilityCode})`
           : latestListing?.status === 'OPERATOR_REPORTED_SUBMITTED'
             ? 'Đã ghi nhận operator submit thủ công; theo dõi marketplace live ở phase sau'
           : latestListing?.status === 'MANAGER_APPROVED' && latestListing.submissionExportId
@@ -811,6 +817,14 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
         <span style={{ border: `1px solid ${accent}55`, color: accent, background: '#fff', borderRadius: 999, padding: '6px 10px', fontSize: '.7rem', fontWeight: 900 }}>{activeProject?.name || `Project #${projectId}`}</span>
       </div>
       <p style={{ margin: '6px 0 0', color: '#475569' }}>Research/Master KW và Product Truth chạy song song → safe compose → QA → exact export. OmniSeller không tự đăng và chỉ ghi nhận thao tác submit thủ công.</p>
+      <div data-testid="policy-capability-banner" role="status" style={{ marginTop: 9, padding: '10px 12px', borderRadius: 9,
+        background: policyAllowsApproval ? '#f0fdf4' : '#fff7ed', border: `2px solid ${policyAllowsApproval ? '#86efac' : '#fb923c'}`,
+        color: policyAllowsApproval ? '#166534' : '#9a3412', fontWeight: 900 }}>
+        Policy capability: {policyAllowsApproval ? 'APPROVAL_ELIGIBLE' : (policyCapability?.status || 'ĐANG TẢI')}
+        {!policyAllowsApproval && <div style={{ marginTop: 4, fontSize: '.76rem', fontWeight: 700 }}>
+          Trial hiện chỉ được tạo và lưu draft. Manager approval, Owner authorization và exact export bị vô hiệu hóa — {policyCapabilityCode}.
+        </div>}
+      </div>
       <div data-testid="canonical-next-action" style={{ marginTop: 10, padding: '10px 12px', borderRadius: 9, background: '#ecfeff', border: '1px solid #67e8f9', color: '#164e63', fontWeight: 800 }}>
         Việc cần làm tiếp: {nextAction}
         <div style={{ marginTop: 4, fontSize: '.72rem', fontWeight: 600 }}>
@@ -1254,22 +1268,22 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
           <details><summary>Dependency manifest + validation accounting</summary><pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{JSON.stringify({ dependencies: reviewPackages[item.id].dependencies, validationAccounting: reviewPackages[item.id].validationAccounting }, null, 2)}</pre></details>
         </div>}
         {isManager && item.status !== 'MANAGER_APPROVED' && <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-          <ActionButton accent="#166534" disabled={!reviewReason.trim() || busy || !reviewPackages[item.id]?.approvalReadiness?.ready} onClick={() => reviewListing(item.id, 'APPROVED')}>Manager duyệt exact package</ActionButton>
+          <ActionButton accent="#166534" disabled={!policyAllowsApproval || !reviewReason.trim() || busy || !reviewPackages[item.id]?.approvalReadiness?.ready} onClick={() => reviewListing(item.id, 'APPROVED')}>Manager duyệt exact package</ActionButton>
           <ActionButton accent="#b45309" disabled={!reviewReason.trim() || busy || !reviewPackages[item.id]} onClick={() => reviewListing(item.id, 'CHANGES_REQUESTED')}>Yêu cầu sửa exact package</ActionButton>
         </div>}
         {item.status === 'MANAGER_APPROVED' && isSeller && !item.submissionRequestId && <div style={{ marginTop: 9, display: 'grid', gap: 6 }}>
           <label><b>Ghi chú gửi Owner</b><textarea rows={2} value={submissionInput(item.id).requestNotes || ''} onChange={event => setSubmissionInput(item.id, 'requestNotes', event.target.value)} /></label>
-          <ActionButton accent="#7c3aed" disabled={busy || !String(submissionInput(item.id).requestNotes || '').trim()} onClick={() => requestSubmission(item)}>Seller yêu cầu authorization</ActionButton>
+          <ActionButton accent="#7c3aed" disabled={!policyAllowsApproval || busy || !String(submissionInput(item.id).requestNotes || '').trim()} onClick={() => requestSubmission(item)}>Seller yêu cầu authorization</ActionButton>
         </div>}
         {item.status === 'MANAGER_APPROVED' && item.submissionRequestId && !item.submissionAuthorizationId && <div style={{ marginTop: 9, display: 'grid', gap: 6 }}>
           <div><b>SUBMISSION_REQUESTED</b> · package {item.submissionPackageHash}</div>
           {isOwner ? <><label><b>Lý do Owner authorize</b><textarea rows={2} value={submissionInput(item.id).authorizationNotes || ''} onChange={event => setSubmissionInput(item.id, 'authorizationNotes', event.target.value)} /></label>
-            <ActionButton accent="#7c3aed" disabled={busy || !String(submissionInput(item.id).authorizationNotes || '').trim()} onClick={() => authorizeSubmission(item)}>Owner authorize exact package</ActionButton></>
+            <ActionButton accent="#7c3aed" disabled={!policyAllowsApproval || busy || !String(submissionInput(item.id).authorizationNotes || '').trim()} onClick={() => authorizeSubmission(item)}>Owner authorize exact package</ActionButton></>
             : <small>Đang chờ Owner authorize exact package. Không được submit trước bước này.</small>}
         </div>}
         {item.status === 'MANAGER_APPROVED' && item.submissionAuthorizationId && !item.submissionExportId && <div style={{ marginTop: 9, display: 'grid', gap: 6 }}>
           <div><b>SUBMISSION_AUTHORIZED</b> · authorization #{item.submissionAuthorizationId}</div>
-          {isSeller ? <ActionButton accent="#0369a1" disabled={busy} onClick={() => exportExactPackage(item)}>Tải exact JSON để submit thủ công</ActionButton>
+          {isSeller ? <ActionButton accent="#0369a1" disabled={!policyAllowsApproval || busy} onClick={() => exportExactPackage(item)}>Tải exact JSON để submit thủ công</ActionButton>
             : <small>Owner đã authorize. Seller đăng nhập để tải exact export.</small>}
         </div>}
         {item.status === 'MANAGER_APPROVED' && item.submissionExportId && <div style={{ marginTop: 9, display: 'grid', gap: 6 }}>

@@ -4,13 +4,21 @@ import { pullYtrendsFromBrowser } from '../ytrendsBrowserClient';
 
 const CORE_FACT_FIELDS = [
   ['productName', 'Tên sản phẩm', true], ['productType', 'Loại sản phẩm', true],
-  ['category', 'Danh mục'], ['materials', 'Vật liệu nền'], ['purity', 'Độ tinh khiết / lớp mạ'],
+  ['category', 'Danh mục'], ['brand', 'Thương hiệu'], ['manufacturer', 'Nhà sản xuất'],
+  ['model', 'Model'], ['sku', 'SKU / mã nội bộ'], ['materials', 'Vật liệu nền'], ['composition', 'Thành phần / cấu tạo'],
+  ['purity', 'Độ tinh khiết / lớp mạ'],
   ['finish', 'Hoàn thiện / màu kim loại'], ['gemstones', 'Đá / hạt'], ['components', 'Cấu kiện / khóa / dây'],
   ['colors', 'Màu sắc'], ['sizes', 'Kích thước lựa chọn'], ['dimensions', 'Kích thước thực'],
   ['weight', 'Trọng lượng'], ['quantity', 'Số lượng trong gói'],
   ['personalization', 'Cá nhân hóa'], ['process', 'Cách sản xuất / cá nhân hóa'],
   ['includedItems', 'Vật phẩm đi kèm'], ['packaging', 'Đóng gói'], ['care', 'Bảo quản'],
   ['style', 'Phong cách'], ['design', 'Thiết kế'], ['theme', 'Chủ đề'],
+  ['features', 'Tính năng / điểm bán đã xác minh'], ['specifications', 'Thông số kỹ thuật'],
+  ['intendedUse', 'Mục đích sử dụng'], ['capabilities', 'Khả năng'], ['compatibility', 'Tương thích'],
+  ['performance', 'Hiệu năng đã kiểm chứng'], ['durability', 'Độ bền đã kiểm chứng'],
+  ['instructions', 'Hướng dẫn sử dụng'], ['warranty', 'Bảo hành'],
+  ['safety', 'Thông tin an toàn'], ['safetyWarnings', 'Cảnh báo an toàn'], ['compliance', 'Tuân thủ / chứng nhận'],
+  ['ingredients', 'Thành phần nguyên liệu'], ['allergens', 'Chất gây dị ứng'],
   ['origin', 'Xuất xứ'], ['shipFrom', 'Nơi gửi hàng'],
   ['recipient', 'Người nhận'], ['occasion', 'Dịp'], ['audience', 'Đối tượng'],
 ];
@@ -18,11 +26,13 @@ const DIGITAL_FACT_FIELDS = [
   ['digital', 'Sản phẩm số'], ['digitalDetails', 'Chi tiết sản phẩm số'],
   ['fileFormat', 'Định dạng file'], ['license', 'Giấy phép'], ['usageRights', 'Quyền sử dụng'],
   ['playerCount', 'Số người chơi'], ['minimumAge', 'Tuổi tối thiểu'], ['duration', 'Thời lượng'],
-  ['language', 'Ngôn ngữ sản phẩm']
+  ['language', 'Ngôn ngữ sản phẩm'], ['softwareCompatibility', 'Tương thích phần mềm / thiết bị'],
+  ['digitalDelivery', 'Cách giao file số']
 ];
 const FACT_FIELDS = [...CORE_FACT_FIELDS, ...DIGITAL_FACT_FIELDS];
 const AMAZON_SURFACE_LIMITS = Object.freeze({ title: 75, itemHighlights: 125, backendBytes: 249 });
 const POLICY_CHOICES = Object.freeze([
+  ['UNIVERSAL_PRODUCT', 'Sản phẩm vật lý mới / khác'], ['UNIVERSAL_DIGITAL', 'Digital / Printable (Etsy)'],
   ['CUSTOM_NECKLACE', 'Custom Jewelry / Necklace'], ['CUSTOM_EMBROIDERY', 'Custom Embroidery'],
   ['CUSTOM_ACRYLIC', 'Custom Acrylic'], ['CUSTOM_BLANKET', 'Custom Blanket'],
   ['CUSTOM_SWEATSHIRT', 'Custom Sweatshirt'], ['CUSTOM_SHIRT', 'Custom Shirt'],
@@ -162,7 +172,7 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
   const [submissionInputs, setSubmissionInputs] = useState({});
   const [exactExports, setExactExports] = useState({});
   const [policyContext, setPolicyContext] = useState(null);
-  const [policyClassification, setPolicyClassification] = useState('CUSTOM_NECKLACE');
+  const [policyClassification, setPolicyClassification] = useState('UNIVERSAL_PRODUCT');
   const [policyLocale, setPolicyLocale] = useState('en-US');
   const [executionLog, setExecutionLog] = useState([]);
   const [busy, setBusy] = useState('');
@@ -229,7 +239,9 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
           : productWords.includes('blanket') ? 'CUSTOM_BLANKET'
             : productWords.includes('hoodie') ? 'CUSTOM_HOODIE'
               : productWords.includes('shirt') ? 'CUSTOM_SHIRT'
-                : productWords.includes('mug') ? 'CUSTOM_MUG' : 'CUSTOM_NECKLACE';
+                : productWords.includes('mug') ? 'CUSTOM_MUG'
+                  : /digital|printable|download|template/.test(productWords) && marketplace === 'ETSY'
+                    ? 'UNIVERSAL_DIGITAL' : 'UNIVERSAL_PRODUCT';
       setPolicyClassification(suggested);
     } else {
       setFacts(emptyFacts);
@@ -840,7 +852,8 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
       </p>
       <div style={{ display: 'flex', gap: 9, flexWrap: 'wrap', alignItems: 'center' }}>
         <label>Loại sản phẩm {' '}<select aria-label="Phân loại project cũ" value={policyClassification} onChange={event => setPolicyClassification(event.target.value)}>
-          {POLICY_CHOICES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+          {POLICY_CHOICES.filter(([value]) => marketplace === 'ETSY' || value !== 'UNIVERSAL_DIGITAL')
+            .map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </select></label>
         <label>Ngôn ngữ listing {' '}<select aria-label="Ngôn ngữ policy project" value={policyLocale} onChange={event => setPolicyLocale(event.target.value)}>
           <option value="en-US">English (US)</option><option value="es-US">Español (US)</option>
@@ -1060,8 +1073,8 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
     <Step number="2" title="Product Truth do Seller nhập và kiểm" accent={accent} done={Boolean(head(state, 'productTruthRevisionId'))}>
       <div data-testid="product-truth-scope" style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: 9, alignItems: 'start', padding: 10, marginBottom: 10, borderRadius: 10, border: '1px solid #bae6fd', background: '#f0f9ff' }}>
         <span aria-hidden="true" style={{ display: 'grid', placeItems: 'center', width: 28, height: 28, borderRadius: 9, background: '#0284c7', color: '#fff', fontWeight: 900 }}>i</span>
-        <div><b style={{ color: '#075985' }}>Product Truth thuộc từng project/sản phẩm — không dùng chung cho toàn catalog.</b>
-          <div style={{ marginTop: 3, color: '#475569', fontSize: '.74rem' }}>Không chỉ Jewelry: biểu mẫu hỗ trợ hàng vật lý và digital. Safe Composer hiện có policy đã cấu hình cho Necklace, Embroidery, Acrylic, Blanket, Sweatshirt, Shirt, Hoodie và Mug; loại khác cần thêm policy trước khi phát hành.</div></div>
+        <div><b style={{ color: '#075985' }}>Universal Product Truth — một hồ sơ riêng cho từng project/sản phẩm.</b>
+          <div style={{ marginTop: 3, color: '#475569', fontSize: '.74rem' }}>Không chỉ Jewelry: có thể nhập sản phẩm vật lý mới hoặc digital Etsy bằng tên loại/danh mục tự do. Preset giúp điền nhanh; loại mới dùng policy generic và vẫn phải qua claim, IP, marketplace/restricted-product review trước khi phát hành.</div></div>
       </div>
       <div style={{ border: '1px solid #bfdbfe', borderRadius: 10, padding: 12, background: '#eff6ff', marginBottom: 12 }}>
         <b>Điền nhanh từ một listing cùng supplier / nguồn hàng</b>

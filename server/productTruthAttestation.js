@@ -3,7 +3,8 @@
 const { approvalHash } = require('./security/approval');
 
 const FACT_KEYS = Object.freeze(new Set([
-  'productName', 'productType', 'category', 'colors', 'finish', 'design', 'style', 'theme', 'pattern',
+  'productName', 'productType', 'category', 'brand', 'manufacturer', 'model', 'sku', 'identifiers',
+  'colors', 'finish', 'design', 'style', 'theme', 'pattern', 'features', 'specifications', 'intendedUse',
   'materials', 'composition', 'purity',
   'components', 'gemstones', 'includedItems', 'sizes', 'dimensions', 'weight',
   'quantity', 'capacity', 'capabilities', 'personalization', 'process', 'origin',
@@ -12,7 +13,8 @@ const FACT_KEYS = Object.freeze(new Set([
   'ageCompliance', 'compliance', 'performance', 'durability', 'compatibility',
   'care', 'environment', 'ethical', 'sustainability', 'digital', 'digitalDetails',
   'fileFormat', 'license', 'usageRights', 'audience', 'recipient', 'occasion',
-  'playerCount', 'minimumAge', 'duration', 'language'
+  'playerCount', 'minimumAge', 'duration', 'language', 'instructions', 'warranty',
+  'ingredients', 'allergens', 'safetyWarnings', 'softwareCompatibility', 'digitalDelivery'
 ]));
 const BASES = Object.freeze(new Set([
   'SUPPLIER_SPEC', 'OWN_LISTING_RECORD', 'REFERENCE_LISTING_SAME_SOURCE', 'PHYSICAL_INSPECTION',

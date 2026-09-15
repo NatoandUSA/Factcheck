@@ -304,7 +304,13 @@ function naturalDescription(facts, title, language) {
   const details = [];
   for (const [label, value] of [['Materials', facts.materials || facts.composition], ['Personalization', facts.personalization],
     ['Size', facts.sizes || facts.dimensions], ['Included', facts.includedItems], ['Format', facts.fileFormat],
-    ['Players', facts.playerCount], ['Age', facts.minimumAge], ['Duration', facts.duration], ['Packaging', facts.packaging], ['Care', facts.care]]) {
+    ['Brand', facts.brand], ['Model', facts.model], ['Features', facts.features || facts.capabilities],
+    ['Specifications', facts.specifications], ['Intended use', facts.intendedUse],
+    ['Compatibility', facts.compatibility || facts.softwareCompatibility], ['Performance', facts.performance],
+    ['Durability', facts.durability], ['Ingredients', facts.ingredients],
+    ['Allergens', facts.allergens], ['Instructions', facts.instructions], ['Warranty', facts.warranty],
+    ['Safety', facts.safetyWarnings || facts.safety], ['Players', facts.playerCount], ['Age', facts.minimumAge],
+    ['Duration', facts.duration], ['Packaging', facts.packaging], ['Care', facts.care]]) {
     if (text(value)) details.push(`${label}: ${text(value)}`);
   }
   return [title, intro, ...details].filter(Boolean).join('\n\n');

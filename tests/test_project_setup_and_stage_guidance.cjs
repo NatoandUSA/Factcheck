@@ -14,7 +14,12 @@ assert.ok(setup.includes("fetch('/api/projects'"), 'Project setup must create a 
 assert.ok(setup.includes('Tạo project'), 'Project setup must expose a visible create action');
 assert.ok(setup.includes('canonicalProjectClassification'), 'Project setup must bind a canonical product classification');
 assert.ok(setup.includes('aria-label="Listing locale"'), 'Project setup must require an explicit listing locale');
-assert.ok(setup.includes('productFamilyVersion'), 'Project setup must send the full policy context');
+assert.ok(setup.includes('classificationKey: classification.productTypeId'),
+  'Project setup must send a server-resolved classification key instead of client-authored policy fields');
+assert.ok(setup.includes('Other / New Physical Product') && setup.includes('UNIVERSAL_PRODUCT'),
+  'Project setup must support new physical product types without falling back to Jewelry');
+assert.ok(setup.includes("CLASSIFICATIONS['Other / New Physical Product']"),
+  'Unknown UI categories must use the universal classification, never Jewelry');
 assert.ok(setup.includes('project-login-required') && setup.includes('invalidateSession'),
   'Project setup must fail closed to shared login when the session is absent or expires');
 assert.ok(evidence.includes("/api/evidence?projectId="), 'Evidence gate must load project-scoped evidence');
@@ -40,5 +45,7 @@ assert.ok(
 );
 assert.ok(server.includes("const projectName = typeof name === 'string' ? name.trim() : '';"), 'Project creation must normalize the project name on the server');
 assert.ok(server.includes("if (!projectName || !normalizedSeedPhrase)"), 'Whitespace-only project inputs must be rejected on the server');
+assert.ok(server.includes('DIGITAL_CLASSIFICATION_REQUIRES_ETSY'),
+  'Amazon must fail closed when a client attempts to bind the Etsy digital classification');
 
 console.log('Project setup and stage guidance UI contract passed.');

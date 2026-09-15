@@ -78,6 +78,8 @@ const { previewWinners: previewEtsyWinners, saveWinners: saveEtsyWinners,
   supplementPatternsWithYtrends, validateBrowserYtrendsPayload } = require('./etsyResearchWorkflow');
 
 const PROJECT_POLICY_CLASSIFICATIONS = Object.freeze({
+  UNIVERSAL_PRODUCT: Object.freeze({ mediaClass: 'NON_MEDIA', productTypeId: 'UNIVERSAL_PRODUCT', categoryId: 'GENERAL_MERCHANDISE', productFamilyVersion: 'universal-product-v1' }),
+  UNIVERSAL_DIGITAL: Object.freeze({ mediaClass: 'DIGITAL', productTypeId: 'UNIVERSAL_DIGITAL', categoryId: 'DIGITAL_PRODUCT', productFamilyVersion: 'universal-digital-v1' }),
   CUSTOM_SWEATSHIRT: Object.freeze({ mediaClass: 'NON_MEDIA', productTypeId: 'CUSTOM_SWEATSHIRT', categoryId: 'APPAREL_SWEATSHIRT', productFamilyVersion: 'custom-sweatshirt-v1' }),
   CUSTOM_SHIRT: Object.freeze({ mediaClass: 'NON_MEDIA', productTypeId: 'CUSTOM_SHIRT', categoryId: 'APPAREL_SHIRT', productFamilyVersion: 'custom-shirt-v1' }),
   CUSTOM_HOODIE: Object.freeze({ mediaClass: 'NON_MEDIA', productTypeId: 'CUSTOM_HOODIE', categoryId: 'APPAREL_HOODIE', productFamilyVersion: 'custom-hoodie-v1' }),
@@ -1440,12 +1442,26 @@ app.post('/api/projects', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SEL
   let body;
   try {
     body = requireExactDto(req.body, new Set(['name', 'seedPhrase', 'referenceAsin', 'locale',
-      'mediaClass', 'productTypeId', 'categoryId', 'productFamilyVersion']));
+      'classificationKey', 'mediaClass', 'productTypeId', 'categoryId', 'productFamilyVersion']));
     assertNoClientPolicyOverrides(body);
   } catch (error) {
     return rejectRevisionStore(res, error);
   }
-  const { name, seedPhrase, referenceAsin, locale, mediaClass, productTypeId, categoryId, productFamilyVersion } = body;
+  const { name, seedPhrase, referenceAsin, classificationKey } = body;
+  const normalizedClassificationKey = String(classificationKey || '').trim().toUpperCase();
+  const serverClassification = normalizedClassificationKey ? PROJECT_POLICY_CLASSIFICATIONS[normalizedClassificationKey] : null;
+  if (normalizedClassificationKey && !serverClassification) {
+    return res.status(400).json({ success: false, error: 'UNSUPPORTED_PROJECT_CLASSIFICATION',
+      details: { allowedClassifications: Object.keys(PROJECT_POLICY_CLASSIFICATIONS) } });
+  }
+  if (serverClassification?.mediaClass === 'DIGITAL' && req.user.marketplace !== 'ETSY') {
+    return res.status(400).json({ success: false, error: 'DIGITAL_CLASSIFICATION_REQUIRES_ETSY' });
+  }
+  const locale = body.locale;
+  const mediaClass = serverClassification?.mediaClass ?? body.mediaClass;
+  const productTypeId = serverClassification?.productTypeId ?? body.productTypeId;
+  const categoryId = serverClassification?.categoryId ?? body.categoryId;
+  const productFamilyVersion = serverClassification?.productFamilyVersion ?? body.productFamilyVersion;
   const projectName = typeof name === 'string' ? name.trim() : '';
   const normalizedSeedPhrase = typeof seedPhrase === 'string' ? seedPhrase.trim() : '';
   if (!projectName || !normalizedSeedPhrase) {
@@ -1515,6 +1531,9 @@ app.patch('/api/projects/:id/policy-context', requireAuth(db), requireRole(['OWN
       code: 'UNSUPPORTED_PROJECT_CLASSIFICATION', status: 400,
       details: { allowedClassifications: Object.keys(PROJECT_POLICY_CLASSIFICATIONS) }
     });
+    if (classification.mediaClass === 'DIGITAL' && req.user.marketplace !== 'ETSY') {
+      throw Object.assign(new Error('DIGITAL_CLASSIFICATION_REQUIRES_ETSY'), { code: 'DIGITAL_CLASSIFICATION_REQUIRES_ETSY', status: 400 });
+    }
     if (!['en-US', 'es-US'].includes(locale)) throw Object.assign(new Error('UNSUPPORTED_LISTING_LOCALE'), { code: 'UNSUPPORTED_LISTING_LOCALE', status: 400 });
     const project = await new Promise((resolve, reject) => db.get(`SELECT * FROM research_projects
       WHERE id=? AND tenant_id=? AND workspace_id=? AND marketplace=?`,

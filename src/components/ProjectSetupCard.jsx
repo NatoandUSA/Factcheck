@@ -4,6 +4,8 @@ import { parseJsonResponse } from '../utils/apiResponse';
 import { useAuth } from '../context/AuthContext';
 
 const CLASSIFICATIONS = Object.freeze({
+  'Other / New Physical Product': ['UNIVERSAL_PRODUCT', 'GENERAL_MERCHANDISE', 'universal-product-v1'],
+  'Digital Product': ['UNIVERSAL_DIGITAL', 'DIGITAL_PRODUCT', 'universal-digital-v1'],
   'Apparel: Sweatshirt': ['CUSTOM_SWEATSHIRT', 'APPAREL_SWEATSHIRT', 'custom-sweatshirt-v1'],
   'Apparel: Shirt': ['CUSTOM_SHIRT', 'APPAREL_SHIRT', 'custom-shirt-v1'],
   'Apparel: Hoodie': ['CUSTOM_HOODIE', 'APPAREL_HOODIE', 'custom-hoodie-v1'],
@@ -16,8 +18,9 @@ const CLASSIFICATIONS = Object.freeze({
 
 export function canonicalProjectClassification(category) {
   const key = String(category || '').includes('Jewelry') ? 'Jewelry' : String(category || '');
-  const [productTypeId, categoryId, productFamilyVersion] = CLASSIFICATIONS[key] || CLASSIFICATIONS.Jewelry;
-  return Object.freeze({ mediaClass: 'NON_MEDIA', productTypeId, categoryId, productFamilyVersion });
+  const [productTypeId, categoryId, productFamilyVersion] = CLASSIFICATIONS[key]
+    || CLASSIFICATIONS['Other / New Physical Product'];
+  return Object.freeze({ mediaClass: key === 'Digital Product' ? 'DIGITAL' : 'NON_MEDIA', productTypeId, categoryId, productFamilyVersion });
 }
 
 export default function ProjectSetupCard({ marketplace, category, seedPhrase = '', onCreated, onShowToast,
@@ -52,7 +55,7 @@ export default function ProjectSetupCard({ marketplace, category, seedPhrase = '
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: name.trim(), seedPhrase: seed.trim(), referenceAsin: referenceAsin.trim() || undefined,
-          locale, ...classification })
+          locale, classificationKey: classification.productTypeId })
       });
       const data = await parseJsonResponse(response);
       if (!response.ok) {

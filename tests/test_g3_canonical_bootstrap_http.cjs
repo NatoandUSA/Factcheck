@@ -44,6 +44,40 @@ async function main() {
   });
   assert.equal(unsupportedPolicy.status, 400, JSON.stringify(unsupportedPolicy.body));
   assert.equal(unsupportedPolicy.body.error, 'UNSUPPORTED_PROJECT_CLASSIFICATION');
+  const universalProject = await request('/api/projects', 'POST', {
+    name: `Universal desk organizer ${Date.now()}`, seedPhrase: 'wood desk organizer',
+    locale: 'en-US', classificationKey: 'UNIVERSAL_PRODUCT'
+  });
+  assert.equal(universalProject.status, 200, JSON.stringify(universalProject.body));
+  const universalRow = await get('SELECT media_class,product_type_id,category_id,product_family_version FROM research_projects WHERE id=?',
+    [universalProject.body.projectId]);
+  assert.deepEqual(universalRow, { media_class: 'NON_MEDIA', product_type_id: 'UNIVERSAL_PRODUCT',
+    category_id: 'GENERAL_MERCHANDISE', product_family_version: 'universal-product-v1' });
+  const universalTruth = await request(`/api/projects/${universalProject.body.projectId}/product-truth/revisions`, 'POST', {
+    expectedHeadRevisionId: null, idempotencyKey: key(101), changeReason: 'NEW_PRODUCT_TEST',
+    facts: {
+      productName: { disposition: 'ASSERTED', value: 'Bamboo Desk Organizer', basis: 'SUPPLIER_SPEC' },
+      productType: { disposition: 'ASSERTED', value: 'Desk organizer', basis: 'SUPPLIER_SPEC' },
+      materials: { disposition: 'ASSERTED', value: 'Bamboo', basis: 'SUPPLIER_SPEC' },
+      performance: { disposition: 'ASSERTED', value: 'Adjustable compartments', basis: 'PHYSICAL_INSPECTION' },
+      specifications: { disposition: 'ASSERTED', value: 'Three removable dividers', basis: 'SUPPLIER_SPEC' }
+    }, notes: 'Universal Product Truth test fixture for a previously unsupported product family.'
+  });
+  assert.equal(universalTruth.status, 201, JSON.stringify(universalTruth.body));
+  assert.equal(universalTruth.body.confirmationState, 'STAFF_DRAFT');
+  const confirmedUniversalTruth = await request(
+    `/api/projects/${universalProject.body.projectId}/product-truth/revisions/${universalTruth.body.productTruthRevisionId}/confirm`,
+    'POST', { idempotencyKey: key(102), reason: 'Verified new-product supplier specification' }
+  );
+  assert.equal(confirmedUniversalTruth.status, 201, JSON.stringify(confirmedUniversalTruth.body));
+  const universalDraft = await request(`/api/projects/${universalProject.body.projectId}/listings/compose-preview`, 'POST', {
+    productTruthRevisionId: universalTruth.body.productTruthRevisionId
+  });
+  assert.equal(universalDraft.status, 200, JSON.stringify(universalDraft.body));
+  assert.equal(universalDraft.body.zeroWrite, true);
+  assert.match(universalDraft.body.content.amazonTitle, /Desk organizer/i);
+  assert.match(universalDraft.body.content.amazonDescription, /Adjustable compartments/);
+  assert.match(universalDraft.body.content.amazonDescription, /Three removable dividers/);
   const repairedPolicy = await request(`/api/projects/${legacyProject.body.projectId}/policy-context`, 'PATCH', {
     classificationKey: 'CUSTOM_NECKLACE', locale: 'es-US'
   });

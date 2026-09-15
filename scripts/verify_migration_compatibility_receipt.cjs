@@ -8,11 +8,21 @@ const SHA40 = /^[a-f0-9]{40}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
 const EVIDENCE_FILE = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,180}\.json$/;
 const PASS_CHECKS = ['forwardMigration', 'baselineReadAfterForward', 'restoreFromBackup'];
+const REQUIRED_TABLES = ['research_projects', 'listings'];
+const MAX_EVIDENCE_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+const MAX_CLOCK_SKEW_MS = 5 * 60 * 1000;
+
+function validCounts(value) {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    && REQUIRED_TABLES.every(table => Number.isInteger(value[table]) && value[table] >= 0)
+    && Object.keys(value).length > 0
+    && Object.values(value).every(count => Number.isInteger(count) && count >= 0);
+}
 
 function sameCounts(left, right) {
-  const a = JSON.stringify(Object.fromEntries(Object.entries(left || {}).sort()));
-  const b = JSON.stringify(Object.fromEntries(Object.entries(right || {}).sort()));
-  return a === b && Object.values(left || {}).every(value => Number.isInteger(value) && value >= 0);
+  if (!validCounts(left) || !validCounts(right)) return false;
+  const normalise = value => JSON.stringify(Object.fromEntries(Object.entries(value).sort()));
+  return normalise(left) === normalise(right);
 }
 
 function readBoundEvidence(receipt, evidenceRoot) {
@@ -29,43 +39,47 @@ function readBoundEvidence(receipt, evidenceRoot) {
   const bytes = fs.readFileSync(candidate);
   const actualSha256 = crypto.createHash('sha256').update(bytes).digest('hex');
   if (actualSha256 !== receipt.evidenceSha256) throw new Error('MIGRATION_EVIDENCE_HASH_MISMATCH');
-  return { evidence: JSON.parse(bytes.toString('utf8')), stat };
+  return JSON.parse(bytes.toString('utf8'));
 }
 
 function verifyMigrationCompatibilityReceipt(receipt, options) {
   const { baselineSha, targetSha, baselineSchemaFingerprint, targetSchemaFingerprint, evidenceRoot,
-    requireIndependentOwner = false, currentUid = typeof process.getuid === 'function' ? process.getuid() : null } = options || {};
+    nowMs = Date.now() } = options || {};
   if (!SHA40.test(String(baselineSha || '')) || !SHA40.test(String(targetSha || ''))
     || !SHA256.test(String(baselineSchemaFingerprint || '')) || !SHA256.test(String(targetSchemaFingerprint || ''))) {
     throw new Error('MIGRATION_RECEIPT_AUTHORITY_REQUIRED');
   }
   const errors = [];
-  if (receipt?.schemaVersion !== 2) errors.push('schemaVersion');
+  if (receipt?.schemaVersion !== 3) errors.push('schemaVersion');
   if (receipt?.baselineSha !== baselineSha) errors.push('baselineSha');
   if (receipt?.targetSha !== targetSha) errors.push('targetSha');
   if (receipt?.baselineSchemaFingerprint !== baselineSchemaFingerprint) errors.push('baselineSchemaFingerprint');
   if (receipt?.targetSchemaFingerprint !== targetSchemaFingerprint) errors.push('targetSchemaFingerprint');
-  if (receipt?.status !== 'PASS') errors.push('status');
-  if (!String(receipt?.approvedBy || '').trim()) errors.push('approvedBy');
-  if (!Number.isFinite(Date.parse(receipt?.approvedAt))) errors.push('approvedAt');
+  if (receipt?.status !== 'TECHNICAL_REHEARSAL_PASS') errors.push('status');
   if (!SHA256.test(String(receipt?.evidenceSha256 || ''))) errors.push('evidenceSha256');
   if (errors.length) throw new Error(`INVALID_MIGRATION_COMPATIBILITY_RECEIPT:${errors.join(',')}`);
 
-  const { evidence, stat } = readBoundEvidence(receipt, evidenceRoot);
-  if (requireIndependentOwner && currentUid != null && stat.uid === currentUid) {
-    throw new Error('MIGRATION_EVIDENCE_NOT_INDEPENDENTLY_OWNED');
-  }
+  const evidence = readBoundEvidence(receipt, evidenceRoot);
   const evidenceErrors = [];
   if (evidence?.schemaVersion !== 1) evidenceErrors.push('schemaVersion');
   for (const field of ['baselineSha', 'targetSha', 'baselineSchemaFingerprint', 'targetSchemaFingerprint']) {
     if (evidence?.[field] !== options[field]) evidenceErrors.push(field);
   }
-  if (!Number.isFinite(Date.parse(evidence?.startedAt)) || !Number.isFinite(Date.parse(evidence?.finishedAt))
-    || Date.parse(evidence.finishedAt) < Date.parse(evidence.startedAt)) evidenceErrors.push('timeRange');
+  const startedAt = Date.parse(evidence?.startedAt);
+  const finishedAt = Date.parse(evidence?.finishedAt);
+  if (!Number.isFinite(startedAt) || !Number.isFinite(finishedAt) || finishedAt < startedAt) {
+    evidenceErrors.push('timeRange');
+  } else if (finishedAt < nowMs - MAX_EVIDENCE_AGE_MS || finishedAt > nowMs + MAX_CLOCK_SKEW_MS) {
+    evidenceErrors.push('freshness');
+  }
   for (const field of PASS_CHECKS) if (evidence?.checks?.[field] !== 'PASS') evidenceErrors.push(`checks.${field}`);
-  if (!SHA256.test(String(evidence?.database?.backupSha256 || ''))
-    || evidence.database.backupSha256 !== evidence?.database?.restoredSha256) evidenceErrors.push('database.restoreChecksum');
-  if (!SHA256.test(String(evidence?.database?.forwardSha256 || ''))) evidenceErrors.push('database.forwardSha256');
+  const backupSha256 = evidence?.database?.backupSha256;
+  const forwardSha256 = evidence?.database?.forwardSha256;
+  if (!SHA256.test(String(backupSha256 || '')) || backupSha256 !== evidence?.database?.restoredSha256) {
+    evidenceErrors.push('database.restoreChecksum');
+  }
+  if (!SHA256.test(String(forwardSha256 || ''))) evidenceErrors.push('database.forwardSha256');
+  else if (forwardSha256 === backupSha256) evidenceErrors.push('database.forwardMigrationNoop');
   if (!sameCounts(evidence?.rowCounts?.before, evidence?.rowCounts?.afterForward)) evidenceErrors.push('rowCounts.afterForward');
   if (!sameCounts(evidence?.rowCounts?.before, evidence?.rowCounts?.afterRestore)) evidenceErrors.push('rowCounts.afterRestore');
   if (evidenceErrors.length) throw new Error(`INVALID_MIGRATION_REHEARSAL_EVIDENCE:${evidenceErrors.join(',')}`);
@@ -77,12 +91,12 @@ if (require.main === module) {
   try {
     const receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8'));
     verifyMigrationCompatibilityReceipt(receipt, { baselineSha, targetSha, baselineSchemaFingerprint,
-      targetSchemaFingerprint, evidenceRoot, requireIndependentOwner: true });
-    process.stdout.write('MIGRATION_COMPATIBILITY_RECEIPT_VERIFIED\n');
+      targetSchemaFingerprint, evidenceRoot });
+    process.stdout.write('MIGRATION_TECHNICAL_RECEIPT_VERIFIED\n');
   } catch (error) {
     process.stderr.write(`${error.message}\n`);
     process.exitCode = 1;
   }
 }
 
-module.exports = Object.freeze({ verifyMigrationCompatibilityReceipt });
+module.exports = Object.freeze({ MAX_EVIDENCE_AGE_MS, REQUIRED_TABLES, verifyMigrationCompatibilityReceipt });

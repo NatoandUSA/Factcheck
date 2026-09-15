@@ -189,11 +189,21 @@ EOF
     echo "🟢 Atomic completion manifest written."
 fi
 
-BASELINE_SCHEMA=$("${NODE_BIN}" "${TARGET_RELEASE_DIR}/scripts/schema_fingerprint.cjs" "${BASELINE_RELEASE_DIR}") || exit 1
+SCHEMA_COMPARATOR_DRIFT=0
+BASELINE_SCHEMA_AS_SEEN_BY_TARGET=$("${NODE_BIN}" "${TARGET_RELEASE_DIR}/scripts/schema_fingerprint.cjs" "${BASELINE_RELEASE_DIR}") || exit 1
+if [ -f "${BASELINE_RELEASE_DIR}/scripts/schema_fingerprint.cjs" ]; then
+    BASELINE_SCHEMA=$("${NODE_BIN}" "${BASELINE_RELEASE_DIR}/scripts/schema_fingerprint.cjs" "${BASELINE_RELEASE_DIR}") || exit 1
+    BASELINE_NATIVE_FINGERPRINT=$("${NODE_BIN}" -e "console.log(JSON.parse(process.argv[1]).fingerprint)" "${BASELINE_SCHEMA}")
+    BASELINE_TARGET_VIEW_FINGERPRINT=$("${NODE_BIN}" -e "console.log(JSON.parse(process.argv[1]).fingerprint)" "${BASELINE_SCHEMA_AS_SEEN_BY_TARGET}")
+    [ "${BASELINE_NATIVE_FINGERPRINT}" != "${BASELINE_TARGET_VIEW_FINGERPRINT}" ] && SCHEMA_COMPARATOR_DRIFT=1
+else
+    BASELINE_SCHEMA="${BASELINE_SCHEMA_AS_SEEN_BY_TARGET}"
+    SCHEMA_COMPARATOR_DRIFT=1
+fi
 TARGET_SCHEMA=$("${NODE_BIN}" "${TARGET_RELEASE_DIR}/scripts/schema_fingerprint.cjs" "${TARGET_RELEASE_DIR}") || exit 1
 BASELINE_SCHEMA_FINGERPRINT=$("${NODE_BIN}" -e "console.log(JSON.parse(process.argv[1]).fingerprint)" "${BASELINE_SCHEMA}")
 TARGET_SCHEMA_FINGERPRINT=$("${NODE_BIN}" -e "console.log(JSON.parse(process.argv[1]).fingerprint)" "${TARGET_SCHEMA}")
-if [ "${BASELINE_SCHEMA_FINGERPRINT}" != "${TARGET_SCHEMA_FINGERPRINT}" ]; then
+if [ "${SCHEMA_COMPARATOR_DRIFT}" = "1" ] || [ "${BASELINE_SCHEMA_FINGERPRINT}" != "${TARGET_SCHEMA_FINGERPRINT}" ]; then
     MIGRATION_RECEIPT="${STATE_DIR}/migration-compatibility/${BASELINE_SHA}_${TARGET_SHA}.json"
     MIGRATION_EVIDENCE_DIR="${STATE_DIR}/migration-compatibility/evidence"
     if [ ! -f "${MIGRATION_RECEIPT}" ]; then
@@ -203,6 +213,15 @@ if [ "${BASELINE_SCHEMA_FINGERPRINT}" != "${TARGET_SCHEMA_FINGERPRINT}" ]; then
     "${NODE_BIN}" "${TARGET_RELEASE_DIR}/scripts/verify_migration_compatibility_receipt.cjs" \
       "${MIGRATION_RECEIPT}" "${BASELINE_SHA}" "${TARGET_SHA}" \
       "${BASELINE_SCHEMA_FINGERPRINT}" "${TARGET_SCHEMA_FINGERPRINT}" "${MIGRATION_EVIDENCE_DIR}" || exit 1
+    MIGRATION_EVIDENCE_SHA=$("${NODE_BIN}" -e "const r=require(process.argv[1]); console.log(r.evidenceSha256 || '')" "${MIGRATION_RECEIPT}")
+    OWNER_APPROVAL_PR_NUMBER=$(awk -F= '/^[[:space:]]*OMNI_OWNER_APPROVAL_PR_NUMBER[[:space:]]*=/ { count += 1; value=$2; gsub(/[[:space:]\r]/, "", value) } END { if (count == 1) print value }' "${ENV_FILE}")
+    if ! [[ "${OWNER_APPROVAL_PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
+        echo "🔴 ERROR: Schema authority changed; exact GitHub Owner approval PR number is required."
+        exit 1
+    fi
+    "${NODE_BIN}" "${TARGET_RELEASE_DIR}/scripts/verify_owner_authorization.cjs" \
+      "${OWNER_APPROVAL_PR_NUMBER}" "NatoandUSA" "${BASELINE_SHA}" "${TARGET_SHA}" \
+      "${BASELINE_SCHEMA_FINGERPRINT}" "${TARGET_SCHEMA_FINGERPRINT}" "${MIGRATION_EVIDENCE_SHA}" || exit 1
 fi
 
 # --- STEP 3: SAFE SERVICE STOP & WAL-SAFE DB BACKUP ---
@@ -218,6 +237,8 @@ echo "🟢 systemd service 'omniseller-web' is INACTIVE."
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 BACKUP_SUBDIR="${BACKUP_DIR}/backup_${TIMESTAMP}_${BASELINE_SHA:0:7}"
 mkdir -p "${BACKUP_SUBDIR}"
+BACKUP_INTEGRITY_CHECK="NOT_PRESENT"
+BACKUP_CHECKSUM_MANIFEST=""
 
 if [ -f "${DB_PATH}" ]; then
     echo "Snapshotting app.db, app.db-wal, and app.db-shm to ${BACKUP_SUBDIR}..."
@@ -244,6 +265,8 @@ if [ -f "${DB_PATH}" ]; then
     (cd "${BACKUP_SUBDIR}" && sha256sum -c checksums.sha256) || {
         echo "🔴 DB snapshot checksum verification failed"; rollback;
     }
+    BACKUP_INTEGRITY_CHECK="ok"
+    BACKUP_CHECKSUM_MANIFEST="${BACKUP_SUBDIR}/checksums.sha256"
 fi
 
 # --- STEP 4: ATOMIC SYMLINK SWITCH ---
@@ -363,12 +386,30 @@ if ! RECEIPT_TARGET_SHA="${TARGET_SHA}" RECEIPT_BASELINE_SHA="${BASELINE_SHA}" \
 RECEIPT_STARTED_AT="${DEPLOY_STARTED_AT}" RECEIPT_FINISHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
 RECEIPT_NODE_VERSION="$("${NODE_BIN}" --version)" RECEIPT_NODE_ENV="production" RECEIPT_ACTIVE_RELEASE="${ACTIVE_RELEASE}" \
 RECEIPT_BACKUP_DIR="${BACKUP_SUBDIR}" RECEIPT_LOCAL_STATUS="${LOCAL_STATUS}" \
+RECEIPT_BACKUP_INTEGRITY="${BACKUP_INTEGRITY_CHECK}" RECEIPT_BACKUP_MANIFEST="${BACKUP_CHECKSUM_MANIFEST}" \
 RECEIPT_LOCAL_REVISION="${LOCAL_REVISION}" RECEIPT_PUBLIC_STATUS="${PUBLIC_STATUS}" \
 RECEIPT_PUBLIC_REVISION="${PUBLIC_REVISION}" RECEIPT_SERVICE_PID="${SERVICE_PID}" \
 RECEIPT_SERVICE_EXEC="${SERVICE_EXEC}" RECEIPT_SERVICE_WORKDIR="${SERVICE_WORKDIR}" \
 RECEIPT_JOURNAL_ERRORS="${JOURNAL_ERROR_COUNT}" RECEIPT_FILE="${RECEIPT_FILE}" \
 "${NODE_BIN}" - <<'NODE'
 const fs = require('node:fs');
+const crypto = require('node:crypto');
+const path = require('node:path');
+let backupFiles = [];
+let checksumManifestSha256 = null;
+if (process.env.RECEIPT_BACKUP_MANIFEST) {
+  const manifestBytes = fs.readFileSync(process.env.RECEIPT_BACKUP_MANIFEST);
+  checksumManifestSha256 = crypto.createHash('sha256').update(manifestBytes).digest('hex');
+  backupFiles = manifestBytes.toString('utf8').trim().split(/\r?\n/).filter(Boolean).map(line => {
+    const match = line.match(/^([a-f0-9]{64})\s+(.+)$/);
+    if (!match) throw new Error('BACKUP_CHECKSUM_MANIFEST_INVALID');
+    const absolute = path.resolve(match[2]);
+    if (path.dirname(absolute) !== path.resolve(process.env.RECEIPT_BACKUP_DIR)) {
+      throw new Error('BACKUP_CHECKSUM_PATH_ESCAPE');
+    }
+    return { name: path.basename(absolute), size: fs.statSync(absolute).size, sha256: match[1] };
+  });
+}
 const receipt = {
   schemaVersion: 1,
   deploymentStatus: 'ACTIVE_VERIFIED',
@@ -379,7 +420,12 @@ const receipt = {
   nodeVersion: process.env.RECEIPT_NODE_VERSION,
   nodeEnvironment: process.env.RECEIPT_NODE_ENV,
   activeRelease: process.env.RECEIPT_ACTIVE_RELEASE,
-  backupDirectory: process.env.RECEIPT_BACKUP_DIR,
+  backup: {
+    directory: process.env.RECEIPT_BACKUP_DIR,
+    integrityCheck: process.env.RECEIPT_BACKUP_INTEGRITY,
+    files: backupFiles,
+    checksumManifestSha256
+  },
   health: {
     local: { status: Number(process.env.RECEIPT_LOCAL_STATUS), revision: process.env.RECEIPT_LOCAL_REVISION },
     public: { status: Number(process.env.RECEIPT_PUBLIC_STATUS), revision: process.env.RECEIPT_PUBLIC_REVISION }
@@ -402,7 +448,8 @@ try {
   fs.writeFileSync(descriptor, `${JSON.stringify(receipt, null, 2)}\n`);
   fs.fsyncSync(descriptor);
   fs.closeSync(descriptor); descriptor = undefined;
-  fs.renameSync(temporary, target);
+  fs.linkSync(temporary, target);
+  fs.unlinkSync(temporary);
   const directory = fs.openSync(require('node:path').dirname(target), 'r');
   try { fs.fsyncSync(directory); } finally { fs.closeSync(directory); }
 } catch (error) {
@@ -415,7 +462,8 @@ then
     receipt_failure
 fi
 sha256sum "${RECEIPT_FILE}" > "${RECEIPT_FILE}.sha256.tmp" || receipt_failure
-mv "${RECEIPT_FILE}.sha256.tmp" "${RECEIPT_FILE}.sha256" || receipt_failure
+ln "${RECEIPT_FILE}.sha256.tmp" "${RECEIPT_FILE}.sha256" || receipt_failure
+rm -f "${RECEIPT_FILE}.sha256.tmp" || receipt_failure
 echo "🟢 Frozen deployment receipt: ${RECEIPT_FILE}"
 
 # --- STEP 7: DEPLOYMENT SUCCESS DECLARATION ---

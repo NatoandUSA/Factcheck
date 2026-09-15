@@ -53,6 +53,7 @@
   "tests/test_g4_image_prompt_generator.cjs",
   "tests/test_marketplace_research_workflows.cjs",
   "tests/test_migration_compatibility_receipt.cjs",
+  "tests/test_owner_authorization.cjs",
   "tests/test_product_truth_staff_form.cjs",
   "tests/test_product_truth_listing_capture_files.cjs",
   "tests/test_product_truth_workbook_http.cjs",

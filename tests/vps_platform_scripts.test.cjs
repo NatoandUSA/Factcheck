@@ -36,11 +36,13 @@ function runPlatformTests() {
   for (const scriptPath of scriptsToTest) {
     const fullPath = path.resolve(__dirname, '..', scriptPath);
     assert.ok(fs.existsSync(fullPath), `Script ${scriptPath} must exist in repository`);
+    const scriptBytes = fs.readFileSync(fullPath);
+    assert.equal(scriptBytes.includes(13), false, `${scriptPath} must be committed with LF-only bytes`);
     if (hasBash) {
       try {
         // Feed the script through stdin so Git Bash on Windows does not have
         // to interpret a drive-letter path such as D:\\... as a POSIX path.
-        execFileSync('bash', ['-n'], { input: fs.readFileSync(fullPath, 'utf8').replace(/\r\n/g, '\n') });
+        execFileSync('bash', ['-n'], { input: scriptBytes });
         console.log(`  🟢 Bash syntax valid: ${scriptPath}`);
       } catch (err) {
         assert.fail(`Syntax check failed for ${scriptPath}: ${err.message}`);
@@ -65,6 +67,10 @@ function runPlatformTests() {
     'Backup checksum must be recorded after the read-only integrity probe');
   assert.ok(deployScript.includes('sha256sum -c checksums.sha256'),
     'Recorded backup checksums must be verified before cutover');
+  assert.ok(deployScript.includes('checksumManifestSha256')
+    && deployScript.includes('integrityCheck: process.env.RECEIPT_BACKUP_INTEGRITY')
+    && deployScript.includes('backupFiles'),
+  'Frozen deployment receipt must carry backup integrity, file hashes and checksum-manifest hash');
   assert.ok(deployScript.includes('BASELINE_RELEASE_DIR=$(readlink -f "${CURRENT_SYMLINK}")')
     && deployScript.includes('[ ! -d "${BASELINE_RELEASE_DIR}/node_modules" ]')
     && !deployScript.includes('Preparing baseline release directory'),
@@ -85,19 +91,26 @@ function runPlatformTests() {
   assert.ok(deployScript.includes('journalctl -u omniseller-web --since "${DEPLOY_STARTED_AT}"'),
     'Service error evidence must have an explicit deployment time boundary');
   assert.ok(deployScript.includes("deploymentStatus: 'ACTIVE_VERIFIED'")
-    && deployScript.includes('fs.renameSync(temporary, target)')
+    && deployScript.includes('fs.linkSync(temporary, target)')
+    && !deployScript.includes('fs.renameSync(temporary, target)')
     && deployScript.includes('RELEASE_ACTIVE_BUT_UNRECEIPTED'),
-  'Deployment receipt must land atomically and fail with an explicit post-cutover state');
+  'Deployment receipt must land atomically without clobbering an existing receipt');
   assert.ok(deployScript.includes('verify_migration_compatibility_receipt.cjs')
+    && deployScript.includes('verify_owner_authorization.cjs')
     && deployScript.includes('scripts/schema_fingerprint.cjs')
     && !deployScript.includes('MIGRATION_PATHS='),
-  'Migration-authority changes must require an exact two-direction compatibility receipt');
+  'Migration-authority changes must require technical rehearsal plus exact GitHub Owner authorization');
+  assert.ok(deployScript.includes('BASELINE_RELEASE_DIR}/scripts/schema_fingerprint.cjs')
+    && deployScript.includes('SCHEMA_COMPARATOR_DRIFT=1'),
+  'Baseline must compute its own fingerprint and comparator drift must fail into the migration gate');
 
   // Test 2: Systemd Template Validity & Preserved Contract
   console.log('\nTest 2: Systemd service unit template validation...');
   const templatePath = path.resolve(__dirname, '../deploy/omniseller-web.service.template');
   assert.ok(fs.existsSync(templatePath), 'deploy/omniseller-web.service.template must exist in repository');
-  const templateContent = fs.readFileSync(templatePath, 'utf8');
+  const templateBytes = fs.readFileSync(templatePath);
+  assert.equal(templateBytes.includes(13), false, 'systemd template must be committed with LF-only bytes');
+  const templateContent = templateBytes.toString('utf8');
   assert.ok(templateContent.includes('Environment=NODE_ENV=production'), 'Template must pin production mode');
   assert.ok(templateContent.includes('WorkingDirectory=/home/etsy/omniseller-current/server'), 'Template must specify omniseller-current WorkingDirectory');
   assert.ok(templateContent.includes('EnvironmentFile=/home/etsy/omniseller-state/env/omniseller.env')

@@ -15,6 +15,7 @@
       "tests/test_h0_state_migration.cjs",
       "tests/test_legacy_migration_integrity.test.cjs",
       "tests/test_migration_compatibility_receipt.cjs",
+      "tests/test_owner_authorization.cjs",
       "tests/test_r43_production_db_upgrade.cjs",
       "tests/test_r43_w2_artifact_migration.cjs",
       "tests/test_rr01_production_state_lineage.cjs"

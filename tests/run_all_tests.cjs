@@ -258,6 +258,7 @@ async function runAllTests(options = {}) {
           env: {
             ...process.env,
             NODE_ENV: 'test',
+            OMNI_R43_ALLOW_LEGACY_WRITES: '1',
             TEST_IMPORTS_DIR: childImportsDir(suiteImportsRoot, idx, file)
           }
         });

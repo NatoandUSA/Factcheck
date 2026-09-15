@@ -79,12 +79,13 @@ Pre-cutover requirements:
 1. Exact 40-character baseline and target commits resolve locally.
 2. Node major is 22 and production state paths are external to the release tree.
 3. The external environment file contains exactly one `OMNI_R43_SINGLE_PATH=1` assignment.
-4. If migration authority files changed, an exact baseline/target compatibility receipt proves:
+4. If the whole-tree schema/source fingerprint or its comparator changes, an exact baseline/target technical receipt proves:
    - forward migration;
    - baseline read after forward migration;
    - restore from the immutable backup.
-5. Target build and native SQLite load pass before stopping the service.
-6. WAL-safe backup integrity and checksums pass before cutover.
+5. A separate GitHub Owner authorization must bind the exact baseline SHA, target SHA, both fingerprints and technical-evidence SHA-256. Local file ownership is not authorization evidence.
+6. Target build and native SQLite load pass before stopping the service.
+7. WAL-safe backup integrity and checksums pass before cutover.
 
 The supported systemd process and the external environment file must both pin `NODE_ENV=production` and `OMNI_R43_SINGLE_PATH=1`. The former PM2 entry point has been removed; the old PM2/Nginx guide is a non-executable tombstone.
 
@@ -138,6 +139,7 @@ Agents may not merge, deploy, clean the dirty root, mutate production data or ce
 - Run the full suite and build on Node 22 for the exact candidate SHA.
 - Independent review of this patch must close all P0/P1 findings.
 - Before deploying, add `OMNI_R43_SINGLE_PATH=1` to the real external production environment file.
+- When the migration gate fires, add the exact reviewed PR number as `OMNI_OWNER_APPROVAL_PR_NUMBER`; the PR must contain the generated authorization marker from GitHub user `NatoandUSA`.
 - Obtain a frozen VPS receipt from the updated deploy run.
 - Run read-only production DDL/state-lineage verification.
 - Run supervised draft-only browser UAT. Do not test approval/export as a success path until an approval-eligible policy contract is separately ratified.
@@ -181,3 +183,22 @@ Additional canonical finding: `scripts/vps_migrate_and_setup_platform.sh` was an
 Focused successor checks pass: runtime policy, retention, schema fingerprint, evidence-bound migration receipt, test authority, both VPS shell scripts, platform contract, production smoke preflight, R4.3 single path (`19/19`), canonical UI (`39/39`) and canonical research HTTP (`79/79`). Vite build passes with 1,827 modules.
 
 The successor canonical inventory contains 101 suites. The unsupported local Node 24 run reports `100/101 PASS`, `0 unexecuted`, `0 harness errors`; the only failure remains the already-isolated Windows child-process sentinel in `test_runner_accounting.cjs`. Clean Node 22 full-suite/build evidence remains mandatory on the exact successor commit.
+
+## 11. Independent review of `0bce21d6` and second successor disposition
+
+The exact remote artifact and GitHub Actions run `34960594551` were independently checked by GPT1. The run is a manual review receipt, not the eventual PR merge gate: exact head SHA `0bce21d60ddf3fb4ebc6ccf4d527e4b28bfa7e0a`, Node 22 build PASS and `101/101` canonical suites PASS.
+
+| ID | Severity | Decision | Second successor remediation |
+|---|---|---|---|
+| D-01 | P1 | `ACCEPT — PROVEN` | Fingerprint every `.js`, `.cjs`, `.mjs`, `.sql` and `.json` file across the release tree except generated/vendor directories; include the fingerprinter and receipt verifier themselves. Baseline runs its own comparator, target independently scans baseline, and comparator drift forces the gate. |
+| D-02 | P1 | `ACCEPT — PROVEN` | Remove `approvedBy`/UID ownership from the technical receipt. Verify a separate GitHub Owner review/comment from `NatoandUSA` containing an exact authorization digest bound to the commit pair, fingerprint pair and evidence hash. The verifier fetches GitHub directly without a deploy-host write token. |
+| D-03 | P2 | `ACCEPT — PROVEN` | Require non-empty counts containing `research_projects` and `listings`, a changed forward DB hash, and evidence completed within seven days with five-minute future skew tolerance. |
+| D-04 | P2 | `ACCEPT — PROVEN` | Pin `*.sh` and `deploy/*.template` to LF in `.gitattributes`; assert raw committed bytes contain zero CR before `bash -n`, without normalization. |
+| D-05 | P3 | `ACCEPT — PROVEN` | Publish the receipt using atomic hard-link no-clobber semantics instead of overwriting `rename`; the hash sidecar is also no-clobber. |
+| D-06 | P3 | `ACCEPT — GOVERNANCE NOTE` | Preserve the explicit default authority but continue migrating tests to deliberate categories when touched. |
+
+Additional defense-in-depth accepted from the review: legacy writes are default-deny. Historical compatibility execution must explicitly set `OMNI_R43_ALLOW_LEGACY_WRITES=1`; R4.3 still wins, and production startup rejects that override. The deployment receipt now embeds backup integrity status, every backup file size/hash and the checksum-manifest SHA-256.
+
+Second-successor focused checks pass for schema adversarial coverage, technical receipt negative cases, GitHub Owner authorization, runtime policy, raw LF enforcement, shell syntax, no-clobber receipt publishing and R4.3 Single-Path (`19/19`). The local unsupported Node 24 inventory is now 102 suites and reports `101/102 PASS`; only the pre-existing Windows process-tree sentinel fails. Exact Node 22 CI on the new frozen SHA remains required before merge eligibility.
+
+Second-successor reviewers must reproduce only the changed control surface: whole-tree fingerprint blind spots and comparator drift, technical receipt empty/no-op/stale cases, forged GitHub identity/digest/commit cases, CRLF rejection, duplicate receipt refusal, default-deny without environment configuration and backup receipt completeness. Do not reopen already accepted C-01–C-07 without new executable counter-evidence.

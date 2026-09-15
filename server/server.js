@@ -12,7 +12,7 @@ const crypto = require('crypto');
 // from the .env file this line is about to load.
 require('dotenv').config({ path: process.env.DOTENV_PATH || path.resolve(__dirname, '../.env') });
 
-const { assertProductionRuntimePolicy } = require('./config/runtimePolicy');
+const { assertProductionRuntimePolicy, shouldDenyLegacyWrites } = require('./config/runtimePolicy');
 assertProductionRuntimePolicy(process.env);
 
 const ipGuard = require('./ipGuard');
@@ -115,12 +115,10 @@ function requireExactDto(body, allowed) {
   return body;
 }
 
-// R4.3 cutover mode keeps legacy code readable for recovery while preventing
-// ordinary staff traffic from mutating a second workflow. CI for historical
-// contracts can omit the flag; production startup is separately fail-closed
-// by config/runtimePolicy.js so a missing flag can never expose this route.
+// Legacy writes are denied by default. Historical compatibility tests must
+// explicitly opt in, while R4.3 always wins over that test-only escape hatch.
 function denyLegacyWriteInR43(req, res, next) {
-  if (process.env.OMNI_R43_SINGLE_PATH === '1') {
+  if (shouldDenyLegacyWrites(process.env)) {
     return res.status(410).json({
       success: false,
       error: 'LEGACY_WRITE_ROUTE_RETIRED',

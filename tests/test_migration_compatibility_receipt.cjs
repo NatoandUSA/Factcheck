@@ -27,11 +27,12 @@ try {
   const evidenceBytes = Buffer.from(`${JSON.stringify(evidence, null, 2)}\n`);
   fs.writeFileSync(evidencePath, evidenceBytes);
   const valid = {
-    schemaVersion: 2, baselineSha, targetSha, baselineSchemaFingerprint, targetSchemaFingerprint,
-    status: 'PASS', approvedBy: 'release-owner@example.test', approvedAt: '2026-09-15T12:00:00.000Z',
+    schemaVersion: 3, baselineSha, targetSha, baselineSchemaFingerprint, targetSchemaFingerprint,
+    status: 'TECHNICAL_REHEARSAL_PASS',
     evidenceFile, evidenceSha256: crypto.createHash('sha256').update(evidenceBytes).digest('hex')
   };
-  const options = { baselineSha, targetSha, baselineSchemaFingerprint, targetSchemaFingerprint, evidenceRoot: root };
+  const options = { baselineSha, targetSha, baselineSchemaFingerprint, targetSchemaFingerprint,
+    evidenceRoot: root, nowMs: Date.parse('2026-09-15T12:00:00.000Z') };
   assert.equal(verifyMigrationCompatibilityReceipt(valid, options), true);
   assert.throws(() => verifyMigrationCompatibilityReceipt({ ...valid, evidenceSha256: '0'.repeat(64) }, options),
     /MIGRATION_EVIDENCE_HASH_MISMATCH/);
@@ -42,8 +43,20 @@ try {
     evidenceSha256: crypto.createHash('sha256').update(forgedBytes).digest('hex') }, options), /checks.forwardMigration/);
   assert.throws(() => verifyMigrationCompatibilityReceipt({ ...valid, evidenceFile: '../escape.json' }, options),
     /MIGRATION_EVIDENCE_PATH_INVALID/);
-  assert.throws(() => verifyMigrationCompatibilityReceipt(valid, { ...options, requireIndependentOwner: true,
-    currentUid: fs.statSync(evidencePath).uid }), /MIGRATION_EVIDENCE_NOT_INDEPENDENTLY_OWNED/);
+  const writeEvidence = (name, value) => {
+    const bytes = Buffer.from(`${JSON.stringify(value)}\n`);
+    fs.writeFileSync(path.join(root, name), bytes);
+    return { ...valid, evidenceFile: name, evidenceSha256: crypto.createHash('sha256').update(bytes).digest('hex') };
+  };
+  assert.throws(() => verifyMigrationCompatibilityReceipt(writeEvidence('empty-counts.json', {
+    ...evidence, rowCounts: { before: {}, afterForward: {}, afterRestore: {} }
+  }), options), /rowCounts/);
+  assert.throws(() => verifyMigrationCompatibilityReceipt(writeEvidence('noop.json', {
+    ...evidence, database: { ...evidence.database, forwardSha256: evidence.database.backupSha256 }
+  }), options), /database.forwardMigrationNoop/);
+  assert.throws(() => verifyMigrationCompatibilityReceipt(writeEvidence('stale.json', {
+    ...evidence, startedAt: '2020-01-01T00:00:00.000Z', finishedAt: '2020-01-01T00:05:00.000Z'
+  }), options), /freshness/);
 } finally {
   fs.rmSync(root, { recursive: true, force: true });
 }

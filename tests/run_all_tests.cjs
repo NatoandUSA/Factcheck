@@ -4,12 +4,14 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { childImportsDir } = require('./helpers/suiteIsolation.cjs');
+const { loadAuthorityMap, authorityCounts } = require('./helpers/testAuthority.cjs');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 const DEFAULT_TIMEOUT_MS = 180000;
 const DEFAULT_KILL_GRACE_MS = 1000;
 const DEFAULT_PIPE_GRACE_MS = 250;
 const INVENTORY_PATH = path.join(__dirname, 'canonical_test_inventory.json');
+const AUTHORITY_PATH = path.join(__dirname, 'canonical_test_authority.json');
 const EXCLUDED_DIRS = new Set(['helpers', 'fixtures']);
 
 function normalizeEntry(testsDir, filename) {
@@ -222,6 +224,10 @@ async function runAllTests(options = {}) {
       } else if (mode === 'canonical') {
         if (options.testFiles) throw new Error('CANONICAL_MODE_REJECTS_EXPLICIT_TEST_FILES');
         testFiles = discoverTestFiles(options.testsDir || __dirname, options.inventoryPath || INVENTORY_PATH);
+        if (path.resolve(options.inventoryPath || INVENTORY_PATH) === path.resolve(INVENTORY_PATH)) {
+          const counts = authorityCounts(loadAuthorityMap(testFiles, AUTHORITY_PATH));
+          console.log(`TEST_AUTHORITY_COUNTS ${Object.entries(counts).sort().map(([key, value]) => `${key}=${value}`).join(' ')}`);
+        }
       } else {
         throw new Error(`INVALID_RUN_MODE_${mode}`);
       }
@@ -252,6 +258,7 @@ async function runAllTests(options = {}) {
           env: {
             ...process.env,
             NODE_ENV: 'test',
+            OMNI_R43_ALLOW_LEGACY_WRITES: '1',
             TEST_IMPORTS_DIR: childImportsDir(suiteImportsRoot, idx, file)
           }
         });

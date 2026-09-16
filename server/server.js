@@ -12,6 +12,9 @@ const crypto = require('crypto');
 // from the .env file this line is about to load.
 require('dotenv').config({ path: process.env.DOTENV_PATH || path.resolve(__dirname, '../.env') });
 
+const { assertProductionRuntimePolicy, shouldDenyLegacyWrites } = require('./config/runtimePolicy');
+assertProductionRuntimePolicy(process.env);
+
 const ipGuard = require('./ipGuard');
 const opportunityScorer = require('./opportunityScorer');
 const ytrendsMcp = require('./ytuongMcpClient');
@@ -57,7 +60,7 @@ const { parseProductTruthWorkbook } = require('./productTruthWorkbookParser');
 const { parseListingHtml, parseListingCapture } = require('./productTruthListingParser');
 const { createListingWithRevision, appendListingRevision, canonicalJson, getListingRevision, hashBytes, listListingRevisions } = require('./revisionStore');
 const { assertCanonicalDependenciesCurrent, composeCommerceDraft, composeTruthOnlyDraft,
-  validateCanonicalDraft } = require('./canonicalDraftService');
+  describePolicyCapability, validateCanonicalDraft } = require('./canonicalDraftService');
 const { appendIntelligenceSnapshot, appendResearchImport, appendResearchSnapshot,
   getCommerceState, getIntelligenceSnapshot, previewIntelligence } = require('./commerceSnapshotStore');
 const { recordCanonicalSubmission, requestCanonicalSubmission, reviewCanonicalListing,
@@ -112,11 +115,10 @@ function requireExactDto(body, allowed) {
   return body;
 }
 
-// R4.3 cutover mode keeps legacy code readable for recovery while preventing
-// ordinary staff traffic from mutating a second workflow. CI for historical
-// contracts can omit the flag; W1 browser/UAT must run with it enabled.
+// Legacy writes are denied by default. Historical compatibility tests must
+// explicitly opt in, while R4.3 always wins over that test-only escape hatch.
 function denyLegacyWriteInR43(req, res, next) {
-  if (process.env.OMNI_R43_SINGLE_PATH === '1') {
+  if (shouldDenyLegacyWrites(process.env)) {
     return res.status(410).json({
       success: false,
       error: 'LEGACY_WRITE_ROUTE_RETIRED',
@@ -1715,8 +1717,12 @@ async function inspectCanonicalResearchFile(file, adapter) {
 app.get('/api/projects/:id/commerce-state', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
   try {
     await requireCommerceProject(req);
-    const state = await getCommerceState(db, revisionScope(req.user), req.params.id);
-    res.json({ success: true, ...state });
+    const scope = revisionScope(req.user);
+    const [state, policyCapability] = await Promise.all([
+      getCommerceState(db, scope, req.params.id),
+      describePolicyCapability(db, scope, req.params.id)
+    ]);
+    res.json({ success: true, ...state, policyCapability });
   } catch (error) { rejectRevisionStore(res, error); }
 });
 
@@ -3101,7 +3107,7 @@ app.patch('/api/listings/:id/approve', requireAuth(db), requireRole(['OWNER', 'M
 
 
 // Export a listing (Gated server-side by Canonical Publish Gate)
-app.get('/api/listings/:id/export', requireAuth(db), requireRole(['OWNER', 'MANAGER']), (req, res) => {
+app.get('/api/listings/:id/export', requireAuth(db), requireRole(['OWNER', 'MANAGER']), denyLegacyWriteInR43, (req, res) => {
   const { id } = req.params;
 
   db.get(

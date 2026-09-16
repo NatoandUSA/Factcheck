@@ -7,6 +7,10 @@
 set -Eeuo pipefail
 
 DEPLOY_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+# journalctl does not accept RFC 3339's literal T/Z form on every supported
+# systemd release. Keep receipt time machine-readable and use a separate,
+# explicitly UTC journal cursor in systemd.time format.
+DEPLOY_JOURNAL_SINCE="$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 
 TARGET_BRANCH="main"
 PUBLIC_DOMAIN="https://omniseller.theglobalserviceteam.site"
@@ -448,7 +452,7 @@ rm -f "${RETENTION_PLAN_FILE}"
 SERVICE_EXEC=$(sudo systemctl show -p ExecStart --value omniseller-web)
 SERVICE_WORKDIR=$(sudo systemctl show -p WorkingDirectory --value omniseller-web)
 ACTIVE_RELEASE=$(readlink -f "${CURRENT_SYMLINK}")
-JOURNAL_ERROR_COUNT=$(sudo journalctl -u omniseller-web --since "${DEPLOY_STARTED_AT}" -p err --no-pager -q | wc -l | tr -d ' ') || rollback
+JOURNAL_ERROR_COUNT=$(sudo journalctl -u omniseller-web --since "${DEPLOY_JOURNAL_SINCE}" -p err --no-pager -q | wc -l | tr -d ' ') || rollback
 RECEIPT_FILE="${RECEIPT_DIR}/${TARGET_SHA}_${TIMESTAMP}.json"
 receipt_failure() {
     echo "🔴 RELEASE_ACTIVE_BUT_UNRECEIPTED: target remains active and health-verified, but atomic receipt creation failed."

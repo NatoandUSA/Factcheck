@@ -281,7 +281,7 @@ if [ "${MIGRATION_REHEARSAL_REQUIRED}" = "true" ]; then
     "${NODE_BIN}" "${TARGET_RELEASE_DIR}/scripts/verify_migration_compatibility_receipt.cjs" \
       "${MIGRATION_RECEIPT}" "${BASELINE_SHA}" "${TARGET_SHA}" \
       "${BASELINE_SCHEMA_FINGERPRINT}" "${TARGET_SCHEMA_FINGERPRINT}" "${MIGRATION_EVIDENCE_DIR}" || exit 1
-    MIGRATION_EVIDENCE_SHA=$("${NODE_BIN}" -e "const r=require(process.argv[1]); console.log(r.evidenceSha256 || '')" "${MIGRATION_RECEIPT}")
+    MIGRATION_EVIDENCE_SHA=$("${NODE_BIN}" -e "const fs=require('node:fs'); const r=JSON.parse(fs.readFileSync(process.argv[1], 'utf8')); console.log(r.evidenceSha256 || '')" "${MIGRATION_RECEIPT}")
 fi
 OWNER_APPROVAL_PR_NUMBER=$(awk -F= '/^[[:space:]]*OMNI_OWNER_APPROVAL_PR_NUMBER[[:space:]]*=/ { count += 1; value=$2; gsub(/[[:space:]\r]/, "", value) } END { if (count == 1) print value }' "${ENV_FILE}")
 if ! [[ "${OWNER_APPROVAL_PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
@@ -430,8 +430,8 @@ echo "Planning release retention from validated manifests..."
 RETENTION_PLAN_FILE=$(mktemp)
 "${NODE_BIN}" "${TARGET_RELEASE_DIR}/scripts/release_retention.cjs" \
   "${RELEASES_DIR}" "${TARGET_SHA}" "${BASELINE_SHA}" 2 > "${RETENTION_PLAN_FILE}" || rollback
-"${NODE_BIN}" -e "const p=require(process.argv[1]); for(const w of p.warnings) console.error('⚠️ Retained for manual review: '+w.sha+' '+w.code);" "${RETENTION_PLAN_FILE}"
-mapfile -t PRUNE_RELEASES < <("${NODE_BIN}" -e "const p=require(process.argv[1]); for(const item of p.prune) console.log(item);" "${RETENTION_PLAN_FILE}")
+"${NODE_BIN}" -e "const fs=require('node:fs'); const p=JSON.parse(fs.readFileSync(process.argv[1], 'utf8')); for(const w of p.warnings) console.error('⚠️ Retained for manual review: '+w.sha+' '+w.code);" "${RETENTION_PLAN_FILE}"
+mapfile -t PRUNE_RELEASES < <("${NODE_BIN}" -e "const fs=require('node:fs'); const p=JSON.parse(fs.readFileSync(process.argv[1], 'utf8')); for(const item of p.prune) console.log(item);" "${RETENTION_PLAN_FILE}")
 for old_release in "${PRUNE_RELEASES[@]}"; do
     release_name=$(basename "${old_release}")
     if [[ "${old_release}" != "${RELEASES_DIR}/"* ]] || [[ ! "${release_name}" =~ ^[a-f0-9]{40}$ ]] \

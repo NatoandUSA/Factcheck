@@ -11,7 +11,7 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { execFileSync, execSync } = require('child_process');
+const { execFileSync, execSync, spawnSync } = require('child_process');
 
 function runPlatformTests() {
   console.log('================================================================');
@@ -93,6 +93,20 @@ function runPlatformTests() {
   'Deploy must verify both production mode and R4.3 mode in the active process environment');
   assert.ok(deployScript.includes('scripts/release_retention.cjs'),
     'Release pruning must use the validated manifest-time retention planner');
+  assert.doesNotMatch(deployScript, /require\(process\.argv\[1\]\)/,
+    'Deploy must parse external JSON as data instead of loading it as a Node module');
+  const extensionlessJsonParser = "const fs=require('node:fs'); const p=JSON.parse(fs.readFileSync(process.argv[1], 'utf8')); for(const item of p.prune) console.log(item);";
+  assert.ok(deployScript.includes(extensionlessJsonParser),
+    'Retention plans must be parsed explicitly as JSON when mktemp returns an extensionless path');
+  const extensionlessPlan = path.join(os.tmpdir(), `omni-retention-plan-${process.pid}`);
+  fs.writeFileSync(extensionlessPlan, JSON.stringify({ keep: [], prune: ['release-a'], warnings: [] }));
+  try {
+    const parseProbe = spawnSync(process.execPath, ['-e', extensionlessJsonParser, extensionlessPlan], { encoding: 'utf8' });
+    assert.strictEqual(parseProbe.status, 0, parseProbe.stderr);
+    assert.strictEqual(parseProbe.stdout.trim(), 'release-a');
+  } finally {
+    fs.unlinkSync(extensionlessPlan);
+  }
   assert.ok(!deployScript.includes('find "${RELEASES_DIR}" -mindepth 1 -maxdepth 1 -type d | sort -r'),
     'Release pruning must never use lexicographic SHA ordering');
   assert.ok(deployScript.includes("rollbackScope: 'CODE_SYMLINK_ONLY_DATABASE_RESTORE_REQUIRES_OWNER_APPROVAL'"),

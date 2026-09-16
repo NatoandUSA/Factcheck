@@ -111,8 +111,10 @@ function runPlatformTests() {
     'Release pruning must never use lexicographic SHA ordering');
   assert.ok(deployScript.includes("rollbackScope: 'CODE_SYMLINK_ONLY_DATABASE_RESTORE_REQUIRES_OWNER_APPROVAL'"),
     'Receipt must state that automatic rollback is code-only');
-  assert.ok(deployScript.includes('journalctl -u omniseller-web --since "${DEPLOY_STARTED_AT}"'),
-    'Service error evidence must have an explicit deployment time boundary');
+  assert.ok(deployScript.includes("DEPLOY_JOURNAL_SINCE=\"$(date -u '+%Y-%m-%d %H:%M:%S UTC')\"")
+    && deployScript.includes('journalctl -u omniseller-web --since "${DEPLOY_JOURNAL_SINCE}"')
+    && !deployScript.includes('journalctl -u omniseller-web --since "${DEPLOY_STARTED_AT}"'),
+  'Service error evidence must use a journalctl-compatible UTC boundary, not the receipt RFC 3339 timestamp');
   assert.ok(deployScript.includes("deploymentStatus: 'ACTIVE_VERIFIED'")
     && deployScript.includes('fs.linkSync(temporary, target)')
     && !deployScript.includes('fs.renameSync(temporary, target)')

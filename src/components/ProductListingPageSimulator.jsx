@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import AmazonRealProductPage from './AmazonRealProductPage';
 import EtsyRealProductPage from './EtsyRealProductPage';
-import { ShoppingBag, ShoppingCart, Layers, ArrowRight, Sparkles, Copy, Check } from 'lucide-react';
+import { ShoppingBag, ShoppingCart, Layers, Sparkles, Copy, Check, Gauge, ShieldCheck, AlertTriangle } from 'lucide-react';
+import { evaluateDraftQuality } from '../utils/draftQualityEvaluator.js';
+import { generateAmazonListingImagePrompts, generateAmazonAPlusImagePrompts, generateEtsyListingImagePrompts } from '../services/imagePromptGenerator.js';
 
 function CopyField({ label, value, onShowToast }) {
   const [copied, setCopied] = useState(false);
@@ -31,6 +33,18 @@ function CopyField({ label, value, onShowToast }) {
 
 const emptyChildRow = () => ({ sku: '', variationAttribute: '', childTitle: '', asin: '' });
 
+function getAssetPlan(listing, marketplace) {
+  if (!listing) return { ready: 0, expected: marketplace === 'AMAZON' ? 20 : 12 };
+  try {
+    const prompts = marketplace === 'AMAZON'
+      ? [...generateAmazonListingImagePrompts(listing), ...generateAmazonAPlusImagePrompts(listing)]
+      : generateEtsyListingImagePrompts(listing);
+    return { ready: prompts.filter(item => String(item?.prompt || '').trim()).length, expected: marketplace === 'AMAZON' ? 20 : 12 };
+  } catch (_) {
+    return { ready: 0, expected: marketplace === 'AMAZON' ? 20 : 12 };
+  }
+}
+
 export default function ProductListingPageSimulator({ currentListing, history = [], onSelectListing, onUpdateListing, onShowToast }) {
   const [platformView, setPlatformView] = useState('AMAZON'); // 'AMAZON' | 'ETSY'
   const [activeListingId, setActiveListingId] = useState(currentListing?.dbId || currentListing?.id || (history[0]?.dbId || history[0]?.id));
@@ -39,6 +53,12 @@ export default function ProductListingPageSimulator({ currentListing, history = 
   // Determine active listing
   const activeListing = (history.find(h => (h.dbId || h.id) === activeListingId)) || currentListing || history[0] || null;
   const activeChild = activeAsin !== 'parent' ? (activeListing?.variations || []).find(v => v.childIndex === activeAsin) : null;
+  const quality = evaluateDraftQuality(activeListing, platformView, getAssetPlan(activeListing, platformView));
+  const verdictStyle = quality.verdict === 'REVIEW_READY'
+    ? { color: '#166534', background: '#dcfce7', border: '#86efac' }
+    : quality.verdict === 'BLOCKED'
+      ? { color: '#991b1b', background: '#fee2e2', border: '#fca5a5' }
+      : { color: '#9a3412', background: '#ffedd5', border: '#fdba74' };
 
   // Variation Plan — Staff-entered planning fields only. No SKU/ASIN is ever
   // generated here; child rows only persist once Staff actually types a SKU,
@@ -93,69 +113,42 @@ export default function ProductListingPageSimulator({ currentListing, history = 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', marginTop: '16px' }}>
       
-      {/* Top Header & Platform Switcher Bar */}
-      <div style={{
-        background: 'var(--bg-surface)',
-        borderRadius: '16px',
-        padding: '18px 24px',
-        border: '1px solid var(--border-subtle)',
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        flexWrap: 'wrap',
-        gap: '16px',
-        boxShadow: 'var(--shadow-sm)'
-      }}>
-        {/* Left: Platform Switcher */}
-        <div style={{ display: 'flex', gap: '10px' }}>
+      <section style={{ background: 'linear-gradient(135deg, #ffffff 0%, #f8fafc 100%)', borderRadius: '14px', border: '1px solid #dbe3ef', boxShadow: '0 10px 30px rgba(15,23,42,.06)', overflow: 'hidden' }}>
+        <div style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap', borderBottom: '1px solid #e2e8f0' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '9px', marginRight: '4px' }}>
+            <div style={{ width: 34, height: 34, display: 'grid', placeItems: 'center', borderRadius: 10, color: '#fff', background: 'linear-gradient(135deg,#0f172a,#334155)' }}><Sparkles size={17} /></div>
+            <div><div style={{ fontWeight: 900, fontSize: '.94rem', color: '#0f172a' }}>Draft Review Studio</div><div style={{ fontSize: '.68rem', color: '#64748b' }}>Simulation Preview · not live</div></div>
+          </div>
+          <div style={{ display: 'flex', gap: '3px', padding: '3px', borderRadius: '9px', background: '#e2e8f0' }}>
           <button
             onClick={() => setPlatformView('AMAZON')}
             style={{
-              padding: '10px 20px',
-              borderRadius: '10px',
-              border: platformView === 'AMAZON' ? '2px solid #0284c7' : '1px solid var(--border-subtle)',
-              background: platformView === 'AMAZON' ? '#f0f9ff' : 'var(--bg-subtle)',
+              padding: '7px 12px', borderRadius: '7px', border: 'none',
+              background: platformView === 'AMAZON' ? '#fff' : 'transparent',
               color: platformView === 'AMAZON' ? '#0369a1' : 'var(--text-secondary)',
-              fontWeight: 800,
-              fontSize: '0.9rem',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px',
-              cursor: 'pointer'
+              fontWeight: 800, fontSize: '0.78rem', display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', boxShadow: platformView === 'AMAZON' ? '0 1px 4px rgba(15,23,42,.12)' : 'none'
             }}
           >
-            <ShoppingCart size={18} color={platformView === 'AMAZON' ? '#0284c7' : 'currentColor'} />
-            <span>🔵 Amazon Product Page (Simulation Preview)</span>
+            <ShoppingCart size={15} /><span>Amazon</span>
           </button>
-
           <button
             onClick={() => setPlatformView('ETSY')}
             style={{
-              padding: '10px 20px',
-              borderRadius: '10px',
-              border: platformView === 'ETSY' ? '2px solid #ea580c' : '1px solid var(--border-subtle)',
-              background: platformView === 'ETSY' ? '#fff7ed' : 'var(--bg-subtle)',
+              padding: '7px 12px', borderRadius: '7px', border: 'none',
+              background: platformView === 'ETSY' ? '#fff' : 'transparent',
               color: platformView === 'ETSY' ? '#c2410c' : 'var(--text-secondary)',
-              fontWeight: 800,
-              fontSize: '0.9rem',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px',
-              cursor: 'pointer'
+              fontWeight: 800, fontSize: '0.78rem', display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', boxShadow: platformView === 'ETSY' ? '0 1px 4px rgba(15,23,42,.12)' : 'none'
             }}
           >
-            <ShoppingBag size={18} color={platformView === 'ETSY' ? '#ea580c' : 'currentColor'} />
-            <span>🟠 Etsy Shop Page (Simulation Preview)</span>
+            <ShoppingBag size={15} /><span>Etsy</span>
           </button>
         </div>
-
-        {/* Right: Select Active Listing */}
         {history.length > 0 && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--text-secondary)' }}>Chọn Listing xem thử:</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '7px', marginLeft: 'auto', minWidth: 250 }}>
+            <span style={{ fontSize: '0.72rem', fontWeight: 800, color: '#64748b' }}>DRAFT</span>
             <select
               className="form-input"
-              style={{ maxWidth: '300px', fontSize: '0.85rem', padding: '8px 12px' }}
+              style={{ width: '100%', maxWidth: '330px', fontSize: '0.78rem', padding: '7px 10px' }}
               value={activeListingId || ''}
               onChange={(e) => setActiveListingId(Number(e.target.value) || e.target.value)}
             >
@@ -167,7 +160,23 @@ export default function ProductListingPageSimulator({ currentListing, history = 
             </select>
           </div>
         )}
-      </div>
+        </div>
+
+        <div style={{ padding: '14px 16px', display: 'grid', gridTemplateColumns: 'minmax(190px,.8fr) minmax(360px,2.2fr)', gap: '14px' }}>
+          <div style={{ border: `1px solid ${verdictStyle.border}`, background: verdictStyle.background, borderRadius: 12, padding: '13px 14px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}><span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '.72rem', fontWeight: 900, color: verdictStyle.color }}><Gauge size={15} /> DRAFT QUALITY</span><span style={{ fontSize: '1.45rem', fontWeight: 950, color: verdictStyle.color }}>{quality.score}<small style={{ fontSize: '.68rem' }}>/100</small></span></div>
+            <div style={{ marginTop: 6, fontSize: '.82rem', fontWeight: 900, color: verdictStyle.color }}>{quality.verdict.replace('_', ' ')}</div>
+            <div style={{ marginTop: 4, fontSize: '.66rem', lineHeight: 1.35, color: '#475569' }}>Điểm hỗ trợ ưu tiên review, không dự báo doanh số và không cấp quyền upload.</div>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,minmax(92px,1fr))', gap: 7 }}>
+            {quality.metrics.map(metric => <div key={metric.key} style={{ padding: '9px 10px', border: '1px solid #e2e8f0', borderRadius: 10, background: '#fff' }}><div style={{ fontSize: '.64rem', color: '#64748b', minHeight: 28 }}>{metric.label}</div><div style={{ fontWeight: 900, fontSize: '.95rem', color: metric.score >= 85 ? '#166534' : metric.score >= 65 ? '#9a3412' : '#991b1b' }}>{metric.score}</div><div style={{ height: 3, borderRadius: 3, background: '#e2e8f0', overflow: 'hidden', marginTop: 5 }}><div style={{ width: `${metric.score}%`, height: '100%', background: metric.score >= 85 ? '#22c55e' : metric.score >= 65 ? '#f59e0b' : '#ef4444' }} /></div></div>)}
+          </div>
+        </div>
+        {(quality.blockers.length > 0 || quality.warnings.length > 0) && <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(260px,1fr))', gap: 8, padding: '0 16px 14px' }}>
+          {quality.blockers.length > 0 && <details open style={{ border: '1px solid #fecaca', background: '#fff7f7', borderRadius: 9, padding: '8px 10px', fontSize: '.72rem' }}><summary style={{ cursor: 'pointer', color: '#991b1b', fontWeight: 900 }}><ShieldCheck size={13} style={{ verticalAlign: 'middle', marginRight: 5 }} />{quality.blockers.length} blocker phải sửa</summary><ul style={{ margin: '7px 0 0 18px', padding: 0 }}>{quality.blockers.map(item => <li key={item} style={{ marginTop: 3 }}>{item}</li>)}</ul></details>}
+          {quality.warnings.length > 0 && <details style={{ border: '1px solid #fed7aa', background: '#fffaf5', borderRadius: 9, padding: '8px 10px', fontSize: '.72rem' }}><summary style={{ cursor: 'pointer', color: '#9a3412', fontWeight: 900 }}><AlertTriangle size={13} style={{ verticalAlign: 'middle', marginRight: 5 }} />{quality.warnings.length} điểm cần QA</summary><ul style={{ margin: '7px 0 0 18px', padding: 0 }}>{quality.warnings.map(item => <li key={item} style={{ marginTop: 3 }}>{item}</li>)}</ul></details>}
+        </div>}
+      </section>
 
       {/* Staff-facing Variation Plan — planning only, never auto-generated.
           Offers 4 child slots as a form convenience; only rows Staff fills

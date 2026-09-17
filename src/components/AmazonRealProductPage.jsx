@@ -42,87 +42,87 @@ export default function AmazonRealProductPage({ listing, onShowToast }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
       
       {/* Top Simulator Controls */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', background: '#0f172a', padding: '16px 20px', borderRadius: '12px', color: '#fff' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px', background: '#ffffff', padding: '10px 12px', borderRadius: '11px', color: '#0f172a', border: '1px solid #dbe3ef', boxShadow: '0 4px 14px rgba(15,23,42,.04)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <div style={{ background: '#0284c7', padding: '8px', borderRadius: '8px' }}>
-            <Sparkles size={20} color="#fff" />
+          <div style={{ background: '#e0f2fe', padding: '7px', borderRadius: '8px' }}>
+            <Sparkles size={18} color="#0369a1" />
           </div>
           <div>
-            <div style={{ fontWeight: 800, fontSize: '1rem', color: '#f59e0b' }}>
-              Amazon Product Page Simulation Preview — Not Live — Not Submission Ready
+            <div style={{ fontWeight: 850, fontSize: '.86rem', color: '#0f172a' }}>
+              Amazon Product Page Simulation Preview <span style={{ color: '#b45309' }}>· Draft only</span>
             </div>
-            <div style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
-              Mô phỏng xem trước giao diện Amazon (Simulation Preview) với <strong>10 Listing Images</strong> & <strong>10 A+ Content Modules</strong>
+            <div style={{ fontSize: '0.68rem', color: '#64748b' }}>
+              Customer view · 10 image prompts · 10 A+ modules · not submission ready
             </div>
           </div>
         </div>
 
         {/* View Mode Switcher */}
-        <div style={{ display: 'flex', gap: '8px', background: 'rgba(255, 255, 255, 0.1)', padding: '4px', borderRadius: '8px', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: '3px', background: '#f1f5f9', padding: '3px', borderRadius: '8px', flexWrap: 'wrap' }}>
           <button
             onClick={() => setActiveSubTab('page')}
             style={{
               background: activeSubTab === 'page' ? '#0284c7' : 'transparent',
-              color: '#fff',
+              color: activeSubTab === 'page' ? '#fff' : '#475569',
               border: 'none',
-              padding: '6px 14px',
+              padding: '6px 10px',
               borderRadius: '6px',
               fontWeight: 600,
               fontSize: '0.8rem',
               cursor: 'pointer'
             }}
           >
-            🛒 Amazon Simulation View
+            Customer view
           </button>
           <button
             onClick={() => setActiveSubTab('raw-review')}
             style={{
               background: activeSubTab === 'raw-review' ? '#0284c7' : 'transparent',
-              color: '#fff',
+              color: activeSubTab === 'raw-review' ? '#fff' : '#475569',
               border: 'none',
-              padding: '6px 14px',
+              padding: '6px 10px',
               borderRadius: '6px',
               fontWeight: 600,
               fontSize: '0.8rem',
               cursor: 'pointer'
             }}
           >
-            📋 Raw Review & Copy All
+            Copy & SEO
           </button>
           <button
             onClick={() => setActiveSubTab('image-prompts')}
             style={{
               background: activeSubTab === 'image-prompts' ? '#0284c7' : 'transparent',
-              color: '#fff',
+              color: activeSubTab === 'image-prompts' ? '#fff' : '#475569',
               border: 'none',
-              padding: '6px 14px',
+              padding: '6px 10px',
               borderRadius: '6px',
               fontWeight: 600,
               fontSize: '0.8rem',
               cursor: 'pointer'
             }}
           >
-            📸 10 Image Prompts
+            Image plan
           </button>
           <button
             onClick={() => setActiveSubTab('aplus-prompts')}
             style={{
               background: activeSubTab === 'aplus-prompts' ? '#0284c7' : 'transparent',
-              color: '#fff',
+              color: activeSubTab === 'aplus-prompts' ? '#fff' : '#475569',
               border: 'none',
-              padding: '6px 14px',
+              padding: '6px 10px',
               borderRadius: '6px',
               fontWeight: 600,
               fontSize: '0.8rem',
               cursor: 'pointer'
             }}
           >
-            ✨ 10 A+ Content Prompts
+            A+ plan
           </button>
         </div>
       </div>
 
-      {/* VIEW 1: LIVE 100% REAL AMAZON PAGE */}
+      {/* Customer-facing simulation only; never represents a live Amazon page. */}
       {activeSubTab === 'page' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
           

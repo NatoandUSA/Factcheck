@@ -14,6 +14,7 @@ const CANONICAL_REVIEW_HANDOFF_MIGRATION = '014_canonical_review_submission_hand
 const OWNER_SUBMISSION_AUTHORIZATION_MIGRATION = '015_owner_submission_authorization';
 const COMMERCE_WORKFLOW_ARTIFACT_MIGRATION = '2026-09-12_commerce_workflow_artifacts_v2_upgrade';
 const OPERATOR_REPORTED_SUBMISSION_MIGRATION = '017_operator_reported_submission_lifecycle';
+const PRODUCT_TRUTH_FAMILY_MIGRATION = '018_product_truth_family_profiles';
 const crypto = require('node:crypto');
 const { canonicalJson, hashBytes } = require('../revisionStore');
 
@@ -337,6 +338,62 @@ async function migrateProjectProductTruthRevisions(db) {
     await run(db, `CREATE TRIGGER IF NOT EXISTS ${table}_immutable_delete
       BEFORE DELETE ON ${table} BEGIN SELECT RAISE(ABORT, 'IMMUTABLE_PRODUCT_TRUTH'); END`);
   }
+}
+
+async function migrateProductTruthFamilies(db) {
+  await run(db, `CREATE TABLE IF NOT EXISTS product_truth_families (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id TEXT NOT NULL,
+    workspace_id INTEGER NOT NULL,
+    marketplace TEXT NOT NULL CHECK(marketplace IN ('AMAZON','ETSY')),
+    normalized_name TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    head_revision_id INTEGER NULL,
+    created_by INTEGER NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id,workspace_id,marketplace,normalized_name)
+  )`);
+  await run(db, `CREATE TABLE IF NOT EXISTS product_truth_family_revisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    family_id INTEGER NOT NULL REFERENCES product_truth_families(id),
+    tenant_id TEXT NOT NULL,
+    workspace_id INTEGER NOT NULL,
+    marketplace TEXT NOT NULL CHECK(marketplace IN ('AMAZON','ETSY')),
+    revision_number INTEGER NOT NULL CHECK(revision_number >= 1),
+    parent_revision_id INTEGER NULL REFERENCES product_truth_family_revisions(id),
+    snapshot_json TEXT NOT NULL,
+    content_hash TEXT NOT NULL CHECK(length(content_hash)=64),
+    change_reason TEXT NOT NULL,
+    created_by INTEGER NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(family_id,revision_number)
+  )`);
+  await run(db, `CREATE INDEX IF NOT EXISTS idx_product_truth_families_scope
+    ON product_truth_families(tenant_id,workspace_id,marketplace,normalized_name)`);
+  await run(db, `CREATE INDEX IF NOT EXISTS idx_product_truth_family_revisions_scope
+    ON product_truth_family_revisions(tenant_id,workspace_id,marketplace,family_id,revision_number)`);
+  await run(db, `CREATE TABLE IF NOT EXISTS product_truth_family_write_receipts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id TEXT NOT NULL,
+    workspace_id INTEGER NOT NULL,
+    marketplace TEXT NOT NULL CHECK(marketplace IN ('AMAZON','ETSY')),
+    operation TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL,
+    request_hash TEXT NOT NULL CHECK(length(request_hash)=64),
+    response_json TEXT NOT NULL,
+    created_by INTEGER NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id,workspace_id,marketplace,operation,idempotency_key)
+  )`);
+  for (const table of ['product_truth_family_revisions', 'product_truth_family_write_receipts']) {
+    await run(db, `CREATE TRIGGER IF NOT EXISTS ${table}_immutable_update
+      BEFORE UPDATE ON ${table} BEGIN SELECT RAISE(ABORT,'IMMUTABLE_PRODUCT_TRUTH_FAMILY'); END`);
+    await run(db, `CREATE TRIGGER IF NOT EXISTS ${table}_immutable_delete
+      BEFORE DELETE ON ${table} BEGIN SELECT RAISE(ABORT,'IMMUTABLE_PRODUCT_TRUTH_FAMILY'); END`);
+  }
+  await run(db, `CREATE TRIGGER IF NOT EXISTS product_truth_families_immutable_delete
+    BEFORE DELETE ON product_truth_families BEGIN SELECT RAISE(ABORT,'IMMUTABLE_PRODUCT_TRUTH_FAMILY'); END`);
 }
 
 async function migrateListingRevisionValidationAccounting(db) {
@@ -1100,6 +1157,18 @@ async function runMigrations(db) {
       throw error;
     }
   }
+  const productTruthFamilyApplied = await all(db, 'SELECT id FROM schema_migrations WHERE id=?', [PRODUCT_TRUTH_FAMILY_MIGRATION]);
+  if (productTruthFamilyApplied.length === 0) {
+    await run(db, 'BEGIN IMMEDIATE');
+    try {
+      await migrateProductTruthFamilies(db);
+      await run(db, 'INSERT INTO schema_migrations(id) VALUES (?)', [PRODUCT_TRUTH_FAMILY_MIGRATION]);
+      await run(db, 'COMMIT');
+    } catch (error) {
+      try { await run(db, 'ROLLBACK'); } catch (_) {}
+      throw error;
+    }
+  }
 }
 
 async function migrateAgentWorkspaceScope(db) {
@@ -1196,6 +1265,7 @@ module.exports = {
   OWNER_SUBMISSION_AUTHORIZATION_MIGRATION,
   COMMERCE_WORKFLOW_ARTIFACT_MIGRATION,
   OPERATOR_REPORTED_SUBMISSION_MIGRATION,
+  PRODUCT_TRUTH_FAMILY_MIGRATION,
   migrateOwnerSubmissionAuthorization,
   migrateCommerceWorkflowArtifacts,
   migrateOperatorReportedSubmissionLifecycle,

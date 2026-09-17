@@ -93,9 +93,41 @@ async function appendUnlocked(db, rawScope, projectIdInput, input = {}, hooks = 
     const normalized = normalizeSnapshot(input.facts);
     const notes = input.notes == null ? null : String(input.notes).trim();
     if (notes && notes.length > 4000) throw Object.assign(new Error('PRODUCT_TRUTH_NOTES_TOO_LARGE'), { code: 'PRODUCT_TRUTH_NOTES_TOO_LARGE' });
-    snapshot = Object.freeze({ ...normalized, notes: notes || null });
+    let inheritance = null;
+    if (input.familyRevisionId != null) {
+      const familyRevisionId = Number(input.familyRevisionId);
+      if (!Number.isInteger(familyRevisionId) || familyRevisionId < 1) {
+        throw Object.assign(new Error('PRODUCT_TRUTH_FAMILY_REVISION_NOT_FOUND'), { code: 'PRODUCT_TRUTH_FAMILY_REVISION_NOT_FOUND' });
+      }
+      const family = await get(db, `SELECT r.*,f.display_name FROM product_truth_family_revisions r
+        JOIN product_truth_families f ON f.id=r.family_id
+        WHERE r.id=? AND r.tenant_id=? AND r.workspace_id=? AND r.marketplace=?
+          AND f.tenant_id=r.tenant_id AND f.workspace_id=r.workspace_id AND f.marketplace=r.marketplace`,
+      [familyRevisionId, scope.tenantId, scope.workspaceId, scope.marketplace]);
+      if (!family) throw Object.assign(new Error('PRODUCT_TRUTH_FAMILY_REVISION_NOT_FOUND'), { code: 'PRODUCT_TRUTH_FAMILY_REVISION_NOT_FOUND' });
+      if (hashBytes(family.snapshot_json) !== family.content_hash) {
+        throw Object.assign(new Error('REVISION_INTEGRITY_FAILURE'), { code: 'REVISION_INTEGRITY_FAILURE' });
+      }
+      const familySnapshot = JSON.parse(family.snapshot_json);
+      const familyKeys = [...new Set([...Object.keys(familySnapshot.asserted || {}), ...Object.keys(familySnapshot.unknown || {})])].sort();
+      const projectKeys = [...new Set([...Object.keys(normalized.asserted), ...Object.keys(normalized.unknown)])].sort();
+      const entry = (value, key) => value.asserted?.[key] != null
+        ? { disposition: 'ASSERTED', ...value.asserted[key] }
+        : { disposition: 'UNKNOWN', ...value.unknown?.[key] };
+      const inheritedFactKeys = familyKeys.filter(key => canonicalJson(entry(familySnapshot, key)) === canonicalJson(entry(normalized, key)));
+      inheritance = Object.freeze({ kind: 'PRODUCT_TRUTH_FAMILY_REVISION', familyId: family.family_id,
+        familyName: family.display_name, familyRevisionId, familyRevisionNumber: family.revision_number,
+        familyContentHash: family.content_hash, inheritedFactKeys,
+        overriddenFactKeys: familyKeys.filter(key => !inheritedFactKeys.includes(key)),
+        projectOnlyFactKeys: projectKeys.filter(key => !familyKeys.includes(key)) });
+    }
+    snapshot = Object.freeze({ ...normalized, notes: notes || null, ...(inheritance ? { inheritance } : {}) });
   }
-  catch (error) { throw new ProductTruthStoreError(error.code || 'INVALID_PRODUCT_TRUTH', 400, { fact: error.fact, path: error.path }); }
+  catch (error) {
+    const status = error.code === 'PRODUCT_TRUTH_FAMILY_REVISION_NOT_FOUND' ? 404
+      : error.code === 'REVISION_INTEGRITY_FAILURE' ? 500 : 400;
+    throw new ProductTruthStoreError(error.code || 'INVALID_PRODUCT_TRUTH', status, { fact: error.fact, path: error.path });
+  }
   const snapshotJson = canonicalJson(snapshot);
   const contentHash = hashBytes(snapshotJson);
   const expectedHeadRevisionId = input.expectedHeadRevisionId == null ? null : Number(input.expectedHeadRevisionId);

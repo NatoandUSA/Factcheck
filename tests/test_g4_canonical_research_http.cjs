@@ -132,16 +132,28 @@ async function main() {
   check(JSON.parse(snapshotRow.accounting_json).unconsumedSheetCount === 0, 'snapshot accounting persisted');
   check(snapshotRow.snapshot_hash === snapshot.body.researchSnapshotHash, 'snapshot hash returned exactly');
 
-  const truth = await json(`/api/projects/${projectId}/product-truth/revisions`, 'POST', {
-    expectedHeadRevisionId: null, idempotencyKey: key(3), changeReason: 'STAFF_DRAFT', facts: {
+  const familyFacts = {
       productType: { disposition: 'ASSERTED', value: 'Custom Necklace', basis: 'SUPPLIER_SPEC' },
       materials: { disposition: 'ASSERTED', value: 'stainless steel', basis: 'SUPPLIER_SPEC' },
       personalization: { disposition: 'ASSERTED', value: 'Custom name personalization', basis: 'PRODUCTION_WORKFLOW' },
       recipient: { disposition: 'ASSERTED', value: 'daughter', basis: 'OTHER' }
-    }
+  };
+  const createdFamily = await json('/api/product-truth-families', 'POST', { name: `Canonical Necklace ${Date.now()}`,
+    idempotencyKey: key(31), changeReason: 'CREATE_REUSABLE_FAMILY', facts: familyFacts, notes: 'Supplier-level shared facts' });
+  check(createdFamily.status === 201 && createdFamily.body.familyRevisionId > 0, JSON.stringify(createdFamily.body));
+  const familyList = await json('/api/product-truth-families');
+  check(familyList.status === 200 && familyList.body.families.some(item => item.id === createdFamily.body.familyId),
+    'family profile is listed only inside the authenticated workspace and marketplace scope');
+  const truth = await json(`/api/projects/${projectId}/product-truth/revisions`, 'POST', {
+    expectedHeadRevisionId: null, familyRevisionId: createdFamily.body.familyRevisionId,
+    idempotencyKey: key(3), changeReason: 'STAFF_DRAFT', facts: familyFacts
   });
   check(truth.status === 201, JSON.stringify(truth.body));
   const truthId = truth.body.productTruthRevisionId;
+  const truthHistory = await json(`/api/projects/${projectId}/product-truth/revisions`);
+  check(truthHistory.body.revisions[0].snapshot.inheritance.familyRevisionId === createdFamily.body.familyRevisionId
+    && truthHistory.body.revisions[0].snapshot.inheritance.inheritedFactKeys.includes('materials'),
+  'project Product Truth binds the exact reusable family revision and records inherited fields');
   const master = await json(`/api/projects/${projectId}/amazon/master-keywords`, 'POST', {
     researchSnapshotId: snapshot.body.researchSnapshotId, decisions: [], expectedHeadArtifactId: null,
     idempotencyKey: key(23), changeReason: 'FREEZE_MASTER_KEYWORDS_FOR_DRAFT'

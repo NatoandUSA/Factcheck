@@ -70,6 +70,7 @@
   "tests/test_performance_and_latency.cjs",
   "tests/test_product_truth_core.cjs",
   "tests/test_production_runtime_policy.cjs",
+  "tests/test_product_truth_families.cjs",
   "tests/test_project_bound_react_wiring.cjs",
   "tests/test_project_scoped_evidence_workflow.test.cjs",
   "tests/test_project_scoped_reload_consumers.cjs",

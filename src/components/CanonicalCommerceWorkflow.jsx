@@ -138,6 +138,9 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
   const [state, setState] = useState(null);
   const [workflowState, setWorkflowState] = useState(null);
   const [truthRevisions, setTruthRevisions] = useState([]);
+  const [truthFamilies, setTruthFamilies] = useState([]);
+  const [selectedTruthFamilyId, setSelectedTruthFamilyId] = useState('');
+  const [truthFamilyName, setTruthFamilyName] = useState('');
   const [facts, setFacts] = useState(emptyFacts);
   const [truthNotes, setTruthNotes] = useState('');
   const [truthBasis, setTruthBasis] = useState('OTHER');
@@ -215,15 +218,17 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
 
   const refresh = async () => {
     if (!projectId) return;
-    const [commerce, truth, listings, workflow] = await Promise.all([
+    const [commerce, truth, listings, workflow, familyResult] = await Promise.all([
       api(`/api/projects/${projectId}/commerce-state`),
       api(`/api/projects/${projectId}/product-truth/revisions`),
       api(`/api/projects/${projectId}/listings`),
-      api(`/api/projects/${projectId}/marketplace-workflow`)
+      api(`/api/projects/${projectId}/marketplace-workflow`),
+      api('/api/product-truth-families')
     ]);
     setState(commerce);
     setWorkflowState(workflow);
     setTruthRevisions(truth.revisions || []);
+    setTruthFamilies(familyResult.families || []);
     setListingQueue(listings.listings || []);
     const refreshedImports = Array.isArray(commerce.imports) ? commerce.imports : [];
     setSelectedImports(previous => previous.length ? previous.filter(id => refreshedImports.some(item => item.id === id)) : refreshedImports.map(item => item.id));
@@ -233,6 +238,10 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
       for (const [key, entry] of Object.entries(revision.snapshot.asserted || {})) hydrated[key] = typeof entry.value === 'string' ? entry.value : JSON.stringify(entry.value);
       setFacts(hydrated);
       setTruthNotes(revision.snapshot.notes || '');
+      if (revision.snapshot.inheritance?.familyId) {
+        setSelectedTruthFamilyId(String(revision.snapshot.inheritance.familyId));
+        setTruthFamilyName(revision.snapshot.inheritance.familyName || '');
+      }
       const productWords = `${hydrated.productType} ${hydrated.productName} ${hydrated.category}`.toLowerCase();
       const suggested = productWords.includes('embroider') ? 'CUSTOM_EMBROIDERY'
         : productWords.includes('acrylic') ? 'CUSTOM_ACRYLIC'
@@ -255,6 +264,7 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
     setAsinPlanPreview(null); setSelectedAsinText(''); setMasterPreview(null); setKeywordDecisions({}); setKeywordQuery('');
     setEtsyWinnerPreview(null); setSelectedEtsyWinners([]); setEtsyPatternPreview(null);
     setSubmissionInputs({}); setExactExports({});
+    setSelectedTruthFamilyId(''); setTruthFamilyName('');
     setListingSource(''); setListingHtmlFile(null); setSameSourceConfirmed(false); setCaptureIdentityConfirmed(false); setListingFactPreview(null);
     setPolicyContext(activeProject ? {
       locale: activeProject.locale, media_class: activeProject.media_class,
@@ -264,7 +274,7 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
     setPolicyLocale(activeProject?.locale || (/\b(para|hija|regalo|collar)\b/i.test(activeProject?.seed_phrase || '') ? 'es-US' : 'en-US'));
     try { setExecutionLog(JSON.parse(sessionStorage.getItem(`omni-execution-log:${marketplace}:${projectId}`) || '[]')); }
     catch (_) { setExecutionLog([]); }
-    if (projectId) refresh().catch(reportError); else { setState(null); setWorkflowState(null); setTruthRevisions([]); setListingQueue([]); }
+    if (projectId) refresh().catch(reportError); else { setState(null); setWorkflowState(null); setTruthRevisions([]); setTruthFamilies([]); setListingQueue([]); }
   }, [projectId, marketplace]);
 
   const run = async (label, operation) => {
@@ -559,18 +569,53 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
     notify(`Đã áp dụng ${listingFactPreview.accounting?.extractedFactCount || 0} trường sau xác nhận exact variant.`);
   };
 
+  const truthFactsFromForm = () => Object.fromEntries(FACT_FIELDS.map(([key]) => {
+    const value = text(facts[key]).trim();
+    return [key, value ? { disposition: 'ASSERTED', value, basis: truthBasis,
+      basisNote: truthBasisNote.trim() || 'Seller đã nhập và kiểm tra trong workflow canonical' }
+      : { disposition: 'UNKNOWN', reason: 'Not provided at this Product Truth revision' }];
+  }));
+
+  const applyTruthFamily = () => {
+    const family = truthFamilies.find(item => String(item.id) === String(selectedTruthFamilyId));
+    if (!family) return;
+    const hydrated = { ...emptyFacts };
+    for (const [key, entry] of Object.entries(family.snapshot?.asserted || {})) {
+      if (key in hydrated) hydrated[key] = typeof entry.value === 'string' ? entry.value : JSON.stringify(entry.value);
+    }
+    setFacts(hydrated);
+    setTruthNotes(family.snapshot?.notes || '');
+    setTruthFamilyName(family.displayName);
+    notify(`Đã nạp ${family.displayName} v${family.revisionNumber}. Chưa ghi project; hãy sửa khác biệt SKU rồi lưu Product Truth.`);
+  };
+
+  const createTruthFamily = () => run('create-truth-family', async () => {
+    if (!truthFamilyName.trim()) throw new Error('Nhập tên dòng sản phẩm trước.');
+    const result = await api('/api/product-truth-families', jsonOptions({ name: truthFamilyName,
+      idempotencyKey: uuid(), changeReason: 'STAFF_CREATED_PRODUCT_FAMILY', facts: truthFactsFromForm(), notes: truthNotes }));
+    setSelectedTruthFamilyId(String(result.familyId));
+    notify(`Đã tạo dòng sản phẩm ${result.displayName} v1.`); await refresh();
+  });
+
+  const updateTruthFamily = () => run('update-truth-family', async () => {
+    const family = truthFamilies.find(item => String(item.id) === String(selectedTruthFamilyId));
+    if (!family) throw new Error('Chọn một dòng sản phẩm trước.');
+    const result = await api(`/api/product-truth-families/${family.id}/revisions`, jsonOptions({
+      expectedHeadRevisionId: family.headRevisionId, idempotencyKey: uuid(),
+      changeReason: 'STAFF_UPDATED_PRODUCT_FAMILY', facts: truthFactsFromForm(), notes: truthNotes
+    }));
+    notify(`Đã lưu ${result.displayName} v${result.revisionNumber}; project cũ không tự thay đổi.`); await refresh();
+  });
+
   const saveTruth = () => run('truth', async () => {
     const entries = Object.entries(facts).filter(([, value]) => text(value).trim());
     if (!entries.length) throw new Error('Product Truth cần ít nhất một dữ kiện.');
-    const truthFacts = Object.fromEntries(FACT_FIELDS.map(([key]) => {
-      const value = text(facts[key]).trim();
-      return [key, value ? { disposition: 'ASSERTED', value, basis: truthBasis,
-        basisNote: truthBasisNote.trim() || 'Seller đã nhập và kiểm tra trong workflow canonical' }
-        : { disposition: 'UNKNOWN', reason: 'Not provided at this Product Truth revision' }];
-    }));
+    const truthFacts = truthFactsFromForm();
+    const family = truthFamilies.find(item => String(item.id) === String(selectedTruthFamilyId));
     const result = await api(`/api/projects/${projectId}/product-truth/revisions`, jsonOptions({
       expectedHeadRevisionId: head(state, 'productTruthRevisionId'), idempotencyKey: uuid(),
-      changeReason: 'STAFF_PRODUCT_TRUTH_UPDATE', facts: truthFacts, notes: truthNotes
+      changeReason: 'STAFF_PRODUCT_TRUTH_UPDATE', facts: truthFacts, notes: truthNotes,
+      ...(family ? { familyRevisionId: family.headRevisionId } : {})
     }));
     setClaimBlockers([]); setIntelligencePreview(null); setDraft(null);
     notify(`Đã lưu Product Truth v${result.revisionNumber}; chưa tự coi là Manager duyệt.`); await refresh();
@@ -1089,6 +1134,29 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
         <span aria-hidden="true" style={{ display: 'grid', placeItems: 'center', width: 28, height: 28, borderRadius: 9, background: '#0284c7', color: '#fff', fontWeight: 900 }}>i</span>
         <div><b style={{ color: '#075985' }}>Universal Product Truth — một hồ sơ riêng cho từng project/sản phẩm.</b>
           <div style={{ marginTop: 3, color: '#475569', fontSize: '.74rem' }}>Không chỉ Jewelry: có thể nhập sản phẩm vật lý mới hoặc digital Etsy bằng tên loại/danh mục tự do. Preset giúp điền nhanh; loại mới dùng policy generic và vẫn phải qua claim, IP, marketplace/restricted-product review trước khi phát hành.</div></div>
+      </div>
+      <div data-testid="product-truth-family-library" style={{ border: '1px solid #a7f3d0', borderRadius: 12, padding: 12, background: '#ecfdf5', marginBottom: 12 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 9, alignItems: 'start', flexWrap: 'wrap' }}>
+          <div><b style={{ color: '#065f46' }}>Thư viện dòng sản phẩm — nhập một lần, dùng lại có kiểm soát</b>
+            <div style={{ marginTop: 3, color: '#475569', fontSize: '.74rem' }}>Mỗi family có version bất biến. Áp dụng chỉ điền form; khi lưu project, hệ thống khóa exact family revision/hash và ghi rõ trường kế thừa hay override. Family mới không tự sửa project cũ. SKU và identifiers luôn là project-only, không được copy theo family.</div></div>
+          <span style={{ padding: '3px 8px', borderRadius: 999, background: '#d1fae5', color: '#065f46', fontSize: '.68rem', fontWeight: 900 }}>{truthFamilies.length} FAMILY</span>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(210px,1fr) auto', gap: 8, marginTop: 10, alignItems: 'end' }}>
+          <label style={{ display: 'grid', gap: 3, fontSize: '.75rem', fontWeight: 800 }}>Dòng sản phẩm đã lưu
+            <select aria-label="Dòng sản phẩm đã lưu" value={selectedTruthFamilyId} onChange={event => {
+              const value = event.target.value; setSelectedTruthFamilyId(value);
+              const family = truthFamilies.find(item => String(item.id) === value); if (family) setTruthFamilyName(family.displayName);
+            }}><option value="">— Không kế thừa / tạo mới —</option>{truthFamilies.map(family => <option key={family.id} value={family.id}>{family.displayName} · v{family.revisionNumber}</option>)}</select>
+          </label>
+          <ActionButton accent="#047857" disabled={!selectedTruthFamilyId || busy} onClick={applyTruthFamily}>Nạp family vào form</ActionButton>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(210px,1fr) auto auto', gap: 8, marginTop: 8, alignItems: 'end' }}>
+          <label style={{ display: 'grid', gap: 3, fontSize: '.75rem', fontWeight: 800 }}>Tên dòng sản phẩm
+            <input aria-label="Tên dòng sản phẩm" value={truthFamilyName} onChange={event => setTruthFamilyName(event.target.value)} placeholder="Ví dụ: Hija Necklace — Supplier A" />
+          </label>
+          <ActionButton accent="#059669" disabled={!truthFamilyName.trim() || busy} onClick={createTruthFamily}>Tạo family từ form</ActionButton>
+          <ActionButton accent="#0f766e" disabled={!selectedTruthFamilyId || busy} onClick={updateTruthFamily}>Lưu version mới</ActionButton>
+        </div>
       </div>
       <div style={{ border: '1px solid #bfdbfe', borderRadius: 10, padding: 12, background: '#eff6ff', marginBottom: 12 }}>
         <b>Điền nhanh từ một listing cùng supplier / nguồn hàng</b>

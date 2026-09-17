@@ -44,6 +44,7 @@ const assert = require('assert');
         } }
       } : {}, artifacts: [] });
     if (String(url).endsWith('/product-truth/revisions')) return response({ success: true, revisions: [] });
+    if (String(url).endsWith('/product-truth-families')) return response({ success: true, families: [] });
     if (String(url).endsWith('/product-truth-listing/preview')) return response({ success: true, zeroWrite: true,
       sourceReference: 'https://www.amazon.com/dp/B0D5XS64LH', rawHash: 'b'.repeat(64),
       facts: {
@@ -105,6 +106,9 @@ const assert = require('assert');
     'Amazon UI must explain the normal Xray-to-Cerebro order and independent Cerebro import');
   check(document.body.textContent.includes('Preview zero-write'), 'research and intelligence previews must be visible');
   check(document.body.textContent.includes('Product Truth do Seller nhập và kiểm'), 'Seller Product Truth stage must be visible');
+  check(document.querySelector('[data-testid="product-truth-family-library"]')
+    && document.body.textContent.includes('nhập một lần, dùng lại có kiểm soát'),
+  'versioned Product Truth family library must be visible');
   check(document.body.textContent.includes('Dùng ngay tài khoản, workspace và project đang mở'),
     'listing-assisted Product Truth must be integrated into the authenticated workflow');
   check(document.body.textContent.includes('Theo keyword đầu vào'), 'AUTO listing language must be visible');

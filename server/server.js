@@ -56,6 +56,7 @@ const { evaluateListingGuard } = require('./listingGuard');
 const { buildStaffAttestedCard, normalizeSnapshot, productTruthAuthorityHash, validateStaffAttestedCard } = require('./productTruthAttestation');
 const { assertNoClientPolicyOverrides } = require('./policy/contractRegistry');
 const { appendProductTruthRevision, confirmProductTruthRevision, listProductTruthRevisions } = require('./productTruthStore');
+const { appendProductTruthFamilyRevision, createProductTruthFamily, listProductTruthFamilies } = require('./productTruthFamilyStore');
 const { parseProductTruthWorkbook } = require('./productTruthWorkbookParser');
 const { parseListingHtml, parseListingCapture } = require('./productTruthListingParser');
 const { createListingWithRevision, appendListingRevision, canonicalJson, getListingRevision, hashBytes, listListingRevisions } = require('./revisionStore');
@@ -1626,13 +1627,38 @@ app.post('/api/projects/:id/product-truth-listing/preview', requireAuth(db), req
 
 app.post('/api/projects/:id/product-truth/revisions', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
   try {
-    const body = requireExactDto(req.body, new Set(['expectedHeadRevisionId', 'idempotencyKey', 'changeReason', 'facts', 'notes']));
+    const body = requireExactDto(req.body, new Set(['expectedHeadRevisionId', 'idempotencyKey', 'changeReason', 'facts', 'notes', 'familyRevisionId']));
     assertNoClientPolicyOverrides(body);
     const result = await appendProductTruthRevision(db, revisionScope(req.user), req.params.id, body);
     res.status(result.revisionNumber === 1 ? 201 : 200).json({ success: true, ...result });
   } catch (error) {
     rejectRevisionStore(res, error);
   }
+});
+
+app.get('/api/product-truth-families', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    const families = await listProductTruthFamilies(db, revisionScope(req.user));
+    res.json({ success: true, count: families.length, families });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+app.post('/api/product-truth-families', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    const body = requireExactDto(req.body, new Set(['name', 'idempotencyKey', 'changeReason', 'facts', 'notes']));
+    assertNoClientPolicyOverrides(body);
+    const result = await createProductTruthFamily(db, revisionScope(req.user), body);
+    res.status(201).json({ success: true, ...result });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+app.post('/api/product-truth-families/:familyId/revisions', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    const body = requireExactDto(req.body, new Set(['expectedHeadRevisionId', 'idempotencyKey', 'changeReason', 'facts', 'notes']));
+    assertNoClientPolicyOverrides(body);
+    const result = await appendProductTruthFamilyRevision(db, revisionScope(req.user), req.params.familyId, body);
+    res.json({ success: true, ...result });
+  } catch (error) { rejectRevisionStore(res, error); }
 });
 
 app.get('/api/projects/:id/product-truth/revisions', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {

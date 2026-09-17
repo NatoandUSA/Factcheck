@@ -1,0 +1,119 @@
+import { validateAmazonListing, validateEtsyListing, getUtf8Bytes } from './complianceValidator.js';
+import { validateProductTruthCard } from '../../shared/productTruth.js';
+
+const clamp = value => Math.max(0, Math.min(100, Math.round(value)));
+const words = value => String(value || '').trim().split(/\s+/).filter(Boolean);
+const uniqueRatio = value => {
+  const tokens = words(value).map(token => token.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '')).filter(Boolean);
+  return tokens.length ? new Set(tokens).size / tokens.length : 0;
+};
+
+function truthAssessment(listing) {
+  const context = {
+    productId: listing?.productId ?? listing?.dbId ?? listing?.id,
+    listingVersion: Number(listing?.listingVersion ?? listing?.listing_version)
+  };
+  const result = validateProductTruthCard(listing?.productTruthCard, context);
+  return { ...result, context };
+}
+
+function amazonAssessment(listing) {
+  const validation = validateAmazonListing(listing);
+  const title = String(listing?.amazonTitle || '').trim();
+  const highlights = String(listing?.itemHighlights || '').trim();
+  const bullets = Array.isArray(listing?.amazonBullets) ? listing.amazonBullets.filter(Boolean) : [];
+  const description = String(listing?.amazonDescription || '').trim();
+  const searchTerms = String(listing?.amazonSearchTerms || '').trim();
+  const mediaClass = String(listing?.mediaClass || listing?.media_class || '').toUpperCase();
+  const blockers = [...validation.issues];
+  const warnings = [...validation.warnings];
+
+  if (!title) blockers.push('Amazon title is required.');
+  if (mediaClass !== 'MEDIA' && title.length > 75) blockers.push(`Amazon title exceeds the 75-character non-media policy (${title.length}/75).`);
+  if (mediaClass === 'MEDIA') warnings.push('Media title limit must be resolved from the exact category policy before upload.');
+  if (highlights.length > 125) blockers.push(`Item Highlights exceed 125 characters (${highlights.length}/125).`);
+  if (!description) warnings.push('Product description is empty.');
+
+  const searchScore = clamp(
+    (title.length >= 45 && title.length <= 75 ? 45 : title ? 25 : 0)
+    + (searchTerms ? 35 : 0)
+    + (searchTerms && getUtf8Bytes(searchTerms) >= 150 && getUtf8Bytes(searchTerms) <= 249 ? 20 : 0)
+  );
+  const readabilityScore = clamp((uniqueRatio(title) * 55) + (bullets.length === 5 ? 25 : bullets.length * 5) + (description.length >= 300 ? 20 : description.length / 15));
+  return { validation, blockers, warnings, searchScore, readabilityScore };
+}
+
+function etsyAssessment(listing) {
+  const validation = validateEtsyListing(listing);
+  const title = String(listing?.etsyTitle || '').trim();
+  const tags = Array.isArray(listing?.etsyTags) ? listing.etsyTags.map(tag => String(tag).trim()).filter(Boolean) : [];
+  const description = String(listing?.etsyDescription || '').trim();
+  const blockers = [...validation.issues];
+  const warnings = [...validation.warnings];
+  if (!title) blockers.push('Etsy title is required.');
+  if (words(title).length > 15) warnings.push(`Etsy title has ${words(title).length} words; keep it clear and buyer-readable (target: 15 or fewer).`);
+  if (new Set(tags.map(tag => tag.toLowerCase())).size !== tags.length) warnings.push('Etsy tags contain duplicates.');
+  if (!description) warnings.push('Etsy description is empty.');
+
+  const diverseTags = new Set(tags.flatMap(tag => words(tag).map(token => token.toLowerCase()))).size;
+  const searchScore = clamp((title ? 35 : 0) + (Math.min(tags.length, 13) / 13 * 45) + Math.min(20, diverseTags));
+  const readabilityScore = clamp((uniqueRatio(title) * 60) + (words(title).length > 0 && words(title).length <= 15 ? 20 : 5) + (description.length >= 300 ? 20 : description.length / 15));
+  return { validation, blockers, warnings, searchScore, readabilityScore };
+}
+
+export function evaluateDraftQuality(listing, marketplace, assetPlan = {}) {
+  const normalizedMarketplace = String(marketplace || '').toUpperCase();
+  if (!listing || !['AMAZON', 'ETSY'].includes(normalizedMarketplace)) {
+    return { marketplace: normalizedMarketplace, score: 0, verdict: 'BLOCKED', blockers: ['A listing and marketplace are required.'], warnings: [], metrics: [] };
+  }
+
+  const truth = truthAssessment(listing);
+  const surface = normalizedMarketplace === 'AMAZON' ? amazonAssessment(listing) : etsyAssessment(listing);
+  const blockers = [...surface.blockers];
+  const warnings = [...surface.warnings];
+  if (!truth.valid) blockers.push(...truth.errors.map(code => `Product Truth: ${code}`));
+  if (listing.status === 'NOT_PERSISTED') blockers.push('Draft is not persisted to the authoritative database.');
+
+  const expectedAssets = Math.max(0, Number(assetPlan.expected) || 0);
+  const readyAssets = Math.max(0, Math.min(expectedAssets, Number(assetPlan.ready) || 0));
+  const assetScore = expectedAssets ? clamp(readyAssets / expectedAssets * 100) : 0;
+  if (!expectedAssets) warnings.push('Image-plan readiness was not measured.');
+  else if (readyAssets < expectedAssets) warnings.push(`Image plan is incomplete (${readyAssets}/${expectedAssets} prompts ready).`);
+
+  const complianceScore = clamp(100 - (surface.validation.issues.length * 35) - (surface.validation.warnings.length * 8) - (surface.blockers.length * 25));
+  const truthScore = truth.valid ? 100 : clamp((truth.verifiedFacts?.length || 0) * 10);
+  const metrics = [
+    { key: 'truth', label: 'Truth & evidence', score: truthScore, weight: 30 },
+    { key: 'compliance', label: 'Policy compliance', score: complianceScore, weight: 25 },
+    { key: 'search', label: 'Search coverage', score: surface.searchScore, weight: 20 },
+    { key: 'readability', label: 'Clarity & conversion', score: surface.readabilityScore, weight: 15 },
+    { key: 'assets', label: 'Image plan', score: assetScore, weight: 10 }
+  ];
+  const score = clamp(metrics.reduce((sum, metric) => sum + metric.score * metric.weight / 100, 0));
+  const verdict = blockers.length ? 'BLOCKED' : score >= 85 && warnings.length <= 2 ? 'REVIEW_READY' : 'NEEDS_QA';
+  return {
+    marketplace: normalizedMarketplace,
+    score,
+    verdict,
+    blockers: [...new Set(blockers)],
+    warnings: [...new Set(warnings)],
+    metrics,
+    verifiedFactCount: truth.verifiedFacts?.length || 0,
+    note: 'Quality heuristic for review prioritization; it does not predict sales or authorize marketplace submission.'
+  };
+}
+
+export function compareDraftEvaluations(left, right) {
+  const rank = evaluation => [
+    evaluation.blockers?.length ? 0 : 1,
+    -(evaluation.blockers?.length || 0),
+    -(evaluation.warnings?.length || 0),
+    evaluation.metrics?.find(metric => metric.key === 'truth')?.score || 0,
+    evaluation.score || 0
+  ];
+  const a = rank(left); const b = rank(right);
+  for (let index = 0; index < a.length; index += 1) if (a[index] !== b[index]) return b[index] - a[index];
+  return 0;
+}
+
+export default { evaluateDraftQuality, compareDraftEvaluations };

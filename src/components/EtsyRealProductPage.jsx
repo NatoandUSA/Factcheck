@@ -50,57 +50,57 @@ export default function EtsyRealProductPage({ listing, onShowToast }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
       
       {/* Top Simulator Controls */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', background: '#2c1e19', padding: '16px 20px', borderRadius: '12px', color: '#fff' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px', background: '#ffffff', padding: '10px 12px', borderRadius: '11px', color: '#0f172a', border: '1px solid #e7ddd7', boxShadow: '0 4px 14px rgba(44,30,25,.04)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <div style={{ background: '#ea580c', padding: '8px', borderRadius: '8px' }}>
-            <Sparkles size={20} color="#fff" />
+          <div style={{ background: '#ffedd5', padding: '7px', borderRadius: '8px' }}>
+            <Sparkles size={18} color="#c2410c" />
           </div>
           <div>
-            <div style={{ fontWeight: 800, fontSize: '1rem', color: '#f59e0b' }}>
-              Etsy Listing Page Simulation Preview — Not Live — Not Submission Ready
+            <div style={{ fontWeight: 850, fontSize: '.86rem', color: '#0f172a' }}>
+              Etsy Listing Page Simulation Preview <span style={{ color: '#b45309' }}>· Draft only</span>
             </div>
-            <div style={{ fontSize: '0.75rem', color: '#fed7aa' }}>
-              Mô phỏng xem trước giao diện Etsy (Simulation Preview) với <strong>12 Listing Photos</strong> & <strong>13 Search Tags Pool</strong>
+            <div style={{ fontSize: '0.68rem', color: '#64748b' }}>
+              Customer view · 12 photo prompts · up to 13 relevant tags · not submission ready
             </div>
           </div>
         </div>
 
         {/* View Mode Switcher */}
-        <div style={{ display: 'flex', gap: '8px', background: 'rgba(255, 255, 255, 0.1)', padding: '4px', borderRadius: '8px' }}>
+        <div style={{ display: 'flex', gap: '3px', background: '#f4f1ef', padding: '3px', borderRadius: '8px' }}>
           <button
             onClick={() => setActiveSubTab('page')}
             style={{
               background: activeSubTab === 'page' ? '#ea580c' : 'transparent',
-              color: '#fff',
+              color: activeSubTab === 'page' ? '#fff' : '#57534e',
               border: 'none',
-              padding: '6px 14px',
+              padding: '6px 10px',
               borderRadius: '6px',
               fontWeight: 600,
               fontSize: '0.8rem',
               cursor: 'pointer'
             }}
           >
-            🛍️ Etsy Simulation View
+            Customer view
           </button>
           <button
             onClick={() => setActiveSubTab('image-prompts')}
             style={{
               background: activeSubTab === 'image-prompts' ? '#ea580c' : 'transparent',
-              color: '#fff',
+              color: activeSubTab === 'image-prompts' ? '#fff' : '#57534e',
               border: 'none',
-              padding: '6px 14px',
+              padding: '6px 10px',
               borderRadius: '6px',
               fontWeight: 600,
               fontSize: '0.8rem',
               cursor: 'pointer'
             }}
           >
-            📸 12 Etsy Photo Prompts
+            Image plan
           </button>
         </div>
       </div>
 
-      {/* VIEW 1: LIVE 100% REAL ETSY SHOP PAGE */}
+      {/* Customer-facing simulation only; never represents a live Etsy page. */}
       {activeSubTab === 'page' && (
         <div style={{ background: '#fff', color: '#222222', fontFamily: '"Guardian Egyptian Web", Georgia, serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', padding: '28px', borderRadius: '12px', border: '1px solid #e1e3df', display: 'flex', gap: '28px', flexWrap: 'wrap' }}>
           
@@ -265,7 +265,7 @@ export default function EtsyRealProductPage({ listing, onShowToast }) {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '18px' }}>
             <div>
               <h3 style={{ fontSize: '1.15rem', fontWeight: 800, margin: 0, color: '#ea580c' }}>
-                Bộ 12 Prompt Ảnh Listing Chuẩn Etsy Maker & Best Seller
+                Bộ 12 Prompt Ảnh Etsy — Maker Story & Conversion Review
               </h3>
               <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', margin: '4px 0 0 0' }}>
                 Tối ưu hóa thẩm mỹ ấm cúng, ảnh thực tế cầm trên tay, bảng size, và hậu trường làm xưởng.

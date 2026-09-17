@@ -26,6 +26,7 @@
   "tests/test_cross_tenant_isolation.cjs",
   "tests/test_database_fixture_isolation.cjs",
   "tests/test_deploy_rollback_faults.cjs",
+  "tests/test_draft_quality_evaluator.cjs",
   "tests/test_etsy_csv_richness.cjs",
   "tests/test_etsy_pasted_search_parser.cjs",
   "tests/test_etsy_provenance_authority.cjs",

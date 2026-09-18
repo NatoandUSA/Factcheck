@@ -1,5 +1,6 @@
 [
   "tests/listing_scope_migration.test.cjs",
+  "tests/market_intelligence_readonly_contract.test.cjs",
   "tests/p0_route_security.test.cjs",
   "tests/route_registry_coverage.test.cjs",
   "tests/sec_auth_foundation.test.cjs",

@@ -3,6 +3,7 @@ import Header from './components/Header';
 import SinglePathMarketplaceWorkspace from './components/SinglePathMarketplaceWorkspace';
 import ProductListingPageSimulator from './components/ProductListingPageSimulator';
 import ListingHistory from './components/ListingHistory';
+import MarketIntelligenceWorkspace from './components/MarketIntelligenceWorkspace';
 import ApiKeyModal from './components/ApiKeyModal';
 import LoginModal from './components/LoginModal';
 import UserManagementModal from './components/UserManagementModal';
@@ -307,7 +308,14 @@ export default function App() {
           />
         )}
 
-        {/* TAB 3: Product Listing Page Simulator */}
+        {/* TAB 3: Market Intelligence — research-only, no Product Truth/publish authority */}
+        {activeTab === 'market-intelligence' && (
+          <MarketIntelligenceWorkspace
+            onRequireLogin={() => setIsLoginModalOpen(true)}
+          />
+        )}
+
+        {/* TAB 4: Product Listing Page Simulator */}
         {activeTab === 'product-page' && (
           <ProductListingPageSimulator
             currentListing={currentListing}

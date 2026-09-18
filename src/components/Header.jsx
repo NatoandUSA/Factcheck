@@ -46,6 +46,18 @@ export default function Header({ activeTab, setActiveTab, onOpenApiKeyModal, onO
           </button>
 
           <button
+            className={`nav-tab-btn ${activeTab === 'market-intelligence' ? 'active' : ''}`}
+            onClick={() => setActiveTab('market-intelligence')}
+            style={{
+              color: activeTab === 'market-intelligence' ? '#7c3aed' : 'inherit',
+              borderBottom: activeTab === 'market-intelligence' ? '2px solid #7c3aed' : 'none'
+            }}
+          >
+            <Activity size={16} />
+            <span>Market Intelligence</span>
+          </button>
+
+          <button
             className={`nav-tab-btn ${activeTab === 'product-page' ? 'active' : ''}`}
             onClick={() => setActiveTab('product-page')}
           >

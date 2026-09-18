@@ -51,6 +51,32 @@ test('corpus gate blocks shared-recipient research for another product family', 
   ], ['Sister Blanket', 'Throw Blanket']);
   assert.equal(blanket.status, 'ALIGNED');
   assert.equal(blanket.alignedCount, 8);
+
+  const smallMismatch = semantic.auditProductFamilyAlignment(
+    Array.from({ length: 4 }, (_, index) => `sister necklace ${index}`), ['Throw Blanket']);
+  assert.equal(smallMismatch.status, 'MISMATCH');
+
+  const unresolved = semantic.auditProductFamilyAlignment(
+    Array.from({ length: 12 }, (_, index) => `sister necklace ${index}`), ['Personalized Snow Globe']);
+  assert.equal(unresolved.status, 'UNRESOLVED');
+
+  const siblingJewelry = semantic.auditProductFamilyAlignment(
+    Array.from({ length: 12 }, (_, index) => `sister necklace ${index}`), ['Personalized Bracelet', 'Jewelry']);
+  assert.equal(siblingJewelry.status, 'MISMATCH');
+  assert.equal(siblingJewelry.alignedCount, 0);
+
+  const ambiguous = semantic.auditProductFamilyAlignment(
+    ['blanket necklace gift', 'blanket gift', 'throw blanket'], ['Throw Blanket']);
+  assert.equal(ambiguous.status, 'ALIGNED');
+  assert.equal(ambiguous.alignedCount, 2);
+  assert.equal(ambiguous.conflictingCount, 1);
+  assert.equal(ambiguous.ambiguousCount, 1);
+});
+test('broad jewelry category does not authorize a sibling product type', () => {
+  const etsy = require('../server/commerceIntelligence/etsyIntelligenceAdapter');
+  assert.equal(etsy.productTypeConflict({ phrase: 'sister necklace gift' }, {
+    productName: 'Personalized Bracelet', productType: 'Bracelet', category: 'Jewelry'
+  }), true);
 });
 
 console.log('\nCerebro metric preservation');

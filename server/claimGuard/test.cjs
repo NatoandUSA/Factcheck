@@ -131,7 +131,9 @@ test('digital, commercial and comparative families have direct stable coverage',
 
 test('relationship phrase best friend is not misclassified as a quality superlative', () => {
   assert(!ids('Best Friend Gift for Sister').includes('COMPARATIVE_SUPERLATIVE_EXCLUSIVITY'));
+  assert(!ids('Best-friend gift for sister').includes('COMPARATIVE_SUPERLATIVE_EXCLUSIVITY'));
   assert(!ids('Regalo para mi mejor amiga').includes('COMPARATIVE_SUPERLATIVE_EXCLUSIVITY'));
+  assert(!ids('Regalo para mi mejor-amiga').includes('COMPARATIVE_SUPERLATIVE_EXCLUSIVITY'));
   assert(ids('Best necklace for every sister').includes('COMPARATIVE_SUPERLATIVE_EXCLUSIVITY'));
   assert(ids('Mejor calidad al mejor precio').includes('COMPARATIVE_SUPERLATIVE_EXCLUSIVITY'));
 });

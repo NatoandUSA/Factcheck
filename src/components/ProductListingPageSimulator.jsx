@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import AmazonRealProductPage from './AmazonRealProductPage';
 import EtsyRealProductPage from './EtsyRealProductPage';
 import { ShoppingBag, ShoppingCart, Layers, Sparkles, Copy, Check, Gauge, ShieldCheck, AlertTriangle } from 'lucide-react';
-import { evaluateDraftQuality } from '../utils/draftQualityEvaluator.js';
+import { evaluateDraftQuality, selectPreviewListing } from '../utils/draftQualityEvaluator.js';
 import { generateAmazonListingImagePrompts, generateAmazonAPlusImagePrompts, generateEtsyListingImagePrompts } from '../services/imagePromptGenerator.js';
 
 function CopyField({ label, value, onShowToast }) {
@@ -58,7 +58,7 @@ export default function ProductListingPageSimulator({ currentListing, history = 
   const [activeAsin, setActiveAsin] = useState('parent'); // 'parent' | childIndex
 
   // Determine active listing
-  const activeListing = (history.find(h => (h.dbId || h.id) === activeListingId)) || currentListing || history[0] || null;
+  const activeListing = selectPreviewListing(currentListing, history, activeListingId);
   const activeChild = activeAsin !== 'parent' ? (activeListing?.variations || []).find(v => v.childIndex === activeAsin) : null;
   const quality = evaluateDraftQuality(activeListing, platformView, getAssetPlan(activeListing, platformView));
 

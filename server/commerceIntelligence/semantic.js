@@ -139,7 +139,7 @@ const RECIPIENT_TOKENS = new Set(PATTERNS.recipient.flatMap(p => fold(p).split(/
 // they let an English Product Truth type ("Necklace") require a Spanish title
 // phrase such as "collar", without translating or approving material claims.
 const PRODUCT_FAMILIES = Object.freeze([
-  Object.freeze(['necklace', 'necklaces', 'collar', 'collares', 'cadena', 'cadenas', 'jewelry', 'joyeria', 'joyas']),
+  Object.freeze(['necklace', 'necklaces', 'collar', 'collares', 'cadena', 'cadenas']),
   Object.freeze(['sweatshirt', 'sweatshirts', 'sudadera', 'sudaderas', 'crewneck', 'pullover', 'sweater', 'sweaters']),
   Object.freeze(['hoodie', 'hoodies']),
   Object.freeze(['shirt', 'shirts', 'camisa', 'camisas', 'tshirt', 'camiseta', 'camisetas']),
@@ -187,18 +187,26 @@ function productFamiliesOf(phrase) {
 function auditProductFamilyAlignment(phrases, identityTexts) {
   const allowedFamilies = allowedProductFamilies(identityTexts.filter(Boolean));
   const result = { status: 'UNRESOLVED', phraseCount: phrases.length, alignedCount: 0,
-    conflictingCount: 0, genericCount: 0, allowedFamilies: [...allowedFamilies] };
+    conflictingCount: 0, ambiguousCount: 0, genericCount: 0, allowedFamilies: [...allowedFamilies] };
   if (!allowedFamilies.size) return result;
   for (const phrase of phrases) {
     const observed = productFamiliesOf(phrase);
     if (!observed.size) result.genericCount++;
-    else if ([...observed].some(index => allowedFamilies.has(index))) result.alignedCount++;
-    else result.conflictingCount++;
+    else {
+      const hasAllowed = [...observed].some(index => allowedFamilies.has(index));
+      const hasConflict = [...observed].some(index => !allowedFamilies.has(index));
+      if (hasAllowed && !hasConflict) result.alignedCount++;
+      else {
+        result.conflictingCount++;
+        if (hasAllowed && hasConflict) result.ambiguousCount++;
+      }
+    }
   }
-  const noProductEvidence = result.phraseCount >= 10 && result.alignedCount === 0;
+  const noProductEvidence = result.alignedCount === 0 && result.conflictingCount > 0;
+  const noSignalInSubstantialCorpus = result.phraseCount >= 10 && result.alignedCount === 0;
   const dominatedByAnotherProduct = result.conflictingCount >= 5
     && result.conflictingCount > result.alignedCount * 3;
-  result.status = noProductEvidence || dominatedByAnotherProduct ? 'MISMATCH' : 'ALIGNED';
+  result.status = noProductEvidence || noSignalInSubstantialCorpus || dominatedByAnotherProduct ? 'MISMATCH' : 'ALIGNED';
   return result;
 }
 

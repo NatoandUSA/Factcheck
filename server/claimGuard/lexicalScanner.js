@@ -79,9 +79,9 @@ const DEFINITIONS = deepFreeze({
   COMPARATIVE_SUPERLATIVE_EXCLUSIVITY: {
     // "Best friend" is a relationship phrase, not a product-quality claim.
     terms: ['better', 'superior', 'exclusive', 'exclusivo', 'exclusiva', 'unique', 'unico', 'unica'],
-    patterns: [/\bbest\b(?!\s+(?:friend|friends|friendship|amiga|amigo)\b)/,
+    patterns: [/\bbest\b(?![\s-]+(?:friend|friends|friendship|amiga|amigo)\b)/,
       /\bnumber one\b/, /(?:^|[^a-z0-9])#1\b/, /\bmost (?:popular|durable|comfortable)\b/,
-      /\bmejor\b(?!\s+(?:amiga|amigo)\b)/, /\bone of a kind\b/]
+      /\bmejor\b(?![\s-]+(?:amiga|amigo)\b)/, /\bone of a kind\b/]
   }
 });
 

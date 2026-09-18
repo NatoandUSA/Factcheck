@@ -165,10 +165,12 @@ async function buildIntelligence({ research, productTruth, configuration = {}, m
     code: 'CEREBRO_KEYWORDS_REQUIRED', status: 409
   });
   const productFamilyAlignment = auditProductFamilyAlignment(keywordRows.map(item => item.phrase),
-    [facts.productType, facts.productName, facts.category]);
-  if (productFamilyAlignment.status === 'MISMATCH') {
-    throw Object.assign(new Error('RESEARCH_PRODUCT_FAMILY_MISMATCH'), {
-      code: 'RESEARCH_PRODUCT_FAMILY_MISMATCH', status: 422, details: productFamilyAlignment
+    [facts.productType, facts.productName]);
+  if (productFamilyAlignment.status !== 'ALIGNED') {
+    const code = productFamilyAlignment.status === 'UNRESOLVED'
+      ? 'PRODUCT_TRUTH_FAMILY_UNRESOLVED' : 'RESEARCH_PRODUCT_FAMILY_MISMATCH';
+    throw Object.assign(new Error(code), {
+      code, status: 422, details: productFamilyAlignment
     });
   }
   const anchors = [configuration.seedPhrase, facts.productType, facts.productName, facts.recipient, facts.occasion]

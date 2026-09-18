@@ -23,7 +23,7 @@ const SOURCE_BOILERPLATE = /(?:no tags? found|\bfrom shop\b|\bsale price\b|\bori
 const CURRENCY_OR_METRIC = /(?:[$€£¥₫₹₱₩₽฿]|\b\d+(?:[.,]\d+)?\s*(?:usd|eur|gbp|idr|vnd)\b)/i;
 const STOP_TOKENS = new Set(['the','and','for','with','from','this','that','para','con','del','las','los','gift','gifts','regalo','custom','option','available']);
 const PRODUCT_NOUN_GROUPS = Object.freeze({
-  NECKLACE: ['necklace','collar','pendant','jewelry','jewellery','cadena'],
+  NECKLACE: ['necklace','collar','pendant','cadena'],
   BRACELET: ['bracelet','bangle','pulsera'], RING: ['ring','anillo'], EARRING: ['earring','earrings','pendientes'],
   APPAREL: ['sweatshirt','sweater','hoodie','shirt','camisa','jacket'], BLANKET: ['blanket','manta'],
   HAT: ['hat','cap','gorra'], LAMP: ['lamp','light','lampara'], DRINKWARE: ['mug','cup','tumbler','vaso'],
@@ -133,7 +133,9 @@ function productGroups(value) {
 }
 
 function productTypeConflict(candidate, facts) {
-  const identityGroups = productGroups([facts.productName, facts.productType, facts.category].map(text).join(' '));
+  // Broad categories such as "Jewelry" must not authorize sibling products.
+  // Exact product name/type owns the family decision.
+  const identityGroups = productGroups([facts.productName, facts.productType].map(text).join(' '));
   const candidateGroups = productGroups(candidate.phrase);
   return identityGroups.size > 0 && candidateGroups.size > 0
     && ![...candidateGroups].some(group => identityGroups.has(group));
@@ -325,10 +327,12 @@ async function buildIntelligence({ research, productTruth, configuration = {}, m
   const master = corpusFromMasterArtifact(masterKeywordArtifact);
   const corpus = master.corpus;
   const productFamilyAlignment = auditProductFamilyAlignment(corpus.map(item => item.phrase),
-    [facts.productType, facts.productName, facts.category]);
-  if (productFamilyAlignment.status === 'MISMATCH') {
-    throw Object.assign(new Error('RESEARCH_PRODUCT_FAMILY_MISMATCH'), {
-      code: 'RESEARCH_PRODUCT_FAMILY_MISMATCH', status: 422, details: productFamilyAlignment
+    [facts.productType, facts.productName]);
+  if (productFamilyAlignment.status !== 'ALIGNED') {
+    const code = productFamilyAlignment.status === 'UNRESOLVED'
+      ? 'PRODUCT_TRUTH_FAMILY_UNRESOLVED' : 'RESEARCH_PRODUCT_FAMILY_MISMATCH';
+    throw Object.assign(new Error(code), {
+      code, status: 422, details: productFamilyAlignment
     });
   }
   const language = resolveListingLanguage(configuration, corpus);

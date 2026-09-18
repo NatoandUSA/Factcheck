@@ -16,7 +16,7 @@ const verifiedCard = (productId, listingVersion) => ({
 
 (async () => {
   const moduleUrl = pathToFileURL(path.resolve(__dirname, '../src/utils/draftQualityEvaluator.js')).href;
-  const { evaluateDraftQuality, compareDraftEvaluations } = await import(moduleUrl);
+  const { evaluateDraftQuality, compareDraftEvaluations, selectPreviewListing } = await import(moduleUrl);
   const base = {
     dbId: 42,
     listingVersion: 3,
@@ -57,6 +57,14 @@ const verifiedCard = (productId, listingVersion) => ({
   assert.equal(canonical.metrics.find(item => item.key === 'truth').score, 100);
   assert.equal(canonical.metrics.find(item => item.key === 'assets').score, 88);
   assert(!canonical.blockers.some(item => item.includes('PRODUCT_TRUTH_CARD_REQUIRED')));
+
+  const exact = { ...base, dbId: 42, simulationSource: 'CANONICAL_REVIEW_PACKAGE',
+    canonicalQualityEvidence: { marketplace: 'AMAZON', productTruthBound: true,
+      productTruthRevisionId: 7, productTruthHash: 'b'.repeat(64), verifiedFactCount: 9,
+      imagePlan: { ready: 7, expected: 8 } } };
+  const thinHistory = { dbId: 42, amazonTitle: 'Thin history row without evidence' };
+  assert.strictEqual(selectPreviewListing(exact, [thinHistory], 42), exact,
+    'exact current review package must win over a same-id history row');
 
   console.log('DRAFT_QUALITY_EVALUATOR_TESTS_PASSED');
 })().catch(error => {

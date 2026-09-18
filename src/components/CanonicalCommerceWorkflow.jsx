@@ -209,7 +209,7 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
     const claimSummary = [...new Set(blocking.map(item => `${item.field}: “${item.token}”`))].slice(0, 6).join('; ');
     const message = errorValue?.code === 'UNVERIFIED_OUTPUT_CLAIM' && claimSummary
       ? `Draft có claim chưa được Product Truth chứng thực — ${claimSummary}`
-      : errorValue?.code === 'RESEARCH_PRODUCT_FAMILY_MISMATCH'
+      : ['RESEARCH_PRODUCT_FAMILY_MISMATCH', 'PRODUCT_TRUTH_FAMILY_UNRESOLVED'].includes(errorValue?.code)
         ? `Research không cùng dòng sản phẩm với Product Truth (khớp ${errorValue.payload?.alignedCount ?? 0}, xung đột ${errorValue.payload?.conflictingCount ?? 0}, chung chung ${errorValue.payload?.genericCount ?? 0}). Hãy dùng đúng file research cho sản phẩm này hoặc tạo project riêng.`
       : errorValue?.code === 'CEREBRO_KEYWORDS_REQUIRED'
         ? 'Cần import Cerebro để phân bổ keyword và tạo draft. Xray là bước upstream khuyến nghị để chọn các nhóm ASIN, nhưng Cerebro có sẵn được import độc lập.'

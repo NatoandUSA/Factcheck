@@ -245,7 +245,7 @@ export default function AmazonRealProductPage({ listing, onShowToast }) {
             <div style={{ borderBottom: '2px solid #ea580c', paddingBottom: '8px', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <h2 style={{ fontSize: '1.15rem', fontWeight: 700, margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <Award size={20} style={{ color: '#ea580c' }} />
-                From the Brand — Amazon A+ Enhanced Brand Content (10 Modules Ready)
+                From the Brand — Amazon A+ Enhanced Brand Content ({aplusPrompts.length} Modules Ready)
               </h2>
               <button
                 onClick={() => copyAllPrompts(aplusPrompts, `Đã copy ${aplusPrompts.length} Prompt A+ Content!`)}

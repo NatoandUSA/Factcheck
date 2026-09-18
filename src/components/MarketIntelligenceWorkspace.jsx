@@ -43,15 +43,19 @@ function staffAction(decision) {
 
 function scoreBreakdown(row) {
   const c = row.scoreComponents || {};
+  const p = c.penalties || {};
   const items = [
-    ['Signal', c.volume],
-    ['Commercial', c.commercialProximity],
+    ['Commercial', c.commercialIntent],
+    ['Marketplace', c.marketplaceProof],
     ['Diversity', c.sourceDiversity],
-    ['Purchase', c.purchaseIntent],
-    ['Recency', c.recency]
+    ['Velocity', c.trendVelocity],
+    ['Recency', c.recency],
+    ['VOC', c.vocStrength],
+    ['Creative', c.creativeMomentum]
   ].filter(([, value]) => Number.isFinite(value));
   if (!items.length) return 'Chưa có breakdown.';
-  return items.map(([label, value]) => `${label} +${value}`).join(' · ');
+  const positive = items.map(([label, value]) => `${label} +${value}`).join(' · ');
+  return Number(p.total) > 0 ? `${positive} · Penalties -${p.total}` : positive;
 }
 
 function Table({ columns, rows, empty = 'Chưa có dữ liệu.' }) {
@@ -120,6 +124,7 @@ export default function MarketIntelligenceWorkspace({ onRequireLogin }) {
   const changes = listening.changes || [];
   const buyerLanguage = listening.buyerLanguage || [];
   const competitorMoves = listening.competitorMoves || [];
+  const sourceCoverage = listening.sourceCoverage || [];
   const meta = state.data?.dashboard?.meta || {};
 
   const sortedKeywords = useMemo(
@@ -192,15 +197,17 @@ export default function MarketIntelligenceWorkspace({ onRequireLogin }) {
             <strong> Bước 3:</strong> đọc Sources + Latest Movement + Buyer Language.
             <strong> Bước 4:</strong> chọn NO ACTION / WATCH MORE / INVESTIGATE / ESCALATE TO MANAGER.
           </GuideCard>
-          <GuideCard title="2. Đọc Opportunity Score">
-            Score là <strong>điểm ưu tiên nghiên cứu</strong>, không phải xác suất thành công.
+          <GuideCard title="2. Đọc Market Opportunity Evidence Score v2">
+            Score là <strong>điểm ưu tiên nghiên cứu</strong>, không phải xác suất thành công hay profit score.
+            Điểm cộng đến từ Commercial Intent, Marketplace Proof, Source Diversity, Trend Velocity, Recency, VOC và Creative Momentum;
+            hệ thống trừ điểm cho saturation rõ ràng, duplicate evidence, trend decay và nguồn yếu.
             0–39: WATCH/NO_DATA · 40–59: INVESTIGATE · 60–79: TEST_CANDIDATE · 80–100: PRIORITY_TEST.
-            Luôn mở breakdown và nguồn trước khi kết luận.
           </GuideCard>
-          <GuideCard title="3. Ưu tiên nguồn">
-            <strong>P1:</strong> First-party + Marketplace/Product listings. <strong>P2:</strong> Social commerce + Competitor storefront.
-            <strong> P3:</strong> Reviews/Reddit/Forums/VOC. <strong>P4:</strong> Search/Blog/News/Reference.
-            P1/P2 gần hành vi mua hơn P4.
+          <GuideCard title="3. Ưu tiên nguồn US ecommerce">
+            <strong>P1:</strong> First-party + Marketplace (Amazon evidence owner-export, Etsy, listings/reviews).
+            <strong> P2:</strong> TikTok Creative Center, TikTok/Shop, Reddit commercial VOC, Meta Ad Library, competitor/social discovery.
+            <strong> P3:</strong> Reviews + Google Trends. <strong>P4:</strong> X/news/reference context.
+            CORE cần theo dõi: Amazon evidence, Etsy, TikTok Creative Center, TikTok organic/Shop, Reddit và Meta Ad Library.
           </GuideCard>
           <GuideCard title="4. Guardrails">
             Score cao ≠ chắc chắn bán được. View/engagement ≠ purchase proof. Nhiều listing ≠ opportunity tốt.
@@ -210,13 +217,35 @@ export default function MarketIntelligenceWorkspace({ onRequireLogin }) {
       </details>
 
       <div className="card" style={{ padding: 18 }}>
+        <h3 style={{ marginTop: 0 }}>US Ecom Source Coverage — hệ thống đang nghe nguồn nào?</h3>
+        <div style={{ color: '#64748b', fontSize: 12, marginBottom: 12 }}>
+          CORE = Amazon evidence (owner-export only), Etsy, TikTok Creative Center, TikTok organic/Shop, Reddit và Meta Ad Library.
+          MISSING nghĩa là hiện chưa có canonical evidence trong hệ thống, không có nghĩa thị trường không có tín hiệu.
+        </div>
+        <Table
+          columns={[
+            { key: 'priority', label: 'Importance' },
+            { key: 'tier', label: 'Tier' },
+            { key: 'name', label: 'Source', render: (r) => <strong>{r.name}</strong> },
+            { key: 'status', label: 'Coverage', render: (r) => <span style={badgeStyle(r.status === 'OBSERVED' ? 'good' : 'warn')}>{r.status || 'MISSING'}</span> },
+            { key: 'signalCount', label: 'Signals' },
+            { key: 'lastObservedAt', label: 'Last observed' },
+            { key: 'purpose', label: 'Best use' },
+            { key: 'constraint', label: 'Constraint' }
+          ]}
+          rows={sourceCoverage}
+          empty="Chưa có source coverage data."
+        />
+      </div>
+
+      <div className="card" style={{ padding: 18 }}>
         <h3 style={{ marginTop: 0 }}>Keyword Watch & Suggested Decision</h3>
         <div style={{ color: '#64748b', fontSize: 12, marginBottom: 12 }}>
           Dùng bảng này để hiểu keyword đang được theo dõi, evidence đến từ đâu và hệ thống đề xuất bước tiếp theo nào.
         </div>
         <Table
           columns={[
-            { key: 'keyword', label: 'Keyword', render: (r) => <><strong>{r.keyword}</strong><div style={{ color: '#64748b', marginTop: 3 }}>{r.language || 'auto'} · {r.market || 'US'} · {r.status || 'ACTIVE'}</div></> },
+            { key: 'keyword', label: 'Keyword / Query Group', render: (r) => <><strong>{r.keyword}</strong><div style={{ color: '#64748b', marginTop: 3 }}>{r.language || 'auto'} · {r.market || 'US'} · {r.status || 'ACTIVE'}</div><div style={{ color: '#64748b', marginTop: 3 }}>Aliases: {(r.aliases || []).join(', ') || '—'}</div><div style={{ color: '#64748b', marginTop: 3 }}>Exclude: {(r.exclusions || []).join(', ') || '—'}</div></> },
             { key: 'opportunityScore', label: 'Opportunity', render: (r) => <><span style={badgeStyle(scoreTone(r.opportunityScore || 0))}>{r.opportunityScore || 0}/100</span><div style={{ color: '#64748b', marginTop: 4, minWidth: 220 }}>{scoreBreakdown(r)}</div></> },
             { key: 'suggestedDecision', label: 'Suggested Decision', render: (r) => <><span style={badgeStyle(decisionTone(r.suggestedDecision))}>{r.suggestedDecision || 'NO_DATA'}</span><div style={{ color: '#64748b', marginTop: 4, maxWidth: 320 }}>{r.decisionRationale || '—'}</div></> },
             { key: 'staffAction', label: 'Staff Action', render: (r) => staffAction(r.suggestedDecision) },

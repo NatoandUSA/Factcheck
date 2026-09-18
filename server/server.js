@@ -3527,6 +3527,72 @@ app.get('/api/mcp/h10/tools', requireAuth(db), requireRole(['OWNER', 'MANAGER', 
 });
 
 
+// API: Market Intelligence read-only bridge.
+// This endpoint is intentionally one-way: OmniSeller may read research observations,
+// but it cannot mutate the intelligence service or promote research into Product Truth.
+let marketIntelCache = { fetchedAt: 0, dashboard: null };
+const MARKET_INTEL_CACHE_MS = 60 * 1000;
+const MARKET_INTEL_ALLOWED_HOSTS = new Set([
+  'intel.theglobalserviceteam.site',
+  'ecom-intelligence-command-center.nvphilong.workers.dev'
+]);
+
+function resolveMarketIntelBaseUrl() {
+  const candidate = process.env.MARKET_INTELLIGENCE_BASE_URL || 'https://intel.theglobalserviceteam.site';
+  const parsed = new URL(candidate);
+  if (parsed.protocol !== 'https:' || !MARKET_INTEL_ALLOWED_HOSTS.has(parsed.hostname)) {
+    throw Object.assign(new Error('MARKET_INTELLIGENCE_BASE_URL_NOT_ALLOWED'), { code: 'MARKET_INTELLIGENCE_BASE_URL_NOT_ALLOWED' });
+  }
+  return parsed.origin;
+}
+
+app.get('/api/market-intelligence/dashboard', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  const now = Date.now();
+  if (marketIntelCache.dashboard && (now - marketIntelCache.fetchedAt) < MARKET_INTEL_CACHE_MS) {
+    return res.json({ success: true, source: 'CACHE', readOnly: true, dashboard: marketIntelCache.dashboard });
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  try {
+    const baseUrl = resolveMarketIntelBaseUrl();
+    const headers = { Accept: 'application/json' };
+    if (process.env.CF_ACCESS_CLIENT_ID && process.env.CF_ACCESS_CLIENT_SECRET) {
+      headers['CF-Access-Client-Id'] = process.env.CF_ACCESS_CLIENT_ID;
+      headers['CF-Access-Client-Secret'] = process.env.CF_ACCESS_CLIENT_SECRET;
+    }
+    const upstream = await fetch(baseUrl + '/api/dashboard?refresh=1', {
+      method: 'GET',
+      headers,
+      signal: controller.signal,
+      redirect: 'error'
+    });
+    if (!upstream.ok) {
+      return res.status(502).json({
+        success: false,
+        error: 'MARKET_INTELLIGENCE_UPSTREAM_ERROR',
+        message: 'Market Intelligence service returned an unavailable response.'
+      });
+    }
+    const raw = await upstream.json();
+    const dashboard = {
+      meta: raw?.meta || {},
+      listening: raw?.listening || {}
+    };
+    marketIntelCache = { fetchedAt: now, dashboard };
+    return res.json({ success: true, source: 'LIVE', readOnly: true, dashboard });
+  } catch (error) {
+    const code = error?.name === 'AbortError' ? 'MARKET_INTELLIGENCE_TIMEOUT' : (error?.code || 'MARKET_INTELLIGENCE_UNAVAILABLE');
+    return res.status(502).json({
+      success: false,
+      error: code,
+      message: 'Market Intelligence is temporarily unavailable. No OmniSeller state was changed.'
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+});
+
 // API: Real-Time Google Trends Cross-Check for Seed Phrase
 app.get('/api/google-trends', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
   const { keyword = 'custom gift' } = req.query;

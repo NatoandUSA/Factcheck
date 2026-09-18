@@ -226,12 +226,13 @@ export default function MarketIntelligenceWorkspace({ onRequireLogin }) {
           columns={[
             { key: 'priority', label: 'Importance' },
             { key: 'tier', label: 'Tier' },
-            { key: 'name', label: 'Source', render: (r) => <strong>{r.name}</strong> },
-            { key: 'status', label: 'Coverage', render: (r) => <span style={badgeStyle(r.status === 'OBSERVED' ? 'good' : 'warn')}>{r.status || 'MISSING'}</span> },
+            { key: 'name', label: 'Source', render: (r) => <><strong>{r.name}</strong><div style={{ color: '#64748b', marginTop: 3 }}>{r.collectorMode || '—'}</div></> },
+            { key: 'status', label: 'Coverage / Bridge', render: (r) => <><span style={badgeStyle(r.status === 'OBSERVED' ? 'good' : 'warn')}>{r.status || 'MISSING'}</span><div style={{ color: '#64748b', marginTop: 4 }}>{r.connectorState ? 'Bridge: ' + r.connectorState : 'No local bridge required'}</div></> },
             { key: 'signalCount', label: 'Signals' },
             { key: 'lastObservedAt', label: 'Last observed' },
             { key: 'purpose', label: 'Best use' },
-            { key: 'constraint', label: 'Constraint' }
+            { key: 'constraint', label: 'Constraint' },
+            { key: 'nextAction', label: 'Collector action', render: (r) => <div style={{ maxWidth: 360 }}>{r.nextAction || '—'}{r.openUrl ? <div style={{ marginTop: 5 }}><a href={r.openUrl} target="_blank" rel="noreferrer">Open source</a></div> : null}</div> }
           ]}
           rows={sourceCoverage}
           empty="Chưa có source coverage data."

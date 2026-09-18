@@ -39,6 +39,19 @@ test('buyer mention does not create a false audience conflict', () => {
   assert.equal(semantic.conflictingRecipient('gift for dad from daughter', daughterAllowed), 'dad');
   assert.equal(semantic.conflictingRecipient('regalo de madre para hija', daughterAllowed), null);
 });
+test('corpus gate blocks shared-recipient research for another product family', () => {
+  const jewelry = Array.from({ length: 12 }, (_, index) => `sister necklace gift ${index}`);
+  const mismatch = semantic.auditProductFamilyAlignment(jewelry, ['Sister Blanket', 'Throw Blanket']);
+  assert.equal(mismatch.status, 'MISMATCH');
+  assert.equal(mismatch.alignedCount, 0);
+  assert.equal(mismatch.conflictingCount, 12);
+  const blanket = semantic.auditProductFamilyAlignment([
+    ...Array.from({ length: 8 }, (_, index) => `sister blanket gift ${index}`),
+    'gift for sister', 'birthday present for sister', 'sister necklace gift'
+  ], ['Sister Blanket', 'Throw Blanket']);
+  assert.equal(blanket.status, 'ALIGNED');
+  assert.equal(blanket.alignedCount, 8);
+});
 
 console.log('\nCerebro metric preservation');
 const sheets = [{ name: 'Cerebro', rows: [

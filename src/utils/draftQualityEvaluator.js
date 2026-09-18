@@ -9,6 +9,15 @@ const uniqueRatio = value => {
 };
 
 function truthAssessment(listing) {
+  const canonical = listing?.canonicalQualityEvidence;
+  if (canonical) {
+    const valid = canonical.productTruthBound === true
+      && Number.isInteger(Number(canonical.productTruthRevisionId))
+      && /^[a-f0-9]{64}$/i.test(String(canonical.productTruthHash || ''));
+    return { valid, errors: valid ? [] : ['CANONICAL_PRODUCT_TRUTH_BINDING_INVALID'],
+      verifiedFacts: Array.from({ length: Math.max(0, Number(canonical.verifiedFactCount) || 0) }),
+      context: { productTruthRevisionId: canonical.productTruthRevisionId, source: 'CANONICAL_REVIEW_PACKAGE' } };
+  }
   const context = {
     productId: listing?.productId ?? listing?.dbId ?? listing?.id,
     listingVersion: Number(listing?.listingVersion ?? listing?.listing_version)

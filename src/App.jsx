@@ -201,8 +201,8 @@ export default function App() {
 
   const handleSelectFromHistory = (item) => {
     setCurrentListing(item);
-    setActiveTab('single');
-    showToast(`Loaded "${item.amazonTitle || item.etsyTitle}"`);
+    setActiveTab('product-page');
+    showToast(`Loaded "${item.amazonTitle || item.etsyTitle || 'exact review package'}"`);
   };
 
   const handleApproveListing = async (listingToApprove) => {

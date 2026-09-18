@@ -172,6 +172,36 @@ function matchesProductFamily(phrase, allowedFamilies) {
   return [...allowedFamilies].some(index => PRODUCT_FAMILIES[index].some(token => phraseTokens.has(token)));
 }
 
+function productFamiliesOf(phrase) {
+  const observed = new Set();
+  const phraseTokens = new Set(fold(phrase).split(/[^a-z0-9]+/).filter(Boolean));
+  PRODUCT_FAMILIES.forEach((family, index) => {
+    if (family.some(token => phraseTokens.has(token))) observed.add(index);
+  });
+  return observed;
+}
+
+// Per-keyword relevance can be fooled by a shared recipient or occasion while
+// every product noun still describes a different item. Stop that wrong-product
+// corpus before it can write copy, prompts, backend terms, or PPC suggestions.
+function auditProductFamilyAlignment(phrases, identityTexts) {
+  const allowedFamilies = allowedProductFamilies(identityTexts.filter(Boolean));
+  const result = { status: 'UNRESOLVED', phraseCount: phrases.length, alignedCount: 0,
+    conflictingCount: 0, genericCount: 0, allowedFamilies: [...allowedFamilies] };
+  if (!allowedFamilies.size) return result;
+  for (const phrase of phrases) {
+    const observed = productFamiliesOf(phrase);
+    if (!observed.size) result.genericCount++;
+    else if ([...observed].some(index => allowedFamilies.has(index))) result.alignedCount++;
+    else result.conflictingCount++;
+  }
+  const noProductEvidence = result.phraseCount >= 10 && result.alignedCount === 0;
+  const dominatedByAnotherProduct = result.conflictingCount >= 5
+    && result.conflictingCount > result.alignedCount * 3;
+  result.status = noProductEvidence || dominatedByAnotherProduct ? 'MISMATCH' : 'ALIGNED';
+  return result;
+}
+
 function recipientFamily(token) {
   const value = fold(token);
   return RECIPIENT_FAMILIES.findIndex(family => family.includes(value));
@@ -234,4 +264,5 @@ function conflictingRecipient(phrase, allowedFamilies) {
 
 module.exports = { classify, isGarbage, bannedClaim, isGeneric, spanishRatio,
   allowedRecipientFamilies, conflictingRecipient, recipientFamily,
-  allowedProductFamilies, matchesProductFamily, PRODUCT_FAMILIES, PATTERNS };
+  allowedProductFamilies, matchesProductFamily, productFamiliesOf, auditProductFamilyAlignment,
+  PRODUCT_FAMILIES, PATTERNS };

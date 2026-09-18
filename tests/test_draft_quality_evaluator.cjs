@@ -50,6 +50,14 @@ const verifiedCard = (productId, listingVersion) => ({
   assert.ok(shortage.warnings.some(item => item.includes('6/13')));
   assert.ok(compareDraftEvaluations(amazon, overLimit) < 0, 'unblocked draft must rank before a blocked draft');
 
+  const canonical = evaluateDraftQuality({ ...base, productTruthCard: undefined,
+    canonicalQualityEvidence: { marketplace: 'AMAZON', productTruthBound: true,
+      productTruthRevisionId: 7, productTruthHash: 'a'.repeat(64), verifiedFactCount: 9,
+      imagePlan: { ready: 7, expected: 8 } } }, 'AMAZON', { ready: 7, expected: 8 });
+  assert.equal(canonical.metrics.find(item => item.key === 'truth').score, 100);
+  assert.equal(canonical.metrics.find(item => item.key === 'assets').score, 88);
+  assert(!canonical.blockers.some(item => item.includes('PRODUCT_TRUTH_CARD_REQUIRED')));
+
   console.log('DRAFT_QUALITY_EVALUATOR_TESTS_PASSED');
 })().catch(error => {
   console.error(error.stack || error);

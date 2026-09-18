@@ -6,7 +6,7 @@ const ipGuard = require('../ipGuard');
 const { evaluateListingGuard } = require('../listingGuard');
 const { evaluateText, SURFACES } = require('../claimGuard');
 const { generateImagePromptSuite } = require('../imagePromptGenerator');
-const { allowedRecipientFamilies, conflictingRecipient } = require('./semantic');
+const { allowedRecipientFamilies, conflictingRecipient, auditProductFamilyAlignment } = require('./semantic');
 
 const ENGINE_ID = 'etsy-commerce-intelligence-v1';
 
@@ -324,6 +324,13 @@ async function buildIntelligence({ research, productTruth, configuration = {}, m
   if (!identity) throw Object.assign(new Error('PRODUCT_IDENTITY_REQUIRED'), { code: 'PRODUCT_IDENTITY_REQUIRED' });
   const master = corpusFromMasterArtifact(masterKeywordArtifact);
   const corpus = master.corpus;
+  const productFamilyAlignment = auditProductFamilyAlignment(corpus.map(item => item.phrase),
+    [facts.productType, facts.productName, facts.category]);
+  if (productFamilyAlignment.status === 'MISMATCH') {
+    throw Object.assign(new Error('RESEARCH_PRODUCT_FAMILY_MISMATCH'), {
+      code: 'RESEARCH_PRODUCT_FAMILY_MISMATCH', status: 422, details: productFamilyAlignment
+    });
+  }
   const language = resolveListingLanguage(configuration, corpus);
   const recipientFamilies = allowedRecipientFamilies([facts.recipient, facts.audience, facts.productName, facts.productType]);
   const safe = []; const claimBlocked = []; const ipBlocked = []; const irrelevant = [];
@@ -383,6 +390,7 @@ async function buildIntelligence({ research, productTruth, configuration = {}, m
         reason: 'ETSY_HAS_NO_SELLER-SELECTED_PPC_KEYWORD_SURFACE' },
       competitorSummary: { observations: (observations.sellers || []).length,
         uniqueListingIds: new Set((observations.sellers || []).map(item => item.listingId).filter(Boolean)).size },
+      productFamilyAlignment,
       guardAccounting: { backendExcluded: guarded.backendExcluded, ppcFlagged: guarded.ppcFlagged } },
     accounting: { sellerObservationCount: (observations.sellers || []).length, masterKeywordCount: master.total,
       keywordCandidateCount: corpus.length,

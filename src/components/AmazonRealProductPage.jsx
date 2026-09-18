@@ -22,8 +22,15 @@ export default function AmazonRealProductPage({ listing, onShowToast }) {
     );
   }
 
-  const listingPrompts = generateAmazonListingImagePrompts(listing);
-  const aplusPrompts = generateAmazonAPlusImagePrompts(listing);
+  const exactPrompts = listing?.imagePrompts?.prompts;
+  const usesExactPromptSuite = Array.isArray(exactPrompts);
+  const listingPrompts = usesExactPromptSuite ? exactPrompts.map(item => ({ ...item,
+    slot: item.purpose || item.id, dimensions: item.aspectRatio, purpose: item.ready === false
+      ? `Blocked — missing: ${(item.missingInputs || []).join(', ')}` : item.purpose }))
+    : generateAmazonListingImagePrompts(listing);
+  // A canonical package must never be decorated with legacy-generated A+
+  // prompts that are absent from that exact reviewed payload.
+  const aplusPrompts = usesExactPromptSuite ? [] : generateAmazonAPlusImagePrompts(listing);
 
   const copyPrompt = (text, idx, label = 'Đã copy prompt ảnh!') => {
     navigator.clipboard.writeText(text);
@@ -52,7 +59,7 @@ export default function AmazonRealProductPage({ listing, onShowToast }) {
               Amazon Product Page Simulation Preview <span style={{ color: '#b45309' }}>· Draft only</span>
             </div>
             <div style={{ fontSize: '0.68rem', color: '#64748b' }}>
-              Customer view · 10 image prompts · 10 A+ modules · not submission ready
+              Customer view · {listingPrompts.length} exact image prompts · {aplusPrompts.length} A+ modules · not submission ready
             </div>
           </div>
         </div>
@@ -170,8 +177,9 @@ export default function AmazonRealProductPage({ listing, onShowToast }) {
                   {listingPrompts[selectedImgIdx]?.dimensions}
                 </div>
                 <button
+                  disabled={!listingPrompts[selectedImgIdx]?.prompt}
                   onClick={() => copyPrompt(listingPrompts[selectedImgIdx]?.prompt, selectedImgIdx, `Đã copy Prompt Ảnh #${selectedImgIdx + 1}!`)}
-                  style={{ marginTop: '14px', background: '#0284c7', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}
+                  style={{ marginTop: '14px', background: listingPrompts[selectedImgIdx]?.prompt ? '#0284c7' : '#94a3b8', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '6px', cursor: listingPrompts[selectedImgIdx]?.prompt ? 'pointer' : 'not-allowed' }}
                 >
                   {copiedIdx === selectedImgIdx ? <Check size={12} /> : <Copy size={12} />}
                   <span>{copiedIdx === selectedImgIdx ? 'Đã Copy Prompt' : 'Copy Midjourney Prompt'}</span>
@@ -240,11 +248,11 @@ export default function AmazonRealProductPage({ listing, onShowToast }) {
                 From the Brand — Amazon A+ Enhanced Brand Content (10 Modules Ready)
               </h2>
               <button
-                onClick={() => copyAllPrompts(aplusPrompts, 'Đã copy toàn bộ 10 Prompt A+ Content!')}
+                onClick={() => copyAllPrompts(aplusPrompts, `Đã copy ${aplusPrompts.length} Prompt A+ Content!`)}
                 style={{ background: '#ea580c', color: '#fff', border: 'none', padding: '6px 12px', borderRadius: '6px', fontSize: '0.75rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}
               >
                 <Copy size={12} />
-                <span>Copy 10 A+ Prompts</span>
+                <span>Copy {aplusPrompts.length} A+ Prompts</span>
               </button>
             </div>
 
@@ -289,19 +297,19 @@ export default function AmazonRealProductPage({ listing, onShowToast }) {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '18px' }}>
             <div>
               <h3 style={{ fontSize: '1.15rem', fontWeight: 800, margin: 0, color: '#0284c7' }}>
-                Bộ 10 Prompt Ảnh Listing Chuẩn Amazon A10 Algorithm
+                Bộ {listingPrompts.length} Prompt Ảnh từ exact package
               </h3>
               <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', margin: '4px 0 0 0' }}>
                 Copy trực tiếp vào Midjourney, Stable Diffusion hoặc DALL-E để sinh bộ ảnh chuyển đổi cao nhất.
               </p>
             </div>
             <button
-              onClick={() => copyAllPrompts(listingPrompts, 'Đã copy toàn bộ 10 Prompt Listing!')}
+              onClick={() => copyAllPrompts(listingPrompts, `Đã copy toàn bộ ${listingPrompts.length} Prompt Listing!`)}
               className="btn btn-primary btn-sm"
               style={{ background: '#0284c7', display: 'flex', alignItems: 'center', gap: '6px' }}
             >
               <Copy size={14} />
-              <span>Copy Tất Cả 10 Prompts</span>
+              <span>Copy Tất Cả {listingPrompts.length} Prompts</span>
             </button>
           </div>
 
@@ -387,7 +395,7 @@ export default function AmazonRealProductPage({ listing, onShowToast }) {
 
               <button
                 type="button"
-                onClick={() => copyAllPrompts(listingPrompts, '📸 Đã copy toàn bộ 10 Prompt Ảnh Listing!')}
+                onClick={() => copyAllPrompts(listingPrompts, `📸 Đã copy toàn bộ ${listingPrompts.length} Prompt Ảnh Listing!`)}
                 className="btn btn-primary"
                 style={{ background: '#0284c7', color: '#fff', fontWeight: 800, padding: '10px 18px', display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', border: '1px solid rgba(255,255,255,0.4)' }}
               >
@@ -397,12 +405,12 @@ export default function AmazonRealProductPage({ listing, onShowToast }) {
 
               <button
                 type="button"
-                onClick={() => copyAllPrompts(aplusPrompts, '✨ Đã copy toàn bộ 10 Prompt A+ Content!')}
+                onClick={() => copyAllPrompts(aplusPrompts, `✨ Đã copy toàn bộ ${aplusPrompts.length} Prompt A+ Content!`)}
                 className="btn btn-primary"
                 style={{ background: '#ea580c', color: '#fff', fontWeight: 800, padding: '10px 18px', display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', border: 'none' }}
               >
                 <Sparkles size={16} />
-                <span>✨ Copy 10 A+ Prompts</span>
+                <span>✨ Copy {aplusPrompts.length} A+ Prompts</span>
               </button>
             </div>
           </div>
@@ -570,19 +578,19 @@ export default function AmazonRealProductPage({ listing, onShowToast }) {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '18px' }}>
             <div>
               <h3 style={{ fontSize: '1.15rem', fontWeight: 800, margin: 0, color: '#ea580c' }}>
-                Bộ 10 Prompt Ảnh Amazon A+ Enhanced Content (EBC Modules)
+                Bộ {aplusPrompts.length} Prompt Ảnh Amazon A+ Enhanced Content (EBC Modules)
               </h3>
               <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', margin: '4px 0 0 0' }}>
                 Bao gồm Banner Header (970x600), Full Width Banner (970x300), và các cụm 3-Module Cards (300x300).
               </p>
             </div>
             <button
-              onClick={() => copyAllPrompts(aplusPrompts, 'Đã copy toàn bộ 10 Prompt A+!')}
+              onClick={() => copyAllPrompts(aplusPrompts, `Đã copy toàn bộ ${aplusPrompts.length} Prompt A+!`)}
               className="btn btn-primary btn-sm"
               style={{ background: '#ea580c', display: 'flex', alignItems: 'center', gap: '6px' }}
             >
               <Copy size={14} />
-              <span>Copy Tất Cả 10 A+ Prompts</span>
+              <span>Copy Tất Cả {aplusPrompts.length} A+ Prompts</span>
             </button>
           </div>
 

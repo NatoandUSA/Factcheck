@@ -55,7 +55,8 @@ const { approvalContextHash, hasCurrentApprovalBinding, currentPublishDecision }
 const { evaluateListingGuard } = require('./listingGuard');
 const { buildStaffAttestedCard, normalizeSnapshot, productTruthAuthorityHash, validateStaffAttestedCard } = require('./productTruthAttestation');
 const { assertNoClientPolicyOverrides } = require('./policy/contractRegistry');
-const { appendProductTruthRevision, confirmProductTruthRevision, listProductTruthRevisions } = require('./productTruthStore');
+const { appendProductTruthRevision, confirmProductTruthRevision, listProductTruthRevisions,
+  currentProductTruthRevision } = require('./productTruthStore');
 const { appendProductTruthFamilyRevision, createProductTruthFamily, listProductTruthFamilies } = require('./productTruthFamilyStore');
 const { parseProductTruthWorkbook } = require('./productTruthWorkbookParser');
 const { parseListingHtml, parseListingCapture } = require('./productTruthListingParser');
@@ -2110,6 +2111,20 @@ app.get('/api/listings/:id/review-package', requireAuth(db), requireRole(['OWNER
     if (!root) throw Object.assign(new Error('LISTING_NOT_FOUND'), { code: 'LISTING_NOT_FOUND', status: 404 });
     const revision = await getListingRevision(db, scope, root.id, root.head_revision_id, root.project_id);
     await assertCanonicalDependenciesCurrent(db, scope, root.project_id, revision.dependencies);
+    const truth = await currentProductTruthRevision(db, scope, root.project_id);
+    const promptItems = Array.isArray(revision.content?.imagePrompts?.prompts)
+      ? revision.content.imagePrompts.prompts
+      : (Array.isArray(revision.content?.imagePrompts) ? revision.content.imagePrompts : []);
+    const qualityEvidence = Object.freeze({
+      marketplace: scope.marketplace,
+      productTruthBound: truth.id === revision.dependencies.productTruthRevisionId
+        && truth.content_hash === revision.dependencies.productTruthHash,
+      productTruthRevisionId: truth.id,
+      productTruthHash: truth.content_hash,
+      verifiedFactCount: Object.keys(truth.snapshot?.asserted || {}).length,
+      imagePlan: Object.freeze({ expected: promptItems.length,
+        ready: promptItems.filter(item => item?.ready !== false && String(item?.prompt || '').trim()).length })
+    });
     let approvalReadiness = { ready: true, blockers: [] };
     try {
       await validateCanonicalDraft(db, scope, root.project_id, revision.dependencies.productTruthRevisionId,
@@ -2122,7 +2137,7 @@ app.get('/api/listings/:id/review-package', requireAuth(db), requireRole(['OWNER
       listingRevisionId: revision.id, revisionNumber: revision.revision_number, content: revision.content,
       contentHash: revision.content_hash, dependencies: revision.dependencies,
       dependencyHash: revision.dependency_manifest_hash, validationAccounting: revision.validationAccounting,
-      approvalReadiness });
+      approvalReadiness, qualityEvidence });
   } catch (error) { rejectRevisionStore(res, error); }
 });
 

@@ -110,8 +110,9 @@ function tagVariants(value) {
   const badStart = new Set(['and','con','de','del','en','from','of','the']);
   const badEnd = new Set(['a','and','con','de','del','en','for','from','mi','of','para','to']);
   for (const phrase of segments) {
-    if (Array.from(phrase).length <= 20) variants.push(phrase);
     const words = phrase.split(' ');
+    const meaningful = tokens(phrase).size > 0 && !badStart.has(fold(words[0])) && !badEnd.has(fold(words.at(-1)));
+    if (meaningful && Array.from(phrase).length <= 20) variants.push(phrase);
     for (let size = Math.min(4, words.length); size >= 2; size--) {
       for (let start = 0; start + size <= words.length; start++) {
         const part = words.slice(start, start + size);
@@ -243,19 +244,20 @@ function semanticKey(value) { return [...tokens(value)].sort().join(' '); }
 const ETSY_TITLE_LIMIT = 140;
 
 function composeEtsyTitle(safe, facts, language = 'EN') {
-  const rawIdentity = text(facts.productName || facts.productType).split(/[|,;]+/)[0].trim();
-  const fallback = text(facts.productType).split(/[|,;]+/)[0].trim();
-  let identity = rawIdentity.split(/\s+/).filter(Boolean).length <= 15 ? rawIdentity : fallback;
-  if (!identity) {
-    identity = text(safe.find(candidate => productGroups(candidate.phrase).size)?.phrase).split(/[|,;]+/)[0].trim();
-  }
+  const verifiedIdentities = [facts.productName, facts.productType].map(value => text(value).split(/[|,;]+/)[0].trim()).filter(Boolean);
+  const identity = verifiedIdentities.find(value => Array.from(value).length <= ETSY_TITLE_LIMIT
+    && value.split(/\s+/).filter(Boolean).length <= 15);
+  if (!identity) throw Object.assign(new Error('ETSY_PRODUCT_TRUTH_IDENTITY_REQUIRES_REVIEW'), {
+    code: 'ETSY_PRODUCT_TRUTH_IDENTITY_REQUIRES_REVIEW', status: 409
+  });
   const personalized = Boolean(text(facts.personalization));
   const alreadyPersonalized = /\b(custom|personalized|personalised|personalizado|personalizada|nombre)\b/i.test(identity);
   const prefix = language === 'ES' ? 'Personalizado' : 'Personalized';
   const proposed = titleCase(`${personalized && !alreadyPersonalized ? `${prefix} ` : ''}${identity}`.trim());
-  if (Array.from(proposed).length <= ETSY_TITLE_LIMIT && proposed.split(/\s+/).filter(Boolean).length <= 15) return proposed;
-  const safeFallback = titleCase(fallback || identity);
-  return Array.from(safeFallback).slice(0, ETSY_TITLE_LIMIT).join('').trim();
+  if (Array.from(proposed).length > ETSY_TITLE_LIMIT || proposed.split(/\s+/).filter(Boolean).length > 15) {
+    return titleCase(identity);
+  }
+  return proposed;
 }
 
 function selectExplainedTags(safe, facts) {

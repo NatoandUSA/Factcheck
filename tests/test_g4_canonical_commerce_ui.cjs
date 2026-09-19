@@ -223,6 +223,25 @@ const assert = require('assert');
   await act(async () => { loginButton.click(); });
   check(loginRequests === 1, 'the project boundary must open the shared OmniSeller login flow');
   await act(async () => root2.unmount());
+
+  const { default: EtsyPreview } = await vite.ssrLoadModule('/src/components/EtsyRealProductPage.jsx');
+  const root3 = createRoot(document.getElementById('root'));
+  const exactPrompts = Array.from({ length: 8 }, (_, index) => ({ id: `ETSY-${index + 1}`,
+    purpose: `Exact purpose ${index + 1}`, aspectRatio: '4:3', prompt: `Exact prompt ${index + 1}`,
+    ready: index < 7, missingInputs: index < 7 ? [] : ['packaging'] }));
+  await act(async () => { root3.render(React.createElement(EtsyPreview, { listing: {
+    etsyTitle: 'Exact Etsy Preview', etsyTags: ['exact tag'], etsyDescription: 'Exact description',
+    imagePrompts: { prompts: exactPrompts }
+  } })); });
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+  check(document.body.textContent.includes('8 photo prompts'),
+    'Etsy exact Preview must render the canonical eight-prompt artifact rather than a legacy generated count');
+  const promptTab = [...document.querySelectorAll('button')].find(button => button.textContent.includes('Image plan'));
+  await act(async () => { promptTab.click(); });
+  check(document.body.textContent.includes('Bộ 8 Prompt Ảnh Etsy')
+    && document.body.textContent.includes('Blocked — missing: packaging'),
+    'Etsy exact Preview must retain blocked-slot readiness evidence');
+  await act(async () => root3.unmount());
   await vite.close(); dom.window.close();
   console.log(`G4 canonical commerce UI: ${measured}/${measured} PASS`);
 })().catch(error => { console.error(error); process.exit(1); });

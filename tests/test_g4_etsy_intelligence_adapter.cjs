@@ -126,6 +126,31 @@ async function main() {
   'rich safe corpus still produces a concise buyer-readable title instead of filling capacity');
   check(adapter.tagVariants('Best Friend, Hermana').every(tag => !tag.includes(',')),
     'comma-delimited Product Truth values become separate valid tag candidates');
+  check(adapter.tagVariants('Sister, and, Best Friend, de, para').every(tag => !['and', 'de', 'para'].includes(tag.toLowerCase())),
+    'connector-only fragments never become standalone tags or conceal a shortage');
+  const longName = Array.from({ length: 16 }, () => 'Blanket').join(' ');
+  const verifiedFallback = await adapter.buildIntelligence({
+    research: { observations: { marketplace: 'ETSY', queryContexts: ['throw blanket'], sellers: [] } },
+    productTruth: { snapshot: { asserted: { productName: asserted(longName), productType: asserted('Throw Blanket') } } },
+    configuration: { seedPhrase: 'throw blanket', listingLanguage: 'EN' },
+    masterKeywordArtifact: master(['throw blanket'], 5)
+  });
+  check(verifiedFallback.output.listingDraft.etsyTitle === 'Throw Blanket',
+    'an overlong Product Truth name falls back only to a shorter verified Product Truth type');
+  await assert.rejects(() => adapter.buildIntelligence({
+    research: { observations: { marketplace: 'ETSY', queryContexts: ['throw blanket'], sellers: [] } },
+    productTruth: { snapshot: { asserted: { productName: asserted(longName) } } },
+    configuration: { seedPhrase: 'throw blanket', listingLanguage: 'EN' },
+    masterKeywordArtifact: master(['throw blanket'], 6)
+  }), error => ['PRODUCT_TRUTH_FAMILY_UNRESOLVED', 'ETSY_PRODUCT_TRUTH_IDENTITY_REQUIRES_REVIEW'].includes(error.code));
+  passed++;
+  await assert.rejects(() => adapter.buildIntelligence({
+    research: { observations: { marketplace: 'ETSY', queryContexts: ['throw blanket'], sellers: [] } },
+    productTruth: { snapshot: { asserted: { productType: asserted(`Blanket ${'x'.repeat(135)}`) } } },
+    configuration: { seedPhrase: 'throw blanket', listingLanguage: 'EN' },
+    masterKeywordArtifact: master(['throw blanket'], 7)
+  }), error => error.code === 'ETSY_PRODUCT_TRUTH_IDENTITY_REQUIRES_REVIEW');
+  passed++;
   console.log(`G4 Etsy intelligence adapter: ${passed}/${passed} PASS`);
 }
 

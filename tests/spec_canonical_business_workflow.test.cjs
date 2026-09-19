@@ -173,6 +173,12 @@ async function runBusinessWorkflowTests() {
     const gate12 = evaluatePublishGate({ ...validEtsyTemplate, etsyTags: tags12 });
     assert.strictEqual(gate12.final_status, "PUBLISH_READY", `12 relevant tags should not be rejected solely for shortage: ${JSON.stringify(gate12.reasons)}`);
 
+    for (const emptyTags of [[], [''], ['   '], ['', '  ']]) {
+      const emptyGate = evaluatePublishGate({ ...validEtsyTemplate, etsyTags: emptyTags });
+      assert(emptyGate.reasons.some(reason => reason.includes('at least one relevant tag')),
+        `zero effective tags must fail after normalization: ${JSON.stringify(emptyTags)}`);
+    }
+
     // 14 tags -> FAIL
     const tags14 = Array.from({ length: 14 }, (_, i) => `tag${i + 1}`);
     const gate14 = evaluatePublishGate({ ...validEtsyTemplate, etsyTags: tags14 });

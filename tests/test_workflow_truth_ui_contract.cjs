@@ -50,9 +50,18 @@ assert.ok(canonical.includes('Phần trăm dung lượng chỉ là số đo, kh�
   'Etsy title guidance must prioritize clarity instead of capacity stuffing');
 assert.ok(canonical.includes('onListingPersisted?.(result)'),
   'a persisted canonical listing must notify the application catalog');
+assert.ok(canonical.includes('saveDraftAttemptRef.current.fingerprint !== fingerprint')
+  && canonical.includes('idempotencyKey: saveDraftAttemptRef.current.idempotencyKey'),
+  'retrying the same exact draft must retain one idempotency key');
+assert.ok(canonical.includes('Promise.allSettled') && canonical.includes('Listing #${result.listingId} đã lưu'),
+  'post-commit refresh failure must not turn a persisted listing into a failed save');
+assert.ok(canonical.includes("refreshFailures.some(item => item.reason?.status === 401)")
+  && canonical.includes('invalidateSession();'),
+  'best-effort post-commit refresh must still invalidate an expired authenticated shell');
 assert.ok(app.includes('onListingPersisted={fetchListings}'),
   'both single-path workspaces must refresh Saved Catalog after persistence');
-assert.ok(etsyPreview.includes('{etsyPrompts.length} photo prompts') && !etsyPreview.includes('12 photo prompts'),
+assert.ok(etsyPreview.includes('listing?.imagePrompts?.prompts')
+  && etsyPreview.includes('{etsyPrompts.length} photo prompts') && !etsyPreview.includes('12 photo prompts'),
   'Etsy Preview must display the exact generated prompt count');
 assert.ok(simulator.includes('expected: prompts.length'),
   'Preview quality scoring must use the generated asset plan length rather than a stale constant');

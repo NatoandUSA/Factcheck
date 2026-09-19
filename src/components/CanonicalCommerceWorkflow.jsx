@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { pullYtrendsFromBrowser } from '../ytrendsBrowserClient';
 
@@ -183,6 +183,7 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [claimBlockers, setClaimBlockers] = useState([]);
+  const saveDraftAttemptRef = useRef({ fingerprint: null, idempotencyKey: null });
 
   const currentTruth = truthRevisions.find(item => Number(item.id) === Number(head(state, 'productTruthRevisionId'))) || truthRevisions[0];
   const isManager = ['OWNER', 'MANAGER'].includes(user?.role);
@@ -690,8 +691,13 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
   });
   const saveDraft = () => run('save-draft', async () => {
     if (!draft?.content) throw new Error('Chưa có draft để lưu.');
+    const fingerprint = JSON.stringify({ projectId, productTruthRevisionId: draft.productTruthRevisionId,
+      intelligenceSnapshotId: draft.intelligenceSnapshotId, content: draft.content });
+    if (saveDraftAttemptRef.current.fingerprint !== fingerprint) {
+      saveDraftAttemptRef.current = { fingerprint, idempotencyKey: uuid() };
+    }
     const result = await api(`/api/projects/${projectId}/listings`, jsonOptions({
-      idempotencyKey: uuid(), changeReason: 'STAFF_REVIEWED_COMMERCE_DRAFT',
+      idempotencyKey: saveDraftAttemptRef.current.idempotencyKey, changeReason: 'STAFF_REVIEWED_COMMERCE_DRAFT',
       productTruthRevisionId: draft.productTruthRevisionId,
       intelligenceSnapshotId: draft.intelligenceSnapshotId, content: draft.content
     }));
@@ -701,8 +707,18 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
     // a completed save look permanently stuck at STARTED in the copied log.
     // The persisted listing is available in the queue after refresh and can
     // still be opened explicitly for review/simulation.
-    await refresh();
-    await onListingPersisted?.(result);
+    const refreshResults = await Promise.allSettled([
+      Promise.resolve().then(refresh),
+      Promise.resolve().then(() => onListingPersisted?.(result))
+    ]);
+    const refreshFailures = refreshResults.filter(item => item.status === 'rejected');
+    if (refreshFailures.some(item => item.reason?.status === 401)) {
+      invalidateSession();
+      onRequireLogin?.();
+    }
+    if (refreshFailures.length) {
+      notify(`Listing #${result.listingId} đã lưu; tải lại queue/catalog chưa hoàn tất. Có thể bấm lưu lại an toàn với cùng receipt.`, 'warning');
+    }
     return result;
   });
 

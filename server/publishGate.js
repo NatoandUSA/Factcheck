@@ -144,7 +144,9 @@ function evaluatePublishGate(listing) {
       issues.push('Missing Etsy tags -- add at least one relevant tag (up to 13 allowed)');
     } else {
       const cleanTags = rawTags.map(t => typeof t === 'string' ? t.trim() : '').filter(Boolean);
-      if (cleanTags.length > contract.maxTagsCount) {
+      if (cleanTags.length === 0) {
+        issues.push('Missing Etsy tags -- add at least one relevant tag (up to 13 allowed)');
+      } else if (cleanTags.length > contract.maxTagsCount) {
         issues.push(`Etsy tags exceed the maximum of ${contract.maxTagsCount} tags (current: ${cleanTags.length})`);
       }
       const uniqueTags = new Set(cleanTags.map(t => t.toLowerCase()));

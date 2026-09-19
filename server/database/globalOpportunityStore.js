@@ -321,6 +321,7 @@ async function reconcileCrossSourceScores(db, scope) {
     FROM global_keyword_candidates
     WHERE tenant_id=? AND workspace_id=? AND marketplace=?
       AND source<>'GLOBAL_JSON_UNVERIFIED'
+      AND status NOT IN ('REJECTED','STALE')
     GROUP BY normalized_keyword`, scopeParams(scope));
   const sourceCounts = new Map(counts.map(row => [row.normalized_keyword, Math.max(1, Number(row.observed_source_count || 1))]));
   const rows = await all(db, `SELECT * FROM global_keyword_candidates
@@ -498,6 +499,7 @@ async function setCandidateStatusUnlocked(db, scope, actorId, candidateId, nextS
       (tenant_id,workspace_id,marketplace,candidate_id,actor_id,action,previous_status,next_status,metadata_json)
       VALUES (?,?,?,?,?,'STATUS_CHANGE',?,?,?)`,
     [...scopeParams(scope), candidateId, actorId, row.status, status, JSON.stringify(metadata || {})]);
+    await reconcileCrossSourceScores(db, scope);
     await run(db, 'COMMIT'); transactionOpen = false;
     return { candidateId, previousStatus: row.status, status };
   } catch (error) {

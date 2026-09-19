@@ -97,8 +97,8 @@ function clusterDescriptor(keyword) {
   return { clusterKey: key, clusterLabel: selected.map(x => x.charAt(0).toUpperCase() + x.slice(1)).join(' '),
     method: anchorIndex >= 0 ? 'PRODUCT_ANCHOR_V1' : 'TAIL_CONCEPT_V1' };
 }
-function stableFileId(bytes, fileName) {
-  return crypto.createHash('sha256').update(text(fileName)).update('\0').update(bytes).digest('hex');
+function stableFileId(bytes) {
+  return crypto.createHash('sha256').update(bytes).digest('hex');
 }
 
 async function parseGlobalOpportunityFile(rawBytes, options = {}) {
@@ -159,7 +159,7 @@ async function parseGlobalOpportunityFile(rawBytes, options = {}) {
     error.details = { diagnostics }; throw error;
   }
   return Object.freeze({
-    sourceFileId: stableFileId(rawBytes, options.fileName),
+    sourceFileId: stableFileId(rawBytes),
     candidateCount: candidates.length,
     candidates,
     diagnostics

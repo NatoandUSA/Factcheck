@@ -8,7 +8,8 @@ process.env.NODE_ENV = 'test';
 const { app, db, databaseReady } = require('../server/server');
 const { createSessionRecord } = require('../server/security/session');
 const { clusterDescriptor, parseGlobalOpportunityFile } = require('../server/globalOpportunityBulkParser');
-const { projectMklCandidates, proofGate, freshnessScore, competitionScore, importCandidates } = require('../server/database/globalOpportunityStore');
+const { projectMklCandidates, proofGate, freshnessScore, competitionScore, importCandidates,
+  migrateGlobalOpportunityScoreV2, GLOBAL_SCORE_VERSION } = require('../server/database/globalOpportunityStore');
 
 function all(sql, params = []) {
   return new Promise((resolve, reject) => db.all(sql, params, (error, rows) => error ? reject(error) : resolve(rows || [])));
@@ -285,6 +286,35 @@ async function run() {
     assert(riskRow);
     assert.equal(Number(riskRow.risk_penalty), 20,
       'risk penalty must survive post-import reconciliation instead of silently resetting to zero');
+
+    const riskCandidate = (await all(`SELECT id FROM global_keyword_candidates
+      WHERE tenant_id=? AND workspace_id=? AND marketplace='AMAZON'
+        AND normalized_keyword='risk penalty memorial mug'`,
+    [user.tenant_id, user.workspace_id]))[0];
+    assert(riskCandidate);
+    await new Promise((resolve, reject) => db.run(
+      `DELETE FROM global_opportunity_scores WHERE candidate_id=? AND score_version=?`,
+      [riskCandidate.id, GLOBAL_SCORE_VERSION], error => error ? reject(error) : resolve()
+    ));
+    await new Promise((resolve, reject) => db.run(
+      `INSERT OR REPLACE INTO global_opportunity_scores
+        (candidate_id,tenant_id,workspace_id,marketplace,marketplace_proof,demand,competition,
+         price_margin_potential,trend_velocity,cross_source_validation,social_momentum,freshness,
+         risk_penalty,opportunity_score,proof_gate,score_version,explanation_json)
+       VALUES (?,?,?,?,0,0,0,0,0,0,0,0,0,99,'PASS','GLOBAL_OPPORTUNITY_V1','{}')`,
+      [riskCandidate.id, user.tenant_id, user.workspace_id, 'AMAZON'],
+      error => error ? reject(error) : resolve()
+    ));
+    await migrateGlobalOpportunityScoreV2(db);
+    const migratedV2 = (await all(`SELECT score_version,risk_penalty,opportunity_score
+      FROM global_opportunity_scores WHERE candidate_id=? AND score_version=?`,
+    [riskCandidate.id, GLOBAL_SCORE_VERSION]))[0];
+    assert(migratedV2);
+    assert.equal(migratedV2.score_version, 'GLOBAL_OPPORTUNITY_V2');
+    assert.equal(Number(migratedV2.risk_penalty), 20,
+      'V2 data migration must recompute from canonical candidate provenance, not copy legacy score bytes');
+    assert.notEqual(Number(migratedV2.opportunity_score), 99,
+      'legacy V1 score must not be relabeled as V2 without recomputation');
 
     const concurrentResults = await Promise.all([
       importCandidates(db, {

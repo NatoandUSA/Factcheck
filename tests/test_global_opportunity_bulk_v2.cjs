@@ -196,28 +196,47 @@ async function run() {
       'server must reconcile distinct sources instead of trusting client crossSourceCount');
     assert(sameKeyword.some(item => Number(item.cross_source_validation) > 0));
 
+    const clusterBeforePoison = (await all(`SELECT display_name FROM keyword_clusters
+      WHERE tenant_id=? AND workspace_id=? AND marketplace='AMAZON' AND cluster_key='PET_MEMORIAL_WIND_CHIME'`,
+    [user.tenant_id, user.workspace_id]))[0];
+    assert(clusterBeforePoison);
+
     const unverifiedRes = await fetch(base + '/api/global-opportunities/import', {
       method: 'POST',
       headers: { Origin: base, Cookie: cookie, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         source: 'FAKE_THIRD_SOURCE',
         sourceFileId: 'fake-third-source',
-        candidates: [{ keyword: 'pet memorial necklace', estimatedSales: 99999, crossSourceCount: 99 }]
+        candidates: [{
+          keyword: 'dog memorial wind chime',
+          clusterKey: 'PET_MEMORIAL_WIND_CHIME',
+          clusterLabel: 'POISONED CLUSTER LABEL',
+          estimatedSales: 99999,
+          crossSourceCount: 99
+        }]
       })
     });
     assert.equal(unverifiedRes.status, 200);
+    const clusterAfterPoison = (await all(`SELECT display_name FROM keyword_clusters
+      WHERE tenant_id=? AND workspace_id=? AND marketplace='AMAZON' AND cluster_key='PET_MEMORIAL_WIND_CHIME'`,
+    [user.tenant_id, user.workspace_id]))[0];
+    assert.equal(clusterAfterPoison.display_name, clusterBeforePoison.display_name,
+      'unverified JSON must not overwrite trusted cluster display metadata');
+
     const afterUnverifiedRes = await fetch(base + '/api/global-opportunities?limit=100', {
       headers: { Origin: base, Cookie: cookie }
     });
     const afterUnverified = await afterUnverifiedRes.json();
-    const necklaceRows = afterUnverified.candidates.filter(item => item.normalized_keyword === 'pet memorial necklace');
-    const trustedNecklace = necklaceRows.find(item => item.source === 'GLOBAL_BULK_CEREBRO');
-    const unverifiedNecklace = necklaceRows.find(item => item.source === 'GLOBAL_JSON_UNVERIFIED');
-    assert(trustedNecklace && unverifiedNecklace);
-    assert.equal(Number(trustedNecklace.cross_source_count), 1,
+    const dogRows = afterUnverified.candidates.filter(item => item.normalized_keyword === 'dog memorial wind chime');
+    const trustedDog = dogRows.find(item => item.source === 'GLOBAL_BULK_CEREBRO');
+    const unverifiedDog = dogRows.find(item => item.source === 'GLOBAL_JSON_UNVERIFIED');
+    assert(trustedDog && unverifiedDog);
+    assert.equal(Number(trustedDog.cross_source_count), 2,
       'unverified JSON must not increase corroboration count of trusted evidence');
-    assert.equal(unverifiedNecklace.estimated_sales, null);
-    assert.equal(unverifiedNecklace.proof_gate, 'WATCH_ONLY');
+    assert.equal(unverifiedDog.estimated_sales, null);
+    assert.equal(unverifiedDog.proof_gate, 'WATCH_ONLY');
+    assert.equal(unverifiedDog.source_file_id, 'unverified-json',
+      'unverified JSON identity must be server-owned to prevent source-file fanout spam');
 
     const concurrentResults = await Promise.all([
       importCandidates(db, {

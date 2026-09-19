@@ -23,13 +23,24 @@ export function assessLanguageConsistency(listing, marketplace) {
   const text = String(marketplace || '').toUpperCase() === 'AMAZON'
     ? [listing?.amazonTitle, ...(listing?.amazonBullets || []), listing?.amazonDescription]
     : [listing?.etsyTitle, ...(listing?.etsyTags || []), listing?.etsyDescription];
-  const tokens = visibleTokens(text.filter(Boolean).join(' '));
-  const exemptionTokens = new Set((listing?.canonicalQualityEvidence?.languageExemptions || [])
-    .flatMap(visibleTokens));
+  const surfaces = text.filter(Boolean).map(visibleTokens);
+  const exemptionSequences = (listing?.canonicalQualityEvidence?.languageExemptions || [])
+    .map(visibleTokens).filter(sequence => sequence.length);
+  const exemptPositions = new Set();
+  for (const [surfaceIndex, tokens] of surfaces.entries()) {
+    for (const sequence of exemptionSequences) {
+      for (let start = 0; start <= tokens.length - sequence.length; start++) {
+        if (sequence.every((token, offset) => tokens[start + offset] === token)) {
+          sequence.forEach((_, offset) => exemptPositions.add(`${surfaceIndex}:${start + offset}`));
+        }
+      }
+    }
+  }
   const foreignLanguages = target === 'EN' ? ['ES', 'VI'] : ['EN', 'VI'];
-  const hits = foreignLanguages.flatMap(language => tokens
-    .filter(token => LANGUAGE_MARKERS[language].has(token) && !exemptionTokens.has(token))
-    .map(token => ({ language, token })));
+  const hits = foreignLanguages.flatMap(language => surfaces.flatMap((tokens, surfaceIndex) => tokens
+    .map((token, tokenIndex) => ({ language, token, surfaceIndex, tokenIndex }))
+    .filter(hit => LANGUAGE_MARKERS[language].has(hit.token)
+      && !exemptPositions.has(`${hit.surfaceIndex}:${hit.tokenIndex}`))));
   const distinct = [...new Map(hits.map(hit => [`${hit.language}:${hit.token}`, hit])).values()];
   // One isolated foreign word may be a brand, proper name, or canonical product
   // token. Two distinct high-signal markers are required before copy is flagged.

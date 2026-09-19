@@ -98,6 +98,21 @@ const verifiedCard = (productId, listingVersion) => ({
     canonicalQualityEvidence: { ...verifiedForeignPhrase.canonicalQualityEvidence, languageExemptions: [] } };
   assert.equal(assessLanguageConsistency(unverifiedForeignPhrase, 'ETSY').mixed, true,
     'the same two foreign markers without Product Truth evidence must remain visible as mixed-language copy');
+  const phraseScopeLeak = { ...verifiedForeignPhrase, etsyTitle: 'best custom gift para hermana',
+    canonicalQualityEvidence: { ...verifiedForeignPhrase.canonicalQualityEvidence,
+      languageExemptions: ['Best Friend'] } };
+  assert.equal(assessLanguageConsistency(phraseScopeLeak, 'ETSY').mixed, true,
+    'tokens from a verified multi-word phrase must not become global exemptions when the phrase is absent');
+  const verifiedProductPhrase = { ...verifiedForeignPhrase, etsyTitle: 'Custom Necklace para Hija',
+    canonicalQualityEvidence: { ...verifiedForeignPhrase.canonicalQualityEvidence,
+      languageExemptions: ['Custom Necklace'] } };
+  assert.equal(assessLanguageConsistency(verifiedProductPhrase, 'ETSY').mixed, false,
+    'an exact contiguous verified product phrase may be exempt at its matched span');
+  const crossSurfacePhrase = { ...verifiedForeignPhrase, etsyTitle: 'Best', etsyTags: ['Friend'],
+    canonicalQualityEvidence: { ...verifiedForeignPhrase.canonicalQualityEvidence,
+      languageExemptions: ['Best Friend'] } };
+  assert.equal(assessLanguageConsistency(crossSurfacePhrase, 'ETSY').mixed, true,
+    'verified phrases must not match across title/tag/description surface boundaries');
 
   console.log('DRAFT_QUALITY_EVALUATOR_TESTS_PASSED');
 })().catch(error => {

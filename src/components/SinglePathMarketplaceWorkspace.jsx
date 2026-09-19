@@ -104,6 +104,6 @@ export default function SinglePathMarketplaceWorkspace({ marketplace, onSelectLi
     </div>}
 
     {activeProject && <CanonicalCommerceWorkflow activeProject={activeProject} marketplace={marketplace}
-      onSelectListing={onSelectListing} onShowToast={onShowToast} />}
+      onSelectListing={onSelectListing} onShowToast={onShowToast} onRequireLogin={onRequireLogin} />}
   </div>;
 }

@@ -26,5 +26,8 @@ check(server.includes('/amazon/asin-plan/preview') && server.includes('/amazon/m
 check(ui.indexOf('1. Upload Xray từ seed') < ui.indexOf('2. Quyết định ASIN batches')
   && ui.indexOf('2. Quyết định ASIN batches') < ui.indexOf('3. Upload Cerebro'),
   'source order remains Xray -> editable ASIN plan -> Cerebro');
+check(ui.includes('error.status = response.status') && ui.includes('invalidateSession()')
+  && ui.includes("errorValue?.code === 'IP_CLEARANCE_REQUIRED'") && ui.includes('payload?.ipHits'),
+  'canonical actions invalidate expired sessions and expose matched IP terms without weakening the guard');
 
 console.log(`Retired marketplace donor workflow: ${passed}/${passed} PASS`);

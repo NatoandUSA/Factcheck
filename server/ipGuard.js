@@ -56,6 +56,9 @@ function screenText(text) {
 
 function screenListing(listing) {
   if (!listing) return screenText('');
+  // Keep field boundaries visible to the tokenizer. Without a sentinel, a
+  // context cue at the end of one field could incorrectly downgrade a match
+  // at the start of the next field.
   return screenText([
     listing.amazonTitle || '',
     listing.itemHighlights || '',
@@ -66,7 +69,7 @@ function screenListing(listing) {
     listing.etsyTitle || '',
     listing.etsyDescription || '',
     ...(Array.isArray(listing.etsyTags) ? listing.etsyTags : [])
-  ].join(' '));
+  ].join(' omni_surface_boundary '));
 }
 
 module.exports = Object.freeze({

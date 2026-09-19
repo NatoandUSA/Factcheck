@@ -118,7 +118,7 @@ async function run() {
 
     const freshnessRows = await all(`SELECT c.proof_timestamp,s.freshness
       FROM global_keyword_candidates c
-      JOIN global_opportunity_scores s ON s.candidate_id=c.id AND s.score_version='GLOBAL_OPPORTUNITY_V1'
+      JOIN global_opportunity_scores s ON s.candidate_id=c.id AND s.score_version='GLOBAL_OPPORTUNITY_V2'
       WHERE c.tenant_id=? AND c.workspace_id=? AND c.marketplace='AMAZON' AND c.source_file_id=?`,
     [user.tenant_id, user.workspace_id, imported.sourceFileId]);
     assert(freshnessRows.length >= 3);
@@ -139,7 +139,7 @@ async function run() {
     assert.deepEqual(ytrendBody.sourceFamilies, ['YTREND']);
     const ytrendRows = await all(`SELECT c.source,c.estimated_revenue,c.proof_type,s.proof_gate
       FROM global_keyword_candidates c
-      JOIN global_opportunity_scores s ON s.candidate_id=c.id AND s.score_version='GLOBAL_OPPORTUNITY_V1'
+      JOIN global_opportunity_scores s ON s.candidate_id=c.id AND s.score_version='GLOBAL_OPPORTUNITY_V2'
       WHERE c.tenant_id=? AND c.workspace_id=? AND c.marketplace='AMAZON'
         AND c.normalized_keyword='viral pet memorial lamp'`,
     [user.tenant_id, user.workspace_id]);
@@ -278,7 +278,7 @@ async function run() {
     }, { allowCommercialMetrics: true, allowProofTimestamp: false });
     const riskRow = (await all(`SELECT s.risk_penalty,s.opportunity_score
       FROM global_keyword_candidates c
-      JOIN global_opportunity_scores s ON s.candidate_id=c.id AND s.score_version='GLOBAL_OPPORTUNITY_V1'
+      JOIN global_opportunity_scores s ON s.candidate_id=c.id AND s.score_version='GLOBAL_OPPORTUNITY_V2'
       WHERE c.tenant_id=? AND c.workspace_id=? AND c.marketplace='AMAZON'
         AND c.normalized_keyword='risk penalty memorial mug'`,
     [user.tenant_id, user.workspace_id]))[0];

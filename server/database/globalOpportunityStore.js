@@ -482,12 +482,15 @@ async function setCandidateStatusUnlocked(db, scope, actorId, candidateId, nextS
   if (!ALLOWED_STATUSES.has(status) || status === 'PROMOTED') {
     throw Object.assign(new Error('INVALID_GLOBAL_CANDIDATE_STATUS'), { code: 'INVALID_GLOBAL_CANDIDATE_STATUS', status: 400 });
   }
-  const row = await get(db, `SELECT * FROM global_keyword_candidates WHERE id=? AND tenant_id=? AND workspace_id=? AND marketplace=?`,
-    [candidateId, ...scopeParams(scope)]);
-  if (!row) throw Object.assign(new Error('GLOBAL_CANDIDATE_NOT_FOUND'), { code: 'GLOBAL_CANDIDATE_NOT_FOUND', status: 404 });
-  if (row.status === 'PROMOTED') throw Object.assign(new Error('GLOBAL_CANDIDATE_ALREADY_PROMOTED'), { code: 'GLOBAL_CANDIDATE_ALREADY_PROMOTED', status: 409 });
-  await run(db, 'BEGIN IMMEDIATE');
+  let transactionOpen = false;
   try {
+    await run(db, 'BEGIN IMMEDIATE'); transactionOpen = true;
+    const row = await get(db, `SELECT * FROM global_keyword_candidates
+      WHERE id=? AND tenant_id=? AND workspace_id=? AND marketplace=?`,
+    [candidateId, ...scopeParams(scope)]);
+    if (!row) throw Object.assign(new Error('GLOBAL_CANDIDATE_NOT_FOUND'), { code: 'GLOBAL_CANDIDATE_NOT_FOUND', status: 404 });
+    if (row.status === 'PROMOTED') throw Object.assign(new Error('GLOBAL_CANDIDATE_ALREADY_PROMOTED'), { code: 'GLOBAL_CANDIDATE_ALREADY_PROMOTED', status: 409 });
+
     await run(db, `UPDATE global_keyword_candidates SET status=?,updated_at=CURRENT_TIMESTAMP
       WHERE id=? AND tenant_id=? AND workspace_id=? AND marketplace=?`,
     [status, candidateId, ...scopeParams(scope)]);
@@ -495,50 +498,64 @@ async function setCandidateStatusUnlocked(db, scope, actorId, candidateId, nextS
       (tenant_id,workspace_id,marketplace,candidate_id,actor_id,action,previous_status,next_status,metadata_json)
       VALUES (?,?,?,?,?,'STATUS_CHANGE',?,?,?)`,
     [...scopeParams(scope), candidateId, actorId, row.status, status, JSON.stringify(metadata || {})]);
-    await run(db, 'COMMIT');
+    await run(db, 'COMMIT'); transactionOpen = false;
+    return { candidateId, previousStatus: row.status, status };
   } catch (error) {
-    try { await run(db, 'ROLLBACK'); } catch (_) {}
+    if (transactionOpen) try { await run(db, 'ROLLBACK'); } catch (_) {}
     throw error;
   }
-  return { candidateId, previousStatus: row.status, status };
 }
 
 async function promoteToProjectUnlocked(db, scope, actorId, candidateId, payload = {}) {
-  const candidate = await get(db, `SELECT c.*,k.display_name AS cluster_name FROM global_keyword_candidates c
-    LEFT JOIN keyword_clusters k ON k.id=c.cluster_id
-    WHERE c.id=? AND c.tenant_id=? AND c.workspace_id=? AND c.marketplace=?`,
-  [candidateId, ...scopeParams(scope)]);
-  if (!candidate) throw Object.assign(new Error('GLOBAL_CANDIDATE_NOT_FOUND'), { code: 'GLOBAL_CANDIDATE_NOT_FOUND', status: 404 });
-  if (candidate.status === 'PROMOTED') return { candidateId, projectId: candidate.promoted_project_id, status: 'PROMOTED', replay: true };
-  const score = await get(db, `SELECT * FROM global_opportunity_scores WHERE candidate_id=? AND score_version='GLOBAL_OPPORTUNITY_V1'`, [candidateId]);
-  if (!score || score.proof_gate !== 'PASS') {
-    throw Object.assign(new Error('GLOBAL_PROOF_OF_SALE_REQUIRED'), { code: 'GLOBAL_PROOF_OF_SALE_REQUIRED', status: 409 });
-  }
-  if (!['QUALIFIED', 'PROMOTE_TO_PROJECT'].includes(String(candidate.status || '').toUpperCase())) {
-    throw Object.assign(new Error('GLOBAL_CANDIDATE_STATUS_NOT_PROMOTABLE'), {
-      code: 'GLOBAL_CANDIDATE_STATUS_NOT_PROMOTABLE', status: 409, currentStatus: candidate.status
-    });
-  }
-  const projectName = text(payload.name) || candidate.cluster_name || candidate.keyword;
-  const seedPhrase = candidate.cluster_name || candidate.keyword;
-  if (!projectName || !seedPhrase) throw Object.assign(new Error('GLOBAL_PROMOTION_CONTEXT_INVALID'), { code: 'GLOBAL_PROMOTION_CONTEXT_INVALID', status: 409 });
-  await run(db, 'BEGIN IMMEDIATE');
+  let transactionOpen = false;
   try {
+    // Read authority state only after BEGIN IMMEDIATE. This makes replay/idempotency
+    // safe across separate Node processes sharing the same SQLite database.
+    await run(db, 'BEGIN IMMEDIATE'); transactionOpen = true;
+    const candidate = await get(db, `SELECT c.*,k.display_name AS cluster_name FROM global_keyword_candidates c
+      LEFT JOIN keyword_clusters k ON k.id=c.cluster_id
+      WHERE c.id=? AND c.tenant_id=? AND c.workspace_id=? AND c.marketplace=?`,
+    [candidateId, ...scopeParams(scope)]);
+    if (!candidate) throw Object.assign(new Error('GLOBAL_CANDIDATE_NOT_FOUND'), { code: 'GLOBAL_CANDIDATE_NOT_FOUND', status: 404 });
+    if (candidate.status === 'PROMOTED') {
+      await run(db, 'COMMIT'); transactionOpen = false;
+      return { candidateId, projectId: candidate.promoted_project_id, status: 'PROMOTED', replay: true };
+    }
+
+    const score = await get(db, `SELECT * FROM global_opportunity_scores
+      WHERE candidate_id=? AND score_version='GLOBAL_OPPORTUNITY_V1'`, [candidateId]);
+    if (!score || score.proof_gate !== 'PASS') {
+      throw Object.assign(new Error('GLOBAL_PROOF_OF_SALE_REQUIRED'), { code: 'GLOBAL_PROOF_OF_SALE_REQUIRED', status: 409 });
+    }
+    if (!['QUALIFIED', 'PROMOTE_TO_PROJECT'].includes(String(candidate.status || '').toUpperCase())) {
+      throw Object.assign(new Error('GLOBAL_CANDIDATE_STATUS_NOT_PROMOTABLE'), {
+        code: 'GLOBAL_CANDIDATE_STATUS_NOT_PROMOTABLE', status: 409, currentStatus: candidate.status
+      });
+    }
+
+    const projectName = text(payload.name) || candidate.cluster_name || candidate.keyword;
+    const seedPhrase = candidate.cluster_name || candidate.keyword;
+    if (!projectName || !seedPhrase) throw Object.assign(new Error('GLOBAL_PROMOTION_CONTEXT_INVALID'), { code: 'GLOBAL_PROMOTION_CONTEXT_INVALID', status: 409 });
+
     const inserted = await run(db, `INSERT INTO research_projects
       (tenant_id,workspace_id,marketplace,name,seed_phrase,state,reference_asin,actor_id)
       VALUES (?,?,?,?,?,'EVIDENCE_INTAKE',?,?)`,
     [...scopeParams(scope), projectName, seedPhrase, text(payload.referenceAsin) || null, actorId]);
-    await run(db, `UPDATE global_keyword_candidates SET status='PROMOTED',promoted_project_id=?,updated_at=CURRENT_TIMESTAMP
-      WHERE id=? AND tenant_id=? AND workspace_id=? AND marketplace=? AND status<>'PROMOTED'`,
+    const updated = await run(db, `UPDATE global_keyword_candidates
+      SET status='PROMOTED',promoted_project_id=?,updated_at=CURRENT_TIMESTAMP
+      WHERE id=? AND tenant_id=? AND workspace_id=? AND marketplace=? AND status IN ('QUALIFIED','PROMOTE_TO_PROJECT')`,
     [inserted.lastID, candidateId, ...scopeParams(scope)]);
+    if (updated.changes !== 1) {
+      throw Object.assign(new Error('GLOBAL_PROMOTION_CONFLICT'), { code: 'GLOBAL_PROMOTION_CONFLICT', status: 409 });
+    }
     await run(db, `INSERT INTO global_opportunity_events
       (tenant_id,workspace_id,marketplace,candidate_id,actor_id,action,previous_status,next_status,metadata_json)
       VALUES (?,?,?,?,?,'CREATE_PROJECT',?,'PROMOTED',?)`,
     [...scopeParams(scope), candidateId, actorId, candidate.status, JSON.stringify({ projectId: inserted.lastID, seedPhrase, score: score.opportunity_score })]);
-    await run(db, 'COMMIT');
+    await run(db, 'COMMIT'); transactionOpen = false;
     return { candidateId, projectId: inserted.lastID, status: 'PROMOTED', projectState: 'EVIDENCE_INTAKE', seedPhrase };
   } catch (error) {
-    try { await run(db, 'ROLLBACK'); } catch (_) {}
+    if (transactionOpen) try { await run(db, 'ROLLBACK'); } catch (_) {}
     throw error;
   }
 }

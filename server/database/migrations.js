@@ -1174,7 +1174,7 @@ async function runMigrations(db) {
   if (globalOpportunityApplied.length === 0) {
     await run(db, 'BEGIN IMMEDIATE');
     try {
-      const { migrateGlobalOpportunityDiscovery } = require('../globalOpportunityStore');
+      const { migrateGlobalOpportunityDiscovery } = require('./globalOpportunityStore');
       await migrateGlobalOpportunityDiscovery(db);
       await run(db, 'INSERT INTO schema_migrations(id) VALUES (?)', [GLOBAL_OPPORTUNITY_DISCOVERY_MIGRATION]);
       await run(db, 'COMMIT');

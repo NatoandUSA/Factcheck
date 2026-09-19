@@ -320,6 +320,9 @@ assert.ok(tooManyTags.policyViolations.some(item => item.code === 'ETSY_TAG_MAX_
 assert.equal(tooManyTags.policyContractApprovalEligible, false);
 const longTag = validatePolicySurfaces({ title: 'Custom necklace gift', tags: ['x'.repeat(21)] }, etsyResolution);
 assert.ok(longTag.policyViolations.some(item => item.code === 'ETSY_TAG_CHAR_LIMIT_EXCEEDED'));
+const punctuatedTag = validatePolicySurfaces({ title: 'Custom necklace gift', tags: ['gift, daughter'] }, etsyResolution);
+assert.ok(punctuatedTag.policyViolations.some(item => item.code === 'ETSY_TAG_INVALID_CHARACTERS'));
+assert.equal(punctuatedTag.policyContractApprovalEligible, false);
 
 // Required surfaces and declared bullet limits fail closed; safe shortages remain quality-only.
 const emptyAmazon = validatePolicySurfaces({}, resolution200);

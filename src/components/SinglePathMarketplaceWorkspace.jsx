@@ -20,7 +20,7 @@ async function loadProjects() {
   return payload.projects || [];
 }
 
-export default function SinglePathMarketplaceWorkspace({ marketplace, onSelectListing, onShowToast, onRequireLogin }) {
+export default function SinglePathMarketplaceWorkspace({ marketplace, onSelectListing, onListingPersisted, onShowToast, onRequireLogin }) {
   const { user, authLoading, invalidateSession } = useAuth();
   const accent = marketplace === 'AMAZON' ? '#0369a1' : '#c2410c';
   const [projects, setProjects] = useState([]);
@@ -104,6 +104,6 @@ export default function SinglePathMarketplaceWorkspace({ marketplace, onSelectLi
     </div>}
 
     {activeProject && <CanonicalCommerceWorkflow activeProject={activeProject} marketplace={marketplace}
-      onSelectListing={onSelectListing} onShowToast={onShowToast} onRequireLogin={onRequireLogin} />}
+      onSelectListing={onSelectListing} onListingPersisted={onListingPersisted} onShowToast={onShowToast} onRequireLogin={onRequireLogin} />}
   </div>;
 }

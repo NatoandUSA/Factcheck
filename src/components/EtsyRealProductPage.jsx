@@ -29,9 +29,13 @@ export default function EtsyRealProductPage({ listing, onShowToast }) {
     );
   }
 
-  // The generator owns Product Truth validation and verified projection.
-  // Never pass raw title/tags as factual prompt inputs.
-  const etsyPrompts = generateEtsyListingImagePrompts(listing);
+  const exactPrompts = listing?.imagePrompts?.prompts;
+  const etsyPrompts = Array.isArray(exactPrompts) ? exactPrompts.map(item => ({ ...item,
+    slot: item.purpose || item.id, dimensions: item.aspectRatio, purpose: item.ready === false
+      ? `Blocked — missing: ${(item.missingInputs || []).join(', ')}` : item.purpose }))
+    // The legacy generator owns Product Truth validation and verified projection.
+    // Never pass raw title/tags as factual prompt inputs.
+    : generateEtsyListingImagePrompts(listing);
 
   const copyPrompt = (text, idx, label = 'Đã copy prompt ảnh!') => {
     navigator.clipboard.writeText(text);
@@ -60,7 +64,7 @@ export default function EtsyRealProductPage({ listing, onShowToast }) {
               Etsy Listing Page Simulation Preview <span style={{ color: '#b45309' }}>· Draft only</span>
             </div>
             <div style={{ fontSize: '0.68rem', color: '#64748b' }}>
-              Customer view · 12 photo prompts · up to 13 relevant tags · not submission ready
+              Customer view · {etsyPrompts.length} photo prompts · up to 13 relevant tags · not submission ready
             </div>
           </div>
         </div>
@@ -259,25 +263,25 @@ export default function EtsyRealProductPage({ listing, onShowToast }) {
         </div>
       )}
 
-      {/* VIEW 2: 12 ETSY LISTING PHOTO PROMPTS */}
+      {/* VIEW 2: EXACT ETSY LISTING PHOTO PROMPTS */}
       {activeSubTab === 'image-prompts' && (
         <div style={{ background: 'var(--bg-surface)', padding: '24px', borderRadius: '12px', border: '1px solid var(--border-subtle)' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '18px' }}>
             <div>
               <h3 style={{ fontSize: '1.15rem', fontWeight: 800, margin: 0, color: '#ea580c' }}>
-                Bộ 12 Prompt Ảnh Etsy — Maker Story & Conversion Review
+                Bộ {etsyPrompts.length} Prompt Ảnh Etsy — Maker Story & Conversion Review
               </h3>
               <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', margin: '4px 0 0 0' }}>
                 Tối ưu hóa thẩm mỹ ấm cúng, ảnh thực tế cầm trên tay, bảng size, và hậu trường làm xưởng.
               </p>
             </div>
             <button
-              onClick={() => copyAllPrompts(etsyPrompts, 'Đã copy toàn bộ 12 Prompt Ảnh Etsy!')}
+              onClick={() => copyAllPrompts(etsyPrompts, `Đã copy toàn bộ ${etsyPrompts.length} Prompt Ảnh Etsy!`)}
               className="btn btn-primary btn-sm"
               style={{ background: '#ea580c', display: 'flex', alignItems: 'center', gap: '6px' }}
             >
               <Copy size={14} />
-              <span>Copy Tất Cả 12 Prompts</span>
+              <span>Copy Tất Cả {etsyPrompts.length} Prompts</span>
             </button>
           </div>
 

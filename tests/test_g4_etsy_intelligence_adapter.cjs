@@ -39,6 +39,8 @@ async function main() {
   'Etsy title uses distinct readable clauses instead of duplicate padding');
   check(result.output.listingDraft.etsyTags.length <= 13, 'Etsy tag count within limit');
   check(result.output.listingDraft.etsyTags.every(tag => Array.from(tag).length <= 20), 'every Etsy tag within limit');
+  check(result.output.listingDraft.etsyTags.every(tag => /^[\p{L}\p{N}]+(?:[ '\-][\p{L}\p{N}]+)*$/u.test(tag)),
+    'every Etsy tag uses only marketplace-supported characters');
   check(result.output.listingDraft.etsyTagExplanations.length === result.output.listingDraft.etsyTags.length,
     'every generated Etsy tag has an allocation explanation');
   check(result.output.listingDraft.etsyTagExplanations.every(item => item.intent && item.reason
@@ -118,8 +120,51 @@ async function main() {
       'regalo de cumpleanos para hija', 'collar de mama para hija', 'mensaje especial para hija'
     ], 4)
   });
-  check(richTitle.output.listingDraft.etsyTitle.length >= 126 && richTitle.output.listingDraft.etsyTitle.length <= 138,
-    'rich safe corpus fills the Etsy title working target of 90-99 percent without truncation');
+  check(richTitle.output.listingDraft.etsyTitle.length <= 140
+    && richTitle.output.listingDraft.etsyTitle.split(/\s+/).length <= 15
+    && (richTitle.output.listingDraft.etsyTitle.match(/,/g) || []).length < 2,
+  'rich safe corpus still produces a concise buyer-readable title instead of filling capacity');
+  check(adapter.tagVariants('Best Friend, Hermana').every(tag => !tag.includes(',')),
+    'comma-delimited Product Truth values become separate valid tag candidates');
+  check(adapter.tagVariants('Sister, and, Best Friend, de, para').every(tag => !['and', 'de', 'para'].includes(tag.toLowerCase())),
+    'connector-only fragments never become standalone tags or conceal a shortage');
+  for (const completeIdentity of [
+    'Throw Blanket, Sister Keepsake',
+    'Throw Blanket | Personalized Gift',
+    'Throw Blanket; Custom Name'
+  ]) {
+    check(adapter.composeEtsyTitle([], { productName: completeIdentity }, 'EN') === completeIdentity,
+      `complete Product Truth identity is preserved across delimiters: ${completeIdentity}`);
+  }
+  const overlongDelimitedIdentity = `Throw Blanket, ${Array.from({ length: 15 }, () => 'Keepsake').join(' ')}`;
+  assert.throws(() => adapter.composeEtsyTitle([], { productName: overlongDelimitedIdentity }, 'EN'),
+    error => error.code === 'ETSY_PRODUCT_TRUTH_IDENTITY_REQUIRES_REVIEW');
+  passed++;
+  check(adapter.composeEtsyTitle([], { productName: overlongDelimitedIdentity, productType: 'Throw Blanket' }, 'EN') === 'Throw Blanket',
+    'over-limit full productName falls back only to the exact shorter verified productType');
+  const longName = Array.from({ length: 16 }, () => 'Blanket').join(' ');
+  const verifiedFallback = await adapter.buildIntelligence({
+    research: { observations: { marketplace: 'ETSY', queryContexts: ['throw blanket'], sellers: [] } },
+    productTruth: { snapshot: { asserted: { productName: asserted(longName), productType: asserted('Throw Blanket') } } },
+    configuration: { seedPhrase: 'throw blanket', listingLanguage: 'EN' },
+    masterKeywordArtifact: master(['throw blanket'], 5)
+  });
+  check(verifiedFallback.output.listingDraft.etsyTitle === 'Throw Blanket',
+    'an overlong Product Truth name falls back only to a shorter verified Product Truth type');
+  await assert.rejects(() => adapter.buildIntelligence({
+    research: { observations: { marketplace: 'ETSY', queryContexts: ['throw blanket'], sellers: [] } },
+    productTruth: { snapshot: { asserted: { productName: asserted(longName) } } },
+    configuration: { seedPhrase: 'throw blanket', listingLanguage: 'EN' },
+    masterKeywordArtifact: master(['throw blanket'], 6)
+  }), error => ['PRODUCT_TRUTH_FAMILY_UNRESOLVED', 'ETSY_PRODUCT_TRUTH_IDENTITY_REQUIRES_REVIEW'].includes(error.code));
+  passed++;
+  await assert.rejects(() => adapter.buildIntelligence({
+    research: { observations: { marketplace: 'ETSY', queryContexts: ['throw blanket'], sellers: [] } },
+    productTruth: { snapshot: { asserted: { productType: asserted(`Blanket ${'x'.repeat(135)}`) } } },
+    configuration: { seedPhrase: 'throw blanket', listingLanguage: 'EN' },
+    masterKeywordArtifact: master(['throw blanket'], 7)
+  }), error => error.code === 'ETSY_PRODUCT_TRUTH_IDENTITY_REQUIRES_REVIEW');
+  passed++;
   console.log(`G4 Etsy intelligence adapter: ${passed}/${passed} PASS`);
 }
 

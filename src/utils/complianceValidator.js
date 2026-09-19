@@ -69,11 +69,14 @@ export function validateEtsyListing(listing) {
   if (titleLen > 140) {
     issues.push(`Etsy Title is ${titleLen} characters (Strict limit: 140)`);
   }
+  const titleWords = (listing?.etsyTitle || '').trim().split(/\s+/).filter(Boolean);
+  if (titleWords.length > 15) warnings.push(`Etsy Title has ${titleWords.length} words. Keep it clear and preferably 15 words or fewer.`);
+  if (((listing?.etsyTitle || '').match(/,/g) || []).length >= 2) warnings.push('Etsy Title reads like a keyword chain. Use a clear product-led title instead of comma stuffing.');
 
   // Tags validation (13 tags, max 20 chars per tag)
   const tags = listing?.etsyTags || [];
   if (tags.length < 13) {
-    warnings.push(`Only ${tags.length}/13 Etsy tags used. Use all 13 tags for maximum search visibility.`);
+    warnings.push(`${tags.length}/13 relevant Etsy tags used. Add only accurate, non-duplicate tags; do not pad with unrelated terms.`);
   } else if (tags.length > 13) {
     issues.push(`${tags.length} tags provided. Etsy allows a maximum of 13 tags.`);
   }
@@ -82,12 +85,18 @@ export function validateEtsyListing(listing) {
   if (invalidLengthTags.length > 0) {
     issues.push(`${invalidLengthTags.length} tag(s) exceed 20 characters: "${invalidLengthTags.join(', ')}"`);
   }
+  const validTagPattern = /^[\p{L}\p{N}]+(?:[ '\-][\p{L}\p{N}]+)*$/u;
+  const invalidCharacterTags = tags.filter(tag => !validTagPattern.test(String(tag).trim()));
+  if (invalidCharacterTags.length > 0) {
+    issues.push(`${invalidCharacterTags.length} tag(s) contain unsupported punctuation: "${invalidCharacterTags.join(', ')}"`);
+  }
 
   return {
     isValid: issues.length === 0,
     issues,
     warnings,
     tagsCount: tags.length,
-    invalidLengthTags
+    invalidLengthTags,
+    invalidCharacterTags
   };
 }

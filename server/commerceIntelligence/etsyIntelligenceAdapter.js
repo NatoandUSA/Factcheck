@@ -103,21 +103,26 @@ function containsCompetitorShop(phrase, sellers) {
 }
 
 function tagVariants(value) {
-  const phrase = text(value).replace(/\s+/g, ' ');
-  if (!phrase) return [];
-  if (Array.from(phrase).length <= 20) return [phrase];
-  const words = phrase.split(' '); const variants = [];
+  const segments = text(value).split(/[,;|\n]+/).map(item => item.normalize('NFKC')
+    .replace(/[^\p{L}\p{N}\s'-]+/gu, ' ').replace(/(^|\s)['-]+|['-]+(?=\s|$)/g, ' ')
+    .replace(/\s+/g, ' ').trim()).filter(Boolean);
+  const variants = [];
   const badStart = new Set(['and','con','de','del','en','from','of','the']);
   const badEnd = new Set(['a','and','con','de','del','en','for','from','mi','of','para','to']);
-  for (let size = Math.min(4, words.length); size >= 2; size--) {
-    for (let start = 0; start + size <= words.length; start++) {
-      const part = words.slice(start, start + size);
-      if (badStart.has(fold(part[0])) || badEnd.has(fold(part.at(-1)))) continue;
-      const candidate = part.join(' ');
-      const signals = tokens(candidate);
-      if (Array.from(candidate).length <= 20 && [...signals].some(token => PRODUCT_NOUN_TOKENS.has(token)
-        || SAFE_INTENT_TOKENS.has(token) || ['custom','personalized','personalised','personalizado','personalizada'].includes(token))) {
-        variants.push(candidate);
+  for (const phrase of segments) {
+    const words = phrase.split(' ');
+    const meaningful = tokens(phrase).size > 0 && !badStart.has(fold(words[0])) && !badEnd.has(fold(words.at(-1)));
+    if (meaningful && Array.from(phrase).length <= 20) variants.push(phrase);
+    for (let size = Math.min(4, words.length); size >= 2; size--) {
+      for (let start = 0; start + size <= words.length; start++) {
+        const part = words.slice(start, start + size);
+        if (badStart.has(fold(part[0])) || badEnd.has(fold(part.at(-1)))) continue;
+        const candidate = part.join(' ');
+        const signals = tokens(candidate);
+        if (Array.from(candidate).length <= 20 && [...signals].some(token => PRODUCT_NOUN_TOKENS.has(token)
+          || SAFE_INTENT_TOKENS.has(token) || ['custom','personalized','personalised','personalizado','personalizada'].includes(token))) {
+          variants.push(candidate);
+        }
       }
     }
   }
@@ -237,44 +242,22 @@ function candidateIntent(candidate) {
 function semanticKey(value) { return [...tokens(value)].sort().join(' '); }
 
 const ETSY_TITLE_LIMIT = 140;
-const ETSY_TITLE_WORKING_MAX = 138;
-const ETSY_TITLE_TARGET_MIN = 126;
 
-function composeEtsyTitle(safe, facts) {
-  const identity = text(facts.productName || facts.productType);
-  const identityGroups = productGroups(identity);
-  const productPhrases = safe.filter(candidate => {
-    const groups = productGroups(candidate.phrase);
-    return groups.size && [...groups].some(group => identityGroups.has(group));
+function composeEtsyTitle(safe, facts, language = 'EN') {
+  const verifiedIdentities = [facts.productName, facts.productType].map(value => text(value)).filter(Boolean);
+  const identity = verifiedIdentities.find(value => Array.from(value).length <= ETSY_TITLE_LIMIT
+    && value.split(/\s+/).filter(Boolean).length <= 15);
+  if (!identity) throw Object.assign(new Error('ETSY_PRODUCT_TRUTH_IDENTITY_REQUIRES_REVIEW'), {
+    code: 'ETSY_PRODUCT_TRUTH_IDENTITY_REQUIRES_REVIEW', status: 409
   });
-  const ordered = [...productPhrases, ...safe]; const clauses = []; const used = new Set();
-  const usedTokens = new Set();
-  const add = value => {
-    const phrase = titleCase(text(value)); const key = semanticKey(phrase);
-    if (!phrase || used.has(key)) return false;
-    const next = [...clauses, phrase].join(', ');
-    if (Array.from(next).length > ETSY_TITLE_WORKING_MAX) return false;
-    clauses.push(phrase); used.add(key);
-    for (const token of tokens(phrase)) usedTokens.add(token);
-    return true;
-  };
-  if (!productPhrases.length) add(identity); else add(productPhrases[0].phrase);
-  for (const candidate of ordered) {
-    if (Array.from(clauses.join(', ')).length >= ETSY_TITLE_TARGET_MIN) break;
-    const gain = [...tokens(candidate.phrase)].filter(token => !usedTokens.has(token));
-    if (gain.length >= 2) add(candidate.phrase);
+  const personalized = Boolean(text(facts.personalization));
+  const alreadyPersonalized = /\b(custom|personalized|personalised|personalizado|personalizada|nombre)\b/i.test(identity);
+  const prefix = language === 'ES' ? 'Personalizado' : 'Personalized';
+  const proposed = titleCase(`${personalized && !alreadyPersonalized ? `${prefix} ` : ''}${identity}`.trim());
+  if (Array.from(proposed).length > ETSY_TITLE_LIMIT || proposed.split(/\s+/).filter(Boolean).length > 15) {
+    return titleCase(identity);
   }
-  if (![...productGroups(clauses.join(' '))].some(group => identityGroups.has(group))) add(identity);
-  // A second pass fills safe remaining capacity without inventing adjectives
-  // or truncating a phrase. Repeated semantic clauses are still rejected.
-  if (Array.from(clauses.join(', ')).length < ETSY_TITLE_TARGET_MIN) {
-    for (const candidate of ordered) {
-      if (Array.from(clauses.join(', ')).length >= ETSY_TITLE_TARGET_MIN) break;
-      const gain = [...tokens(candidate.phrase)].filter(token => !usedTokens.has(token));
-      if (gain.length >= 1) add(candidate.phrase);
-    }
-  }
-  return clauses.join(', ').slice(0, ETSY_TITLE_LIMIT).trim();
+  return proposed;
 }
 
 function selectExplainedTags(safe, facts) {
@@ -367,7 +350,7 @@ async function buildIntelligence({ research, productTruth, configuration = {}, m
       irrelevant.push({ ...candidate, reason: 'IRRELEVANT_TO_PRODUCT_TRUTH_ANCHORS' });
     } else safe.push(candidate);
   }
-  const etsyTitle = composeEtsyTitle(safe, facts); const explainedTags = selectExplainedTags(safe, facts);
+  const etsyTitle = composeEtsyTitle(safe, facts, language); const explainedTags = selectExplainedTags(safe, facts);
   const etsyTags = explainedTags.map(item => item.value); const used = new Set(etsyTags.map(fold));
   const usedCorpusKeys = new Set(explainedTags.map(item => item.corpusKey).filter(Boolean));
   const tagCapacityGap = 13 - etsyTags.length;
@@ -411,4 +394,4 @@ async function buildIntelligence({ research, productTruth, configuration = {}, m
 
 module.exports = Object.freeze({ ENGINE_ID, buildIntelligence, candidateCorpus, engineBindingHash, factsFromSnapshot,
   productTypeConflict, unverifiedAppearanceTokens, unverifiedProductDescriptors, languageOfPhrase,
-  languageCompatible, resolveListingLanguage, containsCompetitorShop, tagVariants, corpusFromMasterArtifact });
+  languageCompatible, resolveListingLanguage, containsCompetitorShop, tagVariants, composeEtsyTitle, corpusFromMasterArtifact });

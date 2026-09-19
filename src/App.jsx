@@ -176,10 +176,12 @@ export default function App() {
 
   const handleSaveToHistory = (listingToSave, notify = true) => {
     if (!listingToSave) return;
-    const exists = history.some(h => h.id === listingToSave.id);
+    const listingId = listingToSave.dbId ?? listingToSave.id;
+    const identity = item => item?.dbId ?? item?.id;
+    const exists = listingId != null && history.some(item => identity(item) === listingId);
     let updated;
     if (exists) {
-      updated = history.map(h => h.id === listingToSave.id ? listingToSave : h);
+      updated = history.map(item => identity(item) === listingId ? listingToSave : item);
     } else {
       updated = [listingToSave, ...history];
     }
@@ -292,6 +294,7 @@ export default function App() {
               setActiveTab('product-page');
             }}
             onShowToast={showToast}
+            onListingPersisted={fetchListings}
           />
         )}
 
@@ -305,6 +308,7 @@ export default function App() {
               setActiveTab('product-page');
             }}
             onShowToast={showToast}
+            onListingPersisted={fetchListings}
           />
         )}
 

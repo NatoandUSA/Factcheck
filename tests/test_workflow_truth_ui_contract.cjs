@@ -9,6 +9,8 @@ const app = read('src/App.jsx');
 const server = read('server/server.js');
 const pastedParser = read('server/etsyPastedSearchParser.js');
 const canonical = read('src/components/CanonicalCommerceWorkflow.jsx');
+const etsyPreview = read('src/components/EtsyRealProductPage.jsx');
+const simulator = read('src/components/ProductListingPageSimulator.jsx');
 
 assert.ok(canonical.includes('legacy-policy-context-recovery'), 'legacy projects must expose an in-place policy recovery card');
 assert.ok(canonical.includes('/policy-context'), 'policy recovery must stay project-scoped');
@@ -44,6 +46,25 @@ assert.ok(canonical.includes("type: 'YTRENDS_E3'"), 'YTrends phrases must be vis
 assert.ok(canonical.includes('data-testid="canonical-progress-rail"'), 'both canonical workspaces must share the progress rail');
 assert.ok(canonical.includes('data-testid="product-truth-scope"'), 'Product Truth must explain its per-project product scope');
 assert.ok(canonical.includes('Không chỉ Jewelry'), 'Product Truth UI must disclose support beyond jewelry');
+assert.ok(canonical.includes('Phần trăm dung lượng chỉ là số đo, không phải mục tiêu để nhồi keyword'),
+  'Etsy title guidance must prioritize clarity instead of capacity stuffing');
+assert.ok(canonical.includes('onListingPersisted?.(result)'),
+  'a persisted canonical listing must notify the application catalog');
+assert.ok(canonical.includes('saveDraftAttemptRef.current.fingerprint !== fingerprint')
+  && canonical.includes('idempotencyKey: saveDraftAttemptRef.current.idempotencyKey'),
+  'retrying the same exact draft must retain one idempotency key');
+assert.ok(canonical.includes('Promise.allSettled') && canonical.includes('Listing #${result.listingId} đã lưu'),
+  'post-commit refresh failure must not turn a persisted listing into a failed save');
+assert.ok(canonical.includes("refreshFailures.some(item => item.reason?.status === 401)")
+  && canonical.includes('invalidateSession();'),
+  'best-effort post-commit refresh must still invalidate an expired authenticated shell');
+assert.ok(app.includes('onListingPersisted={fetchListings}'),
+  'both single-path workspaces must refresh Saved Catalog after persistence');
+assert.ok(etsyPreview.includes('listing?.imagePrompts?.prompts')
+  && etsyPreview.includes('{etsyPrompts.length} photo prompts') && !etsyPreview.includes('12 photo prompts'),
+  'Etsy Preview must display the exact generated prompt count');
+assert.ok(simulator.includes('expected: prompts.length'),
+  'Preview quality scoring must use the generated asset plan length rather than a stale constant');
 
 assert.strictEqual(etsy.includes("const transitioned = await handleTransition('RESEARCH_ACCEPTED')"), false, 'Opening Etsy research must not attempt a legacy server transition');
 assert.ok(etsy.includes("await handleTransition('DNA_ACCEPTED')"), 'Etsy DNA acceptance must call the server transition');

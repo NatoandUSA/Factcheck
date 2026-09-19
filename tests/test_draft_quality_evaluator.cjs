@@ -48,6 +48,14 @@ const verifiedCard = (productId, listingVersion) => ({
   const shortage = evaluateDraftQuality(base, 'ETSY', { ready: 12, expected: 12 });
   assert.equal(shortage.blockers.length, 0);
   assert.ok(shortage.warnings.some(item => item.includes('6/13')));
+  const invalidTag = evaluateDraftQuality({ ...base, etsyTags: ['family, keepsake'] }, 'ETSY', { ready: 8, expected: 8 });
+  assert.equal(invalidTag.verdict, 'BLOCKED');
+  assert.ok(invalidTag.blockers.some(item => item.includes('unsupported punctuation')));
+  const stuffedTitle = evaluateDraftQuality({ ...base,
+    etsyTitle: 'Throw Blanket Custom, Gift for Sister, Best Friend Keepsake, Birthday Present' }, 'ETSY', { ready: 8, expected: 8 });
+  assert.ok(stuffedTitle.warnings.some(item => item.includes('keyword chain')));
+  assert.ok(stuffedTitle.metrics.find(item => item.key === 'readability').score
+    < shortage.metrics.find(item => item.key === 'readability').score);
   assert.ok(compareDraftEvaluations(amazon, overLimit) < 0, 'unblocked draft must rank before a blocked draft');
 
   const canonical = evaluateDraftQuality({ ...base, productTruthCard: undefined,

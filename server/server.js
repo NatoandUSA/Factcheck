@@ -36,7 +36,7 @@ const { COOKIE_NAME, SESSION_TTL_MS, createSessionRecord, verifySessionRecord, r
 const { parseCookies, extractRawToken, requireAuth, requireRole, requireCsrfOrigin, corsOptionsDelegate } = require('./middleware/auth');
 const { runMigrations } = require('./database/migrations');
 const globalOpportunityStore = require('./database/globalOpportunityStore');
-const { parseGlobalOpportunityFile } = require('./globalOpportunityBulkParser');
+const { parseGlobalOpportunityFile, clusterDescriptor } = require('./globalOpportunityBulkParser');
 const {
   ensureTestDatabaseFixtures: ensureFixturesForDb,
   ensureDevelopmentDatabaseFixtures
@@ -3630,25 +3630,42 @@ app.post('/api/global-opportunities/import-file',
       if (!allowedSourceTypes.has(requestedSourceType)) {
         return res.status(400).json({ success: false, error: 'GLOBAL_IMPORT_SOURCE_TYPE_INVALID' });
       }
-      const observedAt = new Date().toISOString();
       const parsed = await parseGlobalOpportunityFile(req.file.buffer, {
         fileName: req.file.originalname,
         mediaType: req.file.mimetype,
-        sourceType: requestedSourceType,
-        proofTimestamp: observedAt
+        sourceType: requestedSourceType
       });
-      const detectedSources = [...new Set(parsed.candidates.map(item => item?.origin?.source).filter(Boolean))];
-      const canonicalSource = detectedSources.length === 1 ? detectedSources[0] : requestedSourceType;
-      const imported = await globalOpportunityStore.importCandidates(
-        db,
-        globalOpportunityScope(req.user),
-        req.user.userId,
-        {
-          source: `GLOBAL_BULK_${canonicalSource}`,
-          sourceFileId: parsed.sourceFileId,
-          candidates: parsed.candidates
-        }
-      );
+      const bySource = new Map();
+      for (const candidate of parsed.candidates) {
+        const source = String(candidate?.origin?.source || 'GENERIC').toUpperCase();
+        if (!bySource.has(source)) bySource.set(source, []);
+        bySource.get(source).push(candidate);
+      }
+      const imported = [];
+      for (const [source, candidates] of bySource.entries()) {
+        // Marketplace-export evidence may carry research-only sales/revenue proof.
+        // Trend/social and generic files remain useful discovery signals but can
+        // never unlock the proof-of-sale gate by themselves.
+        const commercialAuthority = ['CEREBRO', 'HEYETSY'].includes(source);
+        const sanitizedCandidates = commercialAuthority ? candidates : candidates.map(candidate => ({
+          ...candidate,
+          estimatedSales: null,
+          estimatedRevenue: null,
+          proofType: 'NONE'
+        }));
+        const batch = await globalOpportunityStore.importCandidates(
+          db,
+          globalOpportunityScope(req.user),
+          req.user.userId,
+          {
+            source: `GLOBAL_BULK_${source}`,
+            sourceFileId: parsed.sourceFileId,
+            candidates: sanitizedCandidates
+          },
+          { allowCommercialMetrics: commercialAuthority, allowProofTimestamp: false }
+        );
+        imported.push(...batch);
+      }
       return res.json({
         success: true,
         mode: 'GLOBAL_BULK_IMPORT',
@@ -3657,6 +3674,7 @@ app.post('/api/global-opportunities/import-file',
         sourceFileId: parsed.sourceFileId,
         parsedCount: parsed.candidateCount,
         importedCount: imported.length,
+        sourceFamilies: [...bySource.keys()],
         diagnostics: parsed.diagnostics,
         candidates: imported.slice(0, 100)
       });
@@ -3673,7 +3691,20 @@ app.post('/api/global-opportunities/import', requireAuth(db), requireRole(['OWNE
       db,
       globalOpportunityScope(req.user),
       req.user.userId,
-      body
+      {
+        source: 'GLOBAL_JSON_UNVERIFIED',
+        sourceFileId: 'unverified-json',
+        candidates: (Array.isArray(body.candidates) ? body.candidates : []).map(candidate => {
+          const cluster = clusterDescriptor(candidate?.keyword);
+          return {
+            ...candidate,
+            clusterKey: cluster.clusterKey,
+            clusterLabel: cluster.clusterLabel,
+            clusterMethod: cluster.method
+          };
+        })
+      },
+      { allowCommercialMetrics: false, allowProofTimestamp: false }
     );
     return res.json({
       success: true,
@@ -3720,6 +3751,10 @@ app.post('/api/global-opportunities/harvest-project/:projectId', requireAuth(db)
         source: req.user.marketplace === 'AMAZON' ? 'PROJECT_MKL_COMMERCIAL_OUTLIER' : 'PROJECT_MKL_ETSY_REVIEW',
         sourceFileId: `project:${project.id}:artifact:${master.id}`,
         candidates
+      },
+      {
+        allowCommercialMetrics: req.user.marketplace === 'AMAZON',
+        allowProofTimestamp: true
       }
     );
     return res.json({

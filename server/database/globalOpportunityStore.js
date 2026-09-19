@@ -3,9 +3,11 @@ const { clusterDescriptor } = require('../globalOpportunityBulkParser');
 
 const ALLOWED_STATUSES = new Set(['DISCOVERED','QUALIFIED','WATCH','PROMOTE_TO_PROJECT','REJECTED','STALE','PROMOTED']);
 const PROOF_TYPES = new Set(['MARKETPLACE_SALES','ESTIMATED_SALES','ESTIMATED_REVENUE','LISTING_SALES_PROXY','ORDER_EVIDENCE','NONE']);
+const GLOBAL_SCORE_VERSION = 'GLOBAL_OPPORTUNITY_V2';
 
 function text(value) { return typeof value === 'string' ? value.trim() : ''; }
 function finite(value) {
+  if (value === null || value === undefined || value === '') return null;
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
 }
@@ -31,6 +33,16 @@ function get(db, sql, params = []) {
 }
 function all(db, sql, params = []) {
   return new Promise((resolve, reject) => db.all(sql, params, (error, rows) => error ? reject(error) : resolve(rows || [])));
+}
+
+const writeQueues = new WeakMap();
+function withProcessWriteLock(db, operation) {
+  const previous = writeQueues.get(db) || Promise.resolve();
+  const current = previous.catch(() => {}).then(operation);
+  writeQueues.set(db, current);
+  return current.finally(() => {
+    if (writeQueues.get(db) === current) writeQueues.delete(db);
+  });
 }
 
 async function migrateGlobalOpportunityDiscovery(db) {
@@ -198,6 +210,16 @@ function scopeParams(scope) {
   return [scope.tenantId, scope.workspaceId, scope.marketplace];
 }
 
+function rawCandidate(row) {
+  if (typeof row?.raw_json !== 'string' || !row.raw_json.trim()) return {};
+  try {
+    const parsed = JSON.parse(row.raw_json);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch (_) {
+    return {};
+  }
+}
+
 function projectMklCandidates(artifact, marketplace) {
   if (!artifact || typeof artifact !== 'object') return [];
   const expectedKind = marketplace === 'AMAZON' ? 'AMAZON_MASTER_KEYWORDS' : 'ETSY_MASTER_KEYWORDS';
@@ -291,8 +313,8 @@ async function upsertScore(db, scope, candidateId, score) {
   await run(db, `INSERT INTO global_opportunity_scores
     (candidate_id,tenant_id,workspace_id,marketplace,marketplace_proof,demand,competition,
      price_margin_potential,trend_velocity,cross_source_validation,social_momentum,freshness,
-     risk_penalty,opportunity_score,proof_gate,explanation_json)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+     risk_penalty,opportunity_score,proof_gate,score_version,explanation_json)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     ON CONFLICT(candidate_id,score_version) DO UPDATE SET
       marketplace_proof=excluded.marketplace_proof,demand=excluded.demand,competition=excluded.competition,
       price_margin_potential=excluded.price_margin_potential,trend_velocity=excluded.trend_velocity,
@@ -302,13 +324,15 @@ async function upsertScore(db, scope, candidateId, score) {
       explanation_json=excluded.explanation_json,scored_at=CURRENT_TIMESTAMP`,
   [candidateId, ...scopeParams(scope), score.marketplaceProof, score.demand, score.competition,
     score.priceMarginPotential, score.trendVelocity, score.crossSourceValidation, score.socialMomentum,
-    score.freshness, score.riskPenalty, score.opportunityScore, score.proofGate, JSON.stringify(score.explanation)]);
+    score.freshness, score.riskPenalty, score.opportunityScore, score.proofGate, GLOBAL_SCORE_VERSION, JSON.stringify(score.explanation)]);
 }
 
 async function reconcileCrossSourceScores(db, scope) {
   const counts = await all(db, `SELECT normalized_keyword,COUNT(DISTINCT source) AS observed_source_count
     FROM global_keyword_candidates
     WHERE tenant_id=? AND workspace_id=? AND marketplace=?
+      AND source<>'GLOBAL_JSON_UNVERIFIED'
+      AND status NOT IN ('REJECTED','STALE')
     GROUP BY normalized_keyword`, scopeParams(scope));
   const sourceCounts = new Map(counts.map(row => [row.normalized_keyword, Math.max(1, Number(row.observed_source_count || 1))]));
   const rows = await all(db, `SELECT * FROM global_keyword_candidates
@@ -330,16 +354,31 @@ async function reconcileCrossSourceScores(db, scope) {
       socialMomentum: row.social_momentum,
       crossSourceCount: observed,
       proofType: row.proof_type,
-      proofTimestamp: row.proof_timestamp
+      proofTimestamp: row.proof_timestamp,
+      riskPenalty: rawCandidate(row).riskPenalty
     });
     await upsertScore(db, scope, row.id, score);
   }
 }
 
-async function importCandidates(db, scope, actorId, payload) {
+async function migrateGlobalOpportunityScoreV2(db) {
+  const scopes = await all(db, `SELECT DISTINCT tenant_id,workspace_id,marketplace
+    FROM global_keyword_candidates`);
+  for (const row of scopes) {
+    await reconcileCrossSourceScores(db, {
+      tenantId: row.tenant_id,
+      workspaceId: row.workspace_id,
+      marketplace: row.marketplace
+    });
+  }
+}
+
+async function importCandidatesUnlocked(db, scope, actorId, payload, authority = {}) {
   const source = text(payload.source);
   const sourceFileId = text(payload.sourceFileId);
   const input = Array.isArray(payload.candidates) ? payload.candidates : [];
+  const allowCommercialMetrics = authority.allowCommercialMetrics === true;
+  const allowProofTimestamp = authority.allowProofTimestamp === true;
   if (!source || input.length === 0 || input.length > 10000) {
     throw Object.assign(new Error('INVALID_GLOBAL_CANDIDATE_IMPORT'), { code: 'INVALID_GLOBAL_CANDIDATE_IMPORT', status: 400 });
   }
@@ -350,10 +389,27 @@ async function importCandidates(db, scope, actorId, payload) {
       const keyword = text(candidate?.keyword);
       const normalized = normalizeKeyword(keyword);
       if (!normalized) continue;
-      const cluster = await ensureCluster(db, scope, candidate);
-      const proofType = PROOF_TYPES.has(text(candidate.proofType).toUpperCase()) ? text(candidate.proofType).toUpperCase() : 'NONE';
+      const existing = await get(db, `SELECT id,status,cluster_id FROM global_keyword_candidates
+        WHERE tenant_id=? AND workspace_id=? AND marketplace=? AND normalized_keyword=? AND source=? AND source_file_id=?`,
+      [...scopeParams(scope), normalized, source, sourceFileId]);
+      const hasExplicitCluster = Boolean(text(candidate.clusterKey || candidate.cluster));
+      let cluster = null;
+      if (existing?.cluster_id && !hasExplicitCluster) {
+        cluster = await get(db, `SELECT * FROM keyword_clusters
+          WHERE id=? AND tenant_id=? AND workspace_id=? AND marketplace=?`,
+        [existing.cluster_id, ...scopeParams(scope)]);
+      }
+      if (!cluster) cluster = await ensureCluster(db, scope, candidate);
+      const suppliedProofType = PROOF_TYPES.has(text(candidate.proofType).toUpperCase()) ? text(candidate.proofType).toUpperCase() : 'NONE';
+      const effectiveCandidate = {
+        ...candidate,
+        estimatedSales: allowCommercialMetrics ? finite(candidate.estimatedSales) : null,
+        estimatedRevenue: allowCommercialMetrics ? finite(candidate.estimatedRevenue) : null,
+        proofType: allowCommercialMetrics ? suppliedProofType : 'NONE',
+        proofTimestamp: allowProofTimestamp ? text(candidate.proofTimestamp) || null : null
+      };
       const uid = hash([scope.tenantId, scope.workspaceId, scope.marketplace, normalized, source, sourceFileId].join('|'));
-      const score = scoreCandidate({ ...candidate, proofType });
+      const score = scoreCandidate(effectiveCandidate);
       const status = score.proofGate === 'PASS' ? 'QUALIFIED' : 'WATCH';
       await run(db, `INSERT INTO global_keyword_candidates
         (candidate_uid,tenant_id,workspace_id,marketplace,keyword,normalized_keyword,cluster_id,source,source_file_id,
@@ -367,13 +423,13 @@ async function importCandidates(db, scope, actorId, payload) {
           rank_proxy=excluded.rank_proxy,trend_velocity=excluded.trend_velocity,
           social_momentum=excluded.social_momentum,cross_source_count=excluded.cross_source_count,
           proof_type=excluded.proof_type,proof_timestamp=excluded.proof_timestamp,raw_json=excluded.raw_json,
-          status=CASE WHEN global_keyword_candidates.status IN ('PROMOTED','REJECTED') THEN global_keyword_candidates.status ELSE excluded.status END,
+          status=CASE WHEN global_keyword_candidates.status IN ('PROMOTED','REJECTED','STALE') THEN global_keyword_candidates.status ELSE excluded.status END,
           updated_at=CURRENT_TIMESTAMP`,
       [uid, ...scopeParams(scope), keyword, normalized, cluster.id, source, sourceFileId,
-        finite(candidate.searchVolume), finite(candidate.estimatedSales), finite(candidate.estimatedRevenue),
+        finite(candidate.searchVolume), effectiveCandidate.estimatedSales, effectiveCandidate.estimatedRevenue,
         finite(candidate.avgPrice), finite(candidate.competition), finite(candidate.reviews), finite(candidate.rankProxy),
         finite(candidate.trendVelocity), finite(candidate.socialMomentum), Math.max(1, Math.trunc(finite(candidate.crossSourceCount) || 1)),
-        proofType, text(candidate.proofTimestamp) || null, JSON.stringify(candidate), status, actorId]);
+        effectiveCandidate.proofType, effectiveCandidate.proofTimestamp, JSON.stringify(candidate), status, actorId]);
       const row = await get(db, `SELECT id,status FROM global_keyword_candidates
         WHERE tenant_id=? AND workspace_id=? AND marketplace=? AND normalized_keyword=? AND source=? AND source_file_id=?`,
       [...scopeParams(scope), normalized, source, sourceFileId]);
@@ -407,7 +463,7 @@ async function listCandidates(db, scope, filters = {}) {
       s.freshness,s.risk_penalty,s.opportunity_score,s.proof_gate,s.score_version,s.scored_at
     FROM global_keyword_candidates c
     LEFT JOIN keyword_clusters k ON k.id=c.cluster_id
-    LEFT JOIN global_opportunity_scores s ON s.candidate_id=c.id AND s.score_version='GLOBAL_OPPORTUNITY_V1'
+    LEFT JOIN global_opportunity_scores s ON s.candidate_id=c.id AND s.score_version='${GLOBAL_SCORE_VERSION}'
     WHERE c.tenant_id=? AND c.workspace_id=? AND c.marketplace=?${whereStatus}
     ORDER BY COALESCE(s.opportunity_score,0) DESC,c.updated_at DESC LIMIT ?`, params);
 }
@@ -416,11 +472,11 @@ async function listCandidates(db, scope, filters = {}) {
 async function opportunitySummary(db, scope) {
   const rows = await all(db, `SELECT c.status,s.proof_gate,COUNT(*) AS count
     FROM global_keyword_candidates c
-    LEFT JOIN global_opportunity_scores s ON s.candidate_id=c.id AND s.score_version='GLOBAL_OPPORTUNITY_V1'
+    LEFT JOIN global_opportunity_scores s ON s.candidate_id=c.id AND s.score_version='${GLOBAL_SCORE_VERSION}'
     WHERE c.tenant_id=? AND c.workspace_id=? AND c.marketplace=?
     GROUP BY c.status,s.proof_gate`, scopeParams(scope));
-  const clusters = await get(db, `SELECT COUNT(*) AS count FROM keyword_clusters
-    WHERE tenant_id=? AND workspace_id=? AND marketplace=?`, scopeParams(scope));
+  const clusters = await get(db, `SELECT COUNT(DISTINCT cluster_id) AS count FROM global_keyword_candidates
+    WHERE tenant_id=? AND workspace_id=? AND marketplace=? AND cluster_id IS NOT NULL`, scopeParams(scope));
   const candidates = await get(db, `SELECT COUNT(*) AS count FROM global_keyword_candidates
     WHERE tenant_id=? AND workspace_id=? AND marketplace=?`, scopeParams(scope));
   const byStatus = {}; const byProofGate = {};
@@ -448,7 +504,7 @@ async function watchlist(db, scope, filters = {}) {
       s.trend_velocity AS trend_score,s.cross_source_validation,s.social_momentum AS social_score,s.freshness
     FROM global_keyword_candidates c
     LEFT JOIN keyword_clusters k ON k.id=c.cluster_id
-    LEFT JOIN global_opportunity_scores s ON s.candidate_id=c.id AND s.score_version='GLOBAL_OPPORTUNITY_V1'
+    LEFT JOIN global_opportunity_scores s ON s.candidate_id=c.id AND s.score_version='${GLOBAL_SCORE_VERSION}'
     WHERE c.tenant_id=? AND c.workspace_id=? AND c.marketplace=?
       AND c.status IN ('QUALIFIED','WATCH') AND c.status<>'REJECTED'
     ORDER BY CASE WHEN s.proof_gate='PASS' THEN 0 ELSE 1 END,
@@ -456,17 +512,30 @@ async function watchlist(db, scope, filters = {}) {
     [...scopeParams(scope), limit]);
 }
 
-async function setCandidateStatus(db, scope, actorId, candidateId, nextStatus, metadata = {}) {
+async function setCandidateStatusUnlocked(db, scope, actorId, candidateId, nextStatus, metadata = {}) {
   const status = text(nextStatus).toUpperCase();
   if (!ALLOWED_STATUSES.has(status) || status === 'PROMOTED') {
     throw Object.assign(new Error('INVALID_GLOBAL_CANDIDATE_STATUS'), { code: 'INVALID_GLOBAL_CANDIDATE_STATUS', status: 400 });
   }
-  const row = await get(db, `SELECT * FROM global_keyword_candidates WHERE id=? AND tenant_id=? AND workspace_id=? AND marketplace=?`,
-    [candidateId, ...scopeParams(scope)]);
-  if (!row) throw Object.assign(new Error('GLOBAL_CANDIDATE_NOT_FOUND'), { code: 'GLOBAL_CANDIDATE_NOT_FOUND', status: 404 });
-  if (row.status === 'PROMOTED') throw Object.assign(new Error('GLOBAL_CANDIDATE_ALREADY_PROMOTED'), { code: 'GLOBAL_CANDIDATE_ALREADY_PROMOTED', status: 409 });
-  await run(db, 'BEGIN IMMEDIATE');
+  let transactionOpen = false;
   try {
+    await run(db, 'BEGIN IMMEDIATE'); transactionOpen = true;
+    const row = await get(db, `SELECT * FROM global_keyword_candidates
+      WHERE id=? AND tenant_id=? AND workspace_id=? AND marketplace=?`,
+    [candidateId, ...scopeParams(scope)]);
+    if (!row) throw Object.assign(new Error('GLOBAL_CANDIDATE_NOT_FOUND'), { code: 'GLOBAL_CANDIDATE_NOT_FOUND', status: 404 });
+    if (row.status === 'PROMOTED') throw Object.assign(new Error('GLOBAL_CANDIDATE_ALREADY_PROMOTED'), { code: 'GLOBAL_CANDIDATE_ALREADY_PROMOTED', status: 409 });
+
+    if (['QUALIFIED', 'PROMOTE_TO_PROJECT'].includes(status)) {
+      const score = await get(db, `SELECT proof_gate FROM global_opportunity_scores
+        WHERE candidate_id=? AND score_version=?`, [candidateId, GLOBAL_SCORE_VERSION]);
+      if (!score || score.proof_gate !== 'PASS') {
+        throw Object.assign(new Error('GLOBAL_PROOF_OF_SALE_REQUIRED_FOR_STATUS'), {
+          code: 'GLOBAL_PROOF_OF_SALE_REQUIRED_FOR_STATUS', status: 409, requestedStatus: status
+        });
+      }
+    }
+
     await run(db, `UPDATE global_keyword_candidates SET status=?,updated_at=CURRENT_TIMESTAMP
       WHERE id=? AND tenant_id=? AND workspace_id=? AND marketplace=?`,
     [status, candidateId, ...scopeParams(scope)]);
@@ -474,50 +543,80 @@ async function setCandidateStatus(db, scope, actorId, candidateId, nextStatus, m
       (tenant_id,workspace_id,marketplace,candidate_id,actor_id,action,previous_status,next_status,metadata_json)
       VALUES (?,?,?,?,?,'STATUS_CHANGE',?,?,?)`,
     [...scopeParams(scope), candidateId, actorId, row.status, status, JSON.stringify(metadata || {})]);
-    await run(db, 'COMMIT');
+    await reconcileCrossSourceScores(db, scope);
+    await run(db, 'COMMIT'); transactionOpen = false;
+    return { candidateId, previousStatus: row.status, status };
   } catch (error) {
-    try { await run(db, 'ROLLBACK'); } catch (_) {}
+    if (transactionOpen) try { await run(db, 'ROLLBACK'); } catch (_) {}
     throw error;
   }
-  return { candidateId, previousStatus: row.status, status };
 }
 
-async function promoteToProject(db, scope, actorId, candidateId, payload = {}) {
-  const candidate = await get(db, `SELECT c.*,k.display_name AS cluster_name FROM global_keyword_candidates c
-    LEFT JOIN keyword_clusters k ON k.id=c.cluster_id
-    WHERE c.id=? AND c.tenant_id=? AND c.workspace_id=? AND c.marketplace=?`,
-  [candidateId, ...scopeParams(scope)]);
-  if (!candidate) throw Object.assign(new Error('GLOBAL_CANDIDATE_NOT_FOUND'), { code: 'GLOBAL_CANDIDATE_NOT_FOUND', status: 404 });
-  if (candidate.status === 'PROMOTED') return { candidateId, projectId: candidate.promoted_project_id, status: 'PROMOTED', replay: true };
-  const score = await get(db, `SELECT * FROM global_opportunity_scores WHERE candidate_id=? AND score_version='GLOBAL_OPPORTUNITY_V1'`, [candidateId]);
-  if (!score || score.proof_gate !== 'PASS') {
-    throw Object.assign(new Error('GLOBAL_PROOF_OF_SALE_REQUIRED'), { code: 'GLOBAL_PROOF_OF_SALE_REQUIRED', status: 409 });
-  }
-  const projectName = text(payload.name) || candidate.cluster_name || candidate.keyword;
-  const seedPhrase = candidate.cluster_name || candidate.keyword;
-  if (!projectName || !seedPhrase) throw Object.assign(new Error('GLOBAL_PROMOTION_CONTEXT_INVALID'), { code: 'GLOBAL_PROMOTION_CONTEXT_INVALID', status: 409 });
-  await run(db, 'BEGIN IMMEDIATE');
+async function promoteToProjectUnlocked(db, scope, actorId, candidateId, payload = {}) {
+  let transactionOpen = false;
   try {
+    // Read authority state only after BEGIN IMMEDIATE. This makes replay/idempotency
+    // safe across separate Node processes sharing the same SQLite database.
+    await run(db, 'BEGIN IMMEDIATE'); transactionOpen = true;
+    const candidate = await get(db, `SELECT c.*,k.display_name AS cluster_name FROM global_keyword_candidates c
+      LEFT JOIN keyword_clusters k ON k.id=c.cluster_id
+      WHERE c.id=? AND c.tenant_id=? AND c.workspace_id=? AND c.marketplace=?`,
+    [candidateId, ...scopeParams(scope)]);
+    if (!candidate) throw Object.assign(new Error('GLOBAL_CANDIDATE_NOT_FOUND'), { code: 'GLOBAL_CANDIDATE_NOT_FOUND', status: 404 });
+    if (candidate.status === 'PROMOTED') {
+      await run(db, 'COMMIT'); transactionOpen = false;
+      return { candidateId, projectId: candidate.promoted_project_id, status: 'PROMOTED', replay: true };
+    }
+
+    const score = await get(db, `SELECT * FROM global_opportunity_scores
+      WHERE candidate_id=? AND score_version=?`, [candidateId, GLOBAL_SCORE_VERSION]);
+    if (!score || score.proof_gate !== 'PASS') {
+      throw Object.assign(new Error('GLOBAL_PROOF_OF_SALE_REQUIRED'), { code: 'GLOBAL_PROOF_OF_SALE_REQUIRED', status: 409 });
+    }
+    if (!['QUALIFIED', 'PROMOTE_TO_PROJECT'].includes(String(candidate.status || '').toUpperCase())) {
+      throw Object.assign(new Error('GLOBAL_CANDIDATE_STATUS_NOT_PROMOTABLE'), {
+        code: 'GLOBAL_CANDIDATE_STATUS_NOT_PROMOTABLE', status: 409, currentStatus: candidate.status
+      });
+    }
+
+    const projectName = text(payload.name) || candidate.cluster_name || candidate.keyword;
+    const seedPhrase = candidate.cluster_name || candidate.keyword;
+    if (!projectName || !seedPhrase) throw Object.assign(new Error('GLOBAL_PROMOTION_CONTEXT_INVALID'), { code: 'GLOBAL_PROMOTION_CONTEXT_INVALID', status: 409 });
+
     const inserted = await run(db, `INSERT INTO research_projects
       (tenant_id,workspace_id,marketplace,name,seed_phrase,state,reference_asin,actor_id)
       VALUES (?,?,?,?,?,'EVIDENCE_INTAKE',?,?)`,
     [...scopeParams(scope), projectName, seedPhrase, text(payload.referenceAsin) || null, actorId]);
-    await run(db, `UPDATE global_keyword_candidates SET status='PROMOTED',promoted_project_id=?,updated_at=CURRENT_TIMESTAMP
-      WHERE id=? AND tenant_id=? AND workspace_id=? AND marketplace=? AND status<>'PROMOTED'`,
+    const updated = await run(db, `UPDATE global_keyword_candidates
+      SET status='PROMOTED',promoted_project_id=?,updated_at=CURRENT_TIMESTAMP
+      WHERE id=? AND tenant_id=? AND workspace_id=? AND marketplace=? AND status IN ('QUALIFIED','PROMOTE_TO_PROJECT')`,
     [inserted.lastID, candidateId, ...scopeParams(scope)]);
+    if (updated.changes !== 1) {
+      throw Object.assign(new Error('GLOBAL_PROMOTION_CONFLICT'), { code: 'GLOBAL_PROMOTION_CONFLICT', status: 409 });
+    }
     await run(db, `INSERT INTO global_opportunity_events
       (tenant_id,workspace_id,marketplace,candidate_id,actor_id,action,previous_status,next_status,metadata_json)
       VALUES (?,?,?,?,?,'CREATE_PROJECT',?,'PROMOTED',?)`,
     [...scopeParams(scope), candidateId, actorId, candidate.status, JSON.stringify({ projectId: inserted.lastID, seedPhrase, score: score.opportunity_score })]);
-    await run(db, 'COMMIT');
+    await run(db, 'COMMIT'); transactionOpen = false;
     return { candidateId, projectId: inserted.lastID, status: 'PROMOTED', projectState: 'EVIDENCE_INTAKE', seedPhrase };
   } catch (error) {
-    try { await run(db, 'ROLLBACK'); } catch (_) {}
+    if (transactionOpen) try { await run(db, 'ROLLBACK'); } catch (_) {}
     throw error;
   }
 }
 
+function importCandidates(db, scope, actorId, payload, authority = {}) {
+  return withProcessWriteLock(db, () => importCandidatesUnlocked(db, scope, actorId, payload, authority));
+}
+function setCandidateStatus(db, scope, actorId, candidateId, nextStatus, metadata = {}) {
+  return withProcessWriteLock(db, () => setCandidateStatusUnlocked(db, scope, actorId, candidateId, nextStatus, metadata));
+}
+function promoteToProject(db, scope, actorId, candidateId, payload = {}) {
+  return withProcessWriteLock(db, () => promoteToProjectUnlocked(db, scope, actorId, candidateId, payload));
+}
+
 module.exports = Object.freeze({
-  ALLOWED_STATUSES, normalizeKeyword, normalizeClusterKey, migrateGlobalOpportunityDiscovery,
-  proofGate, freshnessScore, competitionScore, scoreCandidate, projectMklCandidates, reconcileCrossSourceScores, importCandidates, listCandidates, opportunitySummary, watchlist, setCandidateStatus, promoteToProject
+  ALLOWED_STATUSES, GLOBAL_SCORE_VERSION, normalizeKeyword, normalizeClusterKey, migrateGlobalOpportunityDiscovery,
+  migrateGlobalOpportunityScoreV2, proofGate, freshnessScore, competitionScore, scoreCandidate, projectMklCandidates, reconcileCrossSourceScores, importCandidates, listCandidates, opportunitySummary, watchlist, setCandidateStatus, promoteToProject
 });

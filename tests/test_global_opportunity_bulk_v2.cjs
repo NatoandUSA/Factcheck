@@ -8,7 +8,8 @@ process.env.NODE_ENV = 'test';
 const { app, db, databaseReady } = require('../server/server');
 const { createSessionRecord } = require('../server/security/session');
 const { clusterDescriptor, parseGlobalOpportunityFile } = require('../server/globalOpportunityBulkParser');
-const { projectMklCandidates, proofGate, freshnessScore, competitionScore } = require('../server/database/globalOpportunityStore');
+const { projectMklCandidates, proofGate, freshnessScore, competitionScore, importCandidates,
+  migrateGlobalOpportunityScoreV2, GLOBAL_SCORE_VERSION } = require('../server/database/globalOpportunityStore');
 
 function all(sql, params = []) {
   return new Promise((resolve, reject) => db.all(sql, params, (error, rows) => error ? reject(error) : resolve(rows || [])));
@@ -33,6 +34,14 @@ async function workbookBytes() {
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
 
+async function ytrendWorkbookBytes() {
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('YTrend Export');
+  ws.addRow(['Keyword','Estimated Revenue','Momentum Score']);
+  ws.addRow(['viral pet memorial lamp',9999,9]);
+  return Buffer.from(await wb.xlsx.writeBuffer());
+}
+
 async function run() {
   assert.equal(proofGate({ proofType: 'ORDER_EVIDENCE', estimatedSales: null, estimatedRevenue: null }), 'WATCH_ONLY',
     'proofType metadata alone must never unlock PASS');
@@ -40,6 +49,8 @@ async function run() {
   assert.equal(freshnessScore('2999-01-01T00:00:00.000Z'), 0, 'future timestamps must not receive freshness credit');
   assert(freshnessScore(new Date().toISOString()) > 0);
   assert(competitionScore(1000) > 0 && competitionScore(1000) < 15);
+  assert.equal(competitionScore(null), 5, 'missing competition must remain UNKNOWN/default, never become zero-competition');
+  assert.equal(competitionScore(''), 5, 'blank competition must remain UNKNOWN/default');
 
   const a = clusterDescriptor('dog memorial wind chime');
   const b = clusterDescriptor('personalized pet loss wind chime');
@@ -106,6 +117,40 @@ async function run() {
     assert.equal(imported.parsedCount, 3);
     assert.equal(imported.importedCount, 3);
 
+    const freshnessRows = await all(`SELECT c.proof_timestamp,s.freshness
+      FROM global_keyword_candidates c
+      JOIN global_opportunity_scores s ON s.candidate_id=c.id AND s.score_version='GLOBAL_OPPORTUNITY_V2'
+      WHERE c.tenant_id=? AND c.workspace_id=? AND c.marketplace='AMAZON' AND c.source_file_id=?`,
+    [user.tenant_id, user.workspace_id, imported.sourceFileId]);
+    assert(freshnessRows.length >= 3);
+    assert(freshnessRows.every(row => row.proof_timestamp === null),
+      'upload time must not be stored as marketplace proof timestamp');
+    assert(freshnessRows.every(row => Number(row.freshness) === 0),
+      'old/undated exports must not receive synthetic freshness credit');
+
+    const ytrendBytes = await ytrendWorkbookBytes();
+    const ytrendForm = new FormData();
+    ytrendForm.set('sourceType', 'AUTO');
+    ytrendForm.set('file', new Blob([ytrendBytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), 'ytrend.xlsx');
+    const ytrendRes = await fetch(base + '/api/global-opportunities/import-file', {
+      method: 'POST', headers: { Origin: base, Cookie: cookie }, body: ytrendForm
+    });
+    assert.equal(ytrendRes.status, 200);
+    const ytrendBody = await ytrendRes.json();
+    assert.deepEqual(ytrendBody.sourceFamilies, ['YTREND']);
+    const ytrendRows = await all(`SELECT c.source,c.estimated_revenue,c.proof_type,s.proof_gate
+      FROM global_keyword_candidates c
+      JOIN global_opportunity_scores s ON s.candidate_id=c.id AND s.score_version='GLOBAL_OPPORTUNITY_V2'
+      WHERE c.tenant_id=? AND c.workspace_id=? AND c.marketplace='AMAZON'
+        AND c.normalized_keyword='viral pet memorial lamp'`,
+    [user.tenant_id, user.workspace_id]);
+    assert.equal(ytrendRows.length, 1);
+    assert.equal(ytrendRows[0].source, 'GLOBAL_BULK_YTREND');
+    assert.equal(ytrendRows[0].estimated_revenue, null,
+      'trend/social exports must not become commercial proof even when they contain revenue-like columns');
+    assert.equal(ytrendRows[0].proof_type, 'NONE');
+    assert.equal(ytrendRows[0].proof_gate, 'WATCH_ONLY');
+
     const renamedForm = new FormData();
     renamedForm.set('sourceType', 'AUTO');
     renamedForm.set('file', new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), 'same-content-renamed.xlsx');
@@ -126,23 +171,20 @@ async function run() {
     [user.tenant_id, user.workspace_id]);
     assert.deepEqual(after, before, 'bulk global import must not mutate any existing project');
 
-    const secondSourceRes = await fetch(base + '/api/global-opportunities/import', {
-      method: 'POST',
-      headers: { Origin: base, Cookie: cookie, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        source: 'YTREND_VALIDATION',
-        sourceFileId: 'ytrend-cross-source-1',
-        candidates: [{
-          keyword: 'dog memorial wind chime',
-          clusterKey: clusterDescriptor('dog memorial wind chime').clusterKey,
-          clusterLabel: clusterDescriptor('dog memorial wind chime').clusterLabel,
-          trendVelocity: 9,
-          socialMomentum: 7,
-          proofType: 'NONE'
-        }]
-      })
-    });
-    assert.equal(secondSourceRes.status, 200);
+    await importCandidates(db, {
+      tenantId: user.tenant_id, workspaceId: user.workspace_id, marketplace: 'AMAZON'
+    }, user.user_id, {
+      source: 'YTREND_VALIDATION',
+      sourceFileId: 'ytrend-cross-source-1',
+      candidates: [{
+        keyword: 'dog memorial wind chime',
+        clusterKey: clusterDescriptor('dog memorial wind chime').clusterKey,
+        clusterLabel: clusterDescriptor('dog memorial wind chime').clusterLabel,
+        trendVelocity: 9,
+        socialMomentum: 7,
+        proofType: 'NONE'
+      }]
+    }, { allowCommercialMetrics: false, allowProofTimestamp: false });
 
     const crossListRes = await fetch(base + '/api/global-opportunities?limit=100', {
       headers: { Origin: base, Cookie: cookie }
@@ -154,6 +196,145 @@ async function run() {
     assert(sameKeyword.every(item => Number(item.cross_source_count) >= 2),
       'server must reconcile distinct sources instead of trusting client crossSourceCount');
     assert(sameKeyword.some(item => Number(item.cross_source_validation) > 0));
+
+    const ytrendCandidate = sameKeyword.find(item => item.source === 'YTREND_VALIDATION');
+    assert(ytrendCandidate);
+    const rejectYtrend = await fetch(base + `/api/global-opportunities/${ytrendCandidate.id}/status`, {
+      method: 'POST',
+      headers: { Origin: base, Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'REJECTED', reason: 'corroboration audit' })
+    });
+    assert.equal(rejectYtrend.status, 200);
+    const afterRejectRes = await fetch(base + '/api/global-opportunities?limit=100', {
+      headers: { Origin: base, Cookie: cookie }
+    });
+    const afterReject = await afterRejectRes.json();
+    const cerebroAfterReject = afterReject.candidates.find(item =>
+      item.normalized_keyword === 'dog memorial wind chime' && item.source === 'GLOBAL_BULK_CEREBRO');
+    assert(cerebroAfterReject);
+    assert.equal(Number(cerebroAfterReject.cross_source_count), 1,
+      'REJECTED source must stop corroborating an otherwise trusted candidate');
+
+    const restoreYtrend = await fetch(base + `/api/global-opportunities/${ytrendCandidate.id}/status`, {
+      method: 'POST',
+      headers: { Origin: base, Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'WATCH', reason: 'restore for remaining audit cases' })
+    });
+    assert.equal(restoreYtrend.status, 200);
+
+    const clusterBeforePoison = (await all(`SELECT display_name FROM keyword_clusters
+      WHERE tenant_id=? AND workspace_id=? AND marketplace='AMAZON' AND cluster_key='PET_MEMORIAL_WIND_CHIME'`,
+    [user.tenant_id, user.workspace_id]))[0];
+    assert(clusterBeforePoison);
+
+    const unverifiedRes = await fetch(base + '/api/global-opportunities/import', {
+      method: 'POST',
+      headers: { Origin: base, Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        source: 'FAKE_THIRD_SOURCE',
+        sourceFileId: 'fake-third-source',
+        candidates: [{
+          keyword: 'dog memorial wind chime',
+          clusterKey: 'PET_MEMORIAL_WIND_CHIME',
+          clusterLabel: 'POISONED CLUSTER LABEL',
+          estimatedSales: 99999,
+          crossSourceCount: 99
+        }]
+      })
+    });
+    assert.equal(unverifiedRes.status, 200);
+    const clusterAfterPoison = (await all(`SELECT display_name FROM keyword_clusters
+      WHERE tenant_id=? AND workspace_id=? AND marketplace='AMAZON' AND cluster_key='PET_MEMORIAL_WIND_CHIME'`,
+    [user.tenant_id, user.workspace_id]))[0];
+    assert.equal(clusterAfterPoison.display_name, clusterBeforePoison.display_name,
+      'unverified JSON must not overwrite trusted cluster display metadata');
+
+    const afterUnverifiedRes = await fetch(base + '/api/global-opportunities?limit=100', {
+      headers: { Origin: base, Cookie: cookie }
+    });
+    const afterUnverified = await afterUnverifiedRes.json();
+    const dogRows = afterUnverified.candidates.filter(item => item.normalized_keyword === 'dog memorial wind chime');
+    const trustedDog = dogRows.find(item => item.source === 'GLOBAL_BULK_CEREBRO');
+    const unverifiedDog = dogRows.find(item => item.source === 'GLOBAL_JSON_UNVERIFIED');
+    assert(trustedDog && unverifiedDog);
+    assert.equal(Number(trustedDog.cross_source_count), 2,
+      'unverified JSON must not increase corroboration count of trusted evidence');
+    assert.equal(unverifiedDog.estimated_sales, null);
+    assert.equal(unverifiedDog.proof_gate, 'WATCH_ONLY');
+    assert.equal(unverifiedDog.source_file_id, 'unverified-json',
+      'unverified JSON identity must be server-owned to prevent source-file fanout spam');
+
+    await importCandidates(db, {
+      tenantId: user.tenant_id, workspaceId: user.workspace_id, marketplace: 'AMAZON'
+    }, user.user_id, {
+      source: 'TRUSTED_RISK_SOURCE',
+      sourceFileId: 'trusted-risk-1',
+      candidates: [{
+        keyword: 'risk penalty memorial mug',
+        estimatedSales: 50,
+        searchVolume: 1000,
+        riskPenalty: 20,
+        proofType: 'MARKETPLACE_SALES'
+      }]
+    }, { allowCommercialMetrics: true, allowProofTimestamp: false });
+    const riskRow = (await all(`SELECT s.risk_penalty,s.opportunity_score
+      FROM global_keyword_candidates c
+      JOIN global_opportunity_scores s ON s.candidate_id=c.id AND s.score_version='GLOBAL_OPPORTUNITY_V2'
+      WHERE c.tenant_id=? AND c.workspace_id=? AND c.marketplace='AMAZON'
+        AND c.normalized_keyword='risk penalty memorial mug'`,
+    [user.tenant_id, user.workspace_id]))[0];
+    assert(riskRow);
+    assert.equal(Number(riskRow.risk_penalty), 20,
+      'risk penalty must survive post-import reconciliation instead of silently resetting to zero');
+
+    const riskCandidate = (await all(`SELECT id FROM global_keyword_candidates
+      WHERE tenant_id=? AND workspace_id=? AND marketplace='AMAZON'
+        AND normalized_keyword='risk penalty memorial mug'`,
+    [user.tenant_id, user.workspace_id]))[0];
+    assert(riskCandidate);
+    await new Promise((resolve, reject) => db.run(
+      `DELETE FROM global_opportunity_scores WHERE candidate_id=? AND score_version=?`,
+      [riskCandidate.id, GLOBAL_SCORE_VERSION], error => error ? reject(error) : resolve()
+    ));
+    await new Promise((resolve, reject) => db.run(
+      `INSERT OR REPLACE INTO global_opportunity_scores
+        (candidate_id,tenant_id,workspace_id,marketplace,marketplace_proof,demand,competition,
+         price_margin_potential,trend_velocity,cross_source_validation,social_momentum,freshness,
+         risk_penalty,opportunity_score,proof_gate,score_version,explanation_json)
+       VALUES (?,?,?,?,0,0,0,0,0,0,0,0,0,99,'PASS','GLOBAL_OPPORTUNITY_V1','{}')`,
+      [riskCandidate.id, user.tenant_id, user.workspace_id, 'AMAZON'],
+      error => error ? reject(error) : resolve()
+    ));
+    await migrateGlobalOpportunityScoreV2(db);
+    const migratedV2 = (await all(`SELECT score_version,risk_penalty,opportunity_score
+      FROM global_opportunity_scores WHERE candidate_id=? AND score_version=?`,
+    [riskCandidate.id, GLOBAL_SCORE_VERSION]))[0];
+    assert(migratedV2);
+    assert.equal(migratedV2.score_version, 'GLOBAL_OPPORTUNITY_V2');
+    assert.equal(Number(migratedV2.risk_penalty), 20,
+      'V2 data migration must recompute from canonical candidate provenance, not copy legacy score bytes');
+    assert.notEqual(Number(migratedV2.opportunity_score), 99,
+      'legacy V1 score must not be relabeled as V2 without recomputation');
+
+    const concurrentResults = await Promise.all([
+      importCandidates(db, {
+        tenantId: user.tenant_id, workspaceId: user.workspace_id, marketplace: 'AMAZON'
+      }, user.user_id, {
+        source: 'CONCURRENT_A',
+        sourceFileId: 'concurrent-a',
+        candidates: [{ keyword: 'concurrent alpha mug', searchVolume: 100 }]
+      }, { allowCommercialMetrics: false, allowProofTimestamp: false }),
+      importCandidates(db, {
+        tenantId: user.tenant_id, workspaceId: user.workspace_id, marketplace: 'AMAZON'
+      }, user.user_id, {
+        source: 'CONCURRENT_B',
+        sourceFileId: 'concurrent-b',
+        candidates: [{ keyword: 'concurrent beta mug', searchVolume: 120 }]
+      }, { allowCommercialMetrics: false, allowProofTimestamp: false })
+    ]);
+    assert.equal(concurrentResults.length, 2);
+    assert(concurrentResults.every(batch => batch.length === 1),
+      'concurrent global writes must serialize rather than collide at BEGIN IMMEDIATE');
 
     const summaryRes = await fetch(base + '/api/global-opportunities/summary', {
       headers: { Origin: base, Cookie: cookie }

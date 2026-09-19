@@ -135,7 +135,6 @@ export default function MarketIntelligenceWorkspace({ onRequireLogin }) {
     try {
       const form = new FormData();
       form.set('sourceType', globalImport.sourceType);
-      form.set('proofTimestamp', new Date().toISOString());
       form.set('file', globalImport.file);
       const res = await fetch('/api/global-opportunities/import-file', {
         method: 'POST', credentials: 'include', body: form
@@ -153,7 +152,8 @@ export default function MarketIntelligenceWorkspace({ onRequireLogin }) {
   };
 
   const promoteCandidate = async (candidate) => {
-    if (!candidate?.id || candidate.proof_gate !== 'PASS' || candidate.status === 'PROMOTED') return;
+    const promotableStatus = ['QUALIFIED', 'PROMOTE_TO_PROJECT'].includes(candidate?.status);
+    if (!candidate?.id || candidate.proof_gate !== 'PASS' || !promotableStatus) return;
     const projectName = candidate.cluster_name || candidate.keyword;
     if (!window.confirm(`Tạo Project mới từ opportunity “${projectName}”? Project hiện có sẽ không bị thay đổi.`)) return;
     setGlobalBusy(candidate.id);
@@ -229,7 +229,7 @@ export default function MarketIntelligenceWorkspace({ onRequireLogin }) {
       <div className="card" style={{ padding: 20 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
           <div>
-            <div style={{ fontSize: 11, color: '#64748b', fontWeight: 800, letterSpacing: '.08em' }}>RESEARCH-ONLY · READ-ONLY IN OMNISELLER</div>
+            <div style={{ fontSize: 11, color: '#64748b', fontWeight: 800, letterSpacing: '.08em' }}>MARKET INTELLIGENCE: READ-ONLY · GLOBAL DISCOVERY: CONTROLLED WRITE</div>
             <h2 style={{ margin: '6px 0 6px' }}>Market Intelligence — Hướng dẫn Staff</h2>
             <p style={{ margin: 0, color: '#475569', maxWidth: 820, lineHeight: 1.55 }}>
               Công cụ này giúp staff phát hiện cơ hội thị trường sớm từ keyword, marketplace, social commerce,
@@ -313,17 +313,23 @@ export default function MarketIntelligenceWorkspace({ onRequireLogin }) {
           <Table
             columns={[
               { key: 'keyword', label: 'Candidate / Cluster', render: (r) => <><strong>{r.keyword}</strong><div style={{ color: '#64748b', marginTop: 3 }}>{r.cluster_name || r.cluster_key || 'exact keyword cluster'} · {r.source}</div></> },
-              { key: 'opportunity_score', label: 'Global Score', render: (r) => <><span style={badgeStyle(scoreTone(Number(r.opportunity_score) || 0))}>{Number(r.opportunity_score || 0).toFixed(1)}/100</span><div style={{ color: '#64748b', marginTop: 3 }}>{r.score_version || 'GLOBAL_OPPORTUNITY_V1'}</div></> },
+              { key: 'opportunity_score', label: 'Global Score', render: (r) => <><span style={badgeStyle(scoreTone(Number(r.opportunity_score) || 0))}>{Number(r.opportunity_score || 0).toFixed(1)}/100</span><div style={{ color: '#64748b', marginTop: 3 }}>{r.score_version || 'GLOBAL_OPPORTUNITY_V2'}</div></> },
               { key: 'proof_gate', label: 'Sales Proof Gate', render: (r) => <><span style={badgeStyle(r.proof_gate === 'PASS' ? 'good' : 'warn')}>{r.proof_gate || 'WATCH_ONLY'}</span><div style={{ color: '#64748b', marginTop: 3 }}>{r.proof_type || 'NONE'}</div></> },
               { key: 'marketplace_proof', label: 'Marketplace / Demand', render: (r) => <div>Proof {Number(r.marketplace_proof || 0).toFixed(1)} · Demand {Number(r.demand || 0).toFixed(1)}<div style={{ color: '#64748b', marginTop: 3 }}>Sales {r.estimated_sales ?? '—'} · Revenue {r.estimated_revenue ?? '—'}</div></div> },
               { key: 'trend_score', label: 'Trend / Social / Cross', render: (r) => <div>Trend {Number(r.trend_score || 0).toFixed(1)} · Social {Number(r.social_score || 0).toFixed(1)}<div style={{ color: '#64748b', marginTop: 3 }}>Cross {Number(r.cross_source_validation || 0).toFixed(1)}</div></div> },
               { key: 'status', label: 'Status', render: (r) => <span style={badgeStyle(r.status === 'PROMOTED' ? 'good' : r.status === 'QUALIFIED' ? 'warn' : 'neutral')}>{r.status}</span> },
-              { key: 'action', label: 'Action', render: (r) => r.status === 'PROMOTED'
-                ? <div><strong>Project #{r.promoted_project_id}</strong><div style={{ color: '#64748b' }}>đã promote</div></div>
-                : <button className="btn btn-primary btn-sm" disabled={r.proof_gate !== 'PASS' || globalBusy === r.id}
-                    onClick={() => promoteCandidate(r)}>
-                    {r.proof_gate !== 'PASS' ? 'WATCH ONLY' : globalBusy === r.id ? 'Đang tạo…' : 'Create Project'}
-                  </button> }
+              { key: 'action', label: 'Action', render: (r) => {
+                if (r.status === 'PROMOTED') {
+                  return <div><strong>Project #{r.promoted_project_id}</strong><div style={{ color: '#64748b' }}>đã promote</div></div>;
+                }
+                const promotable = r.proof_gate === 'PASS' && ['QUALIFIED', 'PROMOTE_TO_PROJECT'].includes(r.status);
+                return <button className="btn btn-primary btn-sm" disabled={!promotable || globalBusy === r.id}
+                  onClick={() => promoteCandidate(r)}>
+                  {r.proof_gate !== 'PASS' ? 'WATCH ONLY'
+                    : !promotable ? r.status
+                      : globalBusy === r.id ? 'Đang tạo…' : 'Create Project'}
+                </button>;
+              } }
             ]}
             rows={globalState.candidates}
             empty="Global Candidate Pool chưa có dữ liệu. Import qua Global Opportunity API/bulk pipeline trước."

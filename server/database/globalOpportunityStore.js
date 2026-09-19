@@ -176,6 +176,38 @@ function scopeParams(scope) {
   return [scope.tenantId, scope.workspaceId, scope.marketplace];
 }
 
+function projectMklCandidates(artifact, marketplace) {
+  if (!artifact || typeof artifact !== 'object') return [];
+  const expectedKind = marketplace === 'AMAZON' ? 'AMAZON_MASTER_KEYWORDS' : 'ETSY_MASTER_KEYWORDS';
+  if (artifact.kind !== expectedKind || !Array.isArray(artifact.payload?.keywords)) return [];
+  if (marketplace !== 'AMAZON') return [];
+  return artifact.payload.keywords
+    .filter(item => ['OUTLIER_REVIEW', 'RESIDUE'].includes(String(item?.tier || '').toUpperCase()))
+    .filter(item => finite(item?.metrics?.keywordSales) != null && finite(item.metrics.keywordSales) > 0)
+    .map(item => ({
+      keyword: text(item.phrase),
+      clusterKey: text(item.phrase),
+      clusterLabel: text(item.phrase),
+      searchVolume: finite(item.metrics.searchVolume),
+      estimatedSales: finite(item.metrics.keywordSales),
+      competition: null,
+      trendVelocity: finite(item.metrics.trend),
+      crossSourceCount: 1,
+      proofType: 'ESTIMATED_SALES',
+      proofTimestamp: artifact.createdAt || null,
+      origin: {
+        kind: 'PROJECT_MKL_HARVEST',
+        sourceProjectId: artifact.projectId,
+        sourceArtifactId: artifact.id,
+        sourceArtifactHash: artifact.artifactHash,
+        sourceTier: item.tier,
+        keywordId: item.keywordId,
+        originalOpportunityScore: item.opportunityScore ?? null
+      }
+    }))
+    .filter(item => item.keyword);
+}
+
 async function ensureCluster(db, scope, candidate) {
   const provided = text(candidate.clusterKey || candidate.cluster);
   const clusterKey = normalizeClusterKey(provided || candidate.keyword);
@@ -348,5 +380,5 @@ async function promoteToProject(db, scope, actorId, candidateId, payload = {}) {
 
 module.exports = Object.freeze({
   ALLOWED_STATUSES, normalizeKeyword, normalizeClusterKey, migrateGlobalOpportunityDiscovery,
-  scoreCandidate, importCandidates, listCandidates, setCandidateStatus, promoteToProject
+  scoreCandidate, projectMklCandidates, importCandidates, listCandidates, setCandidateStatus, promoteToProject
 });

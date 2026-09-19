@@ -263,6 +263,29 @@ async function run() {
     assert.equal(unverifiedDog.source_file_id, 'unverified-json',
       'unverified JSON identity must be server-owned to prevent source-file fanout spam');
 
+    await importCandidates(db, {
+      tenantId: user.tenant_id, workspaceId: user.workspace_id, marketplace: 'AMAZON'
+    }, user.user_id, {
+      source: 'TRUSTED_RISK_SOURCE',
+      sourceFileId: 'trusted-risk-1',
+      candidates: [{
+        keyword: 'risk penalty memorial mug',
+        estimatedSales: 50,
+        searchVolume: 1000,
+        riskPenalty: 20,
+        proofType: 'MARKETPLACE_SALES'
+      }]
+    }, { allowCommercialMetrics: true, allowProofTimestamp: false });
+    const riskRow = (await all(`SELECT s.risk_penalty,s.opportunity_score
+      FROM global_keyword_candidates c
+      JOIN global_opportunity_scores s ON s.candidate_id=c.id AND s.score_version='GLOBAL_OPPORTUNITY_V1'
+      WHERE c.tenant_id=? AND c.workspace_id=? AND c.marketplace='AMAZON'
+        AND c.normalized_keyword='risk penalty memorial mug'`,
+    [user.tenant_id, user.workspace_id]))[0];
+    assert(riskRow);
+    assert.equal(Number(riskRow.risk_penalty), 20,
+      'risk penalty must survive post-import reconciliation instead of silently resetting to zero');
+
     const concurrentResults = await Promise.all([
       importCandidates(db, {
         tenantId: user.tenant_id, workspaceId: user.workspace_id, marketplace: 'AMAZON'

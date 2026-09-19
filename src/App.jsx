@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { resolveCanonicalReviewListing } from './utils/canonicalReviewPackage.js';
 import Header from './components/Header';
 import SinglePathMarketplaceWorkspace from './components/SinglePathMarketplaceWorkspace';
 import ProductListingPageSimulator from './components/ProductListingPageSimulator';
@@ -36,7 +37,15 @@ export default function App() {
   }, [user?.workspaceId, user?.marketplace]);
 
   const handleTabChange = async (tab) => {
-    if (tab === 'etsy-workspace' && user && user.marketplace !== 'ETSY') {
+    if (tab === 'product-page') {
+      const candidate = currentListing || history[0];
+      if (!candidate) {
+        showToast('Chưa có canonical listing để mở Simulation Preview.');
+        return;
+      }
+      const exact = await handleSelectFromHistory(candidate);
+      if (!exact) return;
+    } else if (tab === 'etsy-workspace' && user && user.marketplace !== 'ETSY') {
       try {
         await switchWorkspace({ marketplace: 'ETSY' });
         setActiveTab(tab);
@@ -105,6 +114,10 @@ export default function App() {
     setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id));
     }, 2800);
+  };
+
+  const resolveExactReviewListing = async item => {
+    return resolveCanonicalReviewListing(item, fetch);
   };
 
   const handleGenerateListing = async (formData) => {
@@ -202,10 +215,18 @@ export default function App() {
     }
   };
 
-  const handleSelectFromHistory = (item) => {
-    setCurrentListing(item);
-    setActiveTab('product-page');
-    showToast(`Loaded "${item.amazonTitle || item.etsyTitle || 'exact review package'}"`);
+  const handleSelectFromHistory = async item => {
+    try {
+      const exact = await resolveExactReviewListing(item);
+      setCurrentListing(exact);
+      setActiveTab('product-page');
+      showToast(`Loaded exact review package "${exact.amazonTitle || exact.etsyTitle || 'canonical listing'}"`);
+      return exact;
+    } catch (error) {
+      setCurrentListing(null);
+      showToast(`Preview blocked: ${error.message}. Mở exact review package từ workspace.`);
+      return null;
+    }
   };
 
   const handleApproveListing = async (listingToApprove) => {
@@ -289,10 +310,7 @@ export default function App() {
           <SinglePathMarketplaceWorkspace
             marketplace="AMAZON"
             onRequireLogin={() => setIsLoginModalOpen(true)}
-            onSelectListing={(item) => {
-              handleSelectFromHistory(item);
-              setActiveTab('product-page');
-            }}
+            onSelectListing={handleSelectFromHistory}
             onShowToast={showToast}
             onListingPersisted={fetchListings}
           />
@@ -303,10 +321,7 @@ export default function App() {
           <SinglePathMarketplaceWorkspace
             marketplace="ETSY"
             onRequireLogin={() => setIsLoginModalOpen(true)}
-            onSelectListing={(item) => {
-              handleSelectFromHistory(item);
-              setActiveTab('product-page');
-            }}
+            onSelectListing={handleSelectFromHistory}
             onShowToast={showToast}
             onListingPersisted={fetchListings}
           />
@@ -335,10 +350,7 @@ export default function App() {
           <div style={{ marginTop: '24px' }}>
             <ListingHistory
               history={history}
-              onSelectListing={(item) => {
-                handleSelectFromHistory(item);
-                setActiveTab('product-page');
-              }}
+              onSelectListing={handleSelectFromHistory}
               onDeleteListing={handleDeleteHistoryItem}
               onClearHistory={handleClearHistory}
               onShowToast={showToast}

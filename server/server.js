@@ -2123,6 +2123,9 @@ app.get('/api/listings/:id/review-package', requireAuth(db), requireRole(['OWNER
     const revision = await getListingRevision(db, scope, root.id, root.head_revision_id, root.project_id);
     await assertCanonicalDependenciesCurrent(db, scope, root.project_id, revision.dependencies);
     const truth = await currentProductTruthRevision(db, scope, root.project_id);
+    const intelligence = revision.dependencies.intelligenceSnapshotId == null ? null
+      : await getIntelligenceSnapshot(db, scope, root.project_id, revision.dependencies.intelligenceSnapshotId);
+    const listingLanguage = String(revision.content?.listingLanguage || intelligence?.output?.language || '').toUpperCase();
     const promptItems = Array.isArray(revision.content?.imagePrompts?.prompts)
       ? revision.content.imagePrompts.prompts
       : (Array.isArray(revision.content?.imagePrompts) ? revision.content.imagePrompts : []);
@@ -2133,6 +2136,7 @@ app.get('/api/listings/:id/review-package', requireAuth(db), requireRole(['OWNER
       productTruthRevisionId: truth.id,
       productTruthHash: truth.content_hash,
       verifiedFactCount: Object.keys(truth.snapshot?.asserted || {}).length,
+      listingLanguage: ['EN','ES'].includes(listingLanguage) ? listingLanguage : null,
       imagePlan: Object.freeze({ expected: promptItems.length,
         ready: promptItems.filter(item => item?.ready !== false && String(item?.prompt || '').trim()).length })
     });

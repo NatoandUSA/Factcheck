@@ -8,6 +8,32 @@ const uniqueRatio = value => {
   return tokens.length ? new Set(tokens).size / tokens.length : 0;
 };
 
+const LANGUAGE_MARKERS = Object.freeze({
+  EN: new Set(['blanket','gift','gifts','sister','friend','best','birthday','christmas','personalized','custom','keepsake','throw','for','with','from']),
+  ES: new Set(['regalo','regalos','hermana','amiga','mejor','cumpleanos','cumpleaños','navidad','personalizado','personalizada','para','con','desde']),
+  VI: new Set(['có','không','theo','thông','tin','trên','sản','phẩm','và','hoặc','được','với','cho'])
+});
+
+const visibleTokens = value => String(value || '').normalize('NFKC').toLowerCase()
+  .match(/[\p{L}\p{N}]+/gu) || [];
+
+export function assessLanguageConsistency(listing, marketplace) {
+  const target = String(listing?.listingLanguage || listing?.canonicalQualityEvidence?.listingLanguage || '').toUpperCase();
+  if (!['EN', 'ES'].includes(target)) return { target: target || null, mixed: false, foreignMarkers: [] };
+  const text = String(marketplace || '').toUpperCase() === 'AMAZON'
+    ? [listing?.amazonTitle, ...(listing?.amazonBullets || []), listing?.amazonDescription]
+    : [listing?.etsyTitle, ...(listing?.etsyTags || []), listing?.etsyDescription];
+  const tokens = visibleTokens(text.filter(Boolean).join(' '));
+  const foreignLanguages = target === 'EN' ? ['ES', 'VI'] : ['EN', 'VI'];
+  const hits = foreignLanguages.flatMap(language => tokens
+    .filter(token => LANGUAGE_MARKERS[language].has(token))
+    .map(token => ({ language, token })));
+  const distinct = [...new Map(hits.map(hit => [`${hit.language}:${hit.token}`, hit])).values()];
+  // One isolated foreign word may be a brand, proper name, or canonical product
+  // token. Two distinct high-signal markers are required before copy is flagged.
+  return { target, mixed: distinct.length >= 2, foreignMarkers: distinct };
+}
+
 function truthAssessment(listing) {
   const canonical = listing?.canonicalQualityEvidence;
   if (canonical) {
@@ -48,7 +74,10 @@ function amazonAssessment(listing) {
     + (searchTerms ? 35 : 0)
     + (searchTerms && getUtf8Bytes(searchTerms) >= 150 && getUtf8Bytes(searchTerms) <= 249 ? 20 : 0)
   );
-  const readabilityScore = clamp((uniqueRatio(title) * 55) + (bullets.length === 5 ? 25 : bullets.length * 5) + (description.length >= 300 ? 20 : description.length / 15));
+  const language = assessLanguageConsistency(listing, 'AMAZON');
+  if (language.mixed) warnings.push(`MIXED_LANGUAGE_COPY: ${language.target} listing contains material ${[...new Set(language.foreignMarkers.map(item => item.language))].join('/')} copy.`);
+  const readabilityScore = clamp((uniqueRatio(title) * 55) + (bullets.length === 5 ? 25 : bullets.length * 5)
+    + (description.length >= 300 ? 20 : description.length / 15) - (language.mixed ? 25 : 0));
   return { validation, blockers, warnings, searchScore, readabilityScore };
 }
 
@@ -67,10 +96,13 @@ function etsyAssessment(listing) {
   const diverseTags = new Set(tags.flatMap(tag => words(tag).map(token => token.toLowerCase()))).size;
   const keywordChain = (title.match(/,/g) || []).length >= 2;
   const searchScore = clamp((title ? 30 : 0) + (Math.min(tags.length, 13) / 13 * 50) + Math.min(20, diverseTags));
+  const language = assessLanguageConsistency(listing, 'ETSY');
+  if (language.mixed) warnings.push(`MIXED_LANGUAGE_COPY: ${language.target} listing contains material ${[...new Set(language.foreignMarkers.map(item => item.language))].join('/')} copy.`);
   const readabilityScore = clamp((uniqueRatio(title) * 45)
     + (words(title).length > 0 && words(title).length <= 15 ? 30 : 5)
     + (keywordChain ? 0 : 10)
-    + (description.length >= 300 ? 15 : description.length / 20));
+    + (description.length >= 300 ? 15 : description.length / 20)
+    - (language.mixed ? 25 : 0));
   return { validation, blockers, warnings, searchScore, readabilityScore };
 }
 
@@ -140,4 +172,4 @@ export function selectPreviewListing(currentListing, history = [], activeListing
     || currentListing || history[0] || null;
 }
 
-export default { evaluateDraftQuality, compareDraftEvaluations, selectPreviewListing };
+export default { assessLanguageConsistency, evaluateDraftQuality, compareDraftEvaluations, selectPreviewListing };

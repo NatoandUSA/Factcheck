@@ -16,7 +16,7 @@ const verifiedCard = (productId, listingVersion) => ({
 
 (async () => {
   const moduleUrl = pathToFileURL(path.resolve(__dirname, '../src/utils/draftQualityEvaluator.js')).href;
-  const { evaluateDraftQuality, compareDraftEvaluations, selectPreviewListing } = await import(moduleUrl);
+  const { assessLanguageConsistency, evaluateDraftQuality, compareDraftEvaluations, selectPreviewListing } = await import(moduleUrl);
   const base = {
     dbId: 42,
     listingVersion: 3,
@@ -73,6 +73,21 @@ const verifiedCard = (productId, listingVersion) => ({
   const thinHistory = { dbId: 42, amazonTitle: 'Thin history row without evidence' };
   assert.strictEqual(selectPreviewListing(exact, [thinHistory], 42), exact,
     'exact current review package must win over a same-id history row');
+
+  const mixedSpanish = { ...base, listingLanguage: 'ES', etsyTitle: 'Personalizado Fleece Blanket',
+    etsyDescription: 'Regalo para hermana. Personalized fleece blanket with custom name.' };
+  const mixedAssessment = evaluateDraftQuality(mixedSpanish, 'ETSY', { ready: 8, expected: 8 });
+  assert.ok(mixedAssessment.warnings.some(item => item.includes('MIXED_LANGUAGE_COPY')),
+    'material English copy in an ES listing must be visible QA evidence');
+  assert.ok(mixedAssessment.metrics.find(item => item.key === 'readability').score
+    < shortage.metrics.find(item => item.key === 'readability').score,
+  'mixed-language copy must reduce clarity instead of scoring 100');
+  assert.equal(assessLanguageConsistency({ listingLanguage: 'EN', etsyTitle: 'Hermana Keepsake',
+    etsyDescription: 'A clear keepsake for family.' }, 'ETSY').mixed, false,
+  'one isolated foreign name/token must not trigger a mixed-language warning');
+  assert.equal(assessLanguageConsistency({ listingLanguage: 'ES', etsyTitle: 'Manta para Anna',
+    etsyDescription: 'Regalo personalizado para hermana.' }, 'ETSY').mixed, false,
+  'proper recipient names must not be treated as foreign-language copy');
 
   console.log('DRAFT_QUALITY_EVALUATOR_TESTS_PASSED');
 })().catch(error => {

@@ -106,6 +106,21 @@ async function run() {
     assert.equal(imported.parsedCount, 3);
     assert.equal(imported.importedCount, 3);
 
+    const renamedForm = new FormData();
+    renamedForm.set('sourceType', 'AUTO');
+    renamedForm.set('file', new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), 'same-content-renamed.xlsx');
+    const renamedRes = await fetch(base + '/api/global-opportunities/import-file', {
+      method: 'POST', headers: { Origin: base, Cookie: cookie }, body: renamedForm
+    });
+    assert.equal(renamedRes.status, 200);
+    const renamed = await renamedRes.json();
+    assert.equal(renamed.sourceFileId, imported.sourceFileId, 'file identity must be content-addressed, not filename-addressed');
+
+    const dedupRows = await all(`SELECT normalized_keyword,COUNT(*) AS count FROM global_keyword_candidates
+      WHERE tenant_id=? AND workspace_id=? AND marketplace='AMAZON' AND source_file_id=?
+      GROUP BY normalized_keyword`, [user.tenant_id, user.workspace_id, imported.sourceFileId]);
+    assert(dedupRows.every(row => Number(row.count) === 1), 'same content re-uploaded under a new filename/source hint must not duplicate candidates');
+
     const after = await all(`SELECT id,state,seed_phrase FROM research_projects
       WHERE tenant_id=? AND workspace_id=? AND marketplace='AMAZON' ORDER BY id`,
     [user.tenant_id, user.workspace_id]);

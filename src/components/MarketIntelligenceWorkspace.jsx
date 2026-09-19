@@ -230,7 +230,7 @@ export default function MarketIntelligenceWorkspace({ onRequireLogin }) {
       <div className="card" style={{ padding: 20 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
           <div>
-            <div style={{ fontSize: 11, color: '#64748b', fontWeight: 800, letterSpacing: '.08em' }}>RESEARCH-ONLY · READ-ONLY IN OMNISELLER</div>
+            <div style={{ fontSize: 11, color: '#64748b', fontWeight: 800, letterSpacing: '.08em' }}>MARKET INTELLIGENCE: READ-ONLY · GLOBAL DISCOVERY: CONTROLLED WRITE</div>
             <h2 style={{ margin: '6px 0 6px' }}>Market Intelligence — Hướng dẫn Staff</h2>
             <p style={{ margin: 0, color: '#475569', maxWidth: 820, lineHeight: 1.55 }}>
               Công cụ này giúp staff phát hiện cơ hội thị trường sớm từ keyword, marketplace, social commerce,

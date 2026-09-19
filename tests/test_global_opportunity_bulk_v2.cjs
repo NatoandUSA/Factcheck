@@ -33,6 +33,14 @@ async function workbookBytes() {
   return Buffer.from(await wb.xlsx.writeBuffer());
 }
 
+async function ytrendWorkbookBytes() {
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('YTrend Export');
+  ws.addRow(['Keyword','Estimated Revenue','Momentum Score']);
+  ws.addRow(['viral pet memorial lamp',9999,9]);
+  return Buffer.from(await wb.xlsx.writeBuffer());
+}
+
 async function run() {
   assert.equal(proofGate({ proofType: 'ORDER_EVIDENCE', estimatedSales: null, estimatedRevenue: null }), 'WATCH_ONLY',
     'proofType metadata alone must never unlock PASS');
@@ -118,6 +126,29 @@ async function run() {
       'upload time must not be stored as marketplace proof timestamp');
     assert(freshnessRows.every(row => Number(row.freshness) === 0),
       'old/undated exports must not receive synthetic freshness credit');
+
+    const ytrendBytes = await ytrendWorkbookBytes();
+    const ytrendForm = new FormData();
+    ytrendForm.set('sourceType', 'AUTO');
+    ytrendForm.set('file', new Blob([ytrendBytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), 'ytrend.xlsx');
+    const ytrendRes = await fetch(base + '/api/global-opportunities/import-file', {
+      method: 'POST', headers: { Origin: base, Cookie: cookie }, body: ytrendForm
+    });
+    assert.equal(ytrendRes.status, 200);
+    const ytrendBody = await ytrendRes.json();
+    assert.deepEqual(ytrendBody.sourceFamilies, ['YTREND']);
+    const ytrendRows = await all(`SELECT c.source,c.estimated_revenue,c.proof_type,s.proof_gate
+      FROM global_keyword_candidates c
+      JOIN global_opportunity_scores s ON s.candidate_id=c.id AND s.score_version='GLOBAL_OPPORTUNITY_V1'
+      WHERE c.tenant_id=? AND c.workspace_id=? AND c.marketplace='AMAZON'
+        AND c.normalized_keyword='viral pet memorial lamp'`,
+    [user.tenant_id, user.workspace_id]);
+    assert.equal(ytrendRows.length, 1);
+    assert.equal(ytrendRows[0].source, 'GLOBAL_BULK_YTREND');
+    assert.equal(ytrendRows[0].estimated_revenue, null,
+      'trend/social exports must not become commercial proof even when they contain revenue-like columns');
+    assert.equal(ytrendRows[0].proof_type, 'NONE');
+    assert.equal(ytrendRows[0].proof_gate, 'WATCH_ONLY');
 
     const renamedForm = new FormData();
     renamedForm.set('sourceType', 'AUTO');

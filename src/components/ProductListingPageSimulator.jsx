@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import AmazonRealProductPage from './AmazonRealProductPage';
 import EtsyRealProductPage from './EtsyRealProductPage';
 import { ShoppingBag, ShoppingCart, Layers, Sparkles, Copy, Check, Gauge, ShieldCheck, AlertTriangle } from 'lucide-react';
-import { evaluateDraftQuality } from '../utils/draftQualityEvaluator.js';
+import { evaluateDraftQuality, selectPreviewListing } from '../utils/draftQualityEvaluator.js';
 import { generateAmazonListingImagePrompts, generateAmazonAPlusImagePrompts, generateEtsyListingImagePrompts } from '../services/imagePromptGenerator.js';
 
 function CopyField({ label, value, onShowToast }) {
@@ -35,6 +35,13 @@ const emptyChildRow = () => ({ sku: '', variationAttribute: '', childTitle: '', 
 
 function getAssetPlan(listing, marketplace) {
   if (!listing) return { ready: 0, expected: marketplace === 'AMAZON' ? 20 : 12 };
+  const canonicalPlan = listing?.canonicalQualityEvidence?.imagePlan;
+  if (canonicalPlan && Number(canonicalPlan.expected) >= 0) return canonicalPlan;
+  const exactPrompts = listing?.imagePrompts?.prompts || (Array.isArray(listing?.imagePrompts) ? listing.imagePrompts : null);
+  if (Array.isArray(exactPrompts)) return {
+    ready: exactPrompts.filter(item => item?.ready !== false && String(item?.prompt || '').trim()).length,
+    expected: exactPrompts.length
+  };
   try {
     const prompts = marketplace === 'AMAZON'
       ? [...generateAmazonListingImagePrompts(listing), ...generateAmazonAPlusImagePrompts(listing)]
@@ -51,9 +58,14 @@ export default function ProductListingPageSimulator({ currentListing, history = 
   const [activeAsin, setActiveAsin] = useState('parent'); // 'parent' | childIndex
 
   // Determine active listing
-  const activeListing = (history.find(h => (h.dbId || h.id) === activeListingId)) || currentListing || history[0] || null;
+  const activeListing = selectPreviewListing(currentListing, history, activeListingId);
   const activeChild = activeAsin !== 'parent' ? (activeListing?.variations || []).find(v => v.childIndex === activeAsin) : null;
   const quality = evaluateDraftQuality(activeListing, platformView, getAssetPlan(activeListing, platformView));
+
+  useEffect(() => {
+    const exactMarketplace = activeListing?.canonicalQualityEvidence?.marketplace;
+    if (['AMAZON', 'ETSY'].includes(exactMarketplace)) setPlatformView(exactMarketplace);
+  }, [activeListing?.dbId, activeListing?.canonicalQualityEvidence?.marketplace]);
   const verdictStyle = quality.verdict === 'REVIEW_READY'
     ? { color: '#166534', background: '#dcfce7', border: '#86efac' }
     : quality.verdict === 'BLOCKED'

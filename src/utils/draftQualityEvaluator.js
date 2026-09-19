@@ -9,6 +9,15 @@ const uniqueRatio = value => {
 };
 
 function truthAssessment(listing) {
+  const canonical = listing?.canonicalQualityEvidence;
+  if (canonical) {
+    const valid = canonical.productTruthBound === true
+      && Number.isInteger(Number(canonical.productTruthRevisionId))
+      && /^[a-f0-9]{64}$/i.test(String(canonical.productTruthHash || ''));
+    return { valid, errors: valid ? [] : ['CANONICAL_PRODUCT_TRUTH_BINDING_INVALID'],
+      verifiedFacts: Array.from({ length: Math.max(0, Number(canonical.verifiedFactCount) || 0) }),
+      context: { productTruthRevisionId: canonical.productTruthRevisionId, source: 'CANONICAL_REVIEW_PACKAGE' } };
+  }
   const context = {
     productId: listing?.productId ?? listing?.dbId ?? listing?.id,
     listingVersion: Number(listing?.listingVersion ?? listing?.listing_version)
@@ -116,4 +125,15 @@ export function compareDraftEvaluations(left, right) {
   return 0;
 }
 
-export default { evaluateDraftQuality, compareDraftEvaluations };
+export function selectPreviewListing(currentListing, history = [], activeListingId = null) {
+  const currentId = currentListing?.dbId ?? currentListing?.id;
+  const activeId = activeListingId ?? currentId;
+  // The exact canonical review package is deliberately ephemeral and may have
+  // the same DB id as a thinner history row. Never let that history row erase
+  // its server-derived dependency/quality evidence.
+  if (currentListing && String(currentId) === String(activeId)) return currentListing;
+  return history.find(item => String(item?.dbId ?? item?.id) === String(activeId))
+    || currentListing || history[0] || null;
+}
+
+export default { evaluateDraftQuality, compareDraftEvaluations, selectPreviewListing };

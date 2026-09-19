@@ -265,6 +265,11 @@ async function main() {
   check(reviewPackage.status === 200 && reviewPackage.body.contentHash === listing.body.contentHash
     && reviewPackage.body.dependencyHash === listing.body.dependencyHash,
   'review package exposes the exact immutable content and dependency hashes');
+  check(reviewPackage.body.qualityEvidence?.productTruthBound === true
+    && reviewPackage.body.qualityEvidence.productTruthRevisionId === truthId
+    && reviewPackage.body.qualityEvidence.verifiedFactCount > 0
+    && reviewPackage.body.qualityEvidence.imagePlan.expected > 0,
+  'review package carries server-derived Product Truth and exact image-plan evidence for Simulation Preview');
   check(reviewPackage.body.approvalReadiness.ready === false
     && ['INCOMPLETE_POLICY_LIFECYCLE_SNAPSHOT','POLICY_APPROVAL_BLOCKED','POLICY_CONTRACT_NOT_FOUND']
       .includes(reviewPackage.body.approvalReadiness.error),

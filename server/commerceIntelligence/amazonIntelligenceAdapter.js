@@ -10,7 +10,7 @@ const { selectAsinBatches } = require('./asinSelector');
 const { compose } = require('./amazonComposer');
 const { generateImagePromptSuite } = require('../imagePromptGenerator');
 const { fold, contentTokens } = require('./text');
-const { PATTERNS } = require('./semantic');
+const { PATTERNS, auditProductFamilyAlignment } = require('./semantic');
 
 const ENGINE_ID = 'amazon-commerce-intelligence-v1';
 const SCORE_FIELDS = ['phrase','searchVolume','keywordSales','iq','trend','competingProducts','cpr',
@@ -164,6 +164,15 @@ async function buildIntelligence({ research, productTruth, configuration = {}, m
   if (!keywordRows.length) throw Object.assign(new Error('CEREBRO_KEYWORDS_REQUIRED'), {
     code: 'CEREBRO_KEYWORDS_REQUIRED', status: 409
   });
+  const productFamilyAlignment = auditProductFamilyAlignment(keywordRows.map(item => item.phrase),
+    [facts.productType, facts.productName]);
+  if (productFamilyAlignment.status !== 'ALIGNED') {
+    const code = productFamilyAlignment.status === 'UNRESOLVED'
+      ? 'PRODUCT_TRUTH_FAMILY_UNRESOLVED' : 'RESEARCH_PRODUCT_FAMILY_MISMATCH';
+    throw Object.assign(new Error(code), {
+      code, status: 422, details: productFamilyAlignment
+    });
+  }
   const anchors = [configuration.seedPhrase, facts.productType, facts.productName, facts.recipient, facts.occasion]
     .map(text).filter(Boolean);
   if (!anchors.length) throw Object.assign(new Error('INTELLIGENCE_ANCHOR_REQUIRED'), {
@@ -263,6 +272,9 @@ async function buildIntelligence({ research, productTruth, configuration = {}, m
   const factClaimReview = composerTruth.factClaimReview;
   const composed = compose(compositionCorpus, composerTruth, { labelLanguage: language,
     mustContainAny: anchors, searchTermBytes: 249 });
+  // PPC remains a research-targeting surface rather than customer-visible
+  // factual copy. Unverified candidates stay explicitly flagged by the
+  // listing guard and must never be mistaken for upload-ready copy.
   const content = canonicalContent(composed, facts, [...claimTargeting, ...languageTargeting], productTruth.snapshot);
   let guarded;
   try { guarded = evaluateListingGuard({ listing: content, verifiedFacts: facts }); }
@@ -293,7 +305,8 @@ async function buildIntelligence({ research, productTruth, configuration = {}, m
         artifactHash: masterKeywordArtifact.artifactHash, revisionNumber: masterKeywordArtifact.revisionNumber } : null,
       commerce: composed, asinSelection: xray, claimTargeting, languageTargeting,
       competitorBrandBlocked, lexicalReviewQueue, rareTokenSignals, masterOutlierSignals,
-      corpusBrandTokens: [...corpusBrandTokens].sort(), factClaimReview,
+      corpusBrandTokens: [...corpusBrandTokens].sort(), factClaimReview, productFamilyAlignment,
+      ppcRecommendationStatus: guarded.ppcFlagged.length ? 'REVIEW_REQUIRED' : 'CLEAR',
       guardAccounting: { backendExcluded: guarded.backendExcluded, ppcFlagged: guarded.ppcFlagged } },
     accounting: { inputKeywordCount: sourceRows.length, scoredKeywordCount: scored.length,
       masterKeywordCount: masterRows?.length ?? null,

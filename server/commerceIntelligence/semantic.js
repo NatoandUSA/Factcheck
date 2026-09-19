@@ -139,7 +139,7 @@ const RECIPIENT_TOKENS = new Set(PATTERNS.recipient.flatMap(p => fold(p).split(/
 // they let an English Product Truth type ("Necklace") require a Spanish title
 // phrase such as "collar", without translating or approving material claims.
 const PRODUCT_FAMILIES = Object.freeze([
-  Object.freeze(['necklace', 'necklaces', 'collar', 'collares', 'cadena', 'cadenas', 'jewelry', 'joyeria', 'joyas']),
+  Object.freeze(['necklace', 'necklaces', 'collar', 'collares', 'cadena', 'cadenas']),
   Object.freeze(['sweatshirt', 'sweatshirts', 'sudadera', 'sudaderas', 'crewneck', 'pullover', 'sweater', 'sweaters']),
   Object.freeze(['hoodie', 'hoodies']),
   Object.freeze(['shirt', 'shirts', 'camisa', 'camisas', 'tshirt', 'camiseta', 'camisetas']),
@@ -170,6 +170,44 @@ function matchesProductFamily(phrase, allowedFamilies) {
   if (!allowedFamilies?.size) return false;
   const phraseTokens = new Set(fold(phrase).split(/[^a-z0-9]+/).filter(Boolean));
   return [...allowedFamilies].some(index => PRODUCT_FAMILIES[index].some(token => phraseTokens.has(token)));
+}
+
+function productFamiliesOf(phrase) {
+  const observed = new Set();
+  const phraseTokens = new Set(fold(phrase).split(/[^a-z0-9]+/).filter(Boolean));
+  PRODUCT_FAMILIES.forEach((family, index) => {
+    if (family.some(token => phraseTokens.has(token))) observed.add(index);
+  });
+  return observed;
+}
+
+// Per-keyword relevance can be fooled by a shared recipient or occasion while
+// every product noun still describes a different item. Stop that wrong-product
+// corpus before it can write copy, prompts, backend terms, or PPC suggestions.
+function auditProductFamilyAlignment(phrases, identityTexts) {
+  const allowedFamilies = allowedProductFamilies(identityTexts.filter(Boolean));
+  const result = { status: 'UNRESOLVED', phraseCount: phrases.length, alignedCount: 0,
+    conflictingCount: 0, ambiguousCount: 0, genericCount: 0, allowedFamilies: [...allowedFamilies] };
+  if (!allowedFamilies.size) return result;
+  for (const phrase of phrases) {
+    const observed = productFamiliesOf(phrase);
+    if (!observed.size) result.genericCount++;
+    else {
+      const hasAllowed = [...observed].some(index => allowedFamilies.has(index));
+      const hasConflict = [...observed].some(index => !allowedFamilies.has(index));
+      if (hasAllowed && !hasConflict) result.alignedCount++;
+      else {
+        result.conflictingCount++;
+        if (hasAllowed && hasConflict) result.ambiguousCount++;
+      }
+    }
+  }
+  const noProductEvidence = result.alignedCount === 0 && result.conflictingCount > 0;
+  const noSignalInSubstantialCorpus = result.phraseCount >= 10 && result.alignedCount === 0;
+  const dominatedByAnotherProduct = result.conflictingCount >= 5
+    && result.conflictingCount > result.alignedCount * 3;
+  result.status = noProductEvidence || noSignalInSubstantialCorpus || dominatedByAnotherProduct ? 'MISMATCH' : 'ALIGNED';
+  return result;
 }
 
 function recipientFamily(token) {
@@ -234,4 +272,5 @@ function conflictingRecipient(phrase, allowedFamilies) {
 
 module.exports = { classify, isGarbage, bannedClaim, isGeneric, spanishRatio,
   allowedRecipientFamilies, conflictingRecipient, recipientFamily,
-  allowedProductFamilies, matchesProductFamily, PRODUCT_FAMILIES, PATTERNS };
+  allowedProductFamilies, matchesProductFamily, productFamiliesOf, auditProductFamilyAlignment,
+  PRODUCT_FAMILIES, PATTERNS };

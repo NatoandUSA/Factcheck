@@ -209,6 +209,8 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
     const claimSummary = [...new Set(blocking.map(item => `${item.field}: “${item.token}”`))].slice(0, 6).join('; ');
     const message = errorValue?.code === 'UNVERIFIED_OUTPUT_CLAIM' && claimSummary
       ? `Draft có claim chưa được Product Truth chứng thực — ${claimSummary}`
+      : ['RESEARCH_PRODUCT_FAMILY_MISMATCH', 'PRODUCT_TRUTH_FAMILY_UNRESOLVED'].includes(errorValue?.code)
+        ? `Research không cùng dòng sản phẩm với Product Truth (khớp ${errorValue.payload?.alignedCount ?? 0}, xung đột ${errorValue.payload?.conflictingCount ?? 0}, chung chung ${errorValue.payload?.genericCount ?? 0}). Hãy dùng đúng file research cho sản phẩm này hoặc tạo project riêng.`
       : errorValue?.code === 'CEREBRO_KEYWORDS_REQUIRED'
         ? 'Cần import Cerebro để phân bổ keyword và tạo draft. Xray là bước upstream khuyến nghị để chọn các nhóm ASIN, nhưng Cerebro có sẵn được import độc lập.'
         : errorValue?.message || 'UNKNOWN_ERROR';
@@ -711,6 +713,15 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
     setReviewPackages(previous => ({ ...previous, [listingId]: result }));
     notify(`Đã tải exact review package của listing #${listingId}.`); return result;
   });
+
+  const openSimulationPreview = item => {
+    const reviewPackage = reviewPackages[item.id];
+    if (!reviewPackage) throw new Error('Hãy mở exact review package trước khi preview.');
+    onSelectListing?.({ ...reviewPackage.content, dbId: item.id, status: item.status,
+      listingVersion: reviewPackage.revisionNumber,
+      canonicalQualityEvidence: reviewPackage.qualityEvidence,
+      simulationSource: 'CANONICAL_REVIEW_PACKAGE' });
+  };
 
   const submissionInput = listingId => submissionInputs[listingId] || {};
   const setSubmissionInput = (listingId, key, value) => setSubmissionInputs(previous => ({ ...previous,
@@ -1334,6 +1345,7 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
           </div>
           <details><summary>Toàn bộ listing content</summary><pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{JSON.stringify(reviewPackages[item.id].content, null, 2)}</pre></details>
           <details><summary>Dependency manifest + validation accounting</summary><pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{JSON.stringify({ dependencies: reviewPackages[item.id].dependencies, validationAccounting: reviewPackages[item.id].validationAccounting }, null, 2)}</pre></details>
+          <div style={{ marginTop: 8 }}><ActionButton accent="#0369a1" disabled={busy} onClick={() => openSimulationPreview(item)}>Mở Simulation Preview từ exact package</ActionButton></div>
         </div>}
         {isManager && item.status !== 'MANAGER_APPROVED' && <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
           <ActionButton accent="#166534" disabled={!policyAllowsApproval || !reviewReason.trim() || busy || !reviewPackages[item.id]?.approvalReadiness?.ready} onClick={() => reviewListing(item.id, 'APPROVED')}>Manager duyệt exact package</ActionButton>

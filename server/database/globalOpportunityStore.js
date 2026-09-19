@@ -284,6 +284,36 @@ async function upsertScore(db, scope, candidateId, score) {
     score.freshness, score.riskPenalty, score.opportunityScore, score.proofGate, JSON.stringify(score.explanation)]);
 }
 
+async function reconcileCrossSourceScores(db, scope) {
+  const rows = await all(db, `SELECT c.*,
+      (SELECT COUNT(DISTINCT c2.source) FROM global_keyword_candidates c2
+       WHERE c2.tenant_id=c.tenant_id AND c2.workspace_id=c.workspace_id AND c2.marketplace=c.marketplace
+         AND c2.normalized_keyword=c.normalized_keyword) AS observed_source_count
+    FROM global_keyword_candidates c
+    WHERE c.tenant_id=? AND c.workspace_id=? AND c.marketplace=?`, scopeParams(scope));
+  for (const row of rows) {
+    const observed = Math.max(1, Number(row.observed_source_count || 1));
+    if (Number(row.cross_source_count || 1) !== observed) {
+      await run(db, `UPDATE global_keyword_candidates SET cross_source_count=?,updated_at=CURRENT_TIMESTAMP
+        WHERE id=? AND tenant_id=? AND workspace_id=? AND marketplace=?`,
+      [observed, row.id, ...scopeParams(scope)]);
+    }
+    const score = scoreCandidate({
+      searchVolume: row.search_volume,
+      estimatedSales: row.estimated_sales,
+      estimatedRevenue: row.estimated_revenue,
+      avgPrice: row.avg_price,
+      competition: row.competition,
+      trendVelocity: row.trend_velocity,
+      socialMomentum: row.social_momentum,
+      crossSourceCount: observed,
+      proofType: row.proof_type,
+      proofTimestamp: row.proof_timestamp
+    });
+    await upsertScore(db, scope, row.id, score);
+  }
+}
+
 async function importCandidates(db, scope, actorId, payload) {
   const source = text(payload.source);
   const sourceFileId = text(payload.sourceFileId);
@@ -332,6 +362,7 @@ async function importCandidates(db, scope, actorId, payload) {
       SELECT COUNT(*) FROM global_keyword_candidates c WHERE c.cluster_id=keyword_clusters.id
     ), updated_at=CURRENT_TIMESTAMP
     WHERE tenant_id=? AND workspace_id=? AND marketplace=?`, scopeParams(scope));
+    await reconcileCrossSourceScores(db, scope);
     await run(db, 'COMMIT');
   } catch (error) {
     try { await run(db, 'ROLLBACK'); } catch (_) {}
@@ -466,5 +497,5 @@ async function promoteToProject(db, scope, actorId, candidateId, payload = {}) {
 
 module.exports = Object.freeze({
   ALLOWED_STATUSES, normalizeKeyword, normalizeClusterKey, migrateGlobalOpportunityDiscovery,
-  scoreCandidate, projectMklCandidates, importCandidates, listCandidates, opportunitySummary, watchlist, setCandidateStatus, promoteToProject
+  scoreCandidate, projectMklCandidates, reconcileCrossSourceScores, importCandidates, listCandidates, opportunitySummary, watchlist, setCandidateStatus, promoteToProject
 });

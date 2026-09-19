@@ -155,6 +155,26 @@ async function main() {
   });
   check(staleQaEdit.status === 409 && ['REVISION_CONFLICT','LISTING_HEAD_CONFLICT','PARENT_REVISION_CONFLICT'].includes(staleQaEdit.body.error),
     `controlled QA edit fails closed when the exact head changed: ${JSON.stringify(staleQaEdit)}`);
+  const dependencyDriftCases = [
+    { label: 'Product Truth', productTruthRevisionId: truth.body.productTruthRevisionId + 1,
+      intelligenceSnapshotId: intelligence.body.intelligenceSnapshotId },
+    { label: 'Intelligence', productTruthRevisionId: truth.body.productTruthRevisionId,
+      intelligenceSnapshotId: intelligence.body.intelligenceSnapshotId + 1 },
+    { label: 'Product Truth and Intelligence', productTruthRevisionId: truth.body.productTruthRevisionId + 1,
+      intelligenceSnapshotId: intelligence.body.intelligenceSnapshotId + 1 }
+  ];
+  for (const [index, drift] of dependencyDriftCases.entries()) {
+    const rejected = await json(`/api/listings/${listing.body.listingId}/revisions`, 'POST', {
+      parentRevisionId: successor.body.revisionId,
+      expectedHeadRevisionId: successor.body.revisionId,
+      idempotencyKey: key(26 + index), changeReason: `REJECT_${drift.label.toUpperCase().replaceAll(' ', '_')}_DRIFT`,
+      productTruthRevisionId: drift.productTruthRevisionId,
+      intelligenceSnapshotId: drift.intelligenceSnapshotId,
+      content: successorContent
+    });
+    check(rejected.status === 409 && rejected.body.error === 'QA_EDIT_DEPENDENCY_DRIFT',
+      `${drift.label} rebind attempt must fail against parent-bound dependencies: ${JSON.stringify(rejected)}`);
+  }
   const phrase = master.body.payload.keywords.find(item => item.tier !== 'EXCLUDED').phrase;
   const newerMaster = await json(`/api/projects/${projectId}/etsy/master-keywords`, 'POST', {
     patternArtifactId: patterns.body.id, decisions: [{ phrase, tier: 'REVIEW' }], expectedHeadArtifactId: master.body.id,

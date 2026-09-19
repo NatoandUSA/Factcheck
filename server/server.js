@@ -2269,20 +2269,40 @@ app.post('/api/listings/:id/revisions', requireAuth(db), requireRole(['OWNER', '
     if (root.status === 'SUBMITTED') throw Object.assign(new Error('SUBMITTED_LISTING_TERMINAL'), {
       code: 'SUBMITTED_LISTING_TERMINAL', status: 409
     });
+    const parent = await getListingRevision(db, scope, listingId, Number(body.parentRevisionId), root.project_id);
+    const parentProductTruthRevisionId = Number(parent.dependencies.productTruthRevisionId);
+    const parentIntelligenceSnapshotId = parent.dependencies.intelligenceSnapshotId == null
+      ? null : Number(parent.dependencies.intelligenceSnapshotId);
+    const requestedProductTruthRevisionId = Number(body.productTruthRevisionId);
+    const requestedIntelligenceSnapshotId = body.intelligenceSnapshotId == null
+      ? null : Number(body.intelligenceSnapshotId);
+    if (requestedProductTruthRevisionId !== parentProductTruthRevisionId
+      || requestedIntelligenceSnapshotId !== parentIntelligenceSnapshotId) {
+      throw Object.assign(new Error('QA_EDIT_DEPENDENCY_DRIFT'), {
+        code: 'QA_EDIT_DEPENDENCY_DRIFT', status: 409,
+        details: { parentRevisionId: parent.id,
+          productTruthRevisionId: parentProductTruthRevisionId,
+          intelligenceSnapshotId: parentIntelligenceSnapshotId }
+      });
+    }
+    const parentDependencies = Object.freeze({
+      productTruthRevisionId: parentProductTruthRevisionId,
+      intelligenceSnapshotId: parentIntelligenceSnapshotId
+    });
     const result = await appendListingRevision(db, scope, listingId, {
       projectId: root.project_id, parentRevisionId: body.parentRevisionId,
       expectedHeadRevisionId: body.expectedHeadRevisionId, idempotencyKey: body.idempotencyKey,
       changeReason: body.changeReason, content: body.content,
-      dependencies: { productTruthRevisionId: Number(body.productTruthRevisionId),
-        intelligenceSnapshotId: body.intelligenceSnapshotId == null ? null : Number(body.intelligenceSnapshotId) }
+      dependencies: parentDependencies
     }, {
       prepareContent: async ({ content }) => {
-        const validated = await validateCanonicalDraft(db, scope, root.project_id, body.productTruthRevisionId, content,
-          body.intelligenceSnapshotId);
+        const validated = await validateCanonicalDraft(db, scope, root.project_id,
+          parentDependencies.productTruthRevisionId, content, parentDependencies.intelligenceSnapshotId);
         return { content: validated.content, validationAccounting: validated.guardAccounting };
       },
       resolveDependencies: async () => (await validateCanonicalDraft(db, scope, root.project_id,
-        body.productTruthRevisionId, body.content, body.intelligenceSnapshotId)).dependencies,
+        parentDependencies.productTruthRevisionId, body.content,
+        parentDependencies.intelligenceSnapshotId)).dependencies,
       assertDependenciesCurrent: async ({ dependencies }) => assertCanonicalDependenciesCurrent(
         db, scope, root.project_id, dependencies)
     });

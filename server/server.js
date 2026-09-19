@@ -36,7 +36,7 @@ const { COOKIE_NAME, SESSION_TTL_MS, createSessionRecord, verifySessionRecord, r
 const { parseCookies, extractRawToken, requireAuth, requireRole, requireCsrfOrigin, corsOptionsDelegate } = require('./middleware/auth');
 const { runMigrations } = require('./database/migrations');
 const globalOpportunityStore = require('./database/globalOpportunityStore');
-const { parseGlobalOpportunityFile } = require('./globalOpportunityBulkParser');
+const { parseGlobalOpportunityFile, clusterDescriptor } = require('./globalOpportunityBulkParser');
 const {
   ensureTestDatabaseFixtures: ensureFixturesForDb,
   ensureDevelopmentDatabaseFixtures
@@ -3693,8 +3693,16 @@ app.post('/api/global-opportunities/import', requireAuth(db), requireRole(['OWNE
       req.user.userId,
       {
         source: 'GLOBAL_JSON_UNVERIFIED',
-        sourceFileId: body.sourceFileId,
-        candidates: body.candidates
+        sourceFileId: 'unverified-json',
+        candidates: (Array.isArray(body.candidates) ? body.candidates : []).map(candidate => {
+          const cluster = clusterDescriptor(candidate?.keyword);
+          return {
+            ...candidate,
+            clusterKey: cluster.clusterKey,
+            clusterLabel: cluster.clusterLabel,
+            clusterMethod: cluster.method
+          };
+        })
       },
       { allowCommercialMetrics: false, allowProofTimestamp: false }
     );

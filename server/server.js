@@ -3630,12 +3630,10 @@ app.post('/api/global-opportunities/import-file',
       if (!allowedSourceTypes.has(requestedSourceType)) {
         return res.status(400).json({ success: false, error: 'GLOBAL_IMPORT_SOURCE_TYPE_INVALID' });
       }
-      const observedAt = new Date().toISOString();
       const parsed = await parseGlobalOpportunityFile(req.file.buffer, {
         fileName: req.file.originalname,
         mediaType: req.file.mimetype,
-        sourceType: requestedSourceType,
-        proofTimestamp: observedAt
+        sourceType: requestedSourceType
       });
       const detectedSources = [...new Set(parsed.candidates.map(item => item?.origin?.source).filter(Boolean))];
       const canonicalSource = detectedSources.length === 1 ? detectedSources[0] : requestedSourceType;
@@ -3647,7 +3645,8 @@ app.post('/api/global-opportunities/import-file',
           source: `GLOBAL_BULK_${canonicalSource}`,
           sourceFileId: parsed.sourceFileId,
           candidates: parsed.candidates
-        }
+        },
+        { allowCommercialMetrics: true, allowProofTimestamp: false }
       );
       return res.json({
         success: true,
@@ -3673,7 +3672,12 @@ app.post('/api/global-opportunities/import', requireAuth(db), requireRole(['OWNE
       db,
       globalOpportunityScope(req.user),
       req.user.userId,
-      body
+      {
+        source: 'GLOBAL_JSON_UNVERIFIED',
+        sourceFileId: body.sourceFileId,
+        candidates: body.candidates
+      },
+      { allowCommercialMetrics: false, allowProofTimestamp: false }
     );
     return res.json({
       success: true,
@@ -3720,6 +3724,10 @@ app.post('/api/global-opportunities/harvest-project/:projectId', requireAuth(db)
         source: req.user.marketplace === 'AMAZON' ? 'PROJECT_MKL_COMMERCIAL_OUTLIER' : 'PROJECT_MKL_ETSY_REVIEW',
         sourceFileId: `project:${project.id}:artifact:${master.id}`,
         candidates
+      },
+      {
+        allowCommercialMetrics: req.user.marketplace === 'AMAZON',
+        allowProofTimestamp: true
       }
     );
     return res.json({

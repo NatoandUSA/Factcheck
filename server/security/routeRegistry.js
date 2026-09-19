@@ -85,6 +85,7 @@ const ROUTES = [
   { method: 'GET', path: '/api/mcp/h10/tools', public: false },
   { method: 'GET', path: '/api/global-opportunities', public: false },
   { method: 'POST', path: '/api/global-opportunities/import', public: false },
+  { method: 'POST', path: '/api/global-opportunities/harvest-project/:projectId', public: false },
   { method: 'POST', path: '/api/global-opportunities/:candidateId/status', public: false },
   { method: 'POST', path: '/api/global-opportunities/:candidateId/promote-to-project', public: false },
   { method: 'GET', path: '/api/market-intelligence/dashboard', public: false },

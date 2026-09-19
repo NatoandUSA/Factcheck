@@ -147,6 +147,21 @@ async function run() {
     }, { allowCommercialMetrics: true, allowProofTimestamp: false });
     const trustedId = trusted[0].candidateId;
 
+    const rejectTrusted = await fetch(base + `/api/global-opportunities/${trustedId}/status`, {
+      method: 'POST', headers, body: JSON.stringify({ status: 'REJECTED', reason: 'audit status gate' })
+    });
+    assert.strictEqual(rejectTrusted.status, 200);
+    const rejectedPromotion = await fetch(base + `/api/global-opportunities/${trustedId}/promote-to-project`, {
+      method: 'POST', headers, body: JSON.stringify({ name: 'Must Not Promote Rejected' })
+    });
+    assert.strictEqual(rejectedPromotion.status, 409);
+    assert.strictEqual((await json(rejectedPromotion)).error, 'GLOBAL_CANDIDATE_STATUS_NOT_PROMOTABLE');
+
+    const requalifyTrusted = await fetch(base + `/api/global-opportunities/${trustedId}/status`, {
+      method: 'POST', headers, body: JSON.stringify({ status: 'QUALIFIED', reason: 'audit requalification' })
+    });
+    assert.strictEqual(requalifyTrusted.status, 200);
+
     const promotion = await fetch(base + `/api/global-opportunities/${trustedId}/promote-to-project`, {
       method: 'POST', headers, body: JSON.stringify({ name: 'Global Discovery - Pet Memorial Wind Chime' })
     });

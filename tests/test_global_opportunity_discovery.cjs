@@ -3,7 +3,7 @@ process.env.NODE_ENV = 'test';
 
 const { app, db, databaseReady } = require('../server/server');
 const { createSessionRecord } = require('../server/security/session');
-const { projectMklCandidates } = require('../server/database/globalOpportunityStore');
+const { projectMklCandidates, importCandidates } = require('../server/database/globalOpportunityStore');
 
 function all(sql, params = []) {
   return new Promise((resolve, reject) => db.all(sql, params, (error, rows) => error ? reject(error) : resolve(rows || [])));
@@ -104,12 +104,15 @@ async function run() {
     const listRes = await fetch(base + '/api/global-opportunities?limit=20', { headers: { Origin: base, Cookie: headers.Cookie } });
     assert.strictEqual(listRes.status, 200);
     const list = await json(listRes);
-    const proven = list.candidates.find(row => row.normalized_keyword === 'dog memorial wind chime');
+    const unverifiedSales = list.candidates.find(row => row.normalized_keyword === 'dog memorial wind chime');
     const watch = list.candidates.find(row => row.normalized_keyword === 'viral novelty maybe');
-    assert(proven && watch);
-    assert.strictEqual(proven.proof_gate, 'PASS');
-    assert.strictEqual(proven.status, 'QUALIFIED');
-    assert(Number(proven.opportunity_score) >= 0 && Number(proven.opportunity_score) <= 100);
+    assert(unverifiedSales && watch);
+    assert.strictEqual(unverifiedSales.proof_gate, 'WATCH_ONLY',
+      'client JSON must not self-assert commercial proof');
+    assert.strictEqual(unverifiedSales.status, 'WATCH');
+    assert.strictEqual(unverifiedSales.estimated_sales, null);
+    assert.strictEqual(unverifiedSales.estimated_revenue, null);
+    assert.strictEqual(unverifiedSales.source, 'GLOBAL_JSON_UNVERIFIED');
     assert.strictEqual(watch.proof_gate, 'WATCH_ONLY');
     assert.strictEqual(watch.status, 'WATCH');
     assert(Number(watch.opportunity_score) <= 39, 'social/trend-only candidate must remain capped below qualification');
@@ -125,7 +128,26 @@ async function run() {
       WHERE tenant_id=? AND workspace_id=? AND marketplace='AMAZON' ORDER BY id`, [user.tenant_id, user.workspace_id]);
     assert.deepStrictEqual(afterDenied, beforeProjects, 'failed promotion must not mutate projects');
 
-    const promotion = await fetch(base + `/api/global-opportunities/${proven.id}/promote-to-project`, {
+    const trusted = await importCandidates(db, {
+      tenantId: user.tenant_id, workspaceId: user.workspace_id, marketplace: 'AMAZON'
+    }, user.user_id, {
+      source: 'TEST_TRUSTED_MARKETPLACE_EXPORT',
+      sourceFileId: 'trusted-global-opportunity-test-1',
+      candidates: [{
+        keyword: 'trusted pet memorial wind chime',
+        clusterKey: 'PET_MEMORIAL_WIND_CHIME',
+        clusterLabel: 'Pet Memorial Wind Chime',
+        searchVolume: 4800,
+        estimatedSales: 120,
+        estimatedRevenue: 4200,
+        avgPrice: 34.99,
+        competition: 650,
+        proofType: 'MARKETPLACE_SALES'
+      }]
+    }, { allowCommercialMetrics: true, allowProofTimestamp: false });
+    const trustedId = trusted[0].candidateId;
+
+    const promotion = await fetch(base + `/api/global-opportunities/${trustedId}/promote-to-project`, {
       method: 'POST', headers, body: JSON.stringify({ name: 'Global Discovery - Pet Memorial Wind Chime' })
     });
     assert.strictEqual(promotion.status, 200);
@@ -146,11 +168,11 @@ async function run() {
     [user.tenant_id, user.workspace_id, promoted.projectId]);
     assert.deepStrictEqual(preserved, beforeProjects, 'promotion may add one project but must not alter existing projects');
 
-    const row = await get('SELECT status,promoted_project_id FROM global_keyword_candidates WHERE id=?', [proven.id]);
+    const row = await get('SELECT status,promoted_project_id FROM global_keyword_candidates WHERE id=?', [trustedId]);
     assert.strictEqual(row.status, 'PROMOTED');
     assert.strictEqual(Number(row.promoted_project_id), Number(promoted.projectId));
 
-    const replay = await fetch(base + `/api/global-opportunities/${proven.id}/promote-to-project`, {
+    const replay = await fetch(base + `/api/global-opportunities/${trustedId}/promote-to-project`, {
       method: 'POST', headers, body: JSON.stringify({})
     });
     assert.strictEqual(replay.status, 200);

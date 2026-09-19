@@ -34,6 +34,8 @@
   "contextual_downgrade": {
     "anna": {
       "previous_tokens": ["to", "for", "para", "name", "nombre"],
+      "disqualifying_tokens": ["character", "characters", "personaje", "personajes", "franchise", "franquicia", "princess", "princesa", "disney", "frozen", "elsa", "olaf"],
+      "context_window": 3,
       "note": "Anna is also a common personal name. Recipient/personalization phrasing requires review; explicit Disney/Frozen context remains blocked by its own terms."
     }
   },

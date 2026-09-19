@@ -19,7 +19,10 @@ const library = {
     cat: 'Common English word; review context.'
   },
   contextual_downgrade: {
-    anna: { previous_tokens: ['to', 'for', 'para', 'name', 'nombre'], note: 'Common recipient name.' }
+    anna: { previous_tokens: ['to', 'for', 'para', 'name', 'nombre'],
+      disqualifying_tokens: ['character', 'characters', 'personaje', 'personajes', 'franchise', 'franquicia',
+        'princess', 'princesa', 'disney', 'frozen', 'elsa', 'olaf'],
+      context_window: 3, note: 'Common recipient name.' }
   },
   review_phrases: [
     { term: 'mama bear', note: 'Reported phrase.' },
@@ -103,6 +106,7 @@ test('downgrades a blocked common name only in explicit recipient context', () =
   assert.equal(result.enforcementHits[0].term, 'anna');
   assert.equal(result.enforcementHits[0].matchMode, 'CONTEXTUAL_BOUNDARY');
   assert.match(result.enforcementHits[0].note, /recipient name/i);
+  assert.equal(screenIpText('Regalo para Anna', contextualLibrary).verdict, 'REVIEW');
 });
 
 test('continues blocking the same term without recipient context', () => {
@@ -111,7 +115,12 @@ test('continues blocking the same term without recipient context', () => {
     block: { ...library.block, characters: ['Anna', 'Disney'] }
   };
   assert.equal(screenIpText('Anna character blanket', contextualLibrary).verdict, 'BLOCKED');
+  assert.equal(screenIpText('Frozen Anna blanket', contextualLibrary).verdict, 'BLOCKED');
   assert.equal(screenIpText('Disney gift to Anna', contextualLibrary).verdict, 'BLOCKED');
+  assert.equal(screenIpText('gift to Anna character blanket', contextualLibrary).verdict, 'BLOCKED');
+  assert.equal(screenIpText('regalo para Anna personaje', contextualLibrary).verdict, 'BLOCKED');
+  assert.equal(screenIpText('gift to Anna Anna character blanket', contextualLibrary).verdict, 'BLOCKED');
+  assert.equal(screenIpText('name Anna Disney blanket', contextualLibrary).verdict, 'BLOCKED');
 });
 
 test('does not carry a contextual cue across listing-surface boundaries', () => {

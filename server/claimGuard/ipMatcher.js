@@ -42,11 +42,16 @@ function variantsOf(token) {
 }
 
 function sequenceAt(haystack, needle) {
-  if (!needle.length || needle.length > haystack.length) return -1;
+  return sequenceIndexes(haystack, needle)[0] ?? -1;
+}
+
+function sequenceIndexes(haystack, needle) {
+  const indexes = [];
+  if (!needle.length || needle.length > haystack.length) return indexes;
   for (let start = 0; start + needle.length <= haystack.length; start += 1) {
-    if (needle.every((token, offset) => haystack[start + offset] === token)) return start;
+    if (needle.every((token, offset) => haystack[start + offset] === token)) indexes.push(start);
   }
-  return -1;
+  return indexes;
 }
 
 function fuzzySequenceAt(haystackVariants, needle) {
@@ -123,8 +128,12 @@ function compileIpLibrary(library) {
       const canonical = tokenize(term).join(' ');
       const previousTokens = new Set((Array.isArray(rule?.previous_tokens) ? rule.previous_tokens : [])
         .flatMap(value => tokenize(value)));
+      const disqualifyingTokens = new Set((Array.isArray(rule?.disqualifying_tokens) ? rule.disqualifying_tokens : [])
+        .flatMap(value => tokenize(value)));
+      const contextWindow = Number.isInteger(rule?.context_window) && rule.context_window > 0
+        ? Math.min(rule.context_window, 10) : 3;
       if (canonical && previousTokens.size) contextual.set(canonical, {
-        previousTokens,
+        previousTokens, disqualifyingTokens, contextWindow,
         note: String(rule?.note || 'Context indicates a common-name use; manual review required.')
       });
     }
@@ -206,16 +215,26 @@ function screenCompiled(text, compiledLibrary) {
   const shadowHits = [];
 
   for (const entry of compiledLibrary.entries) {
-    const exactIndex = sequenceAt(tokens, entry.tokens);
-    if (exactIndex >= 0) {
-      const previousToken = exactIndex > 0 ? tokens[exactIndex - 1] : '';
-      const contextualReview = entry.contextualDowngrade?.previousTokens?.has(previousToken);
-      const matchedEntry = contextualReview ? {
-        ...entry,
-        disposition: 'REVIEW',
-        note: entry.contextualDowngrade.note
-      } : entry;
-      enforcementHits.push(makeHit(matchedEntry, contextualReview ? 'CONTEXTUAL_BOUNDARY' : 'BOUNDARY', exactIndex, 'ENFORCE'));
+    const exactIndexes = sequenceIndexes(tokens, entry.tokens);
+    if (exactIndexes.length) {
+      if (!entry.contextualDowngrade) {
+        enforcementHits.push(makeHit(entry, 'BOUNDARY', exactIndexes[0], 'ENFORCE'));
+        continue;
+      }
+      for (const exactIndex of exactIndexes) {
+        const previousToken = exactIndex > 0 ? tokens[exactIndex - 1] : '';
+        const start = Math.max(0, exactIndex - entry.contextualDowngrade.contextWindow);
+        const end = Math.min(tokens.length, exactIndex + entry.tokens.length + entry.contextualDowngrade.contextWindow);
+        const nearby = tokens.slice(start, end);
+        const disqualified = nearby.some(token => entry.contextualDowngrade.disqualifyingTokens.has(token));
+        const contextualReview = entry.contextualDowngrade.previousTokens.has(previousToken) && !disqualified;
+        const matchedEntry = contextualReview ? {
+          ...entry,
+          disposition: 'REVIEW',
+          note: entry.contextualDowngrade.note
+        } : entry;
+        enforcementHits.push(makeHit(matchedEntry, contextualReview ? 'CONTEXTUAL_BOUNDARY' : 'BOUNDARY', exactIndex, 'ENFORCE'));
+      }
       continue;
     }
 
@@ -285,6 +304,7 @@ module.exports = {
   screenCompiled,
   screenIpText,
   sequenceAt,
+  sequenceIndexes,
   singularForms,
   tokenize,
   variantsOf

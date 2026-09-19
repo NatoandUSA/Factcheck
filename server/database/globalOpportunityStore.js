@@ -209,6 +209,16 @@ function scopeParams(scope) {
   return [scope.tenantId, scope.workspaceId, scope.marketplace];
 }
 
+function rawCandidate(row) {
+  if (typeof row?.raw_json !== 'string' || !row.raw_json.trim()) return {};
+  try {
+    const parsed = JSON.parse(row.raw_json);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch (_) {
+    return {};
+  }
+}
+
 function projectMklCandidates(artifact, marketplace) {
   if (!artifact || typeof artifact !== 'object') return [];
   const expectedKind = marketplace === 'AMAZON' ? 'AMAZON_MASTER_KEYWORDS' : 'ETSY_MASTER_KEYWORDS';
@@ -343,7 +353,8 @@ async function reconcileCrossSourceScores(db, scope) {
       socialMomentum: row.social_momentum,
       crossSourceCount: observed,
       proofType: row.proof_type,
-      proofTimestamp: row.proof_timestamp
+      proofTimestamp: row.proof_timestamp,
+      riskPenalty: rawCandidate(row).riskPenalty
     });
     await upsertScore(db, scope, row.id, score);
   }

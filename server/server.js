@@ -35,6 +35,7 @@ const { createRateLimiter } = require('./security/rateLimiter');
 const { COOKIE_NAME, SESSION_TTL_MS, createSessionRecord, verifySessionRecord, revokeSessionRecord } = require('./security/session');
 const { parseCookies, extractRawToken, requireAuth, requireRole, requireCsrfOrigin, corsOptionsDelegate } = require('./middleware/auth');
 const { runMigrations } = require('./database/migrations');
+const globalOpportunityStore = require('./database/globalOpportunityStore');
 const {
   ensureTestDatabaseFixtures: ensureFixturesForDb,
   ensureDevelopmentDatabaseFixtures
@@ -3541,6 +3542,157 @@ app.get('/api/mcp/h10/tools', requireAuth(db), requireRole(['OWNER', 'MANAGER', 
   }
 });
 
+
+// API: Global Opportunity Discovery — workspace/marketplace scoped and project-independent.
+// Research-only until an explicit promote-to-project action creates a brand-new project.
+function globalOpportunityScope(user) {
+  return Object.freeze({ tenantId: user.tenantId, workspaceId: user.workspaceId, marketplace: user.marketplace });
+}
+function parseGlobalCandidateId(raw) {
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1) {
+    throw Object.assign(new Error('INVALID_GLOBAL_CANDIDATE_ID'), { code: 'INVALID_GLOBAL_CANDIDATE_ID', status: 400 });
+  }
+  return value;
+}
+function rejectGlobalOpportunity(res, error) {
+  return res.status(Number.isInteger(error?.status) ? error.status : 500).json({
+    success: false,
+    error: error?.code || 'GLOBAL_OPPORTUNITY_ERROR',
+    message: error?.message || 'Global Opportunity Discovery unavailable.'
+  });
+}
+
+app.get('/api/global-opportunities', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    const candidates = await globalOpportunityStore.listCandidates(db, globalOpportunityScope(req.user), {
+      status: req.query.status,
+      limit: req.query.limit
+    });
+    return res.json({
+      success: true,
+      mode: 'GLOBAL_DISCOVERY',
+      researchOnly: true,
+      projectBound: false,
+      marketplace: req.user.marketplace,
+      count: candidates.length,
+      candidates
+    });
+  } catch (error) {
+    return rejectGlobalOpportunity(res, error);
+  }
+});
+
+app.post('/api/global-opportunities/import', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    const body = requireExactDto(req.body, new Set(['source', 'sourceFileId', 'candidates']));
+    const imported = await globalOpportunityStore.importCandidates(
+      db,
+      globalOpportunityScope(req.user),
+      req.user.userId,
+      body
+    );
+    return res.json({
+      success: true,
+      mode: 'GLOBAL_DISCOVERY',
+      researchOnly: true,
+      projectStateChanged: false,
+      importedCount: imported.length,
+      candidates: imported
+    });
+  } catch (error) {
+    return rejectGlobalOpportunity(res, error);
+  }
+});
+
+app.post('/api/global-opportunities/harvest-project/:projectId', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    requireExactDto(req.body || {}, new Set());
+    const project = await requireProjectContext(req, req.params.projectId);
+    if (project.marketplace !== 'AMAZON') {
+      return res.status(409).json({ success: false, error: 'GLOBAL_PROJECT_HARVEST_AMAZON_ONLY' });
+    }
+    const artifactState = await getArtifactState(db, revisionScope(req.user), project.id);
+    const master = artifactState.heads?.AMAZON_MASTER_KEYWORDS;
+    if (!master) {
+      return res.status(409).json({ success: false, error: 'GLOBAL_PROJECT_MKL_REQUIRED' });
+    }
+    const candidates = globalOpportunityStore.projectMklCandidates(master, req.user.marketplace);
+    if (!candidates.length) {
+      return res.json({
+        success: true,
+        researchOnly: true,
+        sourceProjectStateChanged: false,
+        sourceProjectId: project.id,
+        sourceArtifactId: master.id,
+        harvestedCount: 0,
+        message: 'No OUTLIER_REVIEW/RESIDUE keyword with observed Keyword Sales was eligible.'
+      });
+    }
+    const imported = await globalOpportunityStore.importCandidates(
+      db,
+      globalOpportunityScope(req.user),
+      req.user.userId,
+      {
+        source: 'PROJECT_MKL_COMMERCIAL_OUTLIER',
+        sourceFileId: `project:${project.id}:artifact:${master.id}`,
+        candidates
+      }
+    );
+    return res.json({
+      success: true,
+      researchOnly: true,
+      sourceProjectStateChanged: false,
+      sourceProjectId: project.id,
+      sourceArtifactId: master.id,
+      harvestedCount: imported.length,
+      candidates: imported
+    });
+  } catch (error) {
+    return rejectGlobalOpportunity(res, error);
+  }
+});
+
+app.post('/api/global-opportunities/:candidateId/status', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    const candidateId = parseGlobalCandidateId(req.params.candidateId);
+    const body = requireExactDto(req.body, new Set(['status', 'reason']));
+    const result = await globalOpportunityStore.setCandidateStatus(
+      db,
+      globalOpportunityScope(req.user),
+      req.user.userId,
+      candidateId,
+      body.status,
+      { reason: typeof body.reason === 'string' ? body.reason.trim() : '' }
+    );
+    return res.json({ success: true, researchOnly: true, projectStateChanged: false, ...result });
+  } catch (error) {
+    return rejectGlobalOpportunity(res, error);
+  }
+});
+
+app.post('/api/global-opportunities/:candidateId/promote-to-project', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    const candidateId = parseGlobalCandidateId(req.params.candidateId);
+    const body = requireExactDto(req.body || {}, new Set(['name', 'referenceAsin']));
+    const result = await globalOpportunityStore.promoteToProject(
+      db,
+      globalOpportunityScope(req.user),
+      req.user.userId,
+      candidateId,
+      body
+    );
+    return res.json({
+      success: true,
+      mode: 'PROMOTE_TO_NEW_PROJECT',
+      researchOnly: false,
+      existingProjectsChanged: false,
+      ...result
+    });
+  } catch (error) {
+    return rejectGlobalOpportunity(res, error);
+  }
+});
 
 // API: Market Intelligence read-only bridge.
 // This endpoint is intentionally one-way: OmniSeller may read research observations,

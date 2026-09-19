@@ -3637,12 +3637,14 @@ app.post('/api/global-opportunities/import-file',
         sourceType: requestedSourceType,
         proofTimestamp: observedAt
       });
+      const detectedSources = [...new Set(parsed.candidates.map(item => item?.origin?.source).filter(Boolean))];
+      const canonicalSource = detectedSources.length === 1 ? detectedSources[0] : requestedSourceType;
       const imported = await globalOpportunityStore.importCandidates(
         db,
         globalOpportunityScope(req.user),
         req.user.userId,
         {
-          source: `GLOBAL_BULK_${requestedSourceType}`,
+          source: `GLOBAL_BULK_${canonicalSource}`,
           sourceFileId: parsed.sourceFileId,
           candidates: parsed.candidates
         }

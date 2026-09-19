@@ -125,6 +125,8 @@ export default function MarketIntelligenceWorkspace({ onRequireLogin }) {
   const buyerLanguage = listening.buyerLanguage || [];
   const competitorMoves = listening.competitorMoves || [];
   const sourceCoverage = listening.sourceCoverage || [];
+  const staffReviews = listening.staffReviews || [];
+  const sourceHealthSummary = listening.sourceHealthSummary || {};
   const meta = state.data?.dashboard?.meta || {};
 
   const sortedKeywords = useMemo(
@@ -165,6 +167,7 @@ export default function MarketIntelligenceWorkspace({ onRequireLogin }) {
             <span style={badgeStyle(meta.liveSync ? 'good' : 'warn')}>{meta.liveSync ? 'LIVE SYNC' : 'FALLBACK'}</span>
             <button className="btn btn-secondary btn-sm" onClick={load}>Refresh</button>
             <a className="btn btn-secondary btn-sm" href="https://intel.theglobalserviceteam.site" target="_blank" rel="noreferrer">Mở Intel Console</a>
+            <a className="btn btn-secondary btn-sm" href="https://app.notion.com/p/1dd55c3edecf47f7b6f6572e50fadb91" target="_blank" rel="noreferrer">Mở Review Queue</a>
           </div>
         </div>
         {state.error && <div style={{ marginTop: 12, padding: 10, background: '#fee2e2', color: '#991b1b', borderRadius: 8 }}>{state.error}</div>}
@@ -178,14 +181,34 @@ export default function MarketIntelligenceWorkspace({ onRequireLogin }) {
         <Table
           columns={[
             { key: 'keyword', label: 'Ưu tiên hôm nay', render: (r) => <><strong>{r.keyword}</strong><div style={{ color: '#64748b', marginTop: 3 }}>{r.market || 'US'} · {r.language || 'auto'}</div></> },
-            { key: 'opportunityScore', label: 'Score', render: (r) => <span style={badgeStyle(scoreTone(r.opportunityScore || 0))}>{r.opportunityScore || 0}/100</span> },
-            { key: 'suggestedDecision', label: 'Suggested Decision', render: (r) => <span style={badgeStyle(decisionTone(r.suggestedDecision))}>{r.suggestedDecision || 'NO_DATA'}</span> },
-            { key: 'why', label: 'Vì sao?', render: (r) => <div style={{ maxWidth: 360 }}><strong>{scoreBreakdown(r)}</strong><div style={{ color: '#64748b', marginTop: 4 }}>{r.decisionRationale || 'Chưa đủ dữ liệu giải thích.'}</div></div> },
+            { key: 'opportunityScore', label: 'Score / Delta', render: (r) => <><span style={badgeStyle(scoreTone(r.opportunityScore || 0))}>{r.opportunityScore || 0}/100</span><div style={{ color: '#64748b', marginTop: 4 }}>Δ {r.scoreDelta === null || r.scoreDelta === undefined ? 'baseline' : ((r.scoreDelta > 0 ? '+' : '') + r.scoreDelta)}</div></> },
+            { key: 'suggestedDecision', label: 'Decision / Gate', render: (r) => <><span style={badgeStyle(decisionTone(r.suggestedDecision))}>{r.suggestedDecision || 'NO_DATA'}</span><div style={{ color: '#64748b', marginTop: 4 }}>{r.experimentGate?.state || 'NOT_READY'}</div></> },
+            { key: 'why', label: 'Vì sao?', render: (r) => <div style={{ maxWidth: 360 }}><strong>{scoreBreakdown(r)}</strong><div style={{ color: '#64748b', marginTop: 4 }}>{r.whyChanged || r.decisionRationale || 'Chưa đủ dữ liệu giải thích.'}</div></div> },
             { key: 'staffAction', label: 'Staff nên làm', render: (r) => <div style={{ maxWidth: 340 }}>{staffAction(r.suggestedDecision)}</div> },
             { key: 'sources', label: 'Nguồn nên mở', render: (r) => (r.topSources || []).join(' · ') || 'Chưa có nguồn material' }
           ]}
           rows={dailyQueue}
           empty="Chưa có keyword ACTIVE."
+        />
+      </div>
+
+      <div className="card" style={{ padding: 18 }}>
+        <h3 style={{ marginTop: 0, marginBottom: 4 }}>Staff Intelligence Review Queue</h3>
+        <div style={{ color: '#64748b', fontSize: 12, marginBottom: 14 }}>
+          Đây là human handoff. OmniSeller chỉ đọc; staff/manager cập nhật disposition tại Review Queue canonical trong Notion.
+        </div>
+        <Table
+          columns={[
+            { key: 'keyword', label: 'Keyword', render: (r) => <><strong>{r.keyword}</strong>{r.validationCohort ? <div style={{ color: '#64748b', marginTop: 3 }}>Validation cohort · {r.cohortRole || '—'}</div> : null}</> },
+            { key: 'opportunityScore', label: 'Score' },
+            { key: 'suggestedDecision', label: 'System Suggestion', render: (r) => <span style={badgeStyle(decisionTone(r.suggestedDecision))}>{r.suggestedDecision || '—'}</span> },
+            { key: 'staffDisposition', label: 'Staff', render: (r) => <span style={badgeStyle(r.staffDisposition === 'ESCALATE' ? 'warn' : 'neutral')}>{r.staffDisposition || 'UNREVIEWED'}</span> },
+            { key: 'managerReview', label: 'Manager', render: (r) => <span style={badgeStyle(r.managerReview === 'APPROVED_FOR_EXPERIMENT' ? 'good' : r.managerReview === 'PENDING' ? 'warn' : 'neutral')}>{r.managerReview || 'NOT_REQUIRED'}</span> },
+            { key: 'experimentGate', label: 'Experiment Gate', render: (r) => <><strong>{r.experimentGate || '—'}</strong><div style={{ color: '#64748b', marginTop: 3, maxWidth: 340 }}>{r.gateReasons || ''}</div></> },
+            { key: 'whyNow', label: 'Why now', render: (r) => <div style={{ maxWidth: 380 }}>{r.whyNow || '—'}</div> }
+          ]}
+          rows={staffReviews}
+          empty="Review Queue chưa được sync."
         />
       </div>
 
@@ -221,13 +244,14 @@ export default function MarketIntelligenceWorkspace({ onRequireLogin }) {
         <div style={{ color: '#64748b', fontSize: 12, marginBottom: 12 }}>
           CORE = Amazon evidence (owner-export only), Etsy, TikTok Creative Center, TikTok organic/Shop, Reddit và Meta Ad Library.
           MISSING nghĩa là hiện chưa có canonical evidence trong hệ thống, không có nghĩa thị trường không có tín hiệu.
+          <div style={{ marginTop: 6 }}><strong>Health:</strong> HEALTHY {sourceHealthSummary.HEALTHY || 0} · PARTIAL {sourceHealthSummary.PARTIAL || 0} · STALE {sourceHealthSummary.STALE || 0} · BLOCKED {sourceHealthSummary.BLOCKED || 0} · MISSING {sourceHealthSummary.MISSING || 0}</div>
         </div>
         <Table
           columns={[
             { key: 'priority', label: 'Importance' },
             { key: 'tier', label: 'Tier' },
             { key: 'name', label: 'Source', render: (r) => <><strong>{r.name}</strong><div style={{ color: '#64748b', marginTop: 3 }}>{r.collectorMode || '—'}</div></> },
-            { key: 'status', label: 'Coverage / Bridge', render: (r) => <><span style={badgeStyle(r.status === 'OBSERVED' ? 'good' : 'warn')}>{r.status || 'MISSING'}</span><div style={{ color: '#64748b', marginTop: 4 }}>{r.connectorState ? 'Bridge: ' + r.connectorState : 'No local bridge required'}</div></> },
+            { key: 'status', label: 'Coverage / Health / Bridge', render: (r) => <><span style={badgeStyle(r.status === 'OBSERVED' ? 'good' : 'warn')}>{r.status || 'MISSING'}</span><div style={{ color: '#64748b', marginTop: 4 }}><strong>Health:</strong> {r.healthState || 'UNKNOWN'}{Number.isFinite(r.ageHours) ? ' · ' + r.ageHours.toFixed(1) + 'h' : ''}</div><div style={{ color: '#64748b', marginTop: 3, maxWidth: 300 }}>{r.healthReason || ''}</div><div style={{ color: '#64748b', marginTop: 4 }}>{r.connectorState ? 'Bridge: ' + r.connectorState : 'No local bridge required'}</div></> },
             { key: 'signalCount', label: 'Signals' },
             { key: 'lastObservedAt', label: 'Last observed' },
             { key: 'purpose', label: 'Best use' },
@@ -247,8 +271,8 @@ export default function MarketIntelligenceWorkspace({ onRequireLogin }) {
         <Table
           columns={[
             { key: 'keyword', label: 'Keyword / Query Group', render: (r) => <><strong>{r.keyword}</strong><div style={{ color: '#64748b', marginTop: 3 }}>{r.language || 'auto'} · {r.market || 'US'} · {r.status || 'ACTIVE'}</div><div style={{ color: '#64748b', marginTop: 3 }}>Aliases: {(r.aliases || []).join(', ') || '—'}</div><div style={{ color: '#64748b', marginTop: 3 }}>Exclude: {(r.exclusions || []).join(', ') || '—'}</div></> },
-            { key: 'opportunityScore', label: 'Opportunity', render: (r) => <><span style={badgeStyle(scoreTone(r.opportunityScore || 0))}>{r.opportunityScore || 0}/100</span><div style={{ color: '#64748b', marginTop: 4, minWidth: 220 }}>{scoreBreakdown(r)}</div></> },
-            { key: 'suggestedDecision', label: 'Suggested Decision', render: (r) => <><span style={badgeStyle(decisionTone(r.suggestedDecision))}>{r.suggestedDecision || 'NO_DATA'}</span><div style={{ color: '#64748b', marginTop: 4, maxWidth: 320 }}>{r.decisionRationale || '—'}</div></> },
+            { key: 'opportunityScore', label: 'Opportunity / Delta', render: (r) => <><span style={badgeStyle(scoreTone(r.opportunityScore || 0))}>{r.opportunityScore || 0}/100</span><div style={{ color: '#64748b', marginTop: 4 }}>Δ {r.scoreDelta === null || r.scoreDelta === undefined ? 'baseline' : ((r.scoreDelta > 0 ? '+' : '') + r.scoreDelta)}</div><div style={{ color: '#64748b', marginTop: 4, minWidth: 220 }}>{scoreBreakdown(r)}</div></> },
+            { key: 'suggestedDecision', label: 'Decision / Experiment Gate', render: (r) => <><span style={badgeStyle(decisionTone(r.suggestedDecision))}>{r.suggestedDecision || 'NO_DATA'}</span><div style={{ color: '#64748b', marginTop: 4, maxWidth: 320 }}>{r.experimentGate?.state || 'NOT_READY'}</div><div style={{ color: '#64748b', marginTop: 4, maxWidth: 320 }}>{(r.experimentGate?.reasons || []).join(' ') || r.decisionRationale || '—'}</div></> },
             { key: 'staffAction', label: 'Staff Action', render: (r) => staffAction(r.suggestedDecision) },
             { key: 'signalCount', label: 'Signals' },
             { key: 'commercialSignalCount', label: 'Commercial' },

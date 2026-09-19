@@ -3635,19 +3635,37 @@ app.post('/api/global-opportunities/import-file',
         mediaType: req.file.mimetype,
         sourceType: requestedSourceType
       });
-      const detectedSources = [...new Set(parsed.candidates.map(item => item?.origin?.source).filter(Boolean))];
-      const canonicalSource = detectedSources.length === 1 ? detectedSources[0] : requestedSourceType;
-      const imported = await globalOpportunityStore.importCandidates(
-        db,
-        globalOpportunityScope(req.user),
-        req.user.userId,
-        {
-          source: `GLOBAL_BULK_${canonicalSource}`,
-          sourceFileId: parsed.sourceFileId,
-          candidates: parsed.candidates
-        },
-        { allowCommercialMetrics: true, allowProofTimestamp: false }
-      );
+      const bySource = new Map();
+      for (const candidate of parsed.candidates) {
+        const source = String(candidate?.origin?.source || 'GENERIC').toUpperCase();
+        if (!bySource.has(source)) bySource.set(source, []);
+        bySource.get(source).push(candidate);
+      }
+      const imported = [];
+      for (const [source, candidates] of bySource.entries()) {
+        // Marketplace-export evidence may carry research-only sales/revenue proof.
+        // Trend/social and generic files remain useful discovery signals but can
+        // never unlock the proof-of-sale gate by themselves.
+        const commercialAuthority = ['CEREBRO', 'HEYETSY'].includes(source);
+        const sanitizedCandidates = commercialAuthority ? candidates : candidates.map(candidate => ({
+          ...candidate,
+          estimatedSales: null,
+          estimatedRevenue: null,
+          proofType: 'NONE'
+        }));
+        const batch = await globalOpportunityStore.importCandidates(
+          db,
+          globalOpportunityScope(req.user),
+          req.user.userId,
+          {
+            source: `GLOBAL_BULK_${source}`,
+            sourceFileId: parsed.sourceFileId,
+            candidates: sanitizedCandidates
+          },
+          { allowCommercialMetrics: commercialAuthority, allowProofTimestamp: false }
+        );
+        imported.push(...batch);
+      }
       return res.json({
         success: true,
         mode: 'GLOBAL_BULK_IMPORT',
@@ -3656,6 +3674,7 @@ app.post('/api/global-opportunities/import-file',
         sourceFileId: parsed.sourceFileId,
         parsedCount: parsed.candidateCount,
         importedCount: imported.length,
+        sourceFamilies: [...bySource.keys()],
         diagnostics: parsed.diagnostics,
         candidates: imported.slice(0, 100)
       });

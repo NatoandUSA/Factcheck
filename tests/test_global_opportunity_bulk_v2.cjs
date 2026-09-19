@@ -40,6 +40,8 @@ async function run() {
   assert.equal(freshnessScore('2999-01-01T00:00:00.000Z'), 0, 'future timestamps must not receive freshness credit');
   assert(freshnessScore(new Date().toISOString()) > 0);
   assert(competitionScore(1000) > 0 && competitionScore(1000) < 15);
+  assert.equal(competitionScore(null), 5, 'missing competition must remain UNKNOWN/default, never become zero-competition');
+  assert.equal(competitionScore(''), 5, 'blank competition must remain UNKNOWN/default');
 
   const a = clusterDescriptor('dog memorial wind chime');
   const b = clusterDescriptor('personalized pet loss wind chime');
@@ -105,6 +107,17 @@ async function run() {
     assert.equal(imported.projectStateChanged, false);
     assert.equal(imported.parsedCount, 3);
     assert.equal(imported.importedCount, 3);
+
+    const freshnessRows = await all(`SELECT c.proof_timestamp,s.freshness
+      FROM global_keyword_candidates c
+      JOIN global_opportunity_scores s ON s.candidate_id=c.id AND s.score_version='GLOBAL_OPPORTUNITY_V1'
+      WHERE c.tenant_id=? AND c.workspace_id=? AND c.marketplace='AMAZON' AND c.source_file_id=?`,
+    [user.tenant_id, user.workspace_id, imported.sourceFileId]);
+    assert(freshnessRows.length >= 3);
+    assert(freshnessRows.every(row => row.proof_timestamp === null),
+      'upload time must not be stored as marketplace proof timestamp');
+    assert(freshnessRows.every(row => Number(row.freshness) === 0),
+      'old/undated exports must not receive synthetic freshness credit');
 
     const renamedForm = new FormData();
     renamedForm.set('sourceType', 'AUTO');

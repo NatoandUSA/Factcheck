@@ -440,8 +440,8 @@ async function opportunitySummary(db, scope) {
     LEFT JOIN global_opportunity_scores s ON s.candidate_id=c.id AND s.score_version='GLOBAL_OPPORTUNITY_V1'
     WHERE c.tenant_id=? AND c.workspace_id=? AND c.marketplace=?
     GROUP BY c.status,s.proof_gate`, scopeParams(scope));
-  const clusters = await get(db, `SELECT COUNT(*) AS count FROM keyword_clusters
-    WHERE tenant_id=? AND workspace_id=? AND marketplace=?`, scopeParams(scope));
+  const clusters = await get(db, `SELECT COUNT(DISTINCT cluster_id) AS count FROM global_keyword_candidates
+    WHERE tenant_id=? AND workspace_id=? AND marketplace=? AND cluster_id IS NOT NULL`, scopeParams(scope));
   const candidates = await get(db, `SELECT COUNT(*) AS count FROM global_keyword_candidates
     WHERE tenant_id=? AND workspace_id=? AND marketplace=?`, scopeParams(scope));
   const byStatus = {}; const byProofGate = {};

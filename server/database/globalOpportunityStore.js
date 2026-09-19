@@ -6,6 +6,7 @@ const PROOF_TYPES = new Set(['MARKETPLACE_SALES','ESTIMATED_SALES','ESTIMATED_RE
 
 function text(value) { return typeof value === 'string' ? value.trim() : ''; }
 function finite(value) {
+  if (value === null || value === undefined || value === '') return null;
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
 }
@@ -336,10 +337,12 @@ async function reconcileCrossSourceScores(db, scope) {
   }
 }
 
-async function importCandidates(db, scope, actorId, payload) {
+async function importCandidates(db, scope, actorId, payload, authority = {}) {
   const source = text(payload.source);
   const sourceFileId = text(payload.sourceFileId);
   const input = Array.isArray(payload.candidates) ? payload.candidates : [];
+  const allowCommercialMetrics = authority.allowCommercialMetrics === true;
+  const allowProofTimestamp = authority.allowProofTimestamp === true;
   if (!source || input.length === 0 || input.length > 10000) {
     throw Object.assign(new Error('INVALID_GLOBAL_CANDIDATE_IMPORT'), { code: 'INVALID_GLOBAL_CANDIDATE_IMPORT', status: 400 });
   }
@@ -351,9 +354,16 @@ async function importCandidates(db, scope, actorId, payload) {
       const normalized = normalizeKeyword(keyword);
       if (!normalized) continue;
       const cluster = await ensureCluster(db, scope, candidate);
-      const proofType = PROOF_TYPES.has(text(candidate.proofType).toUpperCase()) ? text(candidate.proofType).toUpperCase() : 'NONE';
+      const suppliedProofType = PROOF_TYPES.has(text(candidate.proofType).toUpperCase()) ? text(candidate.proofType).toUpperCase() : 'NONE';
+      const effectiveCandidate = {
+        ...candidate,
+        estimatedSales: allowCommercialMetrics ? finite(candidate.estimatedSales) : null,
+        estimatedRevenue: allowCommercialMetrics ? finite(candidate.estimatedRevenue) : null,
+        proofType: allowCommercialMetrics ? suppliedProofType : 'NONE',
+        proofTimestamp: allowProofTimestamp ? text(candidate.proofTimestamp) || null : null
+      };
       const uid = hash([scope.tenantId, scope.workspaceId, scope.marketplace, normalized, source, sourceFileId].join('|'));
-      const score = scoreCandidate({ ...candidate, proofType });
+      const score = scoreCandidate(effectiveCandidate);
       const status = score.proofGate === 'PASS' ? 'QUALIFIED' : 'WATCH';
       await run(db, `INSERT INTO global_keyword_candidates
         (candidate_uid,tenant_id,workspace_id,marketplace,keyword,normalized_keyword,cluster_id,source,source_file_id,
@@ -370,10 +380,10 @@ async function importCandidates(db, scope, actorId, payload) {
           status=CASE WHEN global_keyword_candidates.status IN ('PROMOTED','REJECTED') THEN global_keyword_candidates.status ELSE excluded.status END,
           updated_at=CURRENT_TIMESTAMP`,
       [uid, ...scopeParams(scope), keyword, normalized, cluster.id, source, sourceFileId,
-        finite(candidate.searchVolume), finite(candidate.estimatedSales), finite(candidate.estimatedRevenue),
+        finite(candidate.searchVolume), effectiveCandidate.estimatedSales, effectiveCandidate.estimatedRevenue,
         finite(candidate.avgPrice), finite(candidate.competition), finite(candidate.reviews), finite(candidate.rankProxy),
         finite(candidate.trendVelocity), finite(candidate.socialMomentum), Math.max(1, Math.trunc(finite(candidate.crossSourceCount) || 1)),
-        proofType, text(candidate.proofTimestamp) || null, JSON.stringify(candidate), status, actorId]);
+        effectiveCandidate.proofType, effectiveCandidate.proofTimestamp, JSON.stringify(candidate), status, actorId]);
       const row = await get(db, `SELECT id,status FROM global_keyword_candidates
         WHERE tenant_id=? AND workspace_id=? AND marketplace=? AND normalized_keyword=? AND source=? AND source_file_id=?`,
       [...scopeParams(scope), normalized, source, sourceFileId]);
@@ -492,6 +502,11 @@ async function promoteToProject(db, scope, actorId, candidateId, payload = {}) {
   const score = await get(db, `SELECT * FROM global_opportunity_scores WHERE candidate_id=? AND score_version='GLOBAL_OPPORTUNITY_V1'`, [candidateId]);
   if (!score || score.proof_gate !== 'PASS') {
     throw Object.assign(new Error('GLOBAL_PROOF_OF_SALE_REQUIRED'), { code: 'GLOBAL_PROOF_OF_SALE_REQUIRED', status: 409 });
+  }
+  if (!['QUALIFIED', 'PROMOTE_TO_PROJECT'].includes(String(candidate.status || '').toUpperCase())) {
+    throw Object.assign(new Error('GLOBAL_CANDIDATE_STATUS_NOT_PROMOTABLE'), {
+      code: 'GLOBAL_CANDIDATE_STATUS_NOT_PROMOTABLE', status: 409, currentStatus: candidate.status
+    });
   }
   const projectName = text(payload.name) || candidate.cluster_name || candidate.keyword;
   const seedPhrase = candidate.cluster_name || candidate.keyword;

@@ -3625,18 +3625,24 @@ app.post('/api/global-opportunities/import-file',
       if (!req.file?.buffer) {
         return res.status(400).json({ success: false, error: 'GLOBAL_IMPORT_FILE_REQUIRED' });
       }
+      const requestedSourceType = String(req.body?.sourceType || 'AUTO').trim().toUpperCase();
+      const allowedSourceTypes = new Set(['AUTO', 'CEREBRO', 'HEYETSY', 'YTREND', 'GENERIC']);
+      if (!allowedSourceTypes.has(requestedSourceType)) {
+        return res.status(400).json({ success: false, error: 'GLOBAL_IMPORT_SOURCE_TYPE_INVALID' });
+      }
+      const observedAt = new Date().toISOString();
       const parsed = await parseGlobalOpportunityFile(req.file.buffer, {
         fileName: req.file.originalname,
         mediaType: req.file.mimetype,
-        sourceType: req.body?.sourceType,
-        proofTimestamp: req.body?.proofTimestamp
+        sourceType: requestedSourceType,
+        proofTimestamp: observedAt
       });
       const imported = await globalOpportunityStore.importCandidates(
         db,
         globalOpportunityScope(req.user),
         req.user.userId,
         {
-          source: `GLOBAL_BULK_${String(req.body?.sourceType || 'AUTO').trim().toUpperCase() || 'AUTO'}`,
+          source: `GLOBAL_BULK_${requestedSourceType}`,
           sourceFileId: parsed.sourceFileId,
           candidates: parsed.candidates
         }

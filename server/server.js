@@ -3605,6 +3605,54 @@ app.post('/api/global-opportunities/import', requireAuth(db), requireRole(['OWNE
   }
 });
 
+app.post('/api/global-opportunities/harvest-project/:projectId', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    requireExactDto(req.body || {}, new Set());
+    const project = await requireProjectContext(req, req.params.projectId);
+    if (project.marketplace !== 'AMAZON') {
+      return res.status(409).json({ success: false, error: 'GLOBAL_PROJECT_HARVEST_AMAZON_ONLY' });
+    }
+    const artifactState = await getArtifactState(db, revisionScope(req.user), project.id);
+    const master = artifactState.heads?.AMAZON_MASTER_KEYWORDS;
+    if (!master) {
+      return res.status(409).json({ success: false, error: 'GLOBAL_PROJECT_MKL_REQUIRED' });
+    }
+    const candidates = globalOpportunityStore.projectMklCandidates(master, req.user.marketplace);
+    if (!candidates.length) {
+      return res.json({
+        success: true,
+        researchOnly: true,
+        sourceProjectStateChanged: false,
+        sourceProjectId: project.id,
+        sourceArtifactId: master.id,
+        harvestedCount: 0,
+        message: 'No OUTLIER_REVIEW/RESIDUE keyword with observed Keyword Sales was eligible.'
+      });
+    }
+    const imported = await globalOpportunityStore.importCandidates(
+      db,
+      globalOpportunityScope(req.user),
+      req.user.userId,
+      {
+        source: 'PROJECT_MKL_COMMERCIAL_OUTLIER',
+        sourceFileId: `project:${project.id}:artifact:${master.id}`,
+        candidates
+      }
+    );
+    return res.json({
+      success: true,
+      researchOnly: true,
+      sourceProjectStateChanged: false,
+      sourceProjectId: project.id,
+      sourceArtifactId: master.id,
+      harvestedCount: imported.length,
+      candidates: imported
+    });
+  } catch (error) {
+    return rejectGlobalOpportunity(res, error);
+  }
+});
+
 app.post('/api/global-opportunities/:candidateId/status', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
   try {
     const candidateId = parseGlobalCandidateId(req.params.candidateId);

@@ -148,7 +148,7 @@ async function parseGlobalOpportunityFile(rawBytes, options = {}) {
         origin: { kind: 'GLOBAL_BULK_FILE', source, sheetName: sheet.sheetName }
       });
       accepted += 1;
-      if (candidates.length > 50000) {
+      if (candidates.length > 10000) {
         const error = new Error('GLOBAL_IMPORT_ROW_LIMIT_EXCEEDED'); error.code = 'GLOBAL_IMPORT_ROW_LIMIT_EXCEEDED'; error.status = 413; throw error;
       }
     }

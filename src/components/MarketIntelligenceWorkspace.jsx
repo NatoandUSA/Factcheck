@@ -102,6 +102,8 @@ export default function MarketIntelligenceWorkspace({ onRequireLogin }) {
   const [state, setState] = useState({ loading: true, error: null, data: null });
   const [globalState, setGlobalState] = useState({ loading: true, error: null, candidates: [] });
   const [globalBusy, setGlobalBusy] = useState(null);
+  const [globalSummary, setGlobalSummary] = useState(null);
+  const [globalImport, setGlobalImport] = useState({ sourceType: 'AUTO', file: null, busy: false, message: '' });
 
   const loadGlobal = async () => {
     setGlobalState((prev) => ({ ...prev, loading: true, error: null }));
@@ -116,6 +118,37 @@ export default function MarketIntelligenceWorkspace({ onRequireLogin }) {
       setGlobalState({ loading: false, error: null, candidates: body.candidates || [] });
     } catch (error) {
       setGlobalState({ loading: false, error: error.message, candidates: [] });
+    }
+  };
+
+  const loadGlobalSummary = async () => {
+    try {
+      const res = await fetch('/api/global-opportunities/summary', { credentials: 'include', cache: 'no-store' });
+      const body = await res.json().catch(() => ({}));
+      if (res.ok) setGlobalSummary(body.summary || null);
+    } catch (_) {}
+  };
+
+  const importGlobalFile = async () => {
+    if (!globalImport.file || globalImport.busy) return;
+    setGlobalImport((prev) => ({ ...prev, busy: true, message: '' }));
+    try {
+      const form = new FormData();
+      form.set('sourceType', globalImport.sourceType);
+      form.set('proofTimestamp', new Date().toISOString());
+      form.set('file', globalImport.file);
+      const res = await fetch('/api/global-opportunities/import-file', {
+        method: 'POST', credentials: 'include', body: form
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.message || body.error || 'Bulk import failed');
+      setGlobalImport((prev) => ({
+        ...prev, busy: false, file: null,
+        message: `Imported ${body.importedCount || 0}/${body.parsedCount || 0} candidates · ${body.sourceFileId?.slice(0, 10) || 'file'}…`
+      }));
+      await Promise.all([loadGlobal(), loadGlobalSummary()]);
+    } catch (error) {
+      setGlobalImport((prev) => ({ ...prev, busy: false, message: error.message }));
     }
   };
 
@@ -158,7 +191,7 @@ export default function MarketIntelligenceWorkspace({ onRequireLogin }) {
     }
   };
 
-  useEffect(() => { load(); loadGlobal(); }, []);
+  useEffect(() => { load(); loadGlobal(); loadGlobalSummary(); }, []);
 
   const listening = state.data?.dashboard?.listening || {};
   const keywords = listening.keywordWatches || [];
@@ -224,11 +257,58 @@ export default function MarketIntelligenceWorkspace({ onRequireLogin }) {
               Proof-of-sale là gate bắt buộc trước khi tạo Project mới; social/trend-only chỉ được WATCH.
             </div>
           </div>
-          <button className="btn btn-secondary btn-sm" onClick={loadGlobal} disabled={globalState.loading}>
+          <button className="btn btn-secondary btn-sm" onClick={() => { loadGlobal(); loadGlobalSummary(); }} disabled={globalState.loading}>
             {globalState.loading ? 'Đang tải…' : 'Refresh Pool'}
           </button>
         </div>
         {globalState.error && <div style={{ marginTop: 10, padding: 9, background: '#fee2e2', color: '#991b1b', borderRadius: 8 }}>{globalState.error}</div>}
+        {globalSummary && (
+          <div style={{ marginTop: 12, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(135px, 1fr))', gap: 8 }}>
+            {[
+              ['Candidates', globalSummary.candidateCount],
+              ['Clusters', globalSummary.clusterCount],
+              ['Qualified', globalSummary.qualifiedCount],
+              ['Watch', globalSummary.watchCount],
+              ['Promoted', globalSummary.promotedCount]
+            ].map(([label, value]) => (
+              <div key={label} style={{ padding: 10, border: '1px solid #e2e8f0', borderRadius: 10, background: '#f8fafc' }}>
+                <div style={{ fontSize: 11, color: '#64748b', fontWeight: 700 }}>{label}</div>
+                <div style={{ fontSize: 20, fontWeight: 900, marginTop: 2 }}>{value || 0}</div>
+              </div>
+            ))}
+          </div>
+        )}
+        <div style={{ marginTop: 12, padding: 12, border: '1px solid #ddd6fe', background: '#faf5ff', borderRadius: 12 }}>
+          <div style={{ fontWeight: 800, fontSize: 13, marginBottom: 8 }}>Bulk Import — Cerebro / HeyEtsy / YTrend</div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+            <select
+              value={globalImport.sourceType}
+              onChange={(e) => setGlobalImport((prev) => ({ ...prev, sourceType: e.target.value }))}
+              style={{ padding: '7px 9px', borderRadius: 8, border: '1px solid #cbd5e1' }}
+            >
+              <option value="AUTO">Auto detect</option>
+              <option value="CEREBRO">Cerebro</option>
+              <option value="HEYETSY">HeyEtsy</option>
+              <option value="YTREND">YTrend</option>
+              <option value="GENERIC">Generic CSV/XLSX</option>
+            </select>
+            <input
+              type="file"
+              accept=".xlsx,.csv"
+              onChange={(e) => setGlobalImport((prev) => ({ ...prev, file: e.target.files?.[0] || null, message: '' }))}
+            />
+            <button className="btn btn-primary btn-sm" onClick={importGlobalFile} disabled={!globalImport.file || globalImport.busy}>
+              {globalImport.busy ? 'Đang import…' : 'Import to Global Pool'}
+            </button>
+            <a className="btn btn-secondary btn-sm" href="/api/global-opportunities/watchlist?limit=30" target="_blank" rel="noreferrer">
+              Watchlist JSON
+            </a>
+          </div>
+          <div style={{ marginTop: 7, color: '#64748b', fontSize: 11 }}>
+            XLSX/CSV được parse trong memory. Sales/revenue chỉ được dùng làm proof khi cột đó thực sự tồn tại; trend/social/proxy không được nâng thành sales proof.
+          </div>
+          {globalImport.message && <div style={{ marginTop: 8, fontSize: 12, fontWeight: 700 }}>{globalImport.message}</div>}
+        </div>
         <div style={{ marginTop: 14 }}>
           <Table
             columns={[

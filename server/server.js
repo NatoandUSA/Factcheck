@@ -36,6 +36,7 @@ const { COOKIE_NAME, SESSION_TTL_MS, createSessionRecord, verifySessionRecord, r
 const { parseCookies, extractRawToken, requireAuth, requireRole, requireCsrfOrigin, corsOptionsDelegate } = require('./middleware/auth');
 const { runMigrations } = require('./database/migrations');
 const globalOpportunityStore = require('./database/globalOpportunityStore');
+const { parseGlobalOpportunityFile } = require('./globalOpportunityBulkParser');
 const {
   ensureTestDatabaseFixtures: ensureFixturesForDb,
   ensureDevelopmentDatabaseFixtures
@@ -355,6 +356,15 @@ const commerceResearchUpload = multer({
   fileFilter(req, file, cb) {
     const allowed = /\.(xlsx|csv|html?)$/i.test(file.originalname || '');
     cb(allowed ? null : new Error('UNSUPPORTED_RESEARCH_FILE'), allowed);
+  }
+});
+
+const globalOpportunityUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024, files: 1, fields: 4 },
+  fileFilter(req, file, cb) {
+    const allowed = /\.(xlsx|csv)$/i.test(file.originalname || '');
+    cb(allowed ? null : new Error('UNSUPPORTED_GLOBAL_OPPORTUNITY_FILE'), allowed);
   }
 });
 
@@ -3583,6 +3593,71 @@ app.get('/api/global-opportunities', requireAuth(db), requireRole(['OWNER', 'MAN
   }
 });
 
+app.get('/api/global-opportunities/summary', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    const summary = await globalOpportunityStore.opportunitySummary(db, globalOpportunityScope(req.user));
+    return res.json({ success: true, researchOnly: true, marketplace: req.user.marketplace, summary });
+  } catch (error) {
+    return rejectGlobalOpportunity(res, error);
+  }
+});
+
+app.get('/api/global-opportunities/watchlist', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    const candidates = await globalOpportunityStore.watchlist(db, globalOpportunityScope(req.user), { limit: req.query.limit });
+    return res.json({
+      success: true,
+      researchOnly: true,
+      bridgeMode: 'BOUNDED_PULL_FEED',
+      marketplace: req.user.marketplace,
+      count: candidates.length,
+      candidates
+    });
+  } catch (error) {
+    return rejectGlobalOpportunity(res, error);
+  }
+});
+
+app.post('/api/global-opportunities/import-file',
+  requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), globalOpportunityUpload.single('file'),
+  async (req, res) => {
+    try {
+      if (!req.file?.buffer) {
+        return res.status(400).json({ success: false, error: 'GLOBAL_IMPORT_FILE_REQUIRED' });
+      }
+      const parsed = await parseGlobalOpportunityFile(req.file.buffer, {
+        fileName: req.file.originalname,
+        mediaType: req.file.mimetype,
+        sourceType: req.body?.sourceType,
+        proofTimestamp: req.body?.proofTimestamp
+      });
+      const imported = await globalOpportunityStore.importCandidates(
+        db,
+        globalOpportunityScope(req.user),
+        req.user.userId,
+        {
+          source: `GLOBAL_BULK_${String(req.body?.sourceType || 'AUTO').trim().toUpperCase() || 'AUTO'}`,
+          sourceFileId: parsed.sourceFileId,
+          candidates: parsed.candidates
+        }
+      );
+      return res.json({
+        success: true,
+        mode: 'GLOBAL_BULK_IMPORT',
+        researchOnly: true,
+        projectStateChanged: false,
+        sourceFileId: parsed.sourceFileId,
+        parsedCount: parsed.candidateCount,
+        importedCount: imported.length,
+        diagnostics: parsed.diagnostics,
+        candidates: imported.slice(0, 100)
+      });
+    } catch (error) {
+      return rejectGlobalOpportunity(res, error);
+    }
+  }
+);
+
 app.post('/api/global-opportunities/import', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
   try {
     const body = requireExactDto(req.body, new Set(['source', 'sourceFileId', 'candidates']));
@@ -3609,11 +3684,9 @@ app.post('/api/global-opportunities/harvest-project/:projectId', requireAuth(db)
   try {
     requireExactDto(req.body || {}, new Set());
     const project = await requireProjectContext(req, req.params.projectId);
-    if (project.marketplace !== 'AMAZON') {
-      return res.status(409).json({ success: false, error: 'GLOBAL_PROJECT_HARVEST_AMAZON_ONLY' });
-    }
     const artifactState = await getArtifactState(db, revisionScope(req.user), project.id);
-    const master = artifactState.heads?.AMAZON_MASTER_KEYWORDS;
+    const headKind = req.user.marketplace === 'AMAZON' ? 'AMAZON_MASTER_KEYWORDS' : 'ETSY_MASTER_KEYWORDS';
+    const master = artifactState.heads?.[headKind];
     if (!master) {
       return res.status(409).json({ success: false, error: 'GLOBAL_PROJECT_MKL_REQUIRED' });
     }
@@ -3626,7 +3699,9 @@ app.post('/api/global-opportunities/harvest-project/:projectId', requireAuth(db)
         sourceProjectId: project.id,
         sourceArtifactId: master.id,
         harvestedCount: 0,
-        message: 'No OUTLIER_REVIEW/RESIDUE keyword with observed Keyword Sales was eligible.'
+        message: req.user.marketplace === 'AMAZON'
+          ? 'No OUTLIER_REVIEW/RESIDUE keyword with observed Keyword Sales was eligible.'
+          : 'No Etsy REVIEW/PATTERN_ONLY keyword was eligible for WATCH-only global discovery.'
       });
     }
     const imported = await globalOpportunityStore.importCandidates(
@@ -3634,7 +3709,7 @@ app.post('/api/global-opportunities/harvest-project/:projectId', requireAuth(db)
       globalOpportunityScope(req.user),
       req.user.userId,
       {
-        source: 'PROJECT_MKL_COMMERCIAL_OUTLIER',
+        source: req.user.marketplace === 'AMAZON' ? 'PROJECT_MKL_COMMERCIAL_OUTLIER' : 'PROJECT_MKL_ETSY_REVIEW',
         sourceFileId: `project:${project.id}:artifact:${master.id}`,
         candidates
       }

@@ -95,6 +95,35 @@ async function run() {
     [user.tenant_id, user.workspace_id]);
     assert.deepEqual(after, before, 'bulk global import must not mutate any existing project');
 
+    const secondSourceRes = await fetch(base + '/api/global-opportunities/import', {
+      method: 'POST',
+      headers: { Origin: base, Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        source: 'YTREND_VALIDATION',
+        sourceFileId: 'ytrend-cross-source-1',
+        candidates: [{
+          keyword: 'dog memorial wind chime',
+          clusterKey: clusterDescriptor('dog memorial wind chime').clusterKey,
+          clusterLabel: clusterDescriptor('dog memorial wind chime').clusterLabel,
+          trendVelocity: 9,
+          socialMomentum: 7,
+          proofType: 'NONE'
+        }]
+      })
+    });
+    assert.equal(secondSourceRes.status, 200);
+
+    const crossListRes = await fetch(base + '/api/global-opportunities?limit=100', {
+      headers: { Origin: base, Cookie: cookie }
+    });
+    assert.equal(crossListRes.status, 200);
+    const crossList = await crossListRes.json();
+    const sameKeyword = crossList.candidates.filter(item => item.normalized_keyword === 'dog memorial wind chime');
+    assert(sameKeyword.length >= 2);
+    assert(sameKeyword.every(item => Number(item.cross_source_count) >= 2),
+      'server must reconcile distinct sources instead of trusting client crossSourceCount');
+    assert(sameKeyword.some(item => Number(item.cross_source_validation) > 0));
+
     const summaryRes = await fetch(base + '/api/global-opportunities/summary', {
       headers: { Origin: base, Cookie: cookie }
     });

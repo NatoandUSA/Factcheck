@@ -48,6 +48,7 @@ async function api(url, options = {}) {
   if (!response.ok) {
     const error = new Error(payload.message || payload.error || `HTTP_${response.status}`);
     error.code = payload.error;
+    error.status = response.status;
     error.payload = payload;
     throw error;
   }
@@ -131,8 +132,8 @@ function SelectedFileQueue({ files, label, onRemove, onClear }) {
   </div>;
 }
 
-export default function CanonicalCommerceWorkflow({ activeProject, marketplace, onSelectListing, onShowToast }) {
-  const { user } = useAuth();
+export default function CanonicalCommerceWorkflow({ activeProject, marketplace, onSelectListing, onShowToast, onRequireLogin }) {
+  const { user, invalidateSession } = useAuth();
   const accent = marketplace === 'AMAZON' ? '#0369a1' : '#c2410c';
   const projectId = activeProject?.id;
   const [state, setState] = useState(null);
@@ -207,13 +208,21 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
     const blocking = Array.isArray(errorValue?.payload?.blocking) ? errorValue.payload.blocking : [];
     setClaimBlockers(errorValue?.code === 'UNVERIFIED_OUTPUT_CLAIM' ? blocking : []);
     const claimSummary = [...new Set(blocking.map(item => `${item.field}: “${item.token}”`))].slice(0, 6).join('; ');
+    const ipHits = Array.isArray(errorValue?.payload?.ipHits) ? errorValue.payload.ipHits : [];
+    const ipSummary = [...new Set(ipHits.map(item => `${item.term} (${item.category || 'IP'})`))].slice(0, 6).join(', ');
     const message = errorValue?.code === 'UNVERIFIED_OUTPUT_CLAIM' && claimSummary
       ? `Draft có claim chưa được Product Truth chứng thực — ${claimSummary}`
       : ['RESEARCH_PRODUCT_FAMILY_MISMATCH', 'PRODUCT_TRUTH_FAMILY_UNRESOLVED'].includes(errorValue?.code)
         ? `Research không cùng dòng sản phẩm với Product Truth (khớp ${errorValue.payload?.alignedCount ?? 0}, xung đột ${errorValue.payload?.conflictingCount ?? 0}, chung chung ${errorValue.payload?.genericCount ?? 0}). Hãy dùng đúng file research cho sản phẩm này hoặc tạo project riêng.`
       : errorValue?.code === 'CEREBRO_KEYWORDS_REQUIRED'
         ? 'Cần import Cerebro để phân bổ keyword và tạo draft. Xray là bước upstream khuyến nghị để chọn các nhóm ASIN, nhưng Cerebro có sẵn được import độc lập.'
+        : errorValue?.code === 'IP_CLEARANCE_REQUIRED'
+          ? `IP screen cần kiểm tra thủ công${ipSummary ? ` — khớp: ${ipSummary}` : ''}. Không xóa Product Truth để né guard; hãy xác minh ngữ cảnh/quyền và chạy lại.`
         : errorValue?.message || 'UNKNOWN_ERROR';
+    if (errorValue?.status === 401) {
+      invalidateSession();
+      onRequireLogin?.();
+    }
     setError(message);
     notify(`Không thể hoàn tất: ${message}`, 'error');
   };

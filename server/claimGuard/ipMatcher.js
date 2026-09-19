@@ -117,6 +117,19 @@ function compileIpLibrary(library) {
     }
   }
 
+  const contextual = new Map();
+  if (library.contextual_downgrade && typeof library.contextual_downgrade === 'object') {
+    for (const [term, rule] of Object.entries(library.contextual_downgrade)) {
+      const canonical = tokenize(term).join(' ');
+      const previousTokens = new Set((Array.isArray(rule?.previous_tokens) ? rule.previous_tokens : [])
+        .flatMap(value => tokenize(value)));
+      if (canonical && previousTokens.size) contextual.set(canonical, {
+        previousTokens,
+        note: String(rule?.note || 'Context indicates a common-name use; manual review required.')
+      });
+    }
+  }
+
   const allow = new Set(
     [...(Array.isArray(library.allow) ? library.allow : []),
       ...(Array.isArray(library.allowTerms) ? library.allowTerms : [])]
@@ -148,7 +161,8 @@ function compileIpLibrary(library) {
       note: isAmbiguous ? ambiguous.get(canonical) : entry.note,
       tokens,
       variantTokens: tokens.map(normalizeVariantToken),
-      glued: tokens.map(normalizeVariantToken).join('')
+      glued: tokens.map(normalizeVariantToken).join(''),
+      contextualDowngrade: entry.disposition === 'BLOCK' ? contextual.get(canonical) || null : null
     });
   }
 
@@ -194,7 +208,14 @@ function screenCompiled(text, compiledLibrary) {
   for (const entry of compiledLibrary.entries) {
     const exactIndex = sequenceAt(tokens, entry.tokens);
     if (exactIndex >= 0) {
-      enforcementHits.push(makeHit(entry, 'BOUNDARY', exactIndex, 'ENFORCE'));
+      const previousToken = exactIndex > 0 ? tokens[exactIndex - 1] : '';
+      const contextualReview = entry.contextualDowngrade?.previousTokens?.has(previousToken);
+      const matchedEntry = contextualReview ? {
+        ...entry,
+        disposition: 'REVIEW',
+        note: entry.contextualDowngrade.note
+      } : entry;
+      enforcementHits.push(makeHit(matchedEntry, contextualReview ? 'CONTEXTUAL_BOUNDARY' : 'BOUNDARY', exactIndex, 'ENFORCE'));
       continue;
     }
 

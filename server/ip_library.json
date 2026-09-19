@@ -31,6 +31,12 @@
     "boss": "Hugo Boss / 'Boss Babe' mark — 'boss' alone as a gift word is usually fine.",
     "figs": "FIGS (scrubs brand) — safe as fruit/word."
   },
+  "contextual_downgrade": {
+    "anna": {
+      "previous_tokens": ["to", "for", "para", "name", "nombre"],
+      "note": "Anna is also a common personal name. Recipient/personalization phrasing requires review; explicit Disney/Frozen context remains blocked by its own terms."
+    }
+  },
   "review_phrases": [
     {"term": "mama bear", "note": "Registered & aggressively enforced in apparel."},
     {"term": "boss babe", "note": "Registered trademark in apparel."},

@@ -7,6 +7,7 @@ const {
   screenIpText,
   tokenize
 } = require('./ipMatcher.js');
+const productionIpGuard = require('../ipGuard');
 
 const library = {
   meta: { version: 'fixture-en-es-1' },
@@ -16,6 +17,9 @@ const library = {
   },
   ambiguous_downgrade: {
     cat: 'Common English word; review context.'
+  },
+  contextual_downgrade: {
+    anna: { previous_tokens: ['to', 'for', 'para', 'name', 'nombre'], note: 'Common recipient name.' }
   },
   review_phrases: [
     { term: 'mama bear', note: 'Reported phrase.' },
@@ -87,6 +91,33 @@ test('keeps an ambiguous exact token at review', () => {
   assert.equal(result.verdict, 'REVIEW');
   assert.equal(result.enforcementHits[0].disposition, 'REVIEW');
   assert.match(result.enforcementHits[0].note, /Common English/);
+});
+
+test('downgrades a blocked common name only in explicit recipient context', () => {
+  const contextualLibrary = {
+    ...library,
+    block: { ...library.block, characters: ['Anna'] }
+  };
+  const result = screenIpText('Personalized gift from sister to Anna', contextualLibrary);
+  assert.equal(result.verdict, 'REVIEW');
+  assert.equal(result.enforcementHits[0].term, 'anna');
+  assert.equal(result.enforcementHits[0].matchMode, 'CONTEXTUAL_BOUNDARY');
+  assert.match(result.enforcementHits[0].note, /recipient name/i);
+});
+
+test('continues blocking the same term without recipient context', () => {
+  const contextualLibrary = {
+    ...library,
+    block: { ...library.block, characters: ['Anna', 'Disney'] }
+  };
+  assert.equal(screenIpText('Anna character blanket', contextualLibrary).verdict, 'BLOCKED');
+  assert.equal(screenIpText('Disney gift to Anna', contextualLibrary).verdict, 'BLOCKED');
+});
+
+test('does not carry a contextual cue across listing-surface boundaries', () => {
+  const result = productionIpGuard.screenListing({ etsyTitle: 'Personalized gift to', etsyDescription: 'Anna blanket' });
+  assert.equal(result.verdict, 'BLOCK');
+  assert.equal(result.hits.find(hit => hit.term === 'anna')?.matchMode, 'BOUNDARY');
 });
 
 test('keeps leetspeak fuzzy matches shadow-only', () => {

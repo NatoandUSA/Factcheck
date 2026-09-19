@@ -131,12 +131,33 @@ async function migrateGlobalOpportunityDiscovery(db) {
 }
 
 function proofGate(candidate) {
-  const proofType = PROOF_TYPES.has(candidate.proofType) ? candidate.proofType : 'NONE';
   const estimatedSales = finite(candidate.estimatedSales);
   const estimatedRevenue = finite(candidate.estimatedRevenue);
-  const hasCommercialProof = proofType !== 'NONE' || (estimatedSales != null && estimatedSales > 0) ||
+  // proofType is provenance metadata, never authority by itself.
+  // Global qualification requires an observed positive commercial metric.
+  const hasCommercialProof = (estimatedSales != null && estimatedSales > 0) ||
     (estimatedRevenue != null && estimatedRevenue > 0);
   return hasCommercialProof ? 'PASS' : 'WATCH_ONLY';
+}
+
+function freshnessScore(rawTimestamp, nowMs = Date.now()) {
+  const value = Date.parse(String(rawTimestamp || ''));
+  if (!Number.isFinite(value)) return 0;
+  const ageMs = nowMs - value;
+  if (ageMs < -5 * 60 * 1000) return 0;
+  const ageDays = Math.max(0, ageMs) / 86400000;
+  if (ageDays <= 7) return 5;
+  if (ageDays <= 30) return 3;
+  if (ageDays <= 90) return 1;
+  return 0;
+}
+
+function competitionScore(raw) {
+  const value = finite(raw);
+  if (value == null || value < 0) return 5;
+  if (value <= 1) return clamp(15 * (1 - value), 0, 15);
+  if (value <= 100) return clamp(15 * (1 - (value / 100)), 0, 15);
+  return clamp(15 / (1 + Math.log10(value)), 0, 15);
 }
 
 function scoreCandidate(candidate) {
@@ -153,12 +174,12 @@ function scoreCandidate(candidate) {
     ? clamp(8 + (sales > 0 ? Math.log10(1 + sales) * 5 : 0) + (revenue > 0 ? Math.log10(1 + revenue) * 2 : 0), 0, 25)
     : 0;
   const demand = volume == null ? 0 : clamp(Math.log10(1 + Math.max(0, volume)) * 4, 0, 15);
-  const competition = competitionRaw == null ? 5 : clamp(15 - competitionRaw, 0, 15);
+  const competition = competitionScore(competitionRaw);
   const priceMargin = price == null ? 0 : clamp(price / 10, 0, 10);
   const trendScore = trend == null ? 0 : clamp(trend, 0, 10);
   const crossScore = clamp((cross - 1) * 2.5, 0, 10);
   const socialScore = social == null ? 0 : clamp(social, 0, 10);
-  const freshness = candidate.proofTimestamp ? 5 : 2;
+  const freshness = freshnessScore(candidate.proofTimestamp);
   const riskPenalty = clamp(finite(candidate.riskPenalty) || 0, 0, 30);
   const raw = proof + demand + competition + priceMargin + trendScore + crossScore + socialScore + freshness - riskPenalty;
   const opportunityScore = gate === 'PASS' ? clamp(Math.round(raw * 10) / 10, 0, 100) : clamp(Math.min(39, raw), 0, 39);
@@ -497,5 +518,5 @@ async function promoteToProject(db, scope, actorId, candidateId, payload = {}) {
 
 module.exports = Object.freeze({
   ALLOWED_STATUSES, normalizeKeyword, normalizeClusterKey, migrateGlobalOpportunityDiscovery,
-  scoreCandidate, projectMklCandidates, reconcileCrossSourceScores, importCandidates, listCandidates, opportunitySummary, watchlist, setCandidateStatus, promoteToProject
+  proofGate, freshnessScore, competitionScore, scoreCandidate, projectMklCandidates, reconcileCrossSourceScores, importCandidates, listCandidates, opportunitySummary, watchlist, setCandidateStatus, promoteToProject
 });

@@ -135,7 +135,6 @@ export default function MarketIntelligenceWorkspace({ onRequireLogin }) {
     try {
       const form = new FormData();
       form.set('sourceType', globalImport.sourceType);
-      form.set('proofTimestamp', new Date().toISOString());
       form.set('file', globalImport.file);
       const res = await fetch('/api/global-opportunities/import-file', {
         method: 'POST', credentials: 'include', body: form

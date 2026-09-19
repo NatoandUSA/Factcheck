@@ -1,0 +1,107 @@
+{
+  "schemaVersion": "SIDECAR_ARCHITECTURE_MANIFEST_V1",
+  "generatedDate": "2026-09-20",
+  "branch": "review/global-opportunity-v2-isolated-20260919",
+  "sidecarHeadBeforePack": "27dc5ac132b9ab5e891f104908b1c709e696a251",
+  "observedMain": "2ad46a5e0feb90f1240fbfd082afb18b2c88d445",
+  "pureSliceBase": "4b043cd917c240946a7444f78e896ce9b1109984",
+  "mergeWholeBranch": false,
+  "recommendedIntegration": "FRESH_POST_PR59_BRANCH_SELECTIVE_REIMPLEMENT_OR_CHERRY_PICK",
+  "modules": [
+    {
+      "commit": "5a4bf8c62",
+      "file": "server/globalOpportunityClusterEngine.js",
+      "authority": "PROPOSAL_ONLY",
+      "writesState": false,
+      "runtimeWired": false
+    },
+    {
+      "commit": "7955741e0",
+      "file": "server/globalOpportunityImportNormalizer.js",
+      "authority": "PROPOSAL_ONLY",
+      "writesState": false,
+      "runtimeWired": false
+    },
+    {
+      "commit": "ed0ca2fe2",
+      "file": "server/globalOpportunityProposalPipeline.js",
+      "authority": "PROPOSAL_ONLY",
+      "writesState": false,
+      "runtimeWired": false
+    },
+    {
+      "commit": "b64bd9959",
+      "file": "server/globalOpportunityReviewDashboardModel.js",
+      "authority": "PROPOSAL_ONLY",
+      "writesState": false,
+      "runtimeWired": false
+    },
+    {
+      "commit": "e8af60ef3",
+      "file": "server/globalOpportunityReviewViewModel.js",
+      "authority": "PROPOSAL_ONLY",
+      "writesState": false,
+      "runtimeWired": false
+    },
+    {
+      "commit": "33b59b9bf",
+      "file": "server/globalOpportunityDecisionBoundary.js",
+      "authority": "REVIEW_ONLY",
+      "writesState": false,
+      "runtimeWired": false
+    },
+    {
+      "commit": "c0d45d0c6",
+      "file": "server/globalOpportunityReviewArtifactLedger.js",
+      "authority": "REVIEW_ONLY",
+      "writesState": false,
+      "persistsState": false,
+      "runtimeWired": false
+    },
+    {
+      "commit": "27dc5ac13",
+      "file": "server/globalOpportunityCanonicalHandoffPacket.js",
+      "authority": "READ_ONLY_HANDOFF",
+      "writesState": false,
+      "runtimeWired": false
+    }
+  ],
+  "canonicalForbiddenCapabilities": [
+    "SET_PROOF_GATE",
+    "SET_QUALIFIED",
+    "SET_PROMOTE_TO_PROJECT",
+    "CREATE_PROJECT",
+    "MUTATE_PROJECT_STATE",
+    "WRITE_PRODUCT_TRUTH",
+    "MUTATE_MKL",
+    "APPROVE_LISTING",
+    "PUBLISH",
+    "EXPORT_PUBLISH_READY",
+    "INVOKE_CANONICAL_WORKFLOW"
+  ],
+  "knownRisks": [
+    "WHOLE_BRANCH_CONTAINS_INHERITED_OPERATIONAL_PR58_ANCESTRY",
+    "LOCAL_STABLE_SERIALIZER_HASH_LOGIC_DUPLICATED",
+    "REVIEW_TESTS_NOT_NODE22_CANONICAL_CI_AUTHORITY",
+    "SOURCE_SIGNATURE_HEURISTICS_REQUIRE_CANONICAL_REGISTRY",
+    "REVIEW_LEDGER_METADATA_SCHEMA_SHOULD_BE_VERSIONED_ALLOWLIST_OR_NAMESPACE",
+    "CLUSTER_TAXONOMY_IS_HEURISTIC_PROPOSAL_ONLY",
+    "DECISION_BOUNDARY_INTENT_REGISTRY_MAY_DRIFT_FAIL_CLOSED",
+    "CONFLICT_TARGETING_CURRENTLY_COUPLED_TO_VIEWMODEL_PAGINATION",
+    "REVIEWER_IDENTITY_NOT_YET_SERVER_OWNED",
+    "HANDOFF_EVIDENCE_MUST_BE_CANONICALLY_REFETCHED"
+  ],
+  "latestTargetedVerification": {
+    "GLOBAL_OPPORTUNITY_CLUSTER_ENGINE_V1": "PASS",
+    "GLOBAL_OPPORTUNITY_IMPORT_NORMALIZER_V1": "PASS",
+    "GLOBAL_DISCOVERY_PROPOSAL_PIPELINE_V1": "PASS",
+    "GLOBAL_REVIEW_DASHBOARD_MODEL_V1": "PASS",
+    "GLOBAL_REVIEW_UI_CONTRACT_V1": "PASS",
+    "GLOBAL_DECISION_BOUNDARY_V1": "PASS",
+    "GLOBAL_REVIEW_ARTIFACT_LEDGER_V1": "PASS",
+    "GLOBAL_CANONICAL_HANDOFF_PACKET_V1": "PASS",
+    "GLOBAL_OPPORTUNITY_BULK_V2": "PASS",
+    "GLOBAL_OPPORTUNITY_DISCOVERY_V1": "PASS",
+    "gitDiffCheck": "PASS"
+  }
+}

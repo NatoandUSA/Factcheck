@@ -35,7 +35,7 @@ const { createRateLimiter } = require('./security/rateLimiter');
 const { COOKIE_NAME, SESSION_TTL_MS, createSessionRecord, verifySessionRecord, revokeSessionRecord } = require('./security/session');
 const { parseCookies, extractRawToken, requireAuth, requireRole, requireCsrfOrigin, corsOptionsDelegate } = require('./middleware/auth');
 const { runMigrations } = require('./database/migrations');
-const globalOpportunityStore = require('./globalOpportunityStore');
+const globalOpportunityStore = require('./database/globalOpportunityStore');
 const {
   ensureTestDatabaseFixtures: ensureFixturesForDb,
   ensureDevelopmentDatabaseFixtures

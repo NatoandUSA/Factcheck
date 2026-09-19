@@ -3,6 +3,7 @@ const { clusterDescriptor } = require('../globalOpportunityBulkParser');
 
 const ALLOWED_STATUSES = new Set(['DISCOVERED','QUALIFIED','WATCH','PROMOTE_TO_PROJECT','REJECTED','STALE','PROMOTED']);
 const PROOF_TYPES = new Set(['MARKETPLACE_SALES','ESTIMATED_SALES','ESTIMATED_REVENUE','LISTING_SALES_PROXY','ORDER_EVIDENCE','NONE']);
+const GLOBAL_SCORE_VERSION = 'GLOBAL_OPPORTUNITY_V2';
 
 function text(value) { return typeof value === 'string' ? value.trim() : ''; }
 function finite(value) {
@@ -312,8 +313,8 @@ async function upsertScore(db, scope, candidateId, score) {
   await run(db, `INSERT INTO global_opportunity_scores
     (candidate_id,tenant_id,workspace_id,marketplace,marketplace_proof,demand,competition,
      price_margin_potential,trend_velocity,cross_source_validation,social_momentum,freshness,
-     risk_penalty,opportunity_score,proof_gate,explanation_json)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+     risk_penalty,opportunity_score,proof_gate,score_version,explanation_json)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     ON CONFLICT(candidate_id,score_version) DO UPDATE SET
       marketplace_proof=excluded.marketplace_proof,demand=excluded.demand,competition=excluded.competition,
       price_margin_potential=excluded.price_margin_potential,trend_velocity=excluded.trend_velocity,
@@ -323,7 +324,7 @@ async function upsertScore(db, scope, candidateId, score) {
       explanation_json=excluded.explanation_json,scored_at=CURRENT_TIMESTAMP`,
   [candidateId, ...scopeParams(scope), score.marketplaceProof, score.demand, score.competition,
     score.priceMarginPotential, score.trendVelocity, score.crossSourceValidation, score.socialMomentum,
-    score.freshness, score.riskPenalty, score.opportunityScore, score.proofGate, JSON.stringify(score.explanation)]);
+    score.freshness, score.riskPenalty, score.opportunityScore, score.proofGate, GLOBAL_SCORE_VERSION, JSON.stringify(score.explanation)]);
 }
 
 async function reconcileCrossSourceScores(db, scope) {
@@ -357,6 +358,18 @@ async function reconcileCrossSourceScores(db, scope) {
       riskPenalty: rawCandidate(row).riskPenalty
     });
     await upsertScore(db, scope, row.id, score);
+  }
+}
+
+async function migrateGlobalOpportunityScoreV2(db) {
+  const scopes = await all(db, `SELECT DISTINCT tenant_id,workspace_id,marketplace
+    FROM global_keyword_candidates`);
+  for (const row of scopes) {
+    await reconcileCrossSourceScores(db, {
+      tenantId: row.tenant_id,
+      workspaceId: row.workspace_id,
+      marketplace: row.marketplace
+    });
   }
 }
 
@@ -440,7 +453,7 @@ async function listCandidates(db, scope, filters = {}) {
       s.freshness,s.risk_penalty,s.opportunity_score,s.proof_gate,s.score_version,s.scored_at
     FROM global_keyword_candidates c
     LEFT JOIN keyword_clusters k ON k.id=c.cluster_id
-    LEFT JOIN global_opportunity_scores s ON s.candidate_id=c.id AND s.score_version='GLOBAL_OPPORTUNITY_V1'
+    LEFT JOIN global_opportunity_scores s ON s.candidate_id=c.id AND s.score_version='${GLOBAL_SCORE_VERSION}'
     WHERE c.tenant_id=? AND c.workspace_id=? AND c.marketplace=?${whereStatus}
     ORDER BY COALESCE(s.opportunity_score,0) DESC,c.updated_at DESC LIMIT ?`, params);
 }
@@ -449,7 +462,7 @@ async function listCandidates(db, scope, filters = {}) {
 async function opportunitySummary(db, scope) {
   const rows = await all(db, `SELECT c.status,s.proof_gate,COUNT(*) AS count
     FROM global_keyword_candidates c
-    LEFT JOIN global_opportunity_scores s ON s.candidate_id=c.id AND s.score_version='GLOBAL_OPPORTUNITY_V1'
+    LEFT JOIN global_opportunity_scores s ON s.candidate_id=c.id AND s.score_version='${GLOBAL_SCORE_VERSION}'
     WHERE c.tenant_id=? AND c.workspace_id=? AND c.marketplace=?
     GROUP BY c.status,s.proof_gate`, scopeParams(scope));
   const clusters = await get(db, `SELECT COUNT(DISTINCT cluster_id) AS count FROM global_keyword_candidates
@@ -481,7 +494,7 @@ async function watchlist(db, scope, filters = {}) {
       s.trend_velocity AS trend_score,s.cross_source_validation,s.social_momentum AS social_score,s.freshness
     FROM global_keyword_candidates c
     LEFT JOIN keyword_clusters k ON k.id=c.cluster_id
-    LEFT JOIN global_opportunity_scores s ON s.candidate_id=c.id AND s.score_version='GLOBAL_OPPORTUNITY_V1'
+    LEFT JOIN global_opportunity_scores s ON s.candidate_id=c.id AND s.score_version='${GLOBAL_SCORE_VERSION}'
     WHERE c.tenant_id=? AND c.workspace_id=? AND c.marketplace=?
       AND c.status IN ('QUALIFIED','WATCH') AND c.status<>'REJECTED'
     ORDER BY CASE WHEN s.proof_gate='PASS' THEN 0 ELSE 1 END,
@@ -536,7 +549,7 @@ async function promoteToProjectUnlocked(db, scope, actorId, candidateId, payload
     }
 
     const score = await get(db, `SELECT * FROM global_opportunity_scores
-      WHERE candidate_id=? AND score_version='GLOBAL_OPPORTUNITY_V1'`, [candidateId]);
+      WHERE candidate_id=? AND score_version=?`, [candidateId, GLOBAL_SCORE_VERSION]);
     if (!score || score.proof_gate !== 'PASS') {
       throw Object.assign(new Error('GLOBAL_PROOF_OF_SALE_REQUIRED'), { code: 'GLOBAL_PROOF_OF_SALE_REQUIRED', status: 409 });
     }
@@ -584,6 +597,6 @@ function promoteToProject(db, scope, actorId, candidateId, payload = {}) {
 }
 
 module.exports = Object.freeze({
-  ALLOWED_STATUSES, normalizeKeyword, normalizeClusterKey, migrateGlobalOpportunityDiscovery,
-  proofGate, freshnessScore, competitionScore, scoreCandidate, projectMklCandidates, reconcileCrossSourceScores, importCandidates, listCandidates, opportunitySummary, watchlist, setCandidateStatus, promoteToProject
+  ALLOWED_STATUSES, GLOBAL_SCORE_VERSION, normalizeKeyword, normalizeClusterKey, migrateGlobalOpportunityDiscovery,
+  migrateGlobalOpportunityScoreV2, proofGate, freshnessScore, competitionScore, scoreCandidate, projectMklCandidates, reconcileCrossSourceScores, importCandidates, listCandidates, opportunitySummary, watchlist, setCandidateStatus, promoteToProject
 });

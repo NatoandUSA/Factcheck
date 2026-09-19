@@ -188,6 +188,26 @@ async function run() {
     assert.equal(unverifiedNecklace.estimated_sales, null);
     assert.equal(unverifiedNecklace.proof_gate, 'WATCH_ONLY');
 
+    const concurrentResults = await Promise.all([
+      importCandidates(db, {
+        tenantId: user.tenant_id, workspaceId: user.workspace_id, marketplace: 'AMAZON'
+      }, user.user_id, {
+        source: 'CONCURRENT_A',
+        sourceFileId: 'concurrent-a',
+        candidates: [{ keyword: 'concurrent alpha mug', searchVolume: 100 }]
+      }, { allowCommercialMetrics: false, allowProofTimestamp: false }),
+      importCandidates(db, {
+        tenantId: user.tenant_id, workspaceId: user.workspace_id, marketplace: 'AMAZON'
+      }, user.user_id, {
+        source: 'CONCURRENT_B',
+        sourceFileId: 'concurrent-b',
+        candidates: [{ keyword: 'concurrent beta mug', searchVolume: 120 }]
+      }, { allowCommercialMetrics: false, allowProofTimestamp: false })
+    ]);
+    assert.equal(concurrentResults.length, 2);
+    assert(concurrentResults.every(batch => batch.length === 1),
+      'concurrent global writes must serialize rather than collide at BEGIN IMMEDIATE');
+
     const summaryRes = await fetch(base + '/api/global-opportunities/summary', {
       headers: { Origin: base, Cookie: cookie }
     });

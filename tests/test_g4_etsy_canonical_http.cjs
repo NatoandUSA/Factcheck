@@ -123,6 +123,61 @@ async function main() {
   check(dependencies.intelligenceSnapshotHash === intelligence.body.intelligenceSnapshotHash, 'Etsy intelligence hash bound');
   check(intelligence.body.output.keywordAllocation.unallocated.length === intelligence.body.accounting.unallocatedCount,
     'unused Etsy keywords retained with accounting');
+  const reviewPackage = await json(`/api/listings/${listing.body.listingId}/review-package`, 'GET');
+  check(reviewPackage.status === 200 && reviewPackage.body.qualityEvidence.listingLanguage === 'ES',
+    'exact review package carries the listing-level language contract from Intelligence');
+  check(reviewPackage.body.qualityEvidence.languageExemptions.includes('Custom Necklace')
+    && reviewPackage.body.qualityEvidence.languageExemptions.includes('hija'),
+  'language exemptions are server-derived from verified Product Truth identity/name evidence');
+  const successorContent = { ...reviewPackage.body.content,
+    etsyTitle: 'Custom Necklace para Hija',
+    etsyDescription: `${reviewPackage.body.content.etsyDescription}\n\nQA copy revision.` };
+  const successor = await json(`/api/listings/${listing.body.listingId}/revisions`, 'POST', {
+    parentRevisionId: reviewPackage.body.listingRevisionId,
+    expectedHeadRevisionId: reviewPackage.body.listingRevisionId,
+    idempotencyKey: key(24), changeReason: 'MANAGER_QA_COPY_EDIT',
+    productTruthRevisionId: truth.body.productTruthRevisionId,
+    intelligenceSnapshotId: intelligence.body.intelligenceSnapshotId,
+    content: successorContent
+  });
+  check(successor.status === 200 && successor.body.status === 'NEEDS_QA'
+    && successor.body.content.etsyTitle === successorContent.etsyTitle,
+  'controlled QA edit creates an immutable successor revision through the existing primitive');
+  const successorPackage = await json(`/api/listings/${listing.body.listingId}/review-package`, 'GET');
+  check(successorPackage.body.listingRevisionId === successor.body.revisionId
+    && successorPackage.body.dependencies.productTruthRevisionId === truth.body.productTruthRevisionId
+    && successorPackage.body.dependencies.intelligenceSnapshotId === intelligence.body.intelligenceSnapshotId,
+  'successor exact package preserves Product Truth and Intelligence dependencies');
+  const staleQaEdit = await json(`/api/listings/${listing.body.listingId}/revisions`, 'POST', {
+    parentRevisionId: reviewPackage.body.listingRevisionId,
+    expectedHeadRevisionId: reviewPackage.body.listingRevisionId,
+    idempotencyKey: key(25), changeReason: 'STALE_MANAGER_QA_COPY_EDIT',
+    productTruthRevisionId: truth.body.productTruthRevisionId,
+    intelligenceSnapshotId: intelligence.body.intelligenceSnapshotId,
+    content: successorContent
+  });
+  check(staleQaEdit.status === 409 && ['REVISION_CONFLICT','LISTING_HEAD_CONFLICT','PARENT_REVISION_CONFLICT'].includes(staleQaEdit.body.error),
+    `controlled QA edit fails closed when the exact head changed: ${JSON.stringify(staleQaEdit)}`);
+  const dependencyDriftCases = [
+    { label: 'Product Truth', productTruthRevisionId: truth.body.productTruthRevisionId + 1,
+      intelligenceSnapshotId: intelligence.body.intelligenceSnapshotId },
+    { label: 'Intelligence', productTruthRevisionId: truth.body.productTruthRevisionId,
+      intelligenceSnapshotId: intelligence.body.intelligenceSnapshotId + 1 },
+    { label: 'Product Truth and Intelligence', productTruthRevisionId: truth.body.productTruthRevisionId + 1,
+      intelligenceSnapshotId: intelligence.body.intelligenceSnapshotId + 1 }
+  ];
+  for (const [index, drift] of dependencyDriftCases.entries()) {
+    const rejected = await json(`/api/listings/${listing.body.listingId}/revisions`, 'POST', {
+      parentRevisionId: successor.body.revisionId,
+      expectedHeadRevisionId: successor.body.revisionId,
+      idempotencyKey: key(26 + index), changeReason: `REJECT_${drift.label.toUpperCase().replaceAll(' ', '_')}_DRIFT`,
+      productTruthRevisionId: drift.productTruthRevisionId,
+      intelligenceSnapshotId: drift.intelligenceSnapshotId,
+      content: successorContent
+    });
+    check(rejected.status === 409 && rejected.body.error === 'QA_EDIT_DEPENDENCY_DRIFT',
+      `${drift.label} rebind attempt must fail against parent-bound dependencies: ${JSON.stringify(rejected)}`);
+  }
   const phrase = master.body.payload.keywords.find(item => item.tier !== 'EXCLUDED').phrase;
   const newerMaster = await json(`/api/projects/${projectId}/etsy/master-keywords`, 'POST', {
     patternArtifactId: patterns.body.id, decisions: [{ phrase, tier: 'REVIEW' }], expectedHeadArtifactId: master.body.id,

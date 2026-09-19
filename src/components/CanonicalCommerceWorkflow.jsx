@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { pullYtrendsFromBrowser } from '../ytrendsBrowserClient';
+import { toCanonicalPreviewListing } from '../utils/canonicalReviewPackage.js';
 
 const CORE_FACT_FIELDS = [
   ['productName', 'Tên sản phẩm', true], ['productType', 'Loại sản phẩm', true],
@@ -174,6 +175,7 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
   const [listingQueue, setListingQueue] = useState([]);
   const [reviewReason, setReviewReason] = useState('');
   const [reviewPackages, setReviewPackages] = useState({});
+  const [qaEdits, setQaEdits] = useState({});
   const [submissionInputs, setSubmissionInputs] = useState({});
   const [exactExports, setExactExports] = useState({});
   const [policyContext, setPolicyContext] = useState(null);
@@ -184,6 +186,7 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
   const [error, setError] = useState('');
   const [claimBlockers, setClaimBlockers] = useState([]);
   const saveDraftAttemptRef = useRef({ fingerprint: null, idempotencyKey: null });
+  const qaRevisionAttemptRef = useRef({});
 
   const currentTruth = truthRevisions.find(item => Number(item.id) === Number(head(state, 'productTruthRevisionId'))) || truthRevisions[0];
   const isManager = ['OWNER', 'MANAGER'].includes(user?.role);
@@ -689,6 +692,74 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
     return { ...previous, content: { ...previous.content, etsyTags, etsyTagExplanations,
       etsyTagStatus: missingCount ? { code: 'TAG_SHORTAGE', missingCount } : { code: 'COMPLETE', missingCount: 0 } } };
   });
+
+  const beginQaEdit = item => {
+    const reviewPackage = reviewPackages[item.id];
+    if (!reviewPackage) throw new Error('Hãy mở exact review package trước khi tạo QA edit.');
+    const content = JSON.parse(JSON.stringify(reviewPackage.content || {}));
+    setQaEdits(previous => ({ ...previous, [item.id]: {
+      content, changeReason: '', parentRevisionId: reviewPackage.listingRevisionId,
+      listingLanguage: reviewPackage.qualityEvidence?.listingLanguage || null,
+      productTruthRevisionId: reviewPackage.dependencies?.productTruthRevisionId,
+      intelligenceSnapshotId: reviewPackage.dependencies?.intelligenceSnapshotId ?? null
+    } }));
+  };
+
+  const updateQaEdit = (listingId, key, value) => setQaEdits(previous => ({ ...previous,
+    [listingId]: { ...previous[listingId], content: { ...previous[listingId].content, [key]: value } } }));
+
+  const updateQaEditReason = (listingId, value) => setQaEdits(previous => ({ ...previous,
+    [listingId]: { ...previous[listingId], changeReason: value } }));
+
+  const updateQaEtsyTags = (listingId, value) => setQaEdits(previous => {
+    const edit = previous[listingId];
+    const etsyTags = value.split('\n').map(item => item.trim()).filter(Boolean).slice(0, 13);
+    const generated = new Map((edit.content.etsyTagExplanations || []).map(item => [String(item.value || '').toLowerCase(), item]));
+    const etsyTagExplanations = etsyTags.map(tag => generated.get(tag.toLowerCase()) || {
+      value: tag, intent: 'STAFF_EDIT', semanticCluster: null, sources: [{ sourceType: 'STAFF_MANUAL_EDIT' }],
+      reason: 'STAFF_MANUAL_EDIT_REQUIRES_MANAGER_QA'
+    });
+    const missingCount = Math.max(0, 13 - etsyTags.length);
+    return { ...previous, [listingId]: { ...edit, content: { ...edit.content, etsyTags, etsyTagExplanations,
+      etsyTagStatus: missingCount ? { code: 'TAG_SHORTAGE', missingCount } : { code: 'COMPLETE', missingCount: 0 } } } };
+  });
+
+  const saveQaEdit = item => run(`qa-edit-${item.id}`, async () => {
+    const edit = qaEdits[item.id]; const reviewPackage = reviewPackages[item.id];
+    if (!edit?.content || !reviewPackage) throw new Error('QA edit không còn gắn với exact package hiện tại. Hãy mở lại package.');
+    const changeReason = String(edit.changeReason || '').trim();
+    if (!changeReason) throw new Error('Cần ghi lý do thay đổi cho successor revision.');
+    if (Number(edit.parentRevisionId) !== Number(reviewPackage.listingRevisionId)) {
+      throw new Error('Exact package đã thay đổi; hãy hủy QA edit và mở lại revision mới nhất.');
+    }
+    const fingerprint = JSON.stringify({ listingId: item.id, parentRevisionId: edit.parentRevisionId,
+      productTruthRevisionId: edit.productTruthRevisionId, intelligenceSnapshotId: edit.intelligenceSnapshotId,
+      changeReason, content: edit.content });
+    if (qaRevisionAttemptRef.current[item.id]?.fingerprint !== fingerprint) {
+      qaRevisionAttemptRef.current[item.id] = { fingerprint, idempotencyKey: uuid() };
+    }
+    const result = await api(`/api/listings/${item.id}/revisions`, jsonOptions({
+      parentRevisionId: edit.parentRevisionId, expectedHeadRevisionId: edit.parentRevisionId,
+      idempotencyKey: qaRevisionAttemptRef.current[item.id].idempotencyKey,
+      changeReason, productTruthRevisionId: edit.productTruthRevisionId,
+      intelligenceSnapshotId: edit.intelligenceSnapshotId, content: edit.content
+    }));
+    notify(`Đã lưu successor revision #${result.revisionId} cho listing #${item.id}; trạng thái quay về NEEDS_QA.`);
+    setQaEdits(previous => { const next = { ...previous }; delete next[item.id]; return next; });
+    setReviewPackages(previous => { const next = { ...previous }; delete next[item.id]; return next; });
+    const postCommit = await Promise.allSettled([
+      Promise.resolve().then(refresh),
+      api(`/api/listings/${item.id}/review-package`)
+    ]);
+    const freshPackage = postCommit[1];
+    if (freshPackage.status === 'fulfilled') {
+      setReviewPackages(previous => ({ ...previous, [item.id]: freshPackage.value }));
+    }
+    const failures = postCommit.filter(entry => entry.status === 'rejected');
+    if (failures.some(entry => entry.reason?.status === 401)) { invalidateSession(); onRequireLogin?.(); }
+    if (failures.length) notify(`Revision #${result.revisionId} đã lưu; refresh exact package chưa hoàn tất. Hãy tải lại an toàn.`, 'warning');
+    return result;
+  });
   const saveDraft = () => run('save-draft', async () => {
     if (!draft?.content) throw new Error('Chưa có draft để lưu.');
     const fingerprint = JSON.stringify({ projectId, productTruthRevisionId: draft.productTruthRevisionId,
@@ -744,10 +815,7 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
   const openSimulationPreview = item => {
     const reviewPackage = reviewPackages[item.id];
     if (!reviewPackage) throw new Error('Hãy mở exact review package trước khi preview.');
-    onSelectListing?.({ ...reviewPackage.content, dbId: item.id, status: item.status,
-      listingVersion: reviewPackage.revisionNumber,
-      canonicalQualityEvidence: reviewPackage.qualityEvidence,
-      simulationSource: 'CANONICAL_REVIEW_PACKAGE' });
+    onSelectListing?.(toCanonicalPreviewListing(reviewPackage, item.id));
   };
 
   const submissionInput = listingId => submissionInputs[listingId] || {};
@@ -1372,7 +1440,31 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
           </div>
           <details><summary>Toàn bộ listing content</summary><pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{JSON.stringify(reviewPackages[item.id].content, null, 2)}</pre></details>
           <details><summary>Dependency manifest + validation accounting</summary><pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{JSON.stringify({ dependencies: reviewPackages[item.id].dependencies, validationAccounting: reviewPackages[item.id].validationAccounting }, null, 2)}</pre></details>
-          <div style={{ marginTop: 8 }}><ActionButton accent="#0369a1" disabled={busy} onClick={() => openSimulationPreview(item)}>Mở Simulation Preview từ exact package</ActionButton></div>
+          <div style={{ marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <ActionButton accent="#0369a1" disabled={busy} onClick={() => openSimulationPreview(item)}>Mở Simulation Preview từ exact package</ActionButton>
+            <ActionButton accent="#7c3aed" disabled={busy || Boolean(qaEdits[item.id])} onClick={() => beginQaEdit(item)}>Create QA Edit</ActionButton>
+          </div>
+          {qaEdits[item.id] && <div data-testid={`qa-edit-${item.id}`} style={{ marginTop: 10, border: '1px solid #c4b5fd', background: '#faf5ff', borderRadius: 9, padding: 10, display: 'grid', gap: 8 }}>
+            <div style={{ fontWeight: 900, color: '#5b21b6' }}>Controlled QA edit · parent revision #{qaEdits[item.id].parentRevisionId}</div>
+            <div style={{ fontSize: '.76rem', color: '#6b21a8' }}>Giữ nguyên Product Truth #{qaEdits[item.id].productTruthRevisionId} và Intelligence #{qaEdits[item.id].intelligenceSnapshotId ?? '—'}. Save tạo immutable successor revision, revalidate claim/IP/policy và reset review authority về NEEDS_QA.</div>
+            <label><b>Listing language</b><input readOnly value={qaEdits[item.id].listingLanguage || 'UNRESOLVED'} style={{ width: '100%', background: '#f1f5f9' }} /></label>
+            {marketplace === 'ETSY' ? <>
+              <label><CapacityLabel label="Etsy Title" used={characterCount(qaEdits[item.id].content.etsyTitle)} limit={140} utilizationTarget={false} authority="copy revision; Product Truth không đổi" /><textarea value={qaEdits[item.id].content.etsyTitle || ''} onChange={event => updateQaEdit(item.id, 'etsyTitle', event.target.value)} rows={2} style={{ width: '100%' }} /></label>
+              <label><b>Tối đa 13 tags — mỗi dòng một tag</b><textarea value={(qaEdits[item.id].content.etsyTags || []).join('\n')} onChange={event => updateQaEtsyTags(item.id, event.target.value)} rows={7} style={{ width: '100%' }} /></label>
+              <label><b>Description</b><textarea value={qaEdits[item.id].content.etsyDescription || ''} onChange={event => updateQaEdit(item.id, 'etsyDescription', event.target.value)} rows={8} style={{ width: '100%' }} /></label>
+            </> : <>
+              <label><CapacityLabel label="Amazon Title" used={characterCount(qaEdits[item.id].content.amazonTitle)} limit={AMAZON_SURFACE_LIMITS.title} /><textarea value={qaEdits[item.id].content.amazonTitle || ''} onChange={event => updateQaEdit(item.id, 'amazonTitle', event.target.value)} rows={2} style={{ width: '100%' }} /></label>
+              <label><b>Item Highlights</b><textarea value={qaEdits[item.id].content.itemHighlights || ''} onChange={event => updateQaEdit(item.id, 'itemHighlights', event.target.value)} rows={3} style={{ width: '100%' }} /></label>
+              <label><b>Bullets — mỗi dòng một bullet</b><textarea value={(qaEdits[item.id].content.amazonBullets || []).join('\n')} onChange={event => updateQaEdit(item.id, 'amazonBullets', event.target.value.split('\n').map(value => value.trim()).filter(Boolean))} rows={7} style={{ width: '100%' }} /></label>
+              <label><b>Description</b><textarea value={qaEdits[item.id].content.amazonDescription || ''} onChange={event => updateQaEdit(item.id, 'amazonDescription', event.target.value)} rows={8} style={{ width: '100%' }} /></label>
+              <label><CapacityLabel label="Backend Search Terms" used={utf8ByteCount(qaEdits[item.id].content.amazonSearchTerms)} limit={AMAZON_SURFACE_LIMITS.backendBytes} unit="bytes" /><textarea value={qaEdits[item.id].content.amazonSearchTerms || ''} onChange={event => updateQaEdit(item.id, 'amazonSearchTerms', event.target.value)} rows={3} style={{ width: '100%' }} /></label>
+            </>}
+            <label><b>Lý do thay đổi *</b><textarea aria-label={`Lý do QA edit listing ${item.id}`} value={qaEdits[item.id].changeReason} onChange={event => updateQaEditReason(item.id, event.target.value)} rows={2} placeholder="Ví dụ: Chuẩn hóa ngôn ngữ và loại tag trùng ý; không đổi Product Truth." /></label>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <ActionButton accent="#166534" disabled={busy || !qaEdits[item.id].changeReason.trim()} onClick={() => saveQaEdit(item)}>Lưu immutable successor revision</ActionButton>
+              <ActionButton accent="#64748b" disabled={busy} onClick={() => setQaEdits(previous => { const next = { ...previous }; delete next[item.id]; return next; })}>Hủy QA edit</ActionButton>
+            </div>
+          </div>}
         </div>}
         {isManager && item.status !== 'MANAGER_APPROVED' && <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
           <ActionButton accent="#166534" disabled={!policyAllowsApproval || !reviewReason.trim() || busy || !reviewPackages[item.id]?.approvalReadiness?.ready} onClick={() => reviewListing(item.id, 'APPROVED')}>Manager duyệt exact package</ActionButton>

@@ -162,7 +162,13 @@ export default function ProductListingPageSimulator({ currentListing, history = 
               className="form-input"
               style={{ width: '100%', maxWidth: '330px', fontSize: '0.78rem', padding: '7px 10px' }}
               value={activeListingId || ''}
-              onChange={(e) => setActiveListingId(Number(e.target.value) || e.target.value)}
+              onChange={async (e) => {
+                const selectedId = Number(e.target.value) || e.target.value;
+                const selected = history.find(item => String(item?.dbId ?? item?.id) === String(selectedId));
+                if (!selected) return;
+                const resolved = await onSelectListing?.(selected);
+                if (resolved) setActiveListingId(selectedId);
+              }}
             >
               {history.map((item) => (
                 <option key={item.dbId || item.id} value={item.dbId || item.id}>

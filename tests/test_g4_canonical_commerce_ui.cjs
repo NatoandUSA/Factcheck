@@ -19,6 +19,9 @@ const assert = require('assert');
   const calls = [];
   let activeMockMarketplace = 'AMAZON';
   let authMeAuthenticated = true;
+  let mockListings = [];
+  let mockReviewPackage = null;
+  let qaRevisionBody = null;
   const response = body => ({ ok: true, status: 200, json: async () => body });
   global.fetch = async (url, options = {}) => {
     calls.push({ url: String(url), options });
@@ -74,7 +77,16 @@ const assert = require('assert');
         observedTags: [{ phrase: 'regalo hija', listingSpread: 2, shopSpread: 2, evidenceTier: 'E1_OBSERVED_PUBLIC' }],
         structure: { personalizationRate: 0, giftRate: 100, averageWords: 4 }, marketContext: { uniqueShopCount: 2 } }
     });
-    if (String(url).endsWith('/listings')) return response({ success: true, listings: [] });
+    if (/\/api\/listings\/7\/review-package$/.test(String(url))) return response(mockReviewPackage);
+    if (/\/api\/listings\/7\/revisions$/.test(String(url)) && options.method === 'POST') {
+      qaRevisionBody = JSON.parse(options.body);
+      mockReviewPackage = { ...mockReviewPackage, listingRevisionId: 6, revisionNumber: 2,
+        content: qaRevisionBody.content, contentHash: 'd'.repeat(64) };
+      mockListings = [{ ...mockListings[0], head_revision_id: 6, etsyTitle: qaRevisionBody.content.etsyTitle }];
+      return response({ success: true, revisionId: 6, revisionNumber: 2, status: 'NEEDS_QA',
+        content: qaRevisionBody.content, guardAccounting: {} });
+    }
+    if (String(url).endsWith('/listings')) return response({ success: true, listings: mockListings });
     if (String(url).endsWith('/research-imports/preview')) return response({ success: true, zeroWrite: true,
       fileName: 'Cerebro.xlsx', rawHash: 'a'.repeat(64), accounting: { sourceRowCount: 1099, unconsumedRowCount: 0 } });
     if (String(url).endsWith('/research-imports')) return response({ success: true, researchImportId: 12,
@@ -182,6 +194,18 @@ const assert = require('assert');
   check(!calls.some(call => call.url.includes('/submit') || call.url.includes('/export')), 'workflow must not submit or export');
 
   activeMockMarketplace = 'ETSY';
+  mockListings = [{ id: 7, status: 'NEEDS_QA', head_revision_id: 5, etsyTitle: 'Personalizado Fleece Blanket' }];
+  mockReviewPackage = { success: true, listingId: 7, projectId: 4, status: 'NEEDS_QA', listingRevisionId: 5,
+    revisionNumber: 1, contentHash: 'a'.repeat(64), dependencyHash: 'b'.repeat(64),
+    dependencies: { productTruthRevisionId: 10, intelligenceSnapshotId: 5 }, validationAccounting: {},
+    approvalReadiness: { ready: false, error: 'POLICY_CONTRACT_DRAFT_ONLY' },
+    qualityEvidence: { marketplace: 'ETSY', listingLanguage: 'ES', productTruthBound: true,
+      productTruthRevisionId: 10, productTruthHash: 'c'.repeat(64), verifiedFactCount: 6,
+      imagePlan: { ready: 7, expected: 8 } },
+    content: { etsyTitle: 'Personalizado Fleece Blanket',
+      etsyTags: ['regalo hermana'], etsyTagExplanations: [], etsyTagStatus: { code: 'TAG_SHORTAGE', missingCount: 12 },
+      etsyDescription: 'Regalo personalizado para hermana.', itemHighlights: 'Fleece Blanket',
+      categoryName: 'Blankets', imagePrompts: { prompts: [] } } };
   await act(async () => { root.render(React.createElement(AuthProvider, null,
     React.createElement(Workflow, { activeProject: { id: 4, state: 'EVIDENCE_INTAKE' }, marketplace: 'ETSY' }))); });
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
@@ -206,6 +230,31 @@ const assert = require('assert');
   check(document.querySelector('[data-testid="etsy-pattern-table"]')
     && document.body.textContent.includes('OBSERVED_TAG') && document.body.textContent.includes('E1_OBSERVED_PUBLIC'),
   'Pattern Miner must render structured phrase, coverage, shop and evidence columns');
+
+  const exactPackageButton = [...document.querySelectorAll('button')]
+    .find(button => button.textContent.includes('Mở exact review package'));
+  await act(async () => { exactPackageButton.click(); await new Promise(resolve => setTimeout(resolve, 0)); });
+  const createQaEdit = [...document.querySelectorAll('button')].find(button => button.textContent.includes('Create QA Edit'));
+  check(Boolean(createQaEdit), 'exact review package must expose the controlled QA edit entry point');
+  await act(async () => { createQaEdit.click(); });
+  const qaPanel = document.querySelector('[data-testid="qa-edit-7"]');
+  check(qaPanel && qaPanel.textContent.includes('Product Truth #10') && qaPanel.textContent.includes('Intelligence #5'),
+    'QA edit must visibly preserve exact immutable upstream dependencies');
+  const qaTitle = [...qaPanel.querySelectorAll('textarea')].find(field => field.value === 'Personalizado Fleece Blanket');
+  const setTextareaValue = Object.getOwnPropertyDescriptor(dom.window.HTMLTextAreaElement.prototype, 'value').set;
+  await act(async () => { setTextareaValue.call(qaTitle, 'Manta Personalizada para Hermana');
+    qaTitle.dispatchEvent(new dom.window.Event('input', { bubbles: true })); });
+  const qaReason = qaPanel.querySelector('textarea[aria-label="Lý do QA edit listing 7"]');
+  await act(async () => { setTextareaValue.call(qaReason, 'Chuẩn hóa ngôn ngữ; giữ nguyên Product Truth.');
+    qaReason.dispatchEvent(new dom.window.Event('input', { bubbles: true })); });
+  await act(async () => { [...qaPanel.querySelectorAll('button')]
+    .find(button => button.textContent.includes('Lưu immutable successor revision')).click();
+    await new Promise(resolve => setTimeout(resolve, 0)); });
+  check(qaRevisionBody?.parentRevisionId === 5 && qaRevisionBody?.expectedHeadRevisionId === 5
+    && qaRevisionBody?.productTruthRevisionId === 10 && qaRevisionBody?.intelligenceSnapshotId === 5,
+  `QA edit POST must bind parent/head and preserve exact Product Truth/Intelligence dependencies: ${JSON.stringify(qaRevisionBody)}`);
+  check(qaRevisionBody?.content.etsyTitle === 'Manta Personalizada para Hermana',
+    'controlled QA edit must submit the edited copy through the immutable revision endpoint');
 
   await act(async () => root.unmount());
 

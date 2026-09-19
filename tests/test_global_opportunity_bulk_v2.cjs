@@ -8,7 +8,7 @@ process.env.NODE_ENV = 'test';
 const { app, db, databaseReady } = require('../server/server');
 const { createSessionRecord } = require('../server/security/session');
 const { clusterDescriptor, parseGlobalOpportunityFile } = require('../server/globalOpportunityBulkParser');
-const { projectMklCandidates, proofGate, freshnessScore, competitionScore } = require('../server/database/globalOpportunityStore');
+const { projectMklCandidates, proofGate, freshnessScore, competitionScore, importCandidates } = require('../server/database/globalOpportunityStore');
 
 function all(sql, params = []) {
   return new Promise((resolve, reject) => db.all(sql, params, (error, rows) => error ? reject(error) : resolve(rows || [])));
@@ -139,23 +139,20 @@ async function run() {
     [user.tenant_id, user.workspace_id]);
     assert.deepEqual(after, before, 'bulk global import must not mutate any existing project');
 
-    const secondSourceRes = await fetch(base + '/api/global-opportunities/import', {
-      method: 'POST',
-      headers: { Origin: base, Cookie: cookie, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        source: 'YTREND_VALIDATION',
-        sourceFileId: 'ytrend-cross-source-1',
-        candidates: [{
-          keyword: 'dog memorial wind chime',
-          clusterKey: clusterDescriptor('dog memorial wind chime').clusterKey,
-          clusterLabel: clusterDescriptor('dog memorial wind chime').clusterLabel,
-          trendVelocity: 9,
-          socialMomentum: 7,
-          proofType: 'NONE'
-        }]
-      })
-    });
-    assert.equal(secondSourceRes.status, 200);
+    await importCandidates(db, {
+      tenantId: user.tenant_id, workspaceId: user.workspace_id, marketplace: 'AMAZON'
+    }, user.user_id, {
+      source: 'YTREND_VALIDATION',
+      sourceFileId: 'ytrend-cross-source-1',
+      candidates: [{
+        keyword: 'dog memorial wind chime',
+        clusterKey: clusterDescriptor('dog memorial wind chime').clusterKey,
+        clusterLabel: clusterDescriptor('dog memorial wind chime').clusterLabel,
+        trendVelocity: 9,
+        socialMomentum: 7,
+        proofType: 'NONE'
+      }]
+    }, { allowCommercialMetrics: false, allowProofTimestamp: false });
 
     const crossListRes = await fetch(base + '/api/global-opportunities?limit=100', {
       headers: { Origin: base, Cookie: cookie }
@@ -167,6 +164,29 @@ async function run() {
     assert(sameKeyword.every(item => Number(item.cross_source_count) >= 2),
       'server must reconcile distinct sources instead of trusting client crossSourceCount');
     assert(sameKeyword.some(item => Number(item.cross_source_validation) > 0));
+
+    const unverifiedRes = await fetch(base + '/api/global-opportunities/import', {
+      method: 'POST',
+      headers: { Origin: base, Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        source: 'FAKE_THIRD_SOURCE',
+        sourceFileId: 'fake-third-source',
+        candidates: [{ keyword: 'pet memorial necklace', estimatedSales: 99999, crossSourceCount: 99 }]
+      })
+    });
+    assert.equal(unverifiedRes.status, 200);
+    const afterUnverifiedRes = await fetch(base + '/api/global-opportunities?limit=100', {
+      headers: { Origin: base, Cookie: cookie }
+    });
+    const afterUnverified = await afterUnverifiedRes.json();
+    const necklaceRows = afterUnverified.candidates.filter(item => item.normalized_keyword === 'pet memorial necklace');
+    const trustedNecklace = necklaceRows.find(item => item.source === 'GLOBAL_BULK_CEREBRO');
+    const unverifiedNecklace = necklaceRows.find(item => item.source === 'GLOBAL_JSON_UNVERIFIED');
+    assert(trustedNecklace && unverifiedNecklace);
+    assert.equal(Number(trustedNecklace.cross_source_count), 1,
+      'unverified JSON must not increase corroboration count of trusted evidence');
+    assert.equal(unverifiedNecklace.estimated_sales, null);
+    assert.equal(unverifiedNecklace.proof_gate, 'WATCH_ONLY');
 
     const summaryRes = await fetch(base + '/api/global-opportunities/summary', {
       headers: { Origin: base, Cookie: cookie }

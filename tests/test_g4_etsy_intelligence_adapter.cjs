@@ -128,6 +128,20 @@ async function main() {
     'comma-delimited Product Truth values become separate valid tag candidates');
   check(adapter.tagVariants('Sister, and, Best Friend, de, para').every(tag => !['and', 'de', 'para'].includes(tag.toLowerCase())),
     'connector-only fragments never become standalone tags or conceal a shortage');
+  for (const completeIdentity of [
+    'Throw Blanket, Sister Keepsake',
+    'Throw Blanket | Personalized Gift',
+    'Throw Blanket; Custom Name'
+  ]) {
+    check(adapter.composeEtsyTitle([], { productName: completeIdentity }, 'EN') === completeIdentity,
+      `complete Product Truth identity is preserved across delimiters: ${completeIdentity}`);
+  }
+  const overlongDelimitedIdentity = `Throw Blanket, ${Array.from({ length: 15 }, () => 'Keepsake').join(' ')}`;
+  assert.throws(() => adapter.composeEtsyTitle([], { productName: overlongDelimitedIdentity }, 'EN'),
+    error => error.code === 'ETSY_PRODUCT_TRUTH_IDENTITY_REQUIRES_REVIEW');
+  passed++;
+  check(adapter.composeEtsyTitle([], { productName: overlongDelimitedIdentity, productType: 'Throw Blanket' }, 'EN') === 'Throw Blanket',
+    'over-limit full productName falls back only to the exact shorter verified productType');
   const longName = Array.from({ length: 16 }, () => 'Blanket').join(' ');
   const verifiedFallback = await adapter.buildIntelligence({
     research: { observations: { marketplace: 'ETSY', queryContexts: ['throw blanket'], sellers: [] } },

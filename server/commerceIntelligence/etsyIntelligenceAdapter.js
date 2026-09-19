@@ -244,7 +244,7 @@ function semanticKey(value) { return [...tokens(value)].sort().join(' '); }
 const ETSY_TITLE_LIMIT = 140;
 
 function composeEtsyTitle(safe, facts, language = 'EN') {
-  const verifiedIdentities = [facts.productName, facts.productType].map(value => text(value).split(/[|,;]+/)[0].trim()).filter(Boolean);
+  const verifiedIdentities = [facts.productName, facts.productType].map(value => text(value)).filter(Boolean);
   const identity = verifiedIdentities.find(value => Array.from(value).length <= ETSY_TITLE_LIMIT
     && value.split(/\s+/).filter(Boolean).length <= 15);
   if (!identity) throw Object.assign(new Error('ETSY_PRODUCT_TRUTH_IDENTITY_REQUIRES_REVIEW'), {
@@ -394,4 +394,4 @@ async function buildIntelligence({ research, productTruth, configuration = {}, m
 
 module.exports = Object.freeze({ ENGINE_ID, buildIntelligence, candidateCorpus, engineBindingHash, factsFromSnapshot,
   productTypeConflict, unverifiedAppearanceTokens, unverifiedProductDescriptors, languageOfPhrase,
-  languageCompatible, resolveListingLanguage, containsCompetitorShop, tagVariants, corpusFromMasterArtifact });
+  languageCompatible, resolveListingLanguage, containsCompetitorShop, tagVariants, composeEtsyTitle, corpusFromMasterArtifact });

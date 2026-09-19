@@ -310,6 +310,7 @@ async function reconcileCrossSourceScores(db, scope) {
   const counts = await all(db, `SELECT normalized_keyword,COUNT(DISTINCT source) AS observed_source_count
     FROM global_keyword_candidates
     WHERE tenant_id=? AND workspace_id=? AND marketplace=?
+      AND source<>'GLOBAL_JSON_UNVERIFIED'
     GROUP BY normalized_keyword`, scopeParams(scope));
   const sourceCounts = new Map(counts.map(row => [row.normalized_keyword, Math.max(1, Number(row.observed_source_count || 1))]));
   const rows = await all(db, `SELECT * FROM global_keyword_candidates

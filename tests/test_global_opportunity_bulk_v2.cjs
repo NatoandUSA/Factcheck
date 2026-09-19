@@ -196,6 +196,31 @@ async function run() {
       'server must reconcile distinct sources instead of trusting client crossSourceCount');
     assert(sameKeyword.some(item => Number(item.cross_source_validation) > 0));
 
+    const ytrendCandidate = sameKeyword.find(item => item.source === 'YTREND_VALIDATION');
+    assert(ytrendCandidate);
+    const rejectYtrend = await fetch(base + `/api/global-opportunities/${ytrendCandidate.id}/status`, {
+      method: 'POST',
+      headers: { Origin: base, Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'REJECTED', reason: 'corroboration audit' })
+    });
+    assert.equal(rejectYtrend.status, 200);
+    const afterRejectRes = await fetch(base + '/api/global-opportunities?limit=100', {
+      headers: { Origin: base, Cookie: cookie }
+    });
+    const afterReject = await afterRejectRes.json();
+    const cerebroAfterReject = afterReject.candidates.find(item =>
+      item.normalized_keyword === 'dog memorial wind chime' && item.source === 'GLOBAL_BULK_CEREBRO');
+    assert(cerebroAfterReject);
+    assert.equal(Number(cerebroAfterReject.cross_source_count), 1,
+      'REJECTED source must stop corroborating an otherwise trusted candidate');
+
+    const restoreYtrend = await fetch(base + `/api/global-opportunities/${ytrendCandidate.id}/status`, {
+      method: 'POST',
+      headers: { Origin: base, Cookie: cookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'WATCH', reason: 'restore for remaining audit cases' })
+    });
+    assert.equal(restoreYtrend.status, 200);
+
     const clusterBeforePoison = (await all(`SELECT display_name FROM keyword_clusters
       WHERE tenant_id=? AND workspace_id=? AND marketplace='AMAZON' AND cluster_key='PET_MEMORIAL_WIND_CHIME'`,
     [user.tenant_id, user.workspace_id]))[0];

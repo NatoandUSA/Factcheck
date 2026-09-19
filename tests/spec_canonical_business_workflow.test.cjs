@@ -152,8 +152,8 @@ async function runBusinessWorkflowTests() {
     );
     console.log("  🟢 Amazon Search Terms UTF-8 byte boundary strictly enforced (248 PASS, 250 FAIL).");
 
-    // 5. Etsy Tags Invariants: 12 tags FAIL, 14 tags FAIL, 13 tags PASS, 21-char tag FAIL
-    console.log("\nTest 5: Etsy Tags: 12 tags FAIL, 14 tags FAIL, 13 tags PASS, 21-char tag FAIL...");
+    // 5. Etsy Tags Invariants: up to 13, no padding requirement, max 20 chars, supported punctuation only
+    console.log("\nTest 5: Etsy Tags: 12 tags PASS, 14 tags FAIL, 13 tags PASS, invalid tag FAIL...");
     const validEtsyTemplate = {
       productId: 202,
       listingVersion: 1,
@@ -168,15 +168,15 @@ async function runBusinessWorkflowTests() {
       status: "MANAGER_APPROVED"
     };
 
-    // 12 tags -> FAIL
+    // 12 relevant tags -> PASS (shortage is a quality gap, not a policy violation)
     const tags12 = Array.from({ length: 12 }, (_, i) => `tag${i + 1}`);
     const gate12 = evaluatePublishGate({ ...validEtsyTemplate, etsyTags: tags12 });
-    assert(gate12.reasons.some(r => r.includes("exactly 13 tags")), "12 tags must fail 13 tags requirement");
+    assert.strictEqual(gate12.final_status, "PUBLISH_READY", `12 relevant tags should not be rejected solely for shortage: ${JSON.stringify(gate12.reasons)}`);
 
     // 14 tags -> FAIL
     const tags14 = Array.from({ length: 14 }, (_, i) => `tag${i + 1}`);
     const gate14 = evaluatePublishGate({ ...validEtsyTemplate, etsyTags: tags14 });
-    assert(gate14.reasons.some(r => r.includes("exactly 13 tags")), "14 tags must fail 13 tags requirement");
+    assert(gate14.reasons.some(r => r.includes("maximum of 13 tags")), "14 tags must fail the maximum-13 contract");
 
     // Tag with 21 chars -> FAIL
     const tagsWithLong = Array.from({ length: 13 }, (_, i) => i === 0 ? "thisis21characterslong" : `tag${i + 1}`);
@@ -188,7 +188,10 @@ async function runBusinessWorkflowTests() {
     const tags13 = Array.from({ length: 13 }, (_, i) => `validtag${i + 1}`);
     const gate13 = evaluatePublishGate({ ...validEtsyTemplate, etsyTags: tags13 });
     assert.strictEqual(gate13.final_status, "PUBLISH_READY", `13 valid tags should be PUBLISH_READY, got: ${JSON.stringify(gate13.reasons)}`);
-    console.log("  🟢 Etsy Tags contract strictly enforced (12 FAIL, 14 FAIL, 21-char FAIL, 13 valid PASS).");
+    const tagsWithComma = tags13.map((tag, index) => index === 0 ? 'gift, sister' : tag);
+    const gateComma = evaluatePublishGate({ ...validEtsyTemplate, etsyTags: tagsWithComma });
+    assert(gateComma.reasons.some(r => r.includes('unsupported punctuation')), 'comma-bearing tag must fail Etsy character policy');
+    console.log("  🟢 Etsy Tags contract enforced (12 relevant PASS, 14 FAIL, invalid length/punctuation FAIL, 13 valid PASS).");
 
     // 6. Operational Evidence: AI Shipping Profile & Personalization without evidence -> FAIL
     console.log("\nTest 6: Operational Evidence: AI Shipping Profile & Personalization without evidence...");

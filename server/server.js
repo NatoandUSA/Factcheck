@@ -5316,8 +5316,8 @@ The JSON block MUST contain ALL of these fields:
   "amazonSearchTerms": "space-separated backend keywords under 249 UTF-8 bytes",
   "amazonDescription": "<p>HTML formatted product description, no invented materials/specs/care</p>",
   "amazonAPlusPoints": ["3 highlight story blurbs, generic benefit language only if no real facts given"],
-  "etsyTitle": "Under 140 chars, front-loaded keywords",
-  "etsyTags": ["exactly 13 tags", "each under 20 chars"],
+  "etsyTitle": "Clear product-led title under 140 chars; prefer 15 words or fewer and never pad to capacity",
+  "etsyTags": ["up to 13 relevant tags", "each under 20 chars with Etsy-supported punctuation only"],
   "etsyMaterials": "exact verified materials only; otherwise empty array []",
   "etsyPersonalizationInstructions": "exact verified personalization instructions only; otherwise empty string",
   "etsyDescription": "Story-driven description with Details and How to Order -- no unverified Specifications/Care/Workshop claims"

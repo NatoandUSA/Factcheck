@@ -130,6 +130,9 @@ function validatePolicySurfaces(surfaces = {}, resolution, useContext) {
       if (actual > rule.maxChars) {
         policyViolations.push({ code: 'ETSY_TAG_CHAR_LIMIT_EXCEEDED', index, actual, max: rule.maxChars });
       }
+      if (!/^[\p{L}\p{N}]+(?:[ '\-][\p{L}\p{N}]+)*$/u.test(tag)) {
+        policyViolations.push({ code: 'ETSY_TAG_INVALID_CHARACTERS', index });
+      }
     });
     const normalizedTags = tags.map(tag => tag.normalize('NFKC').toLocaleLowerCase(resolution.resolutionContext.locale));
     if (new Set(normalizedTags).size !== normalizedTags.length) {

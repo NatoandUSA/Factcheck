@@ -65,8 +65,12 @@ function etsyAssessment(listing) {
   if (!description) warnings.push('Etsy description is empty.');
 
   const diverseTags = new Set(tags.flatMap(tag => words(tag).map(token => token.toLowerCase()))).size;
-  const searchScore = clamp((title ? 35 : 0) + (Math.min(tags.length, 13) / 13 * 45) + Math.min(20, diverseTags));
-  const readabilityScore = clamp((uniqueRatio(title) * 60) + (words(title).length > 0 && words(title).length <= 15 ? 20 : 5) + (description.length >= 300 ? 20 : description.length / 15));
+  const keywordChain = (title.match(/,/g) || []).length >= 2;
+  const searchScore = clamp((title ? 30 : 0) + (Math.min(tags.length, 13) / 13 * 50) + Math.min(20, diverseTags));
+  const readabilityScore = clamp((uniqueRatio(title) * 45)
+    + (words(title).length > 0 && words(title).length <= 15 ? 30 : 5)
+    + (keywordChain ? 0 : 10)
+    + (description.length >= 300 ? 15 : description.length / 20));
   return { validation, blockers, warnings, searchScore, readabilityScore };
 }
 

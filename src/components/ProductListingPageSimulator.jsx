@@ -34,7 +34,7 @@ function CopyField({ label, value, onShowToast }) {
 const emptyChildRow = () => ({ sku: '', variationAttribute: '', childTitle: '', asin: '' });
 
 function getAssetPlan(listing, marketplace) {
-  if (!listing) return { ready: 0, expected: marketplace === 'AMAZON' ? 20 : 12 };
+  if (!listing) return { ready: 0, expected: marketplace === 'AMAZON' ? 20 : 8 };
   const canonicalPlan = listing?.canonicalQualityEvidence?.imagePlan;
   if (canonicalPlan && Number(canonicalPlan.expected) >= 0) return canonicalPlan;
   const exactPrompts = listing?.imagePrompts?.prompts || (Array.isArray(listing?.imagePrompts) ? listing.imagePrompts : null);
@@ -46,9 +46,9 @@ function getAssetPlan(listing, marketplace) {
     const prompts = marketplace === 'AMAZON'
       ? [...generateAmazonListingImagePrompts(listing), ...generateAmazonAPlusImagePrompts(listing)]
       : generateEtsyListingImagePrompts(listing);
-    return { ready: prompts.filter(item => String(item?.prompt || '').trim()).length, expected: marketplace === 'AMAZON' ? 20 : 12 };
+    return { ready: prompts.filter(item => String(item?.prompt || '').trim()).length, expected: prompts.length };
   } catch (_) {
-    return { ready: 0, expected: marketplace === 'AMAZON' ? 20 : 12 };
+    return { ready: 0, expected: marketplace === 'AMAZON' ? 20 : 8 };
   }
 }
 

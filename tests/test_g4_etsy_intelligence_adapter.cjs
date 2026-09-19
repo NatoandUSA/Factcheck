@@ -39,6 +39,8 @@ async function main() {
   'Etsy title uses distinct readable clauses instead of duplicate padding');
   check(result.output.listingDraft.etsyTags.length <= 13, 'Etsy tag count within limit');
   check(result.output.listingDraft.etsyTags.every(tag => Array.from(tag).length <= 20), 'every Etsy tag within limit');
+  check(result.output.listingDraft.etsyTags.every(tag => /^[\p{L}\p{N}]+(?:[ '\-][\p{L}\p{N}]+)*$/u.test(tag)),
+    'every Etsy tag uses only marketplace-supported characters');
   check(result.output.listingDraft.etsyTagExplanations.length === result.output.listingDraft.etsyTags.length,
     'every generated Etsy tag has an allocation explanation');
   check(result.output.listingDraft.etsyTagExplanations.every(item => item.intent && item.reason
@@ -118,8 +120,12 @@ async function main() {
       'regalo de cumpleanos para hija', 'collar de mama para hija', 'mensaje especial para hija'
     ], 4)
   });
-  check(richTitle.output.listingDraft.etsyTitle.length >= 126 && richTitle.output.listingDraft.etsyTitle.length <= 138,
-    'rich safe corpus fills the Etsy title working target of 90-99 percent without truncation');
+  check(richTitle.output.listingDraft.etsyTitle.length <= 140
+    && richTitle.output.listingDraft.etsyTitle.split(/\s+/).length <= 15
+    && (richTitle.output.listingDraft.etsyTitle.match(/,/g) || []).length < 2,
+  'rich safe corpus still produces a concise buyer-readable title instead of filling capacity');
+  check(adapter.tagVariants('Best Friend, Hermana').every(tag => !tag.includes(',')),
+    'comma-delimited Product Truth values become separate valid tag candidates');
   console.log(`G4 Etsy intelligence adapter: ${passed}/${passed} PASS`);
 }
 

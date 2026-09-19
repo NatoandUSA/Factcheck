@@ -68,9 +68,10 @@ function resolvePublishContract({ marketplace, productType, listing }) {
       marketplace: 'ETSY',
       productType: rawProductType,
       contractStatus: 'VALID_CONTRACT',
-      requiredTagsCount: 13,
+      maxTagsCount: 13,
+      targetTagsCount: 13,
       maxTagChars: 20,
-      maxTitleChars: 200,
+      maxTitleChars: 140,
       reasons: []
     };
   }
@@ -140,11 +141,11 @@ function evaluatePublishGate(listing) {
   if (contract.marketplace === 'ETSY') {
     const rawTags = listing.etsyTags || listing.tags || [];
     if (!Array.isArray(rawTags) || rawTags.length === 0) {
-      issues.push('Missing Etsy tags -- exactly 13 tags required for Etsy listings');
+      issues.push('Missing Etsy tags -- add at least one relevant tag (up to 13 allowed)');
     } else {
       const cleanTags = rawTags.map(t => typeof t === 'string' ? t.trim() : '').filter(Boolean);
-      if (cleanTags.length !== contract.requiredTagsCount) {
-        issues.push(`Etsy tags count must be exactly ${contract.requiredTagsCount} tags (current: ${cleanTags.length})`);
+      if (cleanTags.length > contract.maxTagsCount) {
+        issues.push(`Etsy tags exceed the maximum of ${contract.maxTagsCount} tags (current: ${cleanTags.length})`);
       }
       const uniqueTags = new Set(cleanTags.map(t => t.toLowerCase()));
       if (uniqueTags.size !== cleanTags.length) {
@@ -153,6 +154,10 @@ function evaluatePublishGate(listing) {
       const invalidTags = cleanTags.filter(t => t.length > contract.maxTagChars);
       if (invalidTags.length > 0) {
         issues.push(`${invalidTags.length} tags exceed ${contract.maxTagChars}-character Etsy limit`);
+      }
+      const invalidCharacterTags = cleanTags.filter(tag => !/^[\p{L}\p{N}]+(?:[ '\-][\p{L}\p{N}]+)*$/u.test(tag));
+      if (invalidCharacterTags.length > 0) {
+        issues.push(`${invalidCharacterTags.length} Etsy tags contain unsupported punctuation`);
       }
     }
   }

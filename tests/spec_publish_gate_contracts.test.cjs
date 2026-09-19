@@ -142,7 +142,7 @@ async function runPublishGateContractSuite() {
     productType: 'APPAREL',
     status: 'MANAGER_APPROVED',
     amazonTitle: 'a'.repeat(205), // > 200 chars on Amazon title, but Etsy title is valid
-    etsyTitle: 'Valid Etsy Title Under 200 Chars',
+    etsyTitle: 'Valid Clear Etsy Title Under 140 Chars',
     etsyTags: Array.from({ length: 13 }, (_, i) => `etsytag${i + 1}`),
     etsyDescription: 'Valid Etsy description text.',
     productTruthNotes: 'Verified Etsy product details.',
@@ -425,9 +425,9 @@ async function runPublishGateContractSuite() {
       headers: { Cookie: ownerEtsyCookie, 'Content-Type': 'application/json', Origin: `http://127.0.0.1:${port}` },
       body: JSON.stringify({ expectedVersion: etsySpoofVersion })
     });
-    assert.strictEqual(etsyApproveSpoofRes.status, 400, 'Server must enforce Etsy 13 tags contract on Etsy DB row');
+    assert.strictEqual(etsyApproveSpoofRes.status, 400, 'Server must require at least one Etsy tag on Etsy DB row');
     const etsySpoofBody = await etsyApproveSpoofRes.json();
-    assert.ok(etsySpoofBody.reasons.some(r => r.includes('13 tags required for Etsy listings')));
+    assert.ok(etsySpoofBody.reasons.some(r => r.includes('at least one relevant tag')));
 
     // Valid Etsy Approval (Does NOT require Amazon bullets or Amazon search terms)
     const etsyValidCreateRes = await fetch(`http://127.0.0.1:${port}/api/listings`, {

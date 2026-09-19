@@ -60,7 +60,7 @@ export default function EtsyRealProductPage({ listing, onShowToast }) {
               Etsy Listing Page Simulation Preview <span style={{ color: '#b45309' }}>· Draft only</span>
             </div>
             <div style={{ fontSize: '0.68rem', color: '#64748b' }}>
-              Customer view · 12 photo prompts · up to 13 relevant tags · not submission ready
+              Customer view · {etsyPrompts.length} photo prompts · up to 13 relevant tags · not submission ready
             </div>
           </div>
         </div>

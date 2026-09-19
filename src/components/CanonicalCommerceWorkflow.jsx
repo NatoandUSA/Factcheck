@@ -103,10 +103,11 @@ function Metric({ label, value }) {
 
 const characterCount = value => Array.from(String(value || '')).length;
 const utf8ByteCount = value => new TextEncoder().encode(String(value || '')).length;
-function CapacityLabel({ label, used, limit, unit = 'ký tự', authority = '' }) {
+function CapacityLabel({ label, used, limit, unit = 'ký tự', authority = '', utilizationTarget = true }) {
   const utilization = Number.isFinite(limit) && limit > 0 ? Math.round((used / limit) * 100) : null;
-  const targetState = utilization == null ? '' : utilization < 90 ? ' · CẦN BỔ SUNG' : utilization <= 99 ? ' · ĐẠT MỤC TIÊU' : ' · SÁT/TRÊN TRẦN';
-  return <b style={{ color: utilization != null && utilization < 90 ? '#b91c1c' : 'inherit' }}>{label} ({used}/{Number.isFinite(limit) ? limit : 'PTD'} {unit}{utilization == null ? '' : ` · ${utilization}%${targetState}`}){authority ? ` — ${authority}` : ''}</b>;
+  const targetState = utilization == null || !utilizationTarget ? '' : utilization < 90 ? ' · CẦN BỔ SUNG' : utilization <= 99 ? ' · ĐẠT MỤC TIÊU' : ' · SÁT/TRÊN TRẦN';
+  const lowTarget = utilizationTarget && utilization != null && utilization < 90;
+  return <b style={{ color: lowTarget ? '#b91c1c' : 'inherit' }}>{label} ({used}/{Number.isFinite(limit) ? limit : 'PTD'} {unit}{utilization == null ? '' : ` · ${utilization}%${targetState}`}){authority ? ` — ${authority}` : ''}</b>;
 }
 
 const fileIdentity = file => `${file.name}\u0000${file.size}\u0000${file.lastModified || 0}`;
@@ -132,7 +133,7 @@ function SelectedFileQueue({ files, label, onRemove, onClear }) {
   </div>;
 }
 
-export default function CanonicalCommerceWorkflow({ activeProject, marketplace, onSelectListing, onShowToast, onRequireLogin }) {
+export default function CanonicalCommerceWorkflow({ activeProject, marketplace, onSelectListing, onListingPersisted, onShowToast, onRequireLogin }) {
   const { user, invalidateSession } = useAuth();
   const accent = marketplace === 'AMAZON' ? '#0369a1' : '#c2410c';
   const projectId = activeProject?.id;
@@ -701,6 +702,7 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
     // The persisted listing is available in the queue after refresh and can
     // still be opened explicitly for review/simulation.
     await refresh();
+    await onListingPersisted?.(result);
     return result;
   });
 
@@ -1309,8 +1311,8 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
             <small>{(listing.amazonAPlusPoints || []).map((point, index) => `Point ${index + 1}: ${characterCount(point)} ký tự`).join(' · ') || 'Chưa có point'}</small></label>
           <label><b>PPC targeting — có thể chứa keyword claim chưa xác minh, không phải copy hiển thị</b><textarea value={(listing.ppcKeywords || []).map(item => typeof item === 'string' ? item : item.phrase || '').join('\n')} onChange={event => updateDraft('ppcKeywords', event.target.value.split('\n').map(phrase => phrase.trim()).filter(Boolean))} rows={6} style={{ width: '100%' }} /></label>
         </> : <>
-          <div style={{ padding: 9, borderRadius: 8, background: '#fff7ed', color: '#7c2d12', fontSize: '.76rem' }}><b>Etsy title:</b> vùng làm việc 126–138/140 khi Master KW có đủ phrase liên quan, an toàn và không lặp. Nếu thiếu dữ liệu an toàn, Omni báo thiếu thay vì bịa hoặc nhồi từ.</div>
-          <label><CapacityLabel label="Etsy Title" used={characterCount(listing.etsyTitle)} limit={140} /><textarea value={listing.etsyTitle || ''} onChange={event => updateDraft('etsyTitle', event.target.value)} rows={2} style={{ width: '100%' }} /></label>
+          <div style={{ padding: 9, borderRadius: 8, background: '#fff7ed', color: '#7c2d12', fontSize: '.76rem' }}><b>Etsy title:</b> tối đa 140 ký tự; ưu tiên tên sản phẩm rõ, tự nhiên và khoảng 15 từ trở xuống. Phần trăm dung lượng chỉ là số đo, không phải mục tiêu để nhồi keyword.</div>
+          <label><CapacityLabel label="Etsy Title" used={characterCount(listing.etsyTitle)} limit={140} utilizationTarget={false} authority="rõ ràng quan trọng hơn lấp đầy" /><textarea value={listing.etsyTitle || ''} onChange={event => updateDraft('etsyTitle', event.target.value)} rows={2} style={{ width: '100%' }} /></label>
           <label><b>Tối đa 13 Tags an toàn — mỗi dòng một tag</b><textarea value={(listing.etsyTags || []).join('\n')} onChange={event => updateEtsyTags(event.target.value)} rows={7} style={{ width: '100%' }} /></label>
           <div style={{ border: '1px solid #fed7aa', borderRadius: 8, padding: 9, background: '#fff7ed' }}>
             <b>Phân bổ tag do engine tạo: {listing.etsyTagStatus?.code === 'TAG_SHORTAGE'

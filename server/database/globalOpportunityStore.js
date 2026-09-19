@@ -389,7 +389,17 @@ async function importCandidatesUnlocked(db, scope, actorId, payload, authority =
       const keyword = text(candidate?.keyword);
       const normalized = normalizeKeyword(keyword);
       if (!normalized) continue;
-      const cluster = await ensureCluster(db, scope, candidate);
+      const existing = await get(db, `SELECT id,status,cluster_id FROM global_keyword_candidates
+        WHERE tenant_id=? AND workspace_id=? AND marketplace=? AND normalized_keyword=? AND source=? AND source_file_id=?`,
+      [...scopeParams(scope), normalized, source, sourceFileId]);
+      const hasExplicitCluster = Boolean(text(candidate.clusterKey || candidate.cluster));
+      let cluster = null;
+      if (existing?.cluster_id && !hasExplicitCluster) {
+        cluster = await get(db, `SELECT * FROM keyword_clusters
+          WHERE id=? AND tenant_id=? AND workspace_id=? AND marketplace=?`,
+        [existing.cluster_id, ...scopeParams(scope)]);
+      }
+      if (!cluster) cluster = await ensureCluster(db, scope, candidate);
       const suppliedProofType = PROOF_TYPES.has(text(candidate.proofType).toUpperCase()) ? text(candidate.proofType).toUpperCase() : 'NONE';
       const effectiveCandidate = {
         ...candidate,
@@ -413,7 +423,7 @@ async function importCandidatesUnlocked(db, scope, actorId, payload, authority =
           rank_proxy=excluded.rank_proxy,trend_velocity=excluded.trend_velocity,
           social_momentum=excluded.social_momentum,cross_source_count=excluded.cross_source_count,
           proof_type=excluded.proof_type,proof_timestamp=excluded.proof_timestamp,raw_json=excluded.raw_json,
-          status=CASE WHEN global_keyword_candidates.status IN ('PROMOTED','REJECTED') THEN global_keyword_candidates.status ELSE excluded.status END,
+          status=CASE WHEN global_keyword_candidates.status IN ('PROMOTED','REJECTED','STALE') THEN global_keyword_candidates.status ELSE excluded.status END,
           updated_at=CURRENT_TIMESTAMP`,
       [uid, ...scopeParams(scope), keyword, normalized, cluster.id, source, sourceFileId,
         finite(candidate.searchVolume), effectiveCandidate.estimatedSales, effectiveCandidate.estimatedRevenue,
@@ -515,6 +525,16 @@ async function setCandidateStatusUnlocked(db, scope, actorId, candidateId, nextS
     [candidateId, ...scopeParams(scope)]);
     if (!row) throw Object.assign(new Error('GLOBAL_CANDIDATE_NOT_FOUND'), { code: 'GLOBAL_CANDIDATE_NOT_FOUND', status: 404 });
     if (row.status === 'PROMOTED') throw Object.assign(new Error('GLOBAL_CANDIDATE_ALREADY_PROMOTED'), { code: 'GLOBAL_CANDIDATE_ALREADY_PROMOTED', status: 409 });
+
+    if (['QUALIFIED', 'PROMOTE_TO_PROJECT'].includes(status)) {
+      const score = await get(db, `SELECT proof_gate FROM global_opportunity_scores
+        WHERE candidate_id=? AND score_version=?`, [candidateId, GLOBAL_SCORE_VERSION]);
+      if (!score || score.proof_gate !== 'PASS') {
+        throw Object.assign(new Error('GLOBAL_PROOF_OF_SALE_REQUIRED_FOR_STATUS'), {
+          code: 'GLOBAL_PROOF_OF_SALE_REQUIRED_FOR_STATUS', status: 409, requestedStatus: status
+        });
+      }
+    }
 
     await run(db, `UPDATE global_keyword_candidates SET status=?,updated_at=CURRENT_TIMESTAMP
       WHERE id=? AND tenant_id=? AND workspace_id=? AND marketplace=?`,

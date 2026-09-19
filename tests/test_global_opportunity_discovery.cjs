@@ -124,6 +124,12 @@ async function run() {
     const deniedBody = await json(deniedPromotion);
     assert.strictEqual(deniedBody.error, 'GLOBAL_PROOF_OF_SALE_REQUIRED');
 
+    const deniedQualification = await fetch(base + `/api/global-opportunities/${watch.id}/status`, {
+      method: 'POST', headers, body: JSON.stringify({ status: 'QUALIFIED', reason: 'must not self-qualify' })
+    });
+    assert.strictEqual(deniedQualification.status, 409);
+    assert.strictEqual((await json(deniedQualification)).error, 'GLOBAL_PROOF_OF_SALE_REQUIRED_FOR_STATUS');
+
     const afterDenied = await all(`SELECT id,name,seed_phrase,state FROM research_projects
       WHERE tenant_id=? AND workspace_id=? AND marketplace='AMAZON' ORDER BY id`, [user.tenant_id, user.workspace_id]);
     assert.deepStrictEqual(afterDenied, beforeProjects, 'failed promotion must not mutate projects');
@@ -146,6 +152,23 @@ async function run() {
       }]
     }, { allowCommercialMetrics: true, allowProofTimestamp: false });
     const trustedId = trusted[0].candidateId;
+
+    const staleTrusted = await fetch(base + `/api/global-opportunities/${trustedId}/status`, {
+      method: 'POST', headers, body: JSON.stringify({ status: 'STALE', reason: 'audit stale persistence' })
+    });
+    assert.strictEqual(staleTrusted.status, 200);
+    const reimportStale = await importCandidates(db, {
+      tenantId: user.tenant_id, workspaceId: user.workspace_id, marketplace: 'AMAZON'
+    }, user.user_id, {
+      source: 'TEST_TRUSTED_MARKETPLACE_EXPORT',
+      sourceFileId: 'trusted-global-opportunity-test-1',
+      candidates: [{ keyword: 'trusted pet memorial wind chime', estimatedSales: 120, estimatedRevenue: 4200, proofType: 'MARKETPLACE_SALES' }]
+    }, { allowCommercialMetrics: true, allowProofTimestamp: false });
+    assert.strictEqual(reimportStale[0].status, 'STALE', 're-importing the same source file must not revive a STALE candidate');
+    const restoreTrusted = await fetch(base + `/api/global-opportunities/${trustedId}/status`, {
+      method: 'POST', headers, body: JSON.stringify({ status: 'QUALIFIED', reason: 'explicit audited restore' })
+    });
+    assert.strictEqual(restoreTrusted.status, 200);
 
     const rejectTrusted = await fetch(base + `/api/global-opportunities/${trustedId}/status`, {
       method: 'POST', headers, body: JSON.stringify({ status: 'REJECTED', reason: 'audit status gate' })

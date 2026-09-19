@@ -306,14 +306,15 @@ async function upsertScore(db, scope, candidateId, score) {
 }
 
 async function reconcileCrossSourceScores(db, scope) {
-  const rows = await all(db, `SELECT c.*,
-      (SELECT COUNT(DISTINCT c2.source) FROM global_keyword_candidates c2
-       WHERE c2.tenant_id=c.tenant_id AND c2.workspace_id=c.workspace_id AND c2.marketplace=c.marketplace
-         AND c2.normalized_keyword=c.normalized_keyword) AS observed_source_count
-    FROM global_keyword_candidates c
-    WHERE c.tenant_id=? AND c.workspace_id=? AND c.marketplace=?`, scopeParams(scope));
+  const counts = await all(db, `SELECT normalized_keyword,COUNT(DISTINCT source) AS observed_source_count
+    FROM global_keyword_candidates
+    WHERE tenant_id=? AND workspace_id=? AND marketplace=?
+    GROUP BY normalized_keyword`, scopeParams(scope));
+  const sourceCounts = new Map(counts.map(row => [row.normalized_keyword, Math.max(1, Number(row.observed_source_count || 1))]));
+  const rows = await all(db, `SELECT * FROM global_keyword_candidates
+    WHERE tenant_id=? AND workspace_id=? AND marketplace=?`, scopeParams(scope));
   for (const row of rows) {
-    const observed = Math.max(1, Number(row.observed_source_count || 1));
+    const observed = sourceCounts.get(row.normalized_keyword) || 1;
     if (Number(row.cross_source_count || 1) !== observed) {
       await run(db, `UPDATE global_keyword_candidates SET cross_source_count=?,updated_at=CURRENT_TIMESTAMP
         WHERE id=? AND tenant_id=? AND workspace_id=? AND marketplace=?`,
@@ -339,7 +340,7 @@ async function importCandidates(db, scope, actorId, payload) {
   const source = text(payload.source);
   const sourceFileId = text(payload.sourceFileId);
   const input = Array.isArray(payload.candidates) ? payload.candidates : [];
-  if (!source || input.length === 0 || input.length > 50000) {
+  if (!source || input.length === 0 || input.length > 10000) {
     throw Object.assign(new Error('INVALID_GLOBAL_CANDIDATE_IMPORT'), { code: 'INVALID_GLOBAL_CANDIDATE_IMPORT', status: 400 });
   }
   const results = [];

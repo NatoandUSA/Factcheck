@@ -42,8 +42,16 @@ const { pathToFileURL } = require('node:url');
     ok: false, json: async () => ({ error: 'PRODUCT_TRUTH_CARD_REQUIRED' })
   })), /PRODUCT_TRUTH_CARD_REQUIRED/,
   'generic Preview must fail closed when the exact package is unavailable');
+  const successorPackage = { ...reviewPackage, listingRevisionId: 10, revisionNumber: 4,
+    contentHash: 'd'.repeat(64), content: { ...reviewPackage.content, etsyTitle: 'Current successor' } };
   let fetchCount = 0;
-  assert.equal(await resolveCanonicalReviewListing(exact, async () => { fetchCount += 1; }), exact);
-  assert.equal(fetchCount, 0, 'already-canonical packages must not be replaced by a thin history lookup');
+  const refreshed = await resolveCanonicalReviewListing(exact, async url => {
+    fetchCount += 1;
+    assert.equal(url, '/api/listings/5/review-package');
+    return { ok: true, json: async () => successorPackage };
+  });
+  assert.equal(fetchCount, 1, 'generic navigation must re-fetch even when currentListing contains an older exact package');
+  assert.equal(refreshed.canonicalReviewIdentity.listingRevisionId, 10);
+  assert.equal(refreshed.etsyTitle, 'Current successor', 'stale R5 must not reopen after the server head advances to R6');
   console.log('EXACT_PREVIEW_RESOLUTION_TESTS_PASSED');
 })().catch(error => { console.error(error.stack || error); process.exitCode = 1; });

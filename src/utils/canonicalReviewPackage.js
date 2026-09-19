@@ -30,8 +30,7 @@ export function isCanonicalPreviewListing(listing) {
 
 export async function resolveCanonicalReviewListing(item, fetchImpl = globalThis.fetch) {
   if (!item) throw new Error('LISTING_REQUIRED');
-  if (isCanonicalPreviewListing(item)) return item;
-  const listingId = item.dbId ?? item.id;
+  const listingId = item.canonicalReviewIdentity?.listingId ?? item.dbId ?? item.id;
   if (!listingId) throw new Error('CANONICAL_LISTING_ID_REQUIRED');
   if (typeof fetchImpl !== 'function') throw new Error('CANONICAL_REVIEW_PACKAGE_FETCH_UNAVAILABLE');
   const response = await fetchImpl(`/api/listings/${listingId}/review-package`, { credentials: 'include' });

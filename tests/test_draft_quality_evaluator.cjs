@@ -88,6 +88,16 @@ const verifiedCard = (productId, listingVersion) => ({
   assert.equal(assessLanguageConsistency({ listingLanguage: 'ES', etsyTitle: 'Manta para Anna',
     etsyDescription: 'Regalo personalizado para hermana.' }, 'ETSY').mixed, false,
   'proper recipient names must not be treated as foreign-language copy');
+  const verifiedForeignPhrase = { ...base, listingLanguage: 'ES', etsyTitle: 'Best Friend',
+    etsyTags: ['regalo hermana'], etsyDescription: 'Regalo personalizado para hermana.',
+    canonicalQualityEvidence: { ...base.canonicalQualityEvidence, listingLanguage: 'ES',
+      languageExemptions: ['Best Friend'] } };
+  assert.equal(assessLanguageConsistency(verifiedForeignPhrase, 'ETSY').mixed, false,
+    'a multi-token brand/product/name phrase verified by Product Truth must be exempt from mixed-language warnings');
+  const unverifiedForeignPhrase = { ...verifiedForeignPhrase,
+    canonicalQualityEvidence: { ...verifiedForeignPhrase.canonicalQualityEvidence, languageExemptions: [] } };
+  assert.equal(assessLanguageConsistency(unverifiedForeignPhrase, 'ETSY').mixed, true,
+    'the same two foreign markers without Product Truth evidence must remain visible as mixed-language copy');
 
   console.log('DRAFT_QUALITY_EVALUATOR_TESTS_PASSED');
 })().catch(error => {

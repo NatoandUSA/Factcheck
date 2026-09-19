@@ -2126,6 +2126,11 @@ app.get('/api/listings/:id/review-package', requireAuth(db), requireRole(['OWNER
     const intelligence = revision.dependencies.intelligenceSnapshotId == null ? null
       : await getIntelligenceSnapshot(db, scope, root.project_id, revision.dependencies.intelligenceSnapshotId);
     const listingLanguage = String(revision.content?.listingLanguage || intelligence?.output?.language || '').toUpperCase();
+    const languageExemptions = ['brand', 'productName', 'productType', 'recipient', 'audience']
+      .flatMap(field => {
+        const value = truth.snapshot?.asserted?.[field]?.value;
+        return (Array.isArray(value) ? value : [value]).map(item => String(item ?? '').trim()).filter(Boolean);
+      });
     const promptItems = Array.isArray(revision.content?.imagePrompts?.prompts)
       ? revision.content.imagePrompts.prompts
       : (Array.isArray(revision.content?.imagePrompts) ? revision.content.imagePrompts : []);
@@ -2137,6 +2142,7 @@ app.get('/api/listings/:id/review-package', requireAuth(db), requireRole(['OWNER
       productTruthHash: truth.content_hash,
       verifiedFactCount: Object.keys(truth.snapshot?.asserted || {}).length,
       listingLanguage: ['EN','ES'].includes(listingLanguage) ? listingLanguage : null,
+      languageExemptions: Object.freeze([...new Set(languageExemptions)]),
       imagePlan: Object.freeze({ expected: promptItems.length,
         ready: promptItems.filter(item => item?.ready !== false && String(item?.prompt || '').trim()).length })
     });

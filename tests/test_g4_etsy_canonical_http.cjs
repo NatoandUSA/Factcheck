@@ -126,6 +126,9 @@ async function main() {
   const reviewPackage = await json(`/api/listings/${listing.body.listingId}/review-package`, 'GET');
   check(reviewPackage.status === 200 && reviewPackage.body.qualityEvidence.listingLanguage === 'ES',
     'exact review package carries the listing-level language contract from Intelligence');
+  check(reviewPackage.body.qualityEvidence.languageExemptions.includes('Custom Necklace')
+    && reviewPackage.body.qualityEvidence.languageExemptions.includes('hija'),
+  'language exemptions are server-derived from verified Product Truth identity/name evidence');
   const successorContent = { ...reviewPackage.body.content,
     etsyTitle: 'Custom Necklace para Hija',
     etsyDescription: `${reviewPackage.body.content.etsyDescription}\n\nQA copy revision.` };

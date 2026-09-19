@@ -24,9 +24,11 @@ export function assessLanguageConsistency(listing, marketplace) {
     ? [listing?.amazonTitle, ...(listing?.amazonBullets || []), listing?.amazonDescription]
     : [listing?.etsyTitle, ...(listing?.etsyTags || []), listing?.etsyDescription];
   const tokens = visibleTokens(text.filter(Boolean).join(' '));
+  const exemptionTokens = new Set((listing?.canonicalQualityEvidence?.languageExemptions || [])
+    .flatMap(visibleTokens));
   const foreignLanguages = target === 'EN' ? ['ES', 'VI'] : ['EN', 'VI'];
   const hits = foreignLanguages.flatMap(language => tokens
-    .filter(token => LANGUAGE_MARKERS[language].has(token))
+    .filter(token => LANGUAGE_MARKERS[language].has(token) && !exemptionTokens.has(token))
     .map(token => ({ language, token })));
   const distinct = [...new Map(hits.map(hit => [`${hit.language}:${hit.token}`, hit])).values()];
   // One isolated foreign word may be a brand, proper name, or canonical product

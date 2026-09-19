@@ -3,6 +3,7 @@ process.env.NODE_ENV = 'test';
 
 const { app, db, databaseReady } = require('../server/server');
 const { createSessionRecord } = require('../server/security/session');
+const { projectMklCandidates } = require('../server/database/globalOpportunityStore');
 
 function all(sql, params = []) {
   return new Promise((resolve, reject) => db.all(sql, params, (error, rows) => error ? reject(error) : resolve(rows || [])));
@@ -24,6 +25,27 @@ async function fixture() {
 async function json(res) { return res.json().catch(() => ({})); }
 
 async function run() {
+  const harvested = projectMklCandidates({
+    id: 77,
+    projectId: 55,
+    kind: 'AMAZON_MASTER_KEYWORDS',
+    artifactHash: 'a'.repeat(64),
+    createdAt: '2026-09-19T00:00:00.000Z',
+    payload: { keywords: [
+      { keywordId: 'AMZ-KW-1', phrase: 'commercial outlier', tier: 'OUTLIER_REVIEW',
+        opportunityScore: 0.8, metrics: { searchVolume: 1400, keywordSales: 21, trend: 7 } },
+      { keywordId: 'AMZ-KW-2', phrase: 'residue no sales', tier: 'RESIDUE',
+        metrics: { searchVolume: 900, keywordSales: null } },
+      { keywordId: 'AMZ-KW-3', phrase: 'primary should stay project-bound', tier: 'PRIMARY',
+        metrics: { searchVolume: 5000, keywordSales: 80 } }
+    ] }
+  }, 'AMAZON');
+  assert.strictEqual(harvested.length, 1);
+  assert.strictEqual(harvested[0].keyword, 'commercial outlier');
+  assert.strictEqual(harvested[0].estimatedSales, 21);
+  assert.strictEqual(harvested[0].origin.sourceProjectId, 55);
+  assert.strictEqual(harvested[0].origin.sourceArtifactId, 77);
+
   await databaseReady;
   const user = await fixture();
   const session = await createSession(user.user_id, user.workspace_id, user.tenant_id);

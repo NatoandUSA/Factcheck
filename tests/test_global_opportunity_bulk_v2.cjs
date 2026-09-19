@@ -8,7 +8,7 @@ process.env.NODE_ENV = 'test';
 const { app, db, databaseReady } = require('../server/server');
 const { createSessionRecord } = require('../server/security/session');
 const { clusterDescriptor, parseGlobalOpportunityFile } = require('../server/globalOpportunityBulkParser');
-const { projectMklCandidates } = require('../server/database/globalOpportunityStore');
+const { projectMklCandidates, proofGate, freshnessScore, competitionScore } = require('../server/database/globalOpportunityStore');
 
 function all(sql, params = []) {
   return new Promise((resolve, reject) => db.all(sql, params, (error, rows) => error ? reject(error) : resolve(rows || [])));
@@ -34,6 +34,13 @@ async function workbookBytes() {
 }
 
 async function run() {
+  assert.equal(proofGate({ proofType: 'ORDER_EVIDENCE', estimatedSales: null, estimatedRevenue: null }), 'WATCH_ONLY',
+    'proofType metadata alone must never unlock PASS');
+  assert.equal(proofGate({ proofType: 'NONE', estimatedSales: 1, estimatedRevenue: null }), 'PASS');
+  assert.equal(freshnessScore('2999-01-01T00:00:00.000Z'), 0, 'future timestamps must not receive freshness credit');
+  assert(freshnessScore(new Date().toISOString()) > 0);
+  assert(competitionScore(1000) > 0 && competitionScore(1000) < 15);
+
   const a = clusterDescriptor('dog memorial wind chime');
   const b = clusterDescriptor('personalized pet loss wind chime');
   const c = clusterDescriptor('pet memorial necklace');
@@ -80,6 +87,15 @@ async function run() {
     form.set('sourceType', 'CEREBRO');
     form.set('proofTimestamp', '2026-09-19T00:00:00.000Z');
     form.set('file', new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), 'cerebro.xlsx');
+    const invalidForm = new FormData();
+    invalidForm.set('sourceType', 'MALICIOUS_SOURCE');
+    invalidForm.set('file', new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }), 'cerebro.xlsx');
+    const invalidSourceRes = await fetch(base + '/api/global-opportunities/import-file', {
+      method: 'POST', headers: { Origin: base, Cookie: cookie }, body: invalidForm
+    });
+    assert.equal(invalidSourceRes.status, 400);
+    assert.equal((await invalidSourceRes.json()).error, 'GLOBAL_IMPORT_SOURCE_TYPE_INVALID');
+
     const importRes = await fetch(base + '/api/global-opportunities/import-file', {
       method: 'POST', headers: { Origin: base, Cookie: cookie }, body: form
     });

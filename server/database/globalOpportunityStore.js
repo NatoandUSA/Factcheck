@@ -34,6 +34,16 @@ function all(db, sql, params = []) {
   return new Promise((resolve, reject) => db.all(sql, params, (error, rows) => error ? reject(error) : resolve(rows || [])));
 }
 
+const writeQueues = new WeakMap();
+function withProcessWriteLock(db, operation) {
+  const previous = writeQueues.get(db) || Promise.resolve();
+  const current = previous.catch(() => {}).then(operation);
+  writeQueues.set(db, current);
+  return current.finally(() => {
+    if (writeQueues.get(db) === current) writeQueues.delete(db);
+  });
+}
+
 async function migrateGlobalOpportunityDiscovery(db) {
   await run(db, `CREATE TABLE IF NOT EXISTS keyword_clusters (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -338,7 +348,7 @@ async function reconcileCrossSourceScores(db, scope) {
   }
 }
 
-async function importCandidates(db, scope, actorId, payload, authority = {}) {
+async function importCandidatesUnlocked(db, scope, actorId, payload, authority = {}) {
   const source = text(payload.source);
   const sourceFileId = text(payload.sourceFileId);
   const input = Array.isArray(payload.candidates) ? payload.candidates : [];
@@ -467,7 +477,7 @@ async function watchlist(db, scope, filters = {}) {
     [...scopeParams(scope), limit]);
 }
 
-async function setCandidateStatus(db, scope, actorId, candidateId, nextStatus, metadata = {}) {
+async function setCandidateStatusUnlocked(db, scope, actorId, candidateId, nextStatus, metadata = {}) {
   const status = text(nextStatus).toUpperCase();
   if (!ALLOWED_STATUSES.has(status) || status === 'PROMOTED') {
     throw Object.assign(new Error('INVALID_GLOBAL_CANDIDATE_STATUS'), { code: 'INVALID_GLOBAL_CANDIDATE_STATUS', status: 400 });
@@ -493,7 +503,7 @@ async function setCandidateStatus(db, scope, actorId, candidateId, nextStatus, m
   return { candidateId, previousStatus: row.status, status };
 }
 
-async function promoteToProject(db, scope, actorId, candidateId, payload = {}) {
+async function promoteToProjectUnlocked(db, scope, actorId, candidateId, payload = {}) {
   const candidate = await get(db, `SELECT c.*,k.display_name AS cluster_name FROM global_keyword_candidates c
     LEFT JOIN keyword_clusters k ON k.id=c.cluster_id
     WHERE c.id=? AND c.tenant_id=? AND c.workspace_id=? AND c.marketplace=?`,
@@ -531,6 +541,16 @@ async function promoteToProject(db, scope, actorId, candidateId, payload = {}) {
     try { await run(db, 'ROLLBACK'); } catch (_) {}
     throw error;
   }
+}
+
+function importCandidates(db, scope, actorId, payload, authority = {}) {
+  return withProcessWriteLock(db, () => importCandidatesUnlocked(db, scope, actorId, payload, authority));
+}
+function setCandidateStatus(db, scope, actorId, candidateId, nextStatus, metadata = {}) {
+  return withProcessWriteLock(db, () => setCandidateStatusUnlocked(db, scope, actorId, candidateId, nextStatus, metadata));
+}
+function promoteToProject(db, scope, actorId, candidateId, payload = {}) {
+  return withProcessWriteLock(db, () => promoteToProjectUnlocked(db, scope, actorId, candidateId, payload));
 }
 
 module.exports = Object.freeze({

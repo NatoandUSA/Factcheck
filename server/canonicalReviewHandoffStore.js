@@ -54,6 +54,18 @@ function bounded(value, code, maximum, required = true) {
   return result || null;
 }
 
+async function lifecycleOf(hooks, listing) {
+  if (typeof hooks.getLifecycleCapability !== 'function') {
+    throw new CanonicalHandoffError('SERVER_LIFECYCLE_CAPABILITY_HOOK_REQUIRED', 500);
+  }
+  const capability = await hooks.getLifecycleCapability(listing);
+  if (!capability || typeof capability.mode !== 'string'
+    || typeof capability.marketplaceSubmissionAllowed !== 'boolean') {
+    throw new CanonicalHandoffError('INVALID_SERVER_LIFECYCLE_CAPABILITY', 500);
+  }
+  return capability;
+}
+
 async function rollback(db, error) { try { await run(db, 'ROLLBACK'); } catch (_) {} throw error; }
 
 async function replay(db, scope, projectId, listingId, operation, key, requestHash) {
@@ -204,6 +216,7 @@ async function requestSubmissionUnlocked(db, rawScope, listingIdInput, input = {
       throw new CanonicalHandoffError('SERVER_APPROVAL_POLICY_HOOK_REQUIRED', 500);
     }
     await hooks.assertApprovalEligible(listing);
+    const lifecycle = await lifecycleOf(hooks, listing);
     const review = await approvedReview(db, scope, listing);
     const packageHash = submissionPackageHash(listing, review);
     const inserted = await run(db, `INSERT INTO canonical_submission_requests
@@ -211,7 +224,9 @@ async function requestSubmissionUnlocked(db, rawScope, listingIdInput, input = {
       VALUES (?,?,?,?,?,?,?,?,?,?)`, [scope.tenantId, scope.workspaceId, scope.marketplace, listing.project_id,
       listingId, listing.head_revision_id, review.id, packageHash, notes, scope.actorId]);
     const response = Object.freeze({ listingId, projectId: listing.project_id, listingRevisionId: listing.head_revision_id,
-      submissionRequestId: inserted.lastID, reviewId: review.id, packageHash, status: 'SUBMISSION_REQUESTED' });
+      submissionRequestId: inserted.lastID, reviewId: review.id, packageHash,
+      status: lifecycle.mode === 'UAT_APPROVAL_EXPORT_ONLY' ? 'UAT_EXPORT_REQUESTED' : 'SUBMISSION_REQUESTED',
+      lifecycleMode: lifecycle.mode, marketplaceSubmissionAllowed: lifecycle.marketplaceSubmissionAllowed });
     await receipt(db, scope, listing.project_id, listingId, 'CANONICAL_SUBMISSION_REQUEST', idempotencyKey, requestHash, response);
     await run(db, 'COMMIT'); return response;
   } catch (error) {
@@ -241,6 +256,10 @@ async function submitUnlocked(db, rawScope, listingIdInput, input = {}, hooks = 
     const inside = await replay(db, scope, observed.project_id, listingId, 'CANONICAL_SUBMISSION_HANDOFF', idempotencyKey, requestHash);
     if (inside) { await run(db, 'COMMIT'); return inside; }
     const listing = await currentListing(db, scope, listingId);
+    const lifecycle = await lifecycleOf(hooks, listing);
+    if (!lifecycle.marketplaceSubmissionAllowed) {
+      throw new CanonicalHandoffError('UAT_MARKETPLACE_SUBMISSION_FORBIDDEN', 409);
+    }
     if (listing.status !== 'MANAGER_APPROVED') throw new CanonicalHandoffError('MANAGER_APPROVAL_REQUIRED', 409);
     if (typeof hooks.assertDependenciesCurrent === 'function') await hooks.assertDependenciesCurrent(listing);
     if (typeof hooks.assertApprovalEligible !== 'function') {
@@ -311,6 +330,7 @@ async function authorizeSubmissionUnlocked(db, rawScope, listingIdInput, input =
     if (typeof hooks.assertDependenciesCurrent === 'function') await hooks.assertDependenciesCurrent(listing);
     if (typeof hooks.assertApprovalEligible !== 'function') throw new CanonicalHandoffError('SERVER_APPROVAL_POLICY_HOOK_REQUIRED', 500);
     await hooks.assertApprovalEligible(listing);
+    const lifecycle = await lifecycleOf(hooks, listing);
     const review = await approvedReview(db, scope, listing);
     const request = await get(db, `SELECT * FROM canonical_submission_requests WHERE id=? AND listing_id=?
       AND listing_revision_id=? AND review_id=? AND tenant_id=? AND workspace_id=? AND marketplace=?`,
@@ -324,7 +344,9 @@ async function authorizeSubmissionUnlocked(db, rawScope, listingIdInput, input =
       review.id, request.id, packageHash, notes, scope.actorId]);
     const response = Object.freeze({ listingId, projectId: listing.project_id, listingRevisionId: listing.head_revision_id,
       submissionAuthorizationId: inserted.lastID, submissionRequestId: request.id, reviewId: review.id,
-      packageHash, status: 'SUBMISSION_AUTHORIZED', marketplacePublishingPerformed: false });
+      packageHash, status: lifecycle.mode === 'UAT_APPROVAL_EXPORT_ONLY' ? 'UAT_EXPORT_AUTHORIZED' : 'SUBMISSION_AUTHORIZED',
+      lifecycleMode: lifecycle.mode, marketplacePublishingPerformed: false,
+      marketplaceSubmissionAllowed: lifecycle.marketplaceSubmissionAllowed });
     await receipt(db, scope, listing.project_id, listingId, 'CANONICAL_SUBMISSION_AUTHORIZATION', idempotencyKey,
       requestHash, response);
     await run(db, 'COMMIT'); return response;
@@ -359,13 +381,23 @@ async function exportSubmissionUnlocked(db, rawScope, listingIdInput, input = {}
     if (typeof hooks.assertDependenciesCurrent === 'function') await hooks.assertDependenciesCurrent(listing);
     if (typeof hooks.assertApprovalEligible !== 'function') throw new CanonicalHandoffError('SERVER_APPROVAL_POLICY_HOOK_REQUIRED', 500);
     await hooks.assertApprovalEligible(listing);
+    const lifecycle = await lifecycleOf(hooks, listing);
     const review = await approvedReview(db, scope, listing); const packageHash = submissionPackageHash(listing, review);
     const authorization = await get(db, `SELECT * FROM canonical_submission_authorizations WHERE id=? AND listing_id=?
       AND listing_revision_id=? AND review_id=? AND package_hash=? AND tenant_id=? AND workspace_id=? AND marketplace=?`,
     [authorizationId, listingId, listing.head_revision_id, review.id, packageHash,
       scope.tenantId, scope.workspaceId, scope.marketplace]);
     if (!authorization) throw new CanonicalHandoffError('CURRENT_SUBMISSION_AUTHORIZATION_REQUIRED', 409);
-    const exportPacket = Object.freeze({ schemaVersion: 1, event: 'EXACT_SUBMISSION_EXPORT', marketplace: scope.marketplace,
+    const uatOnly = lifecycle.mode === 'UAT_APPROVAL_EXPORT_ONLY';
+    const exportPacket = Object.freeze({ schemaVersion: uatOnly ? 2 : 1,
+      event: uatOnly ? 'UAT_EXACT_AUDIT_EXPORT' : 'EXACT_SUBMISSION_EXPORT', marketplace: scope.marketplace,
+      lifecycleMode: lifecycle.mode, uatOnly, marketplaceSubmissionAllowed: lifecycle.marketplaceSubmissionAllowed,
+      lifecycleAuthorization: uatOnly ? Object.freeze({
+        id: lifecycle.uatLifecycleAuthorizationId,
+        hash: lifecycle.uatLifecycleAuthorizationHash,
+        authorizedBy: lifecycle.uatLifecycleAuthorizedBy,
+        authorizedAt: lifecycle.uatLifecycleAuthorizedAt
+      }) : null,
       projectId: listing.project_id, listingId, listingRevisionId: listing.head_revision_id,
       revisionNumber: listing.revision_number, reviewId: review.id, submissionAuthorizationId: authorization.id,
       packageHash, contentHash: listing.content_hash, dependencyHash: listing.dependency_manifest_hash,
@@ -378,10 +410,14 @@ async function exportSubmissionUnlocked(db, rawScope, listingIdInput, input = {}
       authorization.id, packageHash, exportJson, exportHash, scope.actorId]);
     const response = Object.freeze({ listingId, projectId: listing.project_id, listingRevisionId: listing.head_revision_id,
       submissionExportId: inserted.lastID, submissionAuthorizationId: authorization.id, packageHash, exportHash,
-      status: 'EXACT_EXPORT_READY', exportJson, marketplacePublishingPerformed: false });
+      status: uatOnly ? 'UAT_EXACT_EXPORT_READY' : 'EXACT_EXPORT_READY', exportJson,
+      lifecycleMode: lifecycle.mode, uatOnly, marketplacePublishingPerformed: false,
+      marketplaceSubmissionAllowed: lifecycle.marketplaceSubmissionAllowed });
     const replayResponse = Object.freeze({ listingId, projectId: listing.project_id, listingRevisionId: listing.head_revision_id,
       submissionExportId: inserted.lastID, submissionAuthorizationId: authorization.id, packageHash, exportHash,
-      status: 'EXACT_EXPORT_READY', marketplacePublishingPerformed: false });
+      status: uatOnly ? 'UAT_EXACT_EXPORT_READY' : 'EXACT_EXPORT_READY', lifecycleMode: lifecycle.mode,
+      uatOnly, marketplacePublishingPerformed: false,
+      marketplaceSubmissionAllowed: lifecycle.marketplaceSubmissionAllowed });
     await receipt(db, scope, listing.project_id, listingId, 'CANONICAL_EXACT_SUBMISSION_EXPORT', idempotencyKey,
       requestHash, replayResponse);
     await run(db, 'COMMIT'); return response;
@@ -402,7 +438,12 @@ async function reportOperatorSubmissionUnlocked(db, rawScope, listingIdInput, in
   const notes = bounded(input.notes, 'OPERATOR_SUBMISSION_NOTES_REQUIRED', 2000);
   const externalReference = bounded(input.externalReference, 'EXTERNAL_SUBMISSION_REFERENCE_REQUIRED', 500);
   const idempotencyKey = keyOf(input.idempotencyKey);
-  const observed = await currentListing(db, scope, listingId); const observedReview = await approvedReview(db, scope, observed);
+  const observed = await currentListing(db, scope, listingId);
+  const observedLifecycle = await lifecycleOf(hooks, observed);
+  if (!observedLifecycle.marketplaceSubmissionAllowed) {
+    throw new CanonicalHandoffError('UAT_MARKETPLACE_SUBMISSION_FORBIDDEN', 409);
+  }
+  const observedReview = await approvedReview(db, scope, observed);
   const observedPackageHash = submissionPackageHash(observed, observedReview);
   const requestHash = hashBytes(canonicalJson({ operation: 'CANONICAL_OPERATOR_SUBMISSION_REPORT', scope: {
     tenantId: scope.tenantId, workspaceId: scope.workspaceId, marketplace: scope.marketplace

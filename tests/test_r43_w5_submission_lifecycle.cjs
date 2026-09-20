@@ -15,7 +15,8 @@ const seller = Object.freeze({ tenantId: 'tenant-a', workspaceId: 7, marketplace
 const owner = Object.freeze({ ...seller, actorId: 22, role: 'OWNER' });
 const otherWorkspace = Object.freeze({ ...seller, workspaceId: 8 });
 const key = number => `00000000-0000-4000-8000-${String(number).padStart(12, '0')}`;
-const hooks = Object.freeze({ assertDependenciesCurrent: async () => {}, assertApprovalEligible: async () => {} });
+const hooks = Object.freeze({ assertDependenciesCurrent: async () => {}, assertApprovalEligible: async () => {},
+  getLifecycleCapability: async () => ({ mode: 'MARKETPLACE_POLICY', marketplaceSubmissionAllowed: true }) });
 let passed = 0;
 function check(value, message) { assert.ok(value, message); passed++; }
 

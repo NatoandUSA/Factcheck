@@ -20,13 +20,26 @@ async function main() {
   check(owner?.marketplace === 'ETSY', 'Etsy owner scope exists');
   const session = await new Promise((resolve, reject) => createSessionRecord(db, owner.userId, owner.workspaceId,
     owner.tenantId, (error, value) => error ? reject(error) : resolve(value)));
+  const manager = await get(`SELECT u.id AS userId FROM users u JOIN workspace_memberships m ON m.user_id=u.id
+    WHERE u.email='manager@omniseller.local' AND m.role='MANAGER' AND m.workspace_id=? LIMIT 1`, [owner.workspaceId]);
+  const seller = await get(`SELECT u.id AS userId FROM users u JOIN workspace_memberships m ON m.user_id=u.id
+    WHERE u.email='seller@omniseller.local' AND m.role='SELLER' AND m.workspace_id=? LIMIT 1`, [owner.workspaceId]);
+  const managerSession = await new Promise((resolve, reject) => createSessionRecord(db, manager.userId, owner.workspaceId,
+    owner.tenantId, (error, value) => error ? reject(error) : resolve(value)));
+  const sellerSession = await new Promise((resolve, reject) => createSessionRecord(db, seller.userId, owner.workspaceId,
+    owner.tenantId, (error, value) => error ? reject(error) : resolve(value)));
   server = app.listen(0, '127.0.0.1'); await new Promise(resolve => server.once('listening', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`; process.env.ALLOWED_ORIGINS = origin;
   const headers = { Cookie: `omni_session=${session.rawToken}`, Origin: origin };
-  const json = async (route, method, body) => {
-    const response = await fetch(`${origin}${route}`, { method, headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const jsonAs = async (rawToken, route, method = 'GET', body) => {
+    const response = await fetch(`${origin}${route}`, { method,
+      headers: { Cookie: `omni_session=${rawToken}`, Origin: origin, 'Content-Type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body) });
     return { status: response.status, body: await response.json() };
   };
+  const json = (route, method = 'GET', body) => jsonAs(session.rawToken, route, method, body);
+  const jsonAsManager = (route, method = 'GET', body) => jsonAs(managerSession.rawToken, route, method, body);
+  const jsonAsSeller = (route, method = 'GET', body) => jsonAs(sellerSession.rawToken, route, method, body);
   const upload = async (route, fields) => {
     const form = new FormData();
     for (const [name, value] of Object.entries(fields)) value?.bytes
@@ -38,6 +51,31 @@ async function main() {
     locale: 'es-US', mediaClass: 'NON_MEDIA', productTypeId: 'CUSTOM_NECKLACE', categoryId: 'JEWELRY_NECKLACE',
     productFamilyVersion: 'custom-necklace-v1' });
   check(project.status === 200, JSON.stringify(project.body)); const projectId = project.body.projectId;
+  const sellerUatAuthorization = await jsonAsSeller(`/api/projects/${projectId}/uat-lifecycle-authorizations`, 'POST', {
+    reason: 'forged seller authorization', idempotencyKey: key(39)
+  });
+  check(sellerUatAuthorization.status === 403, 'Seller cannot create project UAT lifecycle authority');
+  const uatAuthorization = await json(`/api/projects/${projectId}/uat-lifecycle-authorizations`, 'POST', {
+    reason: 'Full Etsy business UAT: internal approval and exact audit export only; marketplace publishing forbidden.',
+    idempotencyKey: key(40)
+  });
+  check(uatAuthorization.status === 201 && uatAuthorization.body.mode === 'APPROVAL_EXPORT_ONLY'
+    && uatAuthorization.body.marketplaceSubmissionAllowed === false
+    && /Z$/.test(uatAuthorization.body.authorizedAt), JSON.stringify(uatAuthorization.body));
+  const uatReplay = await json(`/api/projects/${projectId}/uat-lifecycle-authorizations`, 'POST', {
+    reason: 'Full Etsy business UAT: internal approval and exact audit export only; marketplace publishing forbidden.',
+    idempotencyKey: key(40)
+  });
+  check(uatReplay.status === 200 && uatReplay.body.replay === true
+    && uatReplay.body.authorizationHash === uatAuthorization.body.authorizationHash
+    && uatReplay.body.authorizedAt === uatAuthorization.body.authorizedAt,
+  'UAT authorization replays exact server-owned actor/time evidence');
+  check((await get(`SELECT COUNT(*) AS n FROM audit_events WHERE action='project:authorize-uat-approval-export'
+    AND resource_id=?`, [String(projectId)])).n === 1,
+  'one immutable project authority produces one server audit event; replay does not duplicate it');
+  await assert.rejects(new Promise((resolve, reject) => db.run(`UPDATE project_uat_lifecycle_authorizations
+    SET authorized_at='2000-01-01T00:00:00.000Z' WHERE id=?`, [uatAuthorization.body.uatLifecycleAuthorizationId],
+  error => error ? reject(error) : resolve())), /IMMUTABLE_UAT_LIFECYCLE_AUTHORIZATION/); passed++;
   const csv = Buffer.from('listing_id,title,shop,he_tags,keyword_context,rank_position\n1,"Regalo para hija, collar de oro 18k",Shop A,"regalo hija|collar 18k",para mi hija,1\n2,"Collar para hija",Shop B,"cumpleanos hija|regalo especial",para mi hija,2\n');
   const file = { name: 'etsy-search.csv', bytes: csv };
   const before = (await get('SELECT COUNT(*) AS n FROM research_imports')).n;
@@ -85,6 +123,12 @@ async function main() {
     }
   });
   check(truth.status === 201, JSON.stringify(truth.body));
+  const truthConfirmation = await jsonAsManager(
+    `/api/projects/${projectId}/product-truth/revisions/${truth.body.productTruthRevisionId}/confirm`, 'POST', {
+      idempotencyKey: key(41), reason: 'MANAGER_VERIFIED_COMMERCIAL_UAT_PRODUCT_TRUTH'
+    });
+  check(truthConfirmation.status === 201 && truthConfirmation.body.confirmationState === 'MANAGER_CONFIRMED',
+    JSON.stringify(truthConfirmation.body));
   const bypass = await json(`/api/projects/${projectId}/intelligence-snapshots/preview`, 'POST', {
     researchSnapshotId: research.body.researchSnapshotId, productTruthRevisionId: truth.body.productTruthRevisionId,
     listingLanguage: 'AUTO'
@@ -114,6 +158,18 @@ async function main() {
     intelligenceSnapshotId: intelligence.body.intelligenceSnapshotId, content: previewListing.body.content
   });
   check(listing.status === 201 && listing.body.status === 'NEEDS_QA', JSON.stringify(listing.body));
+  const preApprovalPublishProbe = await jsonAsSeller(
+    `/api/listings/${listing.body.listingId}/operator-submission-reports`, 'POST', {
+      submissionAuthorizationId: 1,
+      submissionExportId: 1,
+      manualSubmissionConfirmed: true,
+      externalReference: 'MUST-NOT-WRITE-BEFORE-QA',
+      notes: 'UAT lifecycle must prohibit marketplace reporting independently of review state.',
+      idempotencyKey: key(48)
+    });
+  check(preApprovalPublishProbe.status === 409
+    && preApprovalPublishProbe.body.error === 'UAT_MARKETPLACE_SUBMISSION_FORBIDDEN',
+  `UAT marketplace prohibition dominates missing review/approval state: ${JSON.stringify(preApprovalPublishProbe.body)}`);
   const revision = await get('SELECT dependency_manifest_json FROM listing_revisions WHERE id=?', [listing.body.revisionId]);
   const dependencies = JSON.parse(revision.dependency_manifest_json);
   check(dependencies.bindingState === 'BOUND', 'Etsy listing dependencies fully bound');
@@ -126,11 +182,32 @@ async function main() {
   const reviewPackage = await json(`/api/listings/${listing.body.listingId}/review-package`, 'GET');
   check(reviewPackage.status === 200 && reviewPackage.body.qualityEvidence.listingLanguage === 'ES',
     'exact review package carries the listing-level language contract from Intelligence');
+  check(reviewPackage.body.lifecycle?.mode === 'UAT_APPROVAL_EXPORT_ONLY'
+    && reviewPackage.body.lifecycle?.marketplaceSubmissionAllowed === false
+    && reviewPackage.body.lifecycle?.uatLifecycleAuthorizationHash === uatAuthorization.body.authorizationHash,
+  'exact review package exposes the immutable UAT authority and absolute marketplace-write prohibition');
+  check(reviewPackage.body.content.shopName === '' && reviewPackage.body.content.priceAmount === ''
+    && reviewPackage.body.content.priceCurrency === '',
+  'exact review package exposes commercial gaps instead of fabricating shop identity or price');
+  const incompleteApproval = await jsonAsManager(`/api/listings/${listing.body.listingId}/canonical-review`, 'POST', {
+    decision: 'APPROVED', reason: 'negative missing commercial data probe',
+    expectedListingRevisionId: reviewPackage.body.listingRevisionId,
+    expectedContentHash: reviewPackage.body.contentHash,
+    expectedDependencyHash: reviewPackage.body.dependencyHash,
+    idempotencyKey: key(47)
+  });
+  check(incompleteApproval.status === 409 && incompleteApproval.body.error === 'POLICY_APPROVAL_BLOCKED'
+    && ['SHOP_IDENTITY_REQUIRED','PRICE_AMOUNT_REQUIRED','PRICE_CURRENCY_REQUIRED']
+      .every(code => incompleteApproval.body.details?.blockers?.some(item => item.code === code)),
+  `UAT approval fails closed until all commercial fields exist: ${JSON.stringify(incompleteApproval.body)}`);
   check(reviewPackage.body.qualityEvidence.languageExemptions.includes('Custom Necklace')
     && reviewPackage.body.qualityEvidence.languageExemptions.includes('hija'),
   'language exemptions are server-derived from verified Product Truth identity/name evidence');
   const successorContent = { ...reviewPackage.body.content,
     etsyTitle: 'Custom Necklace para Hija',
+    shopName: 'Luna Atelier Studio',
+    priceAmount: '42.50',
+    priceCurrency: 'USD',
     etsyDescription: `${reviewPackage.body.content.etsyDescription}\n\nQA copy revision.` };
   const successor = await json(`/api/listings/${listing.body.listingId}/revisions`, 'POST', {
     parentRevisionId: reviewPackage.body.listingRevisionId,
@@ -148,6 +225,10 @@ async function main() {
     && successorPackage.body.dependencies.productTruthRevisionId === truth.body.productTruthRevisionId
     && successorPackage.body.dependencies.intelligenceSnapshotId === intelligence.body.intelligenceSnapshotId,
   'successor exact package preserves Product Truth and Intelligence dependencies');
+  check(successorPackage.body.content.shopName === 'Luna Atelier Studio'
+    && successorPackage.body.content.priceAmount === '42.50'
+    && successorPackage.body.content.priceCurrency === 'USD',
+  'controlled QA edit persists commercial fields in the immutable successor');
   const staleQaEdit = await json(`/api/listings/${listing.body.listingId}/revisions`, 'POST', {
     parentRevisionId: reviewPackage.body.listingRevisionId,
     expectedHeadRevisionId: reviewPackage.body.listingRevisionId,
@@ -178,6 +259,47 @@ async function main() {
     check(rejected.status === 409 && rejected.body.error === 'QA_EDIT_DEPENDENCY_DRIFT',
       `${drift.label} rebind attempt must fail against parent-bound dependencies: ${JSON.stringify(rejected)}`);
   }
+  const approval = await jsonAsManager(`/api/listings/${listing.body.listingId}/canonical-review`, 'POST', {
+    decision: 'APPROVED', reason: 'Manager verified exact content, commercial fields and UAT-only boundary',
+    expectedListingRevisionId: successorPackage.body.listingRevisionId,
+    expectedContentHash: successorPackage.body.contentHash,
+    expectedDependencyHash: successorPackage.body.dependencyHash,
+    idempotencyKey: key(42)
+  });
+  check(approval.status === 201 && approval.body.status === 'MANAGER_APPROVED', JSON.stringify(approval.body));
+  const requested = await jsonAsSeller(`/api/listings/${listing.body.listingId}/submission-requests`, 'POST', {
+    notes: 'Request exact UAT audit export only; no marketplace submission.', idempotencyKey: key(43)
+  });
+  check(requested.status === 201 && requested.body.status === 'UAT_EXPORT_REQUESTED'
+    && requested.body.marketplaceSubmissionAllowed === false, JSON.stringify(requested.body));
+  const authorized = await json(`/api/listings/${listing.body.listingId}/submission-authorizations`, 'POST', {
+    submissionRequestId: requested.body.submissionRequestId,
+    notes: 'Owner authorizes only the exact UAT audit export.', idempotencyKey: key(44)
+  });
+  check(authorized.status === 201 && authorized.body.status === 'UAT_EXPORT_AUTHORIZED'
+    && authorized.body.marketplaceSubmissionAllowed === false, JSON.stringify(authorized.body));
+  const exported = await jsonAsSeller(`/api/listings/${listing.body.listingId}/submission-exports`, 'POST', {
+    submissionAuthorizationId: authorized.body.submissionAuthorizationId, idempotencyKey: key(45)
+  });
+  const exportPacket = JSON.parse(exported.body.exportJson || '{}');
+  check(exported.status === 201 && exported.body.status === 'UAT_EXACT_EXPORT_READY'
+    && exportPacket.event === 'UAT_EXACT_AUDIT_EXPORT' && exportPacket.uatOnly === true
+    && exportPacket.marketplaceSubmissionAllowed === false,
+  `UAT export is explicit audit evidence and never submission authority: ${JSON.stringify(exported.body)}`);
+  check(exportPacket.content.shopName === 'Luna Atelier Studio' && exportPacket.content.priceAmount === '42.50'
+    && exportPacket.content.priceCurrency === 'USD', 'exact UAT export preserves immutable commercial fields');
+  check(exportPacket.lifecycleAuthorization?.hash === uatAuthorization.body.authorizationHash
+    && exportPacket.lifecycleAuthorization?.authorizedAt === uatAuthorization.body.authorizedAt,
+  'exact UAT export binds the server-owned authorization hash and timestamp');
+  const forbiddenReport = await jsonAsSeller(`/api/listings/${listing.body.listingId}/operator-submission-reports`, 'POST', {
+    submissionAuthorizationId: authorized.body.submissionAuthorizationId,
+    submissionExportId: exported.body.submissionExportId, manualSubmissionConfirmed: true,
+    externalReference: 'MUST-NOT-WRITE', notes: 'negative UAT marketplace report probe', idempotencyKey: key(46)
+  });
+  check(forbiddenReport.status === 409 && forbiddenReport.body.error === 'UAT_MARKETPLACE_SUBMISSION_FORBIDDEN',
+    `UAT policy must block marketplace report server-side: ${JSON.stringify(forbiddenReport.body)}`);
+  check((await get('SELECT COUNT(*) AS n FROM canonical_operator_submission_reports WHERE listing_id=?',
+    [listing.body.listingId])).n === 0, 'blocked UAT submission path writes no marketplace event');
   const phrase = master.body.payload.keywords.find(item => item.tier !== 'EXCLUDED').phrase;
   const newerMaster = await json(`/api/projects/${projectId}/etsy/master-keywords`, 'POST', {
     patternArtifactId: patterns.body.id, decisions: [{ phrase, tier: 'REVIEW' }], expectedHeadArtifactId: master.body.id,

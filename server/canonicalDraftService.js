@@ -50,14 +50,32 @@ const get = (db, sql, params = []) => new Promise((resolve, reject) => db.get(sq
 
 const COMMON_FIELDS = new Set(['categoryName', 'itemHighlights', 'imagePrompts', 'creativeAssets', 'ppcKeywords']);
 const AMAZON_FIELDS = new Set([...COMMON_FIELDS, 'amazonTitle', 'amazonBullets', 'amazonSearchTerms', 'amazonDescription', 'amazonAPlusPoints']);
-const ETSY_FIELDS = new Set([...COMMON_FIELDS, 'etsyTitle', 'etsyTags', 'etsyDescription', 'etsyTagExplanations', 'etsyTagStatus']);
+const ETSY_FIELDS = new Set([...COMMON_FIELDS, 'etsyTitle', 'etsyTags', 'etsyDescription', 'etsyTagExplanations',
+  'etsyTagStatus', 'shopName', 'priceAmount', 'priceCurrency']);
 
 function exactContent(content, marketplace) {
   if (!content || typeof content !== 'object' || Array.isArray(content)) throw new CanonicalDraftError('INVALID_LISTING_PAYLOAD');
   const allowed = marketplace === 'AMAZON' ? AMAZON_FIELDS : ETSY_FIELDS;
   const unexpected = Object.keys(content).find(key => !allowed.has(key));
   if (unexpected) throw new CanonicalDraftError('UNEXPECTED_LISTING_FIELD', 400, { field: unexpected });
-  return content;
+  const normalized = { ...content };
+  if (marketplace === 'ETSY') {
+    const shopName = String(content.shopName ?? '').normalize('NFC').trim();
+    const priceAmount = String(content.priceAmount ?? '').trim();
+    const priceCurrency = String(content.priceCurrency ?? '').trim().toUpperCase();
+    if (shopName.length > 120 || /[\u0000-\u001f\u007f]/u.test(shopName)) {
+      throw new CanonicalDraftError('INVALID_SHOP_IDENTITY', 422);
+    }
+    if (priceAmount && !/^(?:0|[1-9]\d{0,6})(?:\.\d{1,2})?$/.test(priceAmount)) {
+      throw new CanonicalDraftError('INVALID_PRICE_AMOUNT', 422);
+    }
+    if (priceAmount && Number(priceAmount) <= 0) throw new CanonicalDraftError('INVALID_PRICE_AMOUNT', 422);
+    if (priceCurrency && !/^[A-Z]{3}$/.test(priceCurrency)) throw new CanonicalDraftError('INVALID_PRICE_CURRENCY', 422);
+    normalized.shopName = shopName;
+    normalized.priceAmount = priceAmount;
+    normalized.priceCurrency = priceCurrency;
+  }
+  return normalized;
 }
 
 function factsFromSnapshot(snapshot) {
@@ -100,8 +118,14 @@ function composeTruthOnlyContent(truth, marketplace) {
 }
 
 async function projectPolicyContext(db, scope, projectId) {
-  const row = await get(db, `SELECT p.*,w.seller_account_label,w.site FROM research_projects p
+  const row = await get(db, `SELECT p.*,w.seller_account_label,w.site,
+    u.id AS uat_lifecycle_authorization_id,u.mode AS uat_lifecycle_mode,
+      u.authorization_hash AS uat_lifecycle_authorization_hash,u.authorized_by AS uat_lifecycle_authorized_by,
+      u.authorized_at AS uat_lifecycle_authorized_at
+    FROM research_projects p
     JOIN workspaces w ON w.id=p.workspace_id AND w.tenant_id=p.tenant_id AND w.marketplace=p.marketplace
+    LEFT JOIN project_uat_lifecycle_authorizations u ON u.project_id=p.id AND u.tenant_id=p.tenant_id
+      AND u.workspace_id=p.workspace_id AND u.marketplace=p.marketplace
     WHERE p.id=? AND p.tenant_id=? AND p.workspace_id=? AND p.marketplace=?`,
   [projectId, scope.tenantId, scope.workspaceId, scope.marketplace]);
   if (!row) throw new CanonicalDraftError('PROJECT_NOT_FOUND', 404);
@@ -164,7 +188,28 @@ function stablePolicyContext(project, scope) {
   return Object.freeze({ tenantId: scope.tenantId, workspaceId: String(scope.workspaceId),
     sellerAccountId: project.seller_account_label, marketplace: scope.marketplace, site: project.site,
     locale: project.locale, mediaClass: project.media_class, productTypeId: project.product_type_id,
-    categoryId: project.category_id, productFamilyVersion: project.product_family_version });
+    categoryId: project.category_id, productFamilyVersion: project.product_family_version,
+    uatLifecycleAuthorizationId: project.uat_lifecycle_authorization_id || null,
+    uatLifecycleMode: project.uat_lifecycle_mode || null,
+    uatLifecycleAuthorizationHash: project.uat_lifecycle_authorization_hash || null,
+    uatLifecycleAuthorizedBy: project.uat_lifecycle_authorized_by || null,
+    uatLifecycleAuthorizedAt: project.uat_lifecycle_authorized_at || null });
+}
+
+function uatApprovalExportEnabled(project) {
+  return project?.uat_lifecycle_mode === 'APPROVAL_EXPORT_ONLY'
+    && Number.isInteger(Number(project?.uat_lifecycle_authorization_id))
+    && /^[a-f0-9]{64}$/.test(String(project?.uat_lifecycle_authorization_hash || ''));
+}
+
+function lifecycleCapability(project) {
+  const uat = uatApprovalExportEnabled(project);
+  return Object.freeze({ mode: uat ? 'UAT_APPROVAL_EXPORT_ONLY' : 'MARKETPLACE_POLICY',
+    approvalAllowed: uat, exportAllowed: uat, marketplaceSubmissionAllowed: !uat,
+    uatLifecycleAuthorizationId: uat ? Number(project.uat_lifecycle_authorization_id) : null,
+    uatLifecycleAuthorizationHash: uat ? project.uat_lifecycle_authorization_hash : null,
+    uatLifecycleAuthorizedBy: uat ? Number(project.uat_lifecycle_authorized_by) : null,
+    uatLifecycleAuthorizedAt: uat ? project.uat_lifecycle_authorized_at : null });
 }
 
 function serverPolicyContext(project, scope) {
@@ -185,9 +230,19 @@ async function describePolicyCapability(db, scope, projectId) {
   try {
     const resolution = draftPolicyRegistry.resolve(context, { purpose: 'DRAFT' });
     const eligibility = resolution.contract.approvalEligibility;
+    const lifecycle = lifecycleCapability(project);
+    if (lifecycle.mode === 'UAT_APPROVAL_EXPORT_ONLY') {
+      return Object.freeze({ status: lifecycle.mode, approvalEligible: true, exportEligible: true,
+        marketplaceSubmissionAllowed: false, lifecycle,
+        blockers: Object.freeze([]), policyContractId: resolution.policyContractId,
+        policyContractArtifactHash: resolution.policyContractArtifactHash,
+        checkedAt: resolution.contract.checkedAt, effectiveFrom: resolution.contract.effectiveFrom });
+    }
     return Object.freeze({
       status: eligibility,
       approvalEligible: eligibility === 'APPROVAL_ELIGIBLE',
+      exportEligible: eligibility === 'APPROVAL_ELIGIBLE',
+      marketplaceSubmissionAllowed: eligibility === 'APPROVAL_ELIGIBLE',
       blockers: Object.freeze(eligibility === 'APPROVAL_ELIGIBLE' ? [] : [{ code: 'POLICY_CONTRACT_DRAFT_ONLY' }]),
       policyContractId: resolution.policyContractId,
       policyContractArtifactHash: resolution.policyContractArtifactHash,
@@ -215,24 +270,43 @@ async function validateCanonicalDraft(db, scope, projectId, selectedTruthRevisio
   catch (_) { throw new CanonicalDraftError('IP_GUARD_UNAVAILABLE', 503); }
   if (ip.verdict === 'BLOCK') throw new CanonicalDraftError('IP_CLEARANCE_REQUIRED', 409, { ipHits: ip.hits });
   const policyContext = serverPolicyContext(project, scope);
+  const lifecycle = lifecycleCapability(project);
+  const uatApproval = lifecycle.mode === 'UAT_APPROVAL_EXPORT_ONLY' && ['APPROVAL', 'EXPORT'].includes(purpose);
   let resolution;
   let policy;
   try {
-    resolution = draftPolicyRegistry.resolve(policyContext, { purpose });
+    resolution = draftPolicyRegistry.resolve(policyContext, { purpose: uatApproval ? 'DRAFT' : purpose });
     policy = validatePolicySurfaces(policySurfaces(guarded.listing, scope.marketplace), resolution, policyContext);
   } catch (error) {
     throw new CanonicalDraftError(error.code || 'POLICY_CONTRACT_UNAVAILABLE', 409, error.details);
   }
   if (!policy.policyCompliant) throw new CanonicalDraftError('POLICY_VALIDATION_FAILED', 422, { violations: policy.policyViolations });
-  if (purpose === 'APPROVAL' && !policy.policyContractApprovalEligible) {
-    throw new CanonicalDraftError('POLICY_APPROVAL_BLOCKED', 409, { blockers: policy.policyApprovalBlockers });
+  const approvalBlockers = [...policy.policyApprovalBlockers];
+  if (uatApproval) {
+    for (let index = approvalBlockers.length - 1; index >= 0; index -= 1) {
+      if (approvalBlockers[index]?.code === 'POLICY_CONTRACT_DRAFT_ONLY') approvalBlockers.splice(index, 1);
+    }
+    if (scope.marketplace === 'ETSY') {
+      if (!guarded.listing.shopName) approvalBlockers.push({ code: 'SHOP_IDENTITY_REQUIRED' });
+      if (!guarded.listing.priceAmount) approvalBlockers.push({ code: 'PRICE_AMOUNT_REQUIRED' });
+      if (!guarded.listing.priceCurrency) approvalBlockers.push({ code: 'PRICE_CURRENCY_REQUIRED' });
+    }
   }
+  if (purpose === 'APPROVAL' && approvalBlockers.length) {
+    throw new CanonicalDraftError('POLICY_APPROVAL_BLOCKED', 409, { blockers: approvalBlockers });
+  }
+  const effectivePolicy = Object.freeze({ ...policy,
+    policyApprovalBlockers: Object.freeze(approvalBlockers),
+    policyContractApprovalEligible: purpose === 'APPROVAL' && approvalBlockers.length === 0,
+    policyContractExportEligible: purpose === 'EXPORT' && approvalBlockers.length === 0,
+    uatApprovalExportOnly: uatApproval });
   const policyBinding = bindingOf(resolution, policyContext);
   const policyContextHash = hashBytes(canonicalJson(stablePolicyContext(project, scope)));
   return Object.freeze({
     content: guarded.listing,
     truth,
-    policy,
+    policy: effectivePolicy,
+    lifecycle,
     dependencies: Object.freeze({
       productTruthRevisionId: truth.id,
       productTruthHash: truth.content_hash,
@@ -253,8 +327,9 @@ async function validateCanonicalDraft(db, scope, projectId, selectedTruthRevisio
       productFamilyVersion: project.product_family_version
     }),
     guardAccounting: Object.freeze({ backendExcluded: guarded.backendExcluded, ppcFlagged: guarded.ppcFlagged,
-      ipVerdict: ip.verdict, policyQualityGaps: policy.qualityGaps,
-      approvalBlockers: policy.policyApprovalBlockers })
+      ipVerdict: ip.verdict, policyQualityGaps: effectivePolicy.qualityGaps,
+      approvalBlockers: effectivePolicy.policyApprovalBlockers,
+      lifecycleMode: lifecycle.mode, marketplaceSubmissionAllowed: lifecycle.marketplaceSubmissionAllowed })
   });
 }
 
@@ -330,5 +405,7 @@ module.exports = Object.freeze({
   composeCommerceDraft,
   composeTruthOnlyDraft,
   describePolicyCapability,
+  projectPolicyContext,
+  lifecycleCapability,
   validateCanonicalDraft
 });

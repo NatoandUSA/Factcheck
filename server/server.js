@@ -62,7 +62,7 @@ const { parseProductTruthWorkbook } = require('./productTruthWorkbookParser');
 const { parseListingHtml, parseListingCapture } = require('./productTruthListingParser');
 const { createListingWithRevision, appendListingRevision, canonicalJson, getListingRevision, hashBytes, listListingRevisions } = require('./revisionStore');
 const { assertCanonicalDependenciesCurrent, composeCommerceDraft, composeTruthOnlyDraft,
-  describePolicyCapability, validateCanonicalDraft } = require('./canonicalDraftService');
+  describePolicyCapability, lifecycleCapability, projectPolicyContext, validateCanonicalDraft } = require('./canonicalDraftService');
 const { appendIntelligenceSnapshot, appendResearchImport, appendResearchSnapshot,
   getCommerceState, getIntelligenceSnapshot, previewIntelligence } = require('./commerceSnapshotStore');
 const { recordCanonicalSubmission, requestCanonicalSubmission, reviewCanonicalListing,
@@ -1571,6 +1571,84 @@ app.patch('/api/projects/:id/policy-context', requireAuth(db), requireRole(['OWN
   } catch (error) { rejectRevisionStore(res, error); }
 });
 
+// Owner-scoped, immutable UAT authority. This does not change marketplace
+// policy: it enables only the internal Manager -> Owner -> audit-export path.
+// Marketplace submission/report endpoints remain fail-closed.
+app.post('/api/projects/:id/uat-lifecycle-authorizations', requireAuth(db), requireRole(['OWNER']), async (req, res) => {
+  try {
+    const projectId = Number(req.params.id);
+    if (!Number.isInteger(projectId) || projectId < 1) throw Object.assign(new Error('PROJECT_CONTEXT_REQUIRED'), { code: 'PROJECT_CONTEXT_REQUIRED', status: 400 });
+    const body = requireExactDto(req.body, new Set(['reason', 'idempotencyKey']));
+    assertNoClientPolicyOverrides(body);
+    const reason = String(body.reason || '').trim();
+    const idempotencyKey = String(body.idempotencyKey || '').trim().toLowerCase();
+    if (!reason || reason.length > 1000) throw Object.assign(new Error('UAT_AUTHORIZATION_REASON_REQUIRED'), { code: 'UAT_AUTHORIZATION_REASON_REQUIRED', status: 400 });
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(idempotencyKey)) {
+      throw Object.assign(new Error('INVALID_IDEMPOTENCY_KEY'), { code: 'INVALID_IDEMPOTENCY_KEY', status: 400 });
+    }
+    const scope = revisionScope(req.user);
+    if (scope.marketplace !== 'ETSY') throw Object.assign(new Error('UAT_LIFECYCLE_ETSY_ONLY'), { code: 'UAT_LIFECYCLE_ETSY_ONLY', status: 409 });
+    const runUat = (sql, params = []) => new Promise((resolve, reject) => db.run(sql, params,
+      function complete(error) { error ? reject(error) : resolve({ lastID: this.lastID, changes: this.changes }); }));
+    const getUat = (sql, params = []) => new Promise((resolve, reject) => db.get(sql, params,
+      (error, row) => error ? reject(error) : resolve(row || null)));
+    const requestAuthority = { tenantId: scope.tenantId, workspaceId: scope.workspaceId,
+      marketplace: scope.marketplace, projectId, mode: 'APPROVAL_EXPORT_ONLY', reason, authorizedBy: scope.actorId };
+    const requestHash = hashBytes(canonicalJson({ ...requestAuthority, idempotencyKey }));
+    await runUat('BEGIN IMMEDIATE');
+    try {
+      const project = await getUat(`SELECT id FROM research_projects
+        WHERE id=? AND tenant_id=? AND workspace_id=? AND marketplace=?`,
+      [projectId, scope.tenantId, scope.workspaceId, scope.marketplace]);
+      if (!project) throw Object.assign(new Error('PROJECT_NOT_FOUND'), { code: 'PROJECT_NOT_FOUND', status: 404 });
+      const existing = await getUat(`SELECT * FROM project_uat_lifecycle_authorizations
+        WHERE tenant_id=? AND workspace_id=? AND marketplace=? AND (project_id=? OR idempotency_key=?)`,
+      [scope.tenantId, scope.workspaceId, scope.marketplace, projectId, idempotencyKey]);
+      if (existing) {
+        const persistedAuthority = { tenantId: existing.tenant_id, workspaceId: existing.workspace_id,
+          marketplace: existing.marketplace, projectId: existing.project_id, mode: existing.mode,
+          reason: existing.reason, authorizedBy: existing.authorized_by, authorizedAt: existing.authorized_at };
+        if (existing.project_id !== projectId || existing.authorized_by !== scope.actorId
+          || existing.request_hash !== requestHash
+          || existing.authorization_hash !== hashBytes(canonicalJson(persistedAuthority))) {
+          throw Object.assign(new Error('UAT_AUTHORIZATION_CONFLICT'), { code: 'UAT_AUTHORIZATION_CONFLICT', status: 409 });
+        }
+        await runUat('COMMIT');
+        return res.json({ success: true, projectId, uatLifecycleAuthorizationId: existing.id,
+          mode: existing.mode, authorizationHash: existing.authorization_hash, authorizedAt: existing.authorized_at,
+          replay: true, marketplaceSubmissionAllowed: false });
+      }
+      const listingCount = Number((await getUat(`SELECT COUNT(*) AS total FROM listings
+        WHERE project_id=? AND tenant_id=? AND workspace_id=? AND marketplace=?`,
+      [projectId, scope.tenantId, scope.workspaceId, scope.marketplace]))?.total || 0);
+      if (listingCount > 0) throw Object.assign(new Error('UAT_AUTHORIZATION_REQUIRES_LISTING_FREE_PROJECT'), {
+        code: 'UAT_AUTHORIZATION_REQUIRES_LISTING_FREE_PROJECT', status: 409
+      });
+      const authorizedAt = new Date().toISOString();
+      const authority = { ...requestAuthority, authorizedAt };
+      const authorizationHash = hashBytes(canonicalJson(authority));
+      const inserted = await runUat(`INSERT INTO project_uat_lifecycle_authorizations
+        (tenant_id,workspace_id,marketplace,project_id,mode,reason,authorization_hash,idempotency_key,request_hash,
+          authorized_by,authorized_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`, [scope.tenantId, scope.workspaceId,
+        scope.marketplace, projectId, 'APPROVAL_EXPORT_ONLY', reason, authorizationHash, idempotencyKey, requestHash,
+        scope.actorId, authorizedAt]);
+      await runUat(`INSERT INTO audit_events
+        (tenant_id,actor_id,workspace_id,marketplace,action,resource_type,resource_id,outcome,metadata)
+        VALUES (?,?,?,?,?,?,?,?,?)`, [scope.tenantId, scope.actorId, scope.workspaceId, scope.marketplace,
+        'project:authorize-uat-approval-export', 'research_project', String(projectId), 'SUCCESS',
+        JSON.stringify({ uatLifecycleAuthorizationId: inserted.lastID, mode: 'APPROVAL_EXPORT_ONLY',
+          authorizationHash, authorizedAt, marketplaceSubmissionAllowed: false })]);
+      await runUat('COMMIT');
+      return res.status(201).json({ success: true, projectId, uatLifecycleAuthorizationId: inserted.lastID,
+        mode: 'APPROVAL_EXPORT_ONLY', authorizationHash, authorizedAt, replay: false,
+        marketplaceSubmissionAllowed: false });
+    } catch (error) {
+      try { await runUat('ROLLBACK'); } catch (_) {}
+      throw error;
+    }
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
 // Canonical project-scoped Product Truth. This axis is intentionally
 // independent of the research DAG and exists before any Listing root.
 app.post('/api/projects/:id/product-truth-imports/preview', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']),
@@ -2111,6 +2189,7 @@ app.get('/api/listings/:id/review-package', requireAuth(db), requireRole(['OWNER
     if (!root) throw Object.assign(new Error('LISTING_NOT_FOUND'), { code: 'LISTING_NOT_FOUND', status: 404 });
     const revision = await getListingRevision(db, scope, root.id, root.head_revision_id, root.project_id);
     await assertCanonicalDependenciesCurrent(db, scope, root.project_id, revision.dependencies);
+    const lifecycle = lifecycleCapability(await projectPolicyContext(db, scope, root.project_id));
     const truth = await currentProductTruthRevision(db, scope, root.project_id);
     const intelligence = revision.dependencies.intelligenceSnapshotId == null ? null
       : await getIntelligenceSnapshot(db, scope, root.project_id, revision.dependencies.intelligenceSnapshotId);
@@ -2147,7 +2226,7 @@ app.get('/api/listings/:id/review-package', requireAuth(db), requireRole(['OWNER
       listingRevisionId: revision.id, revisionNumber: revision.revision_number, content: revision.content,
       contentHash: revision.content_hash, dependencies: revision.dependencies,
       dependencyHash: revision.dependency_manifest_hash, validationAccounting: revision.validationAccounting,
-      approvalReadiness, qualityEvidence });
+      approvalReadiness, lifecycle, qualityEvidence });
   } catch (error) { rejectRevisionStore(res, error); }
 });
 
@@ -2185,7 +2264,8 @@ app.post('/api/listings/:id/submission-requests', requireAuth(db), requireRole([
         if (hashBytes(canonicalJson(validated.content)) !== listing.content_hash) {
           throw Object.assign(new Error('REVISION_VALIDATION_DRIFT'), { code: 'REVISION_VALIDATION_DRIFT', status: 409 });
         }
-      }
+      },
+      getLifecycleCapability: async listing => lifecycleCapability(await projectPolicyContext(db, scope, listing.project_id))
     });
     res.status(201).json({ success: true, ...result });
   } catch (error) { rejectRevisionStore(res, error); }
@@ -2199,7 +2279,8 @@ const canonicalApprovalHooks = (db, scope) => ({
     if (hashBytes(canonicalJson(validated.content)) !== listing.content_hash) {
       throw Object.assign(new Error('REVISION_VALIDATION_DRIFT'), { code: 'REVISION_VALIDATION_DRIFT', status: 409 });
     }
-  }
+  },
+  getLifecycleCapability: async listing => lifecycleCapability(await projectPolicyContext(db, scope, listing.project_id))
 });
 
 app.post('/api/listings/:id/submission-authorizations', requireAuth(db), requireRole(['OWNER']), async (req, res) => {
@@ -2243,7 +2324,8 @@ app.post('/api/listings/:id/submission-handoffs', requireAuth(db), requireRole([
         if (hashBytes(canonicalJson(validated.content)) !== listing.content_hash) {
           throw Object.assign(new Error('REVISION_VALIDATION_DRIFT'), { code: 'REVISION_VALIDATION_DRIFT', status: 409 });
         }
-      }
+      },
+      getLifecycleCapability: async listing => lifecycleCapability(await projectPolicyContext(db, scope, listing.project_id))
     });
     res.status(201).json({ success: true, ...result });
   } catch (error) { rejectRevisionStore(res, error); }

@@ -15,7 +15,6 @@ const OWNER_SUBMISSION_AUTHORIZATION_MIGRATION = '015_owner_submission_authoriza
 const COMMERCE_WORKFLOW_ARTIFACT_MIGRATION = '2026-09-12_commerce_workflow_artifacts_v2_upgrade';
 const OPERATOR_REPORTED_SUBMISSION_MIGRATION = '017_operator_reported_submission_lifecycle';
 const PRODUCT_TRUTH_FAMILY_MIGRATION = '018_product_truth_family_profiles';
-const GLOBAL_OPPORTUNITY_DISCOVERY_MIGRATION = '019_global_opportunity_discovery';
 const crypto = require('node:crypto');
 const { canonicalJson, hashBytes } = require('../revisionStore');
 
@@ -1164,19 +1163,6 @@ async function runMigrations(db) {
     try {
       await migrateProductTruthFamilies(db);
       await run(db, 'INSERT INTO schema_migrations(id) VALUES (?)', [PRODUCT_TRUTH_FAMILY_MIGRATION]);
-      await run(db, 'COMMIT');
-    } catch (error) {
-      try { await run(db, 'ROLLBACK'); } catch (_) {}
-      throw error;
-    }
-  }
-  const globalOpportunityApplied = await all(db, 'SELECT id FROM schema_migrations WHERE id=?', [GLOBAL_OPPORTUNITY_DISCOVERY_MIGRATION]);
-  if (globalOpportunityApplied.length === 0) {
-    await run(db, 'BEGIN IMMEDIATE');
-    try {
-      const { migrateGlobalOpportunityDiscovery } = require('./globalOpportunityStore');
-      await migrateGlobalOpportunityDiscovery(db);
-      await run(db, 'INSERT INTO schema_migrations(id) VALUES (?)', [GLOBAL_OPPORTUNITY_DISCOVERY_MIGRATION]);
       await run(db, 'COMMIT');
     } catch (error) {
       try { await run(db, 'ROLLBACK'); } catch (_) {}

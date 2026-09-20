@@ -37,6 +37,12 @@ check('undefined and sparse arrays fail instead of colliding with empty arrays',
   rejects([undefined], 'ARTIFACT_CODEC_UNDEFINED');
   const sparse = new Array(1);
   rejects(sparse, 'ARTIFACT_CODEC_INVALID_ARRAY_SLOT');
+  const boundedSparse = [];
+  boundedSparse.length = 99999;
+  rejects(boundedSparse, 'ARTIFACT_CODEC_INVALID_ARRAY_SLOT');
+  const hostileLength = [];
+  hostileLength.length = 0xffffffff;
+  rejects(hostileLength, 'ARTIFACT_CODEC_NODE_LIMIT');
   rejects({ value: undefined }, 'ARTIFACT_CODEC_UNDEFINED');
   assert.notEqual(canonicalSerializeArtifact([]), canonicalSerializeArtifact([null]));
 });
@@ -114,6 +120,14 @@ check('resource limits fail closed', () => {
     error => error.code === 'ARTIFACT_CODEC_BYTE_LIMIT');
   assert.throws(() => canonicalSerializeArtifact([1, 2], { limits: { maxNodes: 2 } }),
     error => error.code === 'ARTIFACT_CODEC_NODE_LIMIT');
+  assert.throws(() => canonicalSerializeArtifact({ a: 1, b: 2 }, { limits: { maxNodes: 2 } }),
+    error => error.code === 'ARTIFACT_CODEC_NODE_LIMIT');
+  const sparseAtBoundary = [];
+  sparseAtBoundary.length = 3;
+  assert.throws(() => canonicalSerializeArtifact(sparseAtBoundary, { limits: { maxNodes: 3 } }),
+    error => error.code === 'ARTIFACT_CODEC_NODE_LIMIT');
+  assert.throws(() => canonicalSerializeArtifact(sparseAtBoundary, { limits: { maxNodes: 4 } }),
+    error => error.code === 'ARTIFACT_CODEC_INVALID_ARRAY_SLOT');
 });
 
 console.log(`ARTIFACT_CODEC_ACCOUNTING measured=${measured} passed=${measured} failed=0 unexecuted=0`);

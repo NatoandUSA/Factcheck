@@ -74,21 +74,42 @@ function canonicalSerializeArtifact(value, options = {}) {
     active.add(entry);
     try {
       if (Array.isArray(entry)) {
+        const lengthDescriptor = Object.getOwnPropertyDescriptor(entry, 'length');
+        if (!lengthDescriptor || !Object.prototype.hasOwnProperty.call(lengthDescriptor, 'value')
+          || !Number.isSafeInteger(lengthDescriptor.value) || lengthDescriptor.value < 0) {
+          fail('ARTIFACT_CODEC_INVALID_ARRAY_LENGTH', path);
+        }
+        const length = lengthDescriptor.value;
+        // Bound traversal before enumerating keys. In particular, a sparse
+        // array with an attacker-controlled length must not cause O(length)
+        // allocation merely to discover that its slots are missing.
+        if (length > limits.maxNodes - nodes) fail('ARTIFACT_CODEC_NODE_LIMIT', path);
         const ownKeys = Reflect.ownKeys(entry);
         if (ownKeys.some(key => typeof key === 'symbol')) fail('ARTIFACT_CODEC_SYMBOL_KEY', path);
-        const expectedKeys = new Set(['length', ...Array.from({ length: entry.length }, (_, index) => String(index))]);
+        let indexKeyCount = 0;
+        for (const key of ownKeys) {
+          if (key === 'length') continue;
+          if (typeof key !== 'string' || !/^(?:0|[1-9]\d*)$/.test(key)) {
+            fail('ARTIFACT_CODEC_NON_JSON_ARRAY_PROPERTY', path);
+          }
+          const index = Number(key);
+          if (!Number.isSafeInteger(index) || index >= length || String(index) !== key) {
+            fail('ARTIFACT_CODEC_NON_JSON_ARRAY_PROPERTY', path);
+          }
+          indexKeyCount += 1;
+        }
+        if (indexKeyCount !== length || ownKeys.length !== length + 1) {
+          fail('ARTIFACT_CODEC_INVALID_ARRAY_SLOT', path);
+        }
         const items = [];
         emit('[', path);
-        for (let index = 0; index < entry.length; index += 1) {
+        for (let index = 0; index < length; index += 1) {
           const descriptor = Object.getOwnPropertyDescriptor(entry, String(index));
           if (!descriptor || !descriptor.enumerable || !Object.prototype.hasOwnProperty.call(descriptor, 'value')) {
             fail('ARTIFACT_CODEC_INVALID_ARRAY_SLOT', `${path}[${index}]`);
           }
           if (index > 0) emit(',', path);
           items.push(encode(descriptor.value, `${path}[${index}]`, depth + 1));
-        }
-        if (ownKeys.length !== expectedKeys.size || ownKeys.some(key => !expectedKeys.has(key))) {
-          fail('ARTIFACT_CODEC_NON_JSON_ARRAY_PROPERTY', path);
         }
         emit(']', path);
         return `[${items.join(',')}]`;
@@ -97,6 +118,7 @@ function canonicalSerializeArtifact(value, options = {}) {
       const prototype = Object.getPrototypeOf(entry);
       if (prototype !== Object.prototype && prototype !== null) fail('ARTIFACT_CODEC_NON_PLAIN_OBJECT', path);
       const ownKeys = Reflect.ownKeys(entry);
+      if (ownKeys.length > limits.maxNodes - nodes) fail('ARTIFACT_CODEC_NODE_LIMIT', path);
       if (ownKeys.some(key => typeof key === 'symbol')) fail('ARTIFACT_CODEC_SYMBOL_KEY', path);
       const normalized = new Map();
       for (const key of ownKeys) {

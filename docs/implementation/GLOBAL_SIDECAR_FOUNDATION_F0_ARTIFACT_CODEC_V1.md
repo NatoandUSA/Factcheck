@@ -17,7 +17,7 @@ The codec provides deterministic serialization and domain-separated SHA-256 inte
 - dense arrays containing accepted values
 - plain objects (`Object.prototype` or null prototype) with enumerable data properties and string keys
 
-The codec rejects undefined values, sparse arrays, extra array properties, non-finite numbers, negative zero, BigInt, Symbol, functions, accessors, non-enumerable properties, symbol keys, cycles, Proxy wrappers, non-plain objects and prototype-pollution keys. Proxy detection uses the Node runtime intrinsic before any prototype/key/descriptor traversal, so caller-controlled traps are not executed as serialization authority.
+The codec rejects undefined values, sparse arrays, extra array properties, non-finite numbers, negative zero, BigInt, Symbol, functions, accessors, non-enumerable properties, symbol keys, cycles, Proxy wrappers, non-plain objects and prototype-pollution keys. Proxy detection uses the Node runtime intrinsic before any prototype/key/descriptor traversal, so caller-controlled traps are not executed as serialization authority. Array traversal is bounded by the remaining node budget before key enumeration; density is checked from bounded own keys without materializing an expected-key collection from the declared array length. Plain-object key fan-out is likewise checked against the remaining node budget before descriptor normalization and sorting.
 
 ## Identity contract
 

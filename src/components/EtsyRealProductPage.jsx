@@ -29,6 +29,14 @@ export default function EtsyRealProductPage({ listing, onShowToast }) {
     );
   }
 
+  const commercialPrice = (() => {
+    const amount = Number(listing.priceAmount);
+    const currency = String(listing.priceCurrency || '').trim().toUpperCase();
+    if (!Number.isFinite(amount) || amount <= 0 || !/^[A-Z]{3}$/.test(currency)) return null;
+    try { return new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(amount); }
+    catch { return `${currency} ${listing.priceAmount}`; }
+  })();
+
   const exactPrompts = listing?.imagePrompts?.prompts;
   const etsyPrompts = Array.isArray(exactPrompts) ? exactPrompts.map(item => ({ ...item,
     slot: item.purpose || item.id, dimensions: item.aspectRatio, purpose: item.ready === false
@@ -186,8 +194,8 @@ export default function EtsyRealProductPage({ listing, onShowToast }) {
             {/* Price & Cart Urgency */}
             <div style={{ borderBottom: '1px solid #e1e3df', paddingBottom: '12px' }}>
               <div style={{ display: 'flex', alignItems: 'baseline', gap: '8px' }}>
-                <span style={{ fontSize: '0.9rem', color: '#64748b', fontStyle: 'italic' }}>
-                  Price: [NOT SET — PENDING ETSY LISTING EXPORT]
+                <span style={{ fontSize: commercialPrice ? '1.35rem' : '0.9rem', color: commercialPrice ? '#222' : '#64748b', fontStyle: commercialPrice ? 'normal' : 'italic', fontWeight: commercialPrice ? 700 : 400 }}>
+                  {commercialPrice || 'Price: [NOT SET — MANAGER QA REQUIRED]'}
                 </span>
               </div>
             </div>

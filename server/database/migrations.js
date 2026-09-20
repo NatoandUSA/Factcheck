@@ -15,6 +15,7 @@ const OWNER_SUBMISSION_AUTHORIZATION_MIGRATION = '015_owner_submission_authoriza
 const COMMERCE_WORKFLOW_ARTIFACT_MIGRATION = '2026-09-12_commerce_workflow_artifacts_v2_upgrade';
 const OPERATOR_REPORTED_SUBMISSION_MIGRATION = '017_operator_reported_submission_lifecycle';
 const PRODUCT_TRUTH_FAMILY_MIGRATION = '018_product_truth_family_profiles';
+const UAT_APPROVAL_EXPORT_MIGRATION = '019_uat_approval_export_authorizations';
 const crypto = require('node:crypto');
 const { canonicalJson, hashBytes } = require('../revisionStore');
 
@@ -711,6 +712,31 @@ async function migrateOperatorReportedSubmissionLifecycle(db) {
   }
 }
 
+async function migrateUatApprovalExportAuthorizations(db) {
+  await run(db, `CREATE TABLE IF NOT EXISTS project_uat_lifecycle_authorizations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id TEXT NOT NULL, workspace_id INTEGER NOT NULL,
+    marketplace TEXT NOT NULL CHECK(marketplace='ETSY'),
+    project_id INTEGER NOT NULL REFERENCES research_projects(id),
+    mode TEXT NOT NULL CHECK(mode='APPROVAL_EXPORT_ONLY'),
+    reason TEXT NOT NULL CHECK(length(reason) BETWEEN 1 AND 1000),
+    authorization_hash TEXT NOT NULL CHECK(length(authorization_hash)=64),
+    idempotency_key TEXT NOT NULL,
+    request_hash TEXT NOT NULL CHECK(length(request_hash)=64),
+    authorized_by INTEGER NOT NULL,
+    authorized_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id,workspace_id,marketplace,project_id),
+    UNIQUE(tenant_id,workspace_id,marketplace,idempotency_key)
+  )`);
+  await run(db, `CREATE INDEX IF NOT EXISTS idx_project_uat_lifecycle_scope
+    ON project_uat_lifecycle_authorizations(tenant_id,workspace_id,marketplace,project_id,id)`);
+  for (const operation of ['update', 'delete']) {
+    await run(db, `CREATE TRIGGER IF NOT EXISTS project_uat_lifecycle_authorizations_immutable_${operation}
+      BEFORE ${operation.toUpperCase()} ON project_uat_lifecycle_authorizations
+      BEGIN SELECT RAISE(ABORT,'IMMUTABLE_UAT_LIFECYCLE_AUTHORIZATION'); END`);
+  }
+}
+
 const WORKFLOW_V1_COLUMNS = Object.freeze([
   'id','tenant_id','workspace_id','marketplace','project_id','kind','revision_number','parent_revision_id',
   'dependency_manifest_json','dependency_manifest_hash','payload_json','payload_hash','accounting_json','accounting_hash',
@@ -1169,6 +1195,18 @@ async function runMigrations(db) {
       throw error;
     }
   }
+  const uatApprovalExportApplied = await all(db, 'SELECT id FROM schema_migrations WHERE id=?', [UAT_APPROVAL_EXPORT_MIGRATION]);
+  if (uatApprovalExportApplied.length === 0) {
+    await run(db, 'BEGIN IMMEDIATE');
+    try {
+      await migrateUatApprovalExportAuthorizations(db);
+      await run(db, 'INSERT INTO schema_migrations(id) VALUES (?)', [UAT_APPROVAL_EXPORT_MIGRATION]);
+      await run(db, 'COMMIT');
+    } catch (error) {
+      try { await run(db, 'ROLLBACK'); } catch (_) {}
+      throw error;
+    }
+  }
 }
 
 async function migrateAgentWorkspaceScope(db) {
@@ -1266,9 +1304,11 @@ module.exports = {
   COMMERCE_WORKFLOW_ARTIFACT_MIGRATION,
   OPERATOR_REPORTED_SUBMISSION_MIGRATION,
   PRODUCT_TRUTH_FAMILY_MIGRATION,
+  UAT_APPROVAL_EXPORT_MIGRATION,
   migrateOwnerSubmissionAuthorization,
   migrateCommerceWorkflowArtifacts,
   migrateOperatorReportedSubmissionLifecycle,
+  migrateUatApprovalExportAuthorizations,
   AGENT_WORKSPACE_SCOPE_MIGRATION,
   PROJECT_SCOPED_EVIDENCE_MIGRATION,
   CANONICAL_DAG_MIGRATION,

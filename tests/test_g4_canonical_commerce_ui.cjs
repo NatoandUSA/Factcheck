@@ -205,7 +205,8 @@ const assert = require('assert');
     content: { etsyTitle: 'Personalizado Fleece Blanket',
       etsyTags: ['regalo hermana'], etsyTagExplanations: [], etsyTagStatus: { code: 'TAG_SHORTAGE', missingCount: 12 },
       etsyDescription: 'Regalo personalizado para hermana.', itemHighlights: 'Fleece Blanket',
-      categoryName: 'Blankets', imagePrompts: { prompts: [] } } };
+      categoryName: 'Blankets', shopName: 'Luna Atelier Studio', priceAmount: '39.95', priceCurrency: 'USD',
+      imagePrompts: { prompts: [] } } };
   await act(async () => { root.render(React.createElement(AuthProvider, null,
     React.createElement(Workflow, { activeProject: { id: 4, state: 'EVIDENCE_INTAKE' }, marketplace: 'ETSY' }))); });
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
@@ -240,6 +241,10 @@ const assert = require('assert');
   const qaPanel = document.querySelector('[data-testid="qa-edit-7"]');
   check(qaPanel && qaPanel.textContent.includes('Product Truth #10') && qaPanel.textContent.includes('Intelligence #5'),
     'QA edit must visibly preserve exact immutable upstream dependencies');
+  check([...qaPanel.querySelectorAll('input')].some(field => field.value === 'Luna Atelier Studio')
+    && [...qaPanel.querySelectorAll('input')].some(field => field.value === '39.95')
+    && [...qaPanel.querySelectorAll('input')].some(field => field.value === 'USD'),
+  'QA edit must expose shop identity and price/currency from the exact immutable revision');
   const qaTitle = [...qaPanel.querySelectorAll('textarea')].find(field => field.value === 'Personalizado Fleece Blanket');
   const setTextareaValue = Object.getOwnPropertyDescriptor(dom.window.HTMLTextAreaElement.prototype, 'value').set;
   await act(async () => { setTextareaValue.call(qaTitle, 'Manta Personalizada para Hermana');
@@ -255,6 +260,9 @@ const assert = require('assert');
   `QA edit POST must bind parent/head and preserve exact Product Truth/Intelligence dependencies: ${JSON.stringify(qaRevisionBody)}`);
   check(qaRevisionBody?.content.etsyTitle === 'Manta Personalizada para Hermana',
     'controlled QA edit must submit the edited copy through the immutable revision endpoint');
+  check(qaRevisionBody?.content.shopName === 'Luna Atelier Studio' && qaRevisionBody?.content.priceAmount === '39.95'
+    && qaRevisionBody?.content.priceCurrency === 'USD',
+  'controlled QA edit must preserve commercial fields in the immutable successor payload');
 
   await act(async () => root.unmount());
 
@@ -280,11 +288,15 @@ const assert = require('assert');
     ready: index < 7, missingInputs: index < 7 ? [] : ['packaging'] }));
   await act(async () => { root3.render(React.createElement(EtsyPreview, { listing: {
     etsyTitle: 'Exact Etsy Preview', etsyTags: ['exact tag'], etsyDescription: 'Exact description',
+    shopName: 'Luna Atelier Studio', priceAmount: '42.50', priceCurrency: 'USD',
     imagePrompts: { prompts: exactPrompts }
   } })); });
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
   check(document.body.textContent.includes('8 photo prompts'),
     'Etsy exact Preview must render the canonical eight-prompt artifact rather than a legacy generated count');
+  check(document.body.textContent.includes('Luna Atelier Studio') && !document.body.textContent.includes('[Shop Name: Unset]')
+    && !document.body.textContent.includes('NOT SET'),
+  'Etsy exact Preview must render immutable shop identity and formatted price instead of placeholders');
   const promptTab = [...document.querySelectorAll('button')].find(button => button.textContent.includes('Image plan'));
   await act(async () => { promptTab.click(); });
   check(document.body.textContent.includes('Bộ 8 Prompt Ảnh Etsy')

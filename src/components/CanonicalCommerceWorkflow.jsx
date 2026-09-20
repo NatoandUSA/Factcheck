@@ -181,6 +181,7 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
   const [policyContext, setPolicyContext] = useState(null);
   const [policyClassification, setPolicyClassification] = useState('UNIVERSAL_PRODUCT');
   const [policyLocale, setPolicyLocale] = useState('en-US');
+  const [uatAuthorizationReason, setUatAuthorizationReason] = useState('Full Etsy Business UAT: Manager review, Owner authorization and audit export only; marketplace submission prohibited.');
   const [executionLog, setExecutionLog] = useState([]);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
@@ -680,6 +681,16 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
     notify('Đã liên kết phân loại/policy cho project cũ; giữ nguyên toàn bộ Product Truth và research.');
   });
 
+  const enableUatApprovalExport = () => run('uat-approval-export-authority', async () => {
+    const reason = uatAuthorizationReason.trim();
+    if (!reason) throw new Error('Owner phải ghi rõ phạm vi UAT trước khi cấp quyền.');
+    const result = await api(`/api/projects/${projectId}/uat-lifecycle-authorizations`, jsonOptions({
+      reason, idempotencyKey: uuid()
+    }));
+    notify('Đã bật UAT approval/export-only. Marketplace submission vẫn bị cấm tuyệt đối.');
+    await refresh(); return result;
+  });
+
   const updateDraft = (key, value) => setDraft(previous => ({ ...previous, content: { ...previous.content, [key]: value } }));
   const updateEtsyTags = value => setDraft(previous => {
     const etsyTags = value.split('\n').map(item => item.trim()).filter(Boolean).slice(0, 13);
@@ -845,9 +856,13 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
     setExactExports(previous => ({ ...previous, [item.id]: result }));
     const blob = new Blob([result.exportJson], { type: 'application/json' });
     const url = URL.createObjectURL(blob); const anchor = document.createElement('a');
-    anchor.href = url; anchor.download = `omniseller-${marketplace.toLowerCase()}-listing-${item.id}-${result.exportHash.slice(0, 12)}.json`;
+    const exportPurpose = result.uatOnly ? 'uat-audit' : 'submission';
+    anchor.href = url; anchor.download = `omniseller-${marketplace.toLowerCase()}-${exportPurpose}-listing-${item.id}-${result.exportHash.slice(0, 12)}.json`;
     document.body.appendChild(anchor); anchor.click(); anchor.remove(); URL.revokeObjectURL(url);
-    notify(`Đã tải exact export ${result.exportHash}; hãy submit thủ công ngoài OmniSeller.`); await refresh(); return result;
+    notify(result.uatOnly
+      ? `Đã tải exact UAT audit export ${result.exportHash}; file này tuyệt đối không cấp quyền submit/publish.`
+      : `Đã tải exact export ${result.exportHash}; hãy submit thủ công ngoài OmniSeller.`);
+    await refresh(); return result;
   });
 
   const reportOperatorSubmission = item => run('report-manual-submission', async () => {
@@ -899,6 +914,8 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
     .every(field => String(policyContext?.[field] || '').trim());
   const policyCapability = state?.policyCapability || null;
   const policyAllowsApproval = policyCapability?.approvalEligible === true;
+  const uatApprovalExportOnly = policyCapability?.status === 'UAT_APPROVAL_EXPORT_ONLY';
+  const marketplaceSubmissionAllowed = policyCapability?.marketplaceSubmissionAllowed === true;
   const policyCapabilityCode = policyCapability?.blockers?.[0]?.code
     || (policyCapability ? 'POLICY_APPROVAL_BLOCKED' : 'POLICY_CAPABILITY_LOADING');
   const latestListing = listingQueue[0];
@@ -924,6 +941,8 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
             ? `Trial chỉ tạo draft: approval/export bị khóa (${policyCapabilityCode})`
           : latestListing?.status === 'OPERATOR_REPORTED_SUBMITTED'
             ? 'Đã ghi nhận operator submit thủ công; theo dõi marketplace live ở phase sau'
+          : latestListing?.status === 'MANAGER_APPROVED' && latestListing.submissionExportId && !marketplaceSubmissionAllowed
+            ? 'UAT approval/export đã hoàn tất; marketplace submission/publish vẫn bị cấm'
           : latestListing?.status === 'MANAGER_APPROVED' && latestListing.submissionExportId
             ? (isSeller ? 'Bước 5D: submit thủ công ngoài OmniSeller rồi ghi OPERATOR_REPORTED_SUBMITTED' : 'Chờ Seller/operator submit thủ công exact export')
           : latestListing?.status === 'MANAGER_APPROVED' && latestListing.submissionAuthorizationId
@@ -942,7 +961,8 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
     { number: 2, label: 'Product Truth', done: truthReady },
     { number: 3, label: 'Keyword Intelligence', done: intelligenceReady },
     { number: 4, label: 'Draft & Creative', done: Boolean(listing) },
-    { number: 5, label: 'QA & Handoff', done: latestListing?.status === 'OPERATOR_REPORTED_SUBMITTED' }
+    { number: 5, label: 'QA & Handoff', done: latestListing?.status === 'OPERATOR_REPORTED_SUBMITTED'
+      || (uatApprovalExportOnly && Boolean(latestListing?.submissionExportId)) }
   ];
 
   const previewGrid = (entries, testId) => entries.length > 0 && <div data-testid={testId} style={{ display: 'grid', gap: 8, marginTop: 10 }}>
@@ -971,9 +991,14 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
       <div data-testid="policy-capability-banner" role="status" style={{ marginTop: 9, padding: '10px 12px', borderRadius: 9,
         background: policyAllowsApproval ? '#f0fdf4' : '#fff7ed', border: `2px solid ${policyAllowsApproval ? '#86efac' : '#fb923c'}`,
         color: policyAllowsApproval ? '#166534' : '#9a3412', fontWeight: 900 }}>
-        Policy capability: {policyAllowsApproval ? 'APPROVAL_ELIGIBLE' : (policyCapability?.status || 'ĐANG TẢI')}
+        Policy capability: {uatApprovalExportOnly ? 'UAT_APPROVAL_EXPORT_ONLY' : policyAllowsApproval ? 'APPROVAL_ELIGIBLE' : (policyCapability?.status || 'ĐANG TẢI')}
+        {uatApprovalExportOnly && <div style={{ marginTop: 4, fontSize: '.76rem' }}>Manager review, Owner authorization và exact audit export được phép. Marketplace submission/publish bị cấm.</div>}
         {!policyAllowsApproval && <div style={{ marginTop: 4, fontSize: '.76rem', fontWeight: 700 }}>
           Trial hiện chỉ được tạo và lưu draft. Manager approval, Owner authorization và exact export bị vô hiệu hóa — {policyCapabilityCode}.
+        </div>}
+        {!policyAllowsApproval && isOwner && marketplace === 'ETSY' && listingQueue.length === 0 && <div style={{ marginTop: 8, display: 'grid', gap: 6 }}>
+          <label>Phạm vi UAT approval/export-only<textarea rows={2} value={uatAuthorizationReason} onChange={event => setUatAuthorizationReason(event.target.value)} /></label>
+          <ActionButton accent="#7c3aed" disabled={busy || !uatAuthorizationReason.trim()} onClick={enableUatApprovalExport}>Owner bật UAT approval/export-only</ActionButton>
         </div>}
       </div>
       <div data-testid="canonical-next-action" style={{ marginTop: 10, padding: '10px 12px', borderRadius: 9, background: '#ecfeff', border: '1px solid #67e8f9', color: '#164e63', fontWeight: 800 }}>
@@ -1411,6 +1436,11 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
           <label><b>Description</b><textarea value={listing.etsyDescription || ''} onChange={event => updateDraft('etsyDescription', event.target.value)} rows={7} style={{ width: '100%' }} /></label>
           <label><b>Item Highlights</b><textarea value={listing.itemHighlights || ''} onChange={event => updateDraft('itemHighlights', event.target.value)} rows={3} style={{ width: '100%' }} /></label>
           <label><b>Category</b><input value={listing.categoryName || ''} onChange={event => updateDraft('categoryName', event.target.value)} style={{ width: '100%' }} /></label>
+          <label><b>Shop identity</b><input value={listing.shopName || ''} onChange={event => updateDraft('shopName', event.target.value)} placeholder="Exact Etsy shop display name" style={{ width: '100%' }} /></label>
+          <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 8 }}>
+            <label><b>Price amount</b><input inputMode="decimal" value={listing.priceAmount || ''} onChange={event => updateDraft('priceAmount', event.target.value)} placeholder="39.99" /></label>
+            <label><b>Currency</b><input value={listing.priceCurrency || ''} onChange={event => updateDraft('priceCurrency', event.target.value.toUpperCase())} placeholder="USD" maxLength={3} /></label>
+          </div>
         </>}
         <div><b>Bộ prompt ảnh bên ngoài ({Array.isArray(prompts) ? prompts.length : 0})</b>
           {Array.isArray(prompts) && prompts.map((prompt, index) => <div key={prompt.id || prompt.slot || index} style={{ border: '1px solid #e2e8f0', borderRadius: 8, padding: 9, marginTop: 7, background: '#fff' }}>
@@ -1423,8 +1453,14 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
       </div>}
     </Step>
 
-    <Step number="5" title="Manager QA → Owner authorization → exact export → báo cáo submit thủ công" accent={accent} done={listingQueue.some(item => item.status === 'OPERATOR_REPORTED_SUBMITTED')}>
-      <p style={{ marginTop: 0, color: '#475569' }}>Manager phải mở và đọc exact package trước khi duyệt. Chuỗi bắt buộc: Seller yêu cầu → Owner authorize exact package → Seller tải exact export → Seller/operator submit thủ công ngoài OmniSeller → <b>OPERATOR_REPORTED_SUBMITTED</b>. Trạng thái cuối không có nghĩa marketplace đã accept/live.</p>
+    <Step number="5" title={uatApprovalExportOnly
+      ? 'Manager QA → Owner UAT authorization → exact audit export — tuyệt đối không publish'
+      : 'Manager QA → Owner authorization → exact export → báo cáo submit thủ công'} accent={accent}
+      done={listingQueue.some(item => item.status === 'OPERATOR_REPORTED_SUBMITTED'
+        || (uatApprovalExportOnly && item.submissionExportId))}>
+      <p style={{ marginTop: 0, color: '#475569' }}>{uatApprovalExportOnly
+        ? <>Manager phải mở exact package trước khi duyệt. Chuỗi UAT: Seller yêu cầu → Owner authorize exact package → Seller tải exact audit export. <b>Không có bước submit/report marketplace; server cấm tuyệt đối.</b></>
+        : <>Manager phải mở và đọc exact package trước khi duyệt. Chuỗi bắt buộc: Seller yêu cầu → Owner authorize exact package → Seller tải exact export → Seller/operator submit thủ công ngoài OmniSeller → <b>OPERATOR_REPORTED_SUBMITTED</b>. Trạng thái cuối không có nghĩa marketplace đã accept/live.</>}</p>
       {isManager && <label style={{ display: 'grid', gap: 4, marginBottom: 10, fontWeight: 800, fontSize: '.78rem' }}>Lý do review
         <textarea rows={2} value={reviewReason} onChange={event => setReviewReason(event.target.value)} placeholder="Đã kiểm Product Truth, claim, IP, policy và chất lượng copy..." />
       </label>}
@@ -1452,6 +1488,11 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
               <label><CapacityLabel label="Etsy Title" used={characterCount(qaEdits[item.id].content.etsyTitle)} limit={140} utilizationTarget={false} authority="copy revision; Product Truth không đổi" /><textarea value={qaEdits[item.id].content.etsyTitle || ''} onChange={event => updateQaEdit(item.id, 'etsyTitle', event.target.value)} rows={2} style={{ width: '100%' }} /></label>
               <label><b>Tối đa 13 tags — mỗi dòng một tag</b><textarea value={(qaEdits[item.id].content.etsyTags || []).join('\n')} onChange={event => updateQaEtsyTags(item.id, event.target.value)} rows={7} style={{ width: '100%' }} /></label>
               <label><b>Description</b><textarea value={qaEdits[item.id].content.etsyDescription || ''} onChange={event => updateQaEdit(item.id, 'etsyDescription', event.target.value)} rows={8} style={{ width: '100%' }} /></label>
+              <label><b>Shop identity</b><input value={qaEdits[item.id].content.shopName || ''} onChange={event => updateQaEdit(item.id, 'shopName', event.target.value)} style={{ width: '100%' }} /></label>
+              <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 8 }}>
+                <label><b>Price amount</b><input inputMode="decimal" value={qaEdits[item.id].content.priceAmount || ''} onChange={event => updateQaEdit(item.id, 'priceAmount', event.target.value)} /></label>
+                <label><b>Currency</b><input value={qaEdits[item.id].content.priceCurrency || ''} onChange={event => updateQaEdit(item.id, 'priceCurrency', event.target.value.toUpperCase())} maxLength={3} /></label>
+              </div>
             </> : <>
               <label><CapacityLabel label="Amazon Title" used={characterCount(qaEdits[item.id].content.amazonTitle)} limit={AMAZON_SURFACE_LIMITS.title} /><textarea value={qaEdits[item.id].content.amazonTitle || ''} onChange={event => updateQaEdit(item.id, 'amazonTitle', event.target.value)} rows={2} style={{ width: '100%' }} /></label>
               <label><b>Item Highlights</b><textarea value={qaEdits[item.id].content.itemHighlights || ''} onChange={event => updateQaEdit(item.id, 'itemHighlights', event.target.value)} rows={3} style={{ width: '100%' }} /></label>
@@ -1472,20 +1513,21 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
         </div>}
         {item.status === 'MANAGER_APPROVED' && isSeller && !item.submissionRequestId && <div style={{ marginTop: 9, display: 'grid', gap: 6 }}>
           <label><b>Ghi chú gửi Owner</b><textarea rows={2} value={submissionInput(item.id).requestNotes || ''} onChange={event => setSubmissionInput(item.id, 'requestNotes', event.target.value)} /></label>
-          <ActionButton accent="#7c3aed" disabled={!policyAllowsApproval || busy || !String(submissionInput(item.id).requestNotes || '').trim()} onClick={() => requestSubmission(item)}>Seller yêu cầu authorization</ActionButton>
+          <ActionButton accent="#7c3aed" disabled={!policyAllowsApproval || busy || !String(submissionInput(item.id).requestNotes || '').trim()} onClick={() => requestSubmission(item)}>{uatApprovalExportOnly ? 'Seller yêu cầu UAT export authorization' : 'Seller yêu cầu authorization'}</ActionButton>
         </div>}
         {item.status === 'MANAGER_APPROVED' && item.submissionRequestId && !item.submissionAuthorizationId && <div style={{ marginTop: 9, display: 'grid', gap: 6 }}>
-          <div><b>SUBMISSION_REQUESTED</b> · package {item.submissionPackageHash}</div>
+          <div><b>{uatApprovalExportOnly ? 'UAT_EXPORT_REQUESTED' : 'SUBMISSION_REQUESTED'}</b> · package {item.submissionPackageHash}</div>
           {isOwner ? <><label><b>Lý do Owner authorize</b><textarea rows={2} value={submissionInput(item.id).authorizationNotes || ''} onChange={event => setSubmissionInput(item.id, 'authorizationNotes', event.target.value)} /></label>
-            <ActionButton accent="#7c3aed" disabled={!policyAllowsApproval || busy || !String(submissionInput(item.id).authorizationNotes || '').trim()} onClick={() => authorizeSubmission(item)}>Owner authorize exact package</ActionButton></>
+            <ActionButton accent="#7c3aed" disabled={!policyAllowsApproval || busy || !String(submissionInput(item.id).authorizationNotes || '').trim()} onClick={() => authorizeSubmission(item)}>{uatApprovalExportOnly ? 'Owner authorize UAT audit export' : 'Owner authorize exact package'}</ActionButton></>
             : <small>Đang chờ Owner authorize exact package. Không được submit trước bước này.</small>}
         </div>}
         {item.status === 'MANAGER_APPROVED' && item.submissionAuthorizationId && !item.submissionExportId && <div style={{ marginTop: 9, display: 'grid', gap: 6 }}>
-          <div><b>SUBMISSION_AUTHORIZED</b> · authorization #{item.submissionAuthorizationId}</div>
-          {isSeller ? <ActionButton accent="#0369a1" disabled={!policyAllowsApproval || busy} onClick={() => exportExactPackage(item)}>Tải exact JSON để submit thủ công</ActionButton>
+          <div><b>{uatApprovalExportOnly ? 'UAT_EXPORT_AUTHORIZED' : 'SUBMISSION_AUTHORIZED'}</b> · authorization #{item.submissionAuthorizationId}</div>
+          {isSeller ? <ActionButton accent="#0369a1" disabled={!policyAllowsApproval || busy} onClick={() => exportExactPackage(item)}>{uatApprovalExportOnly ? 'Tải exact UAT audit JSON — không submit' : 'Tải exact JSON để submit thủ công'}</ActionButton>
             : <small>Owner đã authorize. Seller đăng nhập để tải exact export.</small>}
         </div>}
-        {item.status === 'MANAGER_APPROVED' && item.submissionExportId && <div style={{ marginTop: 9, display: 'grid', gap: 6 }}>
+        {item.status === 'MANAGER_APPROVED' && item.submissionExportId && !marketplaceSubmissionAllowed && <div style={{ marginTop: 9, padding: 8, background: '#fef3c7', color: '#92400e', borderRadius: 8 }}><b>UAT_EXACT_EXPORT_READY</b><br />Marketplace submission/publish bị cấm bởi UAT_APPROVAL_EXPORT_ONLY.</div>}
+        {item.status === 'MANAGER_APPROVED' && item.submissionExportId && marketplaceSubmissionAllowed && <div style={{ marginTop: 9, display: 'grid', gap: 6 }}>
           <div><b>EXACT_EXPORT_READY</b> · export #{item.submissionExportId} · hash {item.submissionExportHash}</div>
           {isSeller ? <><label><b>External reference / mã thao tác trên sàn</b><input value={submissionInput(item.id).externalReference || ''} onChange={event => setSubmissionInput(item.id, 'externalReference', event.target.value)} /></label>
             <label><b>Ghi chú thao tác</b><textarea rows={2} value={submissionInput(item.id).operatorNotes || ''} onChange={event => setSubmissionInput(item.id, 'operatorNotes', event.target.value)} /></label>

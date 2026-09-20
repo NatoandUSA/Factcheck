@@ -1015,58 +1015,125 @@ app.get('/api/owner/users', requireAuth(db), requireRole(['OWNER']), (req, res) 
 
 // POST /api/owner/users - Owner creates staff/testing user
 app.post('/api/owner/users', requireAuth(db), requireRole(['OWNER']), async (req, res) => {
-  const { email, password, name, role = 'SELLER' } = req.body || {};
-
-  if (!email || !password || !name) {
-    return res.status(400).json({ success: false, error: 'MISSING_FIELDS', message: 'Email, password, and name are required.' });
-  }
-
-  const normalizedEmail = String(email).trim().toLowerCase();
-  const cleanName = String(name).trim();
-  const targetRole = (role === 'MANAGER') ? 'MANAGER' : 'SELLER';
-
-  if (normalizedEmail.length < 3 || normalizedEmail.length > 255 || password.length < 6 || password.length > 128) {
-    return res.status(400).json({ success: false, error: 'INVALID_LENGTH', message: 'Email 3-255 chars, password 6-128 chars.' });
-  }
-
   try {
+    const body = requireExactDto(req.body, new Set(['email', 'password', 'name', 'role']));
+    const { email, password, name, role = 'SELLER' } = body;
+    if (typeof email !== 'string' || typeof password !== 'string' || typeof name !== 'string') {
+      return res.status(400).json({ success: false, error: 'MISSING_FIELDS', message: 'Email, password, and name are required.' });
+    }
+    const normalizedEmail = email.trim().toLowerCase();
+    const cleanName = name.trim();
+    const targetRole = String(role).trim().toUpperCase();
+    if (!['SELLER', 'MANAGER'].includes(targetRole)) {
+      return res.status(400).json({ success: false, error: 'INVALID_STAFF_ROLE', message: 'Role must be SELLER or MANAGER.' });
+    }
+    if (!cleanName || cleanName.length > 160 || normalizedEmail.length < 3 || normalizedEmail.length > 255
+      || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)
+      || password.length < 12 || password.length > 128) {
+      return res.status(400).json({ success: false, error: 'INVALID_STAFF_ACCOUNT_FIELDS',
+        message: 'Use a valid email, a 1-160 character name, and a 12-128 character password.' });
+    }
     const passwordHash = await hashPassword(password);
-
-    db.run(
-      `INSERT INTO users (email, password_hash, role, name, tenant_id) VALUES (?, ?, ?, ?, ?)`,
-      [normalizedEmail, passwordHash, targetRole, cleanName, req.user.tenantId],
-      function(userErr) {
-        if (userErr) {
-          if (userErr.message.includes('UNIQUE')) {
-            return res.status(400).json({ success: false, error: 'EMAIL_EXISTS', message: 'Email này đã tồn tại trên hệ thống.' });
-          }
-          return res.status(500).json({ success: false, error: userErr.message });
-        }
-        const newUserId = this.lastID;
-
-        db.run(
-          `INSERT INTO workspace_memberships (user_id, workspace_id, role, status) VALUES (?, ?, ?, 'ACTIVE')`,
-          [newUserId, req.user.workspaceId, targetRole],
-          function(wmErr) {
-            if (wmErr) return res.status(500).json({ success: false, error: wmErr.message });
-
-            res.json({
-              success: true,
-              user: {
-                id: newUserId,
-                email: normalizedEmail,
-                name: cleanName,
-                role: targetRole,
-                workspaceId: req.user.workspaceId
-              }
-            });
-          }
-        );
+    const rollback = (error, status = 500, code = 'STAFF_ACCOUNT_CREATE_FAILED') => db.run('ROLLBACK', () => {
+      if (String(error?.message || '').includes('UNIQUE')) {
+        return res.status(409).json({ success: false, error: 'EMAIL_EXISTS', message: 'Email này đã tồn tại trên hệ thống.' });
       }
-    );
+      return res.status(status).json({ success: false, error: code });
+    });
+    db.serialize(() => db.run('BEGIN IMMEDIATE', beginError => {
+      if (beginError) return res.status(503).json({ success: false, error: 'STAFF_ACCOUNT_CREATE_UNAVAILABLE' });
+      // Role and workspace authority live only in workspace_memberships. Keep
+      // users schema-compatible with upgraded production databases.
+      db.run(`INSERT INTO users (email, password_hash, name) VALUES (?, ?, ?)`,
+        [normalizedEmail, passwordHash, cleanName], function onUser(userError) {
+          if (userError) return rollback(userError);
+          const newUserId = this.lastID;
+          db.run(`INSERT INTO workspace_memberships (user_id, workspace_id, role, status)
+                  VALUES (?, ?, ?, 'ACTIVE')`,
+          [newUserId, req.user.workspaceId, targetRole], membershipError => {
+            if (membershipError) return rollback(membershipError);
+            db.run(`INSERT INTO audit_events
+              (tenant_id,actor_id,workspace_id,marketplace,action,resource_type,resource_id,outcome,metadata)
+              VALUES (?,?,?,?,?,'workspace_membership',?,'SUCCESS',?)`,
+            [req.user.tenantId, req.user.userId, req.user.workspaceId, req.user.marketplace,
+              'staff:create', String(newUserId), JSON.stringify({ role: targetRole, email: normalizedEmail })], auditError => {
+              if (auditError) return rollback(auditError);
+              db.run('COMMIT', commitError => commitError ? rollback(commitError) : res.status(201).json({
+                success: true,
+                user: { id: newUserId, email: normalizedEmail, name: cleanName,
+                  role: targetRole, status: 'ACTIVE', workspaceId: req.user.workspaceId }
+              }));
+            });
+          });
+        });
+    }));
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    const status = Number.isInteger(err?.status) ? err.status : 500;
+    res.status(status).json({ success: false, error: err?.code || 'STAFF_ACCOUNT_CREATE_FAILED' });
   }
+});
+
+// POST /api/owner/users/:id/deactivate - Workspace-scoped staff offboarding.
+// Membership status is the live authority checked on every authenticated
+// request; active sessions are also explicitly revoked in the same transaction.
+app.post('/api/owner/users/:id/deactivate', requireAuth(db), requireRole(['OWNER']), (req, res) => {
+  let reason;
+  try {
+    const body = requireExactDto(req.body || {}, new Set(['reason']));
+    reason = String(body.reason || '').trim();
+    if (!reason || reason.length > 500) throw Object.assign(new Error('STAFF_DEACTIVATION_REASON_REQUIRED'), {
+      code: 'STAFF_DEACTIVATION_REASON_REQUIRED', status: 400
+    });
+  } catch (error) {
+    return res.status(error.status || 400).json({ success: false, error: error.code || 'INVALID_REQUEST_BODY' });
+  }
+  const targetUserId = Number(req.params.id);
+  if (!Number.isInteger(targetUserId) || targetUserId < 1) {
+    return res.status(400).json({ success: false, error: 'INVALID_STAFF_USER_ID' });
+  }
+  if (targetUserId === req.user.userId) {
+    return res.status(409).json({ success: false, error: 'OWNER_SELF_DEACTIVATION_FORBIDDEN' });
+  }
+  const rollback = (error, status = 500, code = 'STAFF_DEACTIVATION_FAILED') => db.run('ROLLBACK', () =>
+    res.status(status).json({ success: false, error: error?.code || code }));
+  db.serialize(() => db.run('BEGIN IMMEDIATE', beginError => {
+    if (beginError) return res.status(503).json({ success: false, error: 'STAFF_DEACTIVATION_UNAVAILABLE' });
+    db.get(`SELECT u.id, u.email, wm.role, wm.status FROM users u
+      JOIN workspace_memberships wm ON wm.user_id=u.id
+      WHERE u.id=? AND wm.workspace_id=?`, [targetUserId, req.user.workspaceId], (lookupError, target) => {
+      if (lookupError) return rollback(lookupError);
+      if (!target) return rollback(null, 404, 'STAFF_MEMBERSHIP_NOT_FOUND');
+      if (target.role === 'OWNER') return rollback(null, 409, 'OWNER_DEACTIVATION_FORBIDDEN');
+      if (target.status !== 'ACTIVE') {
+        return db.run('COMMIT', commitError => commitError ? rollback(commitError) : res.json({
+          success: true, userId: targetUserId, status: target.status, replay: true, revokedSessions: 0
+        }));
+      }
+      db.run(`UPDATE workspace_memberships SET status='INACTIVE'
+        WHERE user_id=? AND workspace_id=? AND status='ACTIVE'`,
+      [targetUserId, req.user.workspaceId], function onMembership(updateError) {
+        if (updateError || this.changes !== 1) return rollback(updateError || new Error('STAFF_MEMBERSHIP_UPDATE_CONFLICT'), 409,
+          'STAFF_MEMBERSHIP_UPDATE_CONFLICT');
+        db.run(`UPDATE sessions SET revoked_at=CURRENT_TIMESTAMP
+          WHERE user_id=? AND workspace_id=? AND revoked_at IS NULL`,
+        [targetUserId, req.user.workspaceId], function onSessions(sessionError) {
+          if (sessionError) return rollback(sessionError);
+          const revokedSessions = this.changes;
+          db.run(`INSERT INTO audit_events
+            (tenant_id,actor_id,workspace_id,marketplace,action,resource_type,resource_id,outcome,metadata)
+            VALUES (?,?,?,?,?,'workspace_membership',?,'SUCCESS',?)`,
+          [req.user.tenantId, req.user.userId, req.user.workspaceId, req.user.marketplace,
+            'staff:deactivate', String(targetUserId), JSON.stringify({ email: target.email, role: target.role,
+              reason, revokedSessions })], auditError => {
+            if (auditError) return rollback(auditError);
+            db.run('COMMIT', commitError => commitError ? rollback(commitError) : res.json({
+              success: true, userId: targetUserId, status: 'INACTIVE', replay: false, revokedSessions
+            }));
+          });
+        });
+      });
+    });
+  }));
 });
 
 // GET /api/evidence - Authoritative Research Evidence Ledger

@@ -1,16 +1,17 @@
 import React, { useState, useEffect } from 'react';
-import { X, Users, UserPlus, Copy, Check, ShieldCheck, Key, Lock, Mail, User } from 'lucide-react';
+import { X, Users, UserPlus, Copy, Check, ShieldCheck, Lock, Mail, User, UserX } from 'lucide-react';
 
 export default function UserManagementModal({ isOpen, onClose, onShowToast }) {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [deactivatingId, setDeactivatingId] = useState(null);
   const [copiedId, setCopiedId] = useState(null);
 
   // New User Form State
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('password123');
+  const [password, setPassword] = useState('');
   const [role, setRole] = useState('SELLER');
   const [createdCredential, setCreatedCredential] = useState(null);
 
@@ -76,7 +77,7 @@ export default function UserManagementModal({ isOpen, onClose, onShowToast }) {
       // Reset form fields
       setName('');
       setEmail('');
-      setPassword('password123');
+      setPassword('');
       fetchUsers();
     } catch (err) {
       if (onShowToast) onShowToast(`Tạo thất bại: ${err.message}`);
@@ -90,6 +91,26 @@ export default function UserManagementModal({ isOpen, onClose, onShowToast }) {
     setCopiedId(id);
     if (onShowToast) onShowToast('📋 Đã copy thông tin đăng nhập vào Clipboard!');
     setTimeout(() => setCopiedId(null), 2000);
+  };
+
+  const handleDeactivateUser = async (user) => {
+    if (!window.confirm(`Vô hiệu hóa ${user.name} (${user.email})? Mọi phiên đăng nhập trong workspace này sẽ bị thu hồi ngay.`)) return;
+    setDeactivatingId(user.id);
+    try {
+      const res = await fetch(`/api/owner/users/${user.id}/deactivate`, {
+        method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 'Owner deactivated staff account from workspace user management.' })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Không thể vô hiệu hóa tài khoản');
+      if (onShowToast) onShowToast(`Đã vô hiệu hóa ${user.name} và thu hồi ${data.revokedSessions || 0} phiên đăng nhập.`);
+      setCreatedCredential(null);
+      await fetchUsers();
+    } catch (error) {
+      if (onShowToast) onShowToast(`Vô hiệu hóa thất bại: ${error.message}`);
+    } finally {
+      setDeactivatingId(null);
+    }
   };
 
   return (
@@ -214,7 +235,7 @@ export default function UserManagementModal({ isOpen, onClose, onShowToast }) {
                     type="text"
                     required
                     className="form-input"
-                    placeholder="password123"
+                    placeholder="Tối thiểu 12 ký tự"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     style={{ paddingLeft: '34px', width: '100%', fontSize: '0.85rem' }}
@@ -329,7 +350,9 @@ export default function UserManagementModal({ isOpen, onClose, onShowToast }) {
                             </span>
                           </td>
                           <td style={{ padding: '10px 14px' }}>
-                            <span style={{ color: '#16a34a', fontWeight: 700, fontSize: '0.75rem' }}>● ACTIVE</span>
+                            <span style={{ color: u.status === 'ACTIVE' ? '#16a34a' : '#94a3b8', fontWeight: 700, fontSize: '0.75rem' }}>
+                              ● {u.status || 'UNKNOWN'}
+                            </span>
                           </td>
                           <td style={{ padding: '10px 14px', textAlign: 'right' }}>
                             <button
@@ -340,6 +363,17 @@ export default function UserManagementModal({ isOpen, onClose, onShowToast }) {
                               {copiedId === u.id ? <Check size={12} /> : <Copy size={12} />}
                               <span>{copiedId === u.id ? 'Copied' : 'Copy Email'}</span>
                             </button>
+                            {u.role !== 'OWNER' && u.status === 'ACTIVE' && (
+                              <button
+                                onClick={() => handleDeactivateUser(u)}
+                                disabled={deactivatingId === u.id}
+                                className="btn btn-secondary btn-sm"
+                                style={{ marginLeft: '6px', fontSize: '0.75rem', padding: '4px 10px', color: '#b91c1c', borderColor: '#fecaca' }}
+                              >
+                                <UserX size={12} />
+                                <span>{deactivatingId === u.id ? 'Đang khóa...' : 'Vô hiệu hóa'}</span>
+                              </button>
+                            )}
                           </td>
                         </tr>
                       );

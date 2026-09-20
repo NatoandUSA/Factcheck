@@ -100,80 +100,6 @@ function GuideCard({ title, children }) {
 
 export default function MarketIntelligenceWorkspace({ onRequireLogin }) {
   const [state, setState] = useState({ loading: true, error: null, data: null });
-  const [globalState, setGlobalState] = useState({ loading: true, error: null, candidates: [] });
-  const [globalBusy, setGlobalBusy] = useState(null);
-  const [globalSummary, setGlobalSummary] = useState(null);
-  const [globalImport, setGlobalImport] = useState({ sourceType: 'AUTO', file: null, busy: false, message: '' });
-
-  const loadGlobal = async () => {
-    setGlobalState((prev) => ({ ...prev, loading: true, error: null }));
-    try {
-      const res = await fetch('/api/global-opportunities?limit=100', { credentials: 'include', cache: 'no-store' });
-      if (res.status === 401) {
-        onRequireLogin?.();
-        throw new Error('Cần đăng nhập để xem Global Opportunity Pool.');
-      }
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(body.message || body.error || 'Global Opportunity Pool unavailable');
-      setGlobalState({ loading: false, error: null, candidates: body.candidates || [] });
-    } catch (error) {
-      setGlobalState({ loading: false, error: error.message, candidates: [] });
-    }
-  };
-
-  const loadGlobalSummary = async () => {
-    try {
-      const res = await fetch('/api/global-opportunities/summary', { credentials: 'include', cache: 'no-store' });
-      const body = await res.json().catch(() => ({}));
-      if (res.ok) setGlobalSummary(body.summary || null);
-    } catch (_) {}
-  };
-
-  const importGlobalFile = async () => {
-    if (!globalImport.file || globalImport.busy) return;
-    setGlobalImport((prev) => ({ ...prev, busy: true, message: '' }));
-    try {
-      const form = new FormData();
-      form.set('sourceType', globalImport.sourceType);
-      form.set('proofTimestamp', new Date().toISOString());
-      form.set('file', globalImport.file);
-      const res = await fetch('/api/global-opportunities/import-file', {
-        method: 'POST', credentials: 'include', body: form
-      });
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(body.message || body.error || 'Bulk import failed');
-      setGlobalImport((prev) => ({
-        ...prev, busy: false, file: null,
-        message: `Imported ${body.importedCount || 0}/${body.parsedCount || 0} candidates · ${body.sourceFileId?.slice(0, 10) || 'file'}…`
-      }));
-      await Promise.all([loadGlobal(), loadGlobalSummary()]);
-    } catch (error) {
-      setGlobalImport((prev) => ({ ...prev, busy: false, message: error.message }));
-    }
-  };
-
-  const promoteCandidate = async (candidate) => {
-    if (!candidate?.id || candidate.proof_gate !== 'PASS' || candidate.status === 'PROMOTED') return;
-    const projectName = candidate.cluster_name || candidate.keyword;
-    if (!window.confirm(`Tạo Project mới từ opportunity “${projectName}”? Project hiện có sẽ không bị thay đổi.`)) return;
-    setGlobalBusy(candidate.id);
-    try {
-      const res = await fetch(`/api/global-opportunities/${candidate.id}/promote-to-project`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: projectName })
-      });
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(body.message || body.error || 'Promotion failed');
-      await loadGlobal();
-      window.alert(`Đã tạo Project #${body.projectId} ở EVIDENCE_INTAKE. Project cũ không thay đổi.`);
-    } catch (error) {
-      setGlobalState((prev) => ({ ...prev, error: error.message }));
-    } finally {
-      setGlobalBusy(null);
-    }
-  };
 
   const load = async () => {
     setState((prev) => ({ ...prev, loading: true, error: null }));
@@ -191,7 +117,7 @@ export default function MarketIntelligenceWorkspace({ onRequireLogin }) {
     }
   };
 
-  useEffect(() => { load(); loadGlobal(); loadGlobalSummary(); }, []);
+  useEffect(() => { load(); }, []);
 
   const listening = state.data?.dashboard?.listening || {};
   const keywords = listening.keywordWatches || [];
@@ -245,90 +171,6 @@ export default function MarketIntelligenceWorkspace({ onRequireLogin }) {
           </div>
         </div>
         {state.error && <div style={{ marginTop: 12, padding: 10, background: '#fee2e2', color: '#991b1b', borderRadius: 8 }}>{state.error}</div>}
-      </div>
-
-      <div className="card" style={{ padding: 18 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-          <div>
-            <div style={{ fontSize: 11, color: '#7c3aed', fontWeight: 900, letterSpacing: '.08em' }}>GLOBAL DISCOVERY · PRE-PROJECT</div>
-            <h3 style={{ margin: '4px 0' }}>Global Opportunity Pool</h3>
-            <div style={{ color: '#64748b', fontSize: 12, maxWidth: 860, lineHeight: 1.5 }}>
-              Candidate ở đây thuộc workspace + marketplace, chưa thuộc Project và không đi vào MKL/Product Truth.
-              Proof-of-sale là gate bắt buộc trước khi tạo Project mới; social/trend-only chỉ được WATCH.
-            </div>
-          </div>
-          <button className="btn btn-secondary btn-sm" onClick={() => { loadGlobal(); loadGlobalSummary(); }} disabled={globalState.loading}>
-            {globalState.loading ? 'Đang tải…' : 'Refresh Pool'}
-          </button>
-        </div>
-        {globalState.error && <div style={{ marginTop: 10, padding: 9, background: '#fee2e2', color: '#991b1b', borderRadius: 8 }}>{globalState.error}</div>}
-        {globalSummary && (
-          <div style={{ marginTop: 12, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(135px, 1fr))', gap: 8 }}>
-            {[
-              ['Candidates', globalSummary.candidateCount],
-              ['Clusters', globalSummary.clusterCount],
-              ['Qualified', globalSummary.qualifiedCount],
-              ['Watch', globalSummary.watchCount],
-              ['Promoted', globalSummary.promotedCount]
-            ].map(([label, value]) => (
-              <div key={label} style={{ padding: 10, border: '1px solid #e2e8f0', borderRadius: 10, background: '#f8fafc' }}>
-                <div style={{ fontSize: 11, color: '#64748b', fontWeight: 700 }}>{label}</div>
-                <div style={{ fontSize: 20, fontWeight: 900, marginTop: 2 }}>{value || 0}</div>
-              </div>
-            ))}
-          </div>
-        )}
-        <div style={{ marginTop: 12, padding: 12, border: '1px solid #ddd6fe', background: '#faf5ff', borderRadius: 12 }}>
-          <div style={{ fontWeight: 800, fontSize: 13, marginBottom: 8 }}>Bulk Import — Cerebro / HeyEtsy / YTrend</div>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-            <select
-              value={globalImport.sourceType}
-              onChange={(e) => setGlobalImport((prev) => ({ ...prev, sourceType: e.target.value }))}
-              style={{ padding: '7px 9px', borderRadius: 8, border: '1px solid #cbd5e1' }}
-            >
-              <option value="AUTO">Auto detect</option>
-              <option value="CEREBRO">Cerebro</option>
-              <option value="HEYETSY">HeyEtsy</option>
-              <option value="YTREND">YTrend</option>
-              <option value="GENERIC">Generic CSV/XLSX</option>
-            </select>
-            <input
-              type="file"
-              accept=".xlsx,.csv"
-              onChange={(e) => setGlobalImport((prev) => ({ ...prev, file: e.target.files?.[0] || null, message: '' }))}
-            />
-            <button className="btn btn-primary btn-sm" onClick={importGlobalFile} disabled={!globalImport.file || globalImport.busy}>
-              {globalImport.busy ? 'Đang import…' : 'Import to Global Pool'}
-            </button>
-            <a className="btn btn-secondary btn-sm" href="/api/global-opportunities/watchlist?limit=30" target="_blank" rel="noreferrer">
-              Watchlist JSON
-            </a>
-          </div>
-          <div style={{ marginTop: 7, color: '#64748b', fontSize: 11 }}>
-            XLSX/CSV được parse trong memory. Sales/revenue chỉ được dùng làm proof khi cột đó thực sự tồn tại; trend/social/proxy không được nâng thành sales proof.
-          </div>
-          {globalImport.message && <div style={{ marginTop: 8, fontSize: 12, fontWeight: 700 }}>{globalImport.message}</div>}
-        </div>
-        <div style={{ marginTop: 14 }}>
-          <Table
-            columns={[
-              { key: 'keyword', label: 'Candidate / Cluster', render: (r) => <><strong>{r.keyword}</strong><div style={{ color: '#64748b', marginTop: 3 }}>{r.cluster_name || r.cluster_key || 'exact keyword cluster'} · {r.source}</div></> },
-              { key: 'opportunity_score', label: 'Global Score', render: (r) => <><span style={badgeStyle(scoreTone(Number(r.opportunity_score) || 0))}>{Number(r.opportunity_score || 0).toFixed(1)}/100</span><div style={{ color: '#64748b', marginTop: 3 }}>{r.score_version || 'GLOBAL_OPPORTUNITY_V1'}</div></> },
-              { key: 'proof_gate', label: 'Sales Proof Gate', render: (r) => <><span style={badgeStyle(r.proof_gate === 'PASS' ? 'good' : 'warn')}>{r.proof_gate || 'WATCH_ONLY'}</span><div style={{ color: '#64748b', marginTop: 3 }}>{r.proof_type || 'NONE'}</div></> },
-              { key: 'marketplace_proof', label: 'Marketplace / Demand', render: (r) => <div>Proof {Number(r.marketplace_proof || 0).toFixed(1)} · Demand {Number(r.demand || 0).toFixed(1)}<div style={{ color: '#64748b', marginTop: 3 }}>Sales {r.estimated_sales ?? '—'} · Revenue {r.estimated_revenue ?? '—'}</div></div> },
-              { key: 'trend_score', label: 'Trend / Social / Cross', render: (r) => <div>Trend {Number(r.trend_score || 0).toFixed(1)} · Social {Number(r.social_score || 0).toFixed(1)}<div style={{ color: '#64748b', marginTop: 3 }}>Cross {Number(r.cross_source_validation || 0).toFixed(1)}</div></div> },
-              { key: 'status', label: 'Status', render: (r) => <span style={badgeStyle(r.status === 'PROMOTED' ? 'good' : r.status === 'QUALIFIED' ? 'warn' : 'neutral')}>{r.status}</span> },
-              { key: 'action', label: 'Action', render: (r) => r.status === 'PROMOTED'
-                ? <div><strong>Project #{r.promoted_project_id}</strong><div style={{ color: '#64748b' }}>đã promote</div></div>
-                : <button className="btn btn-primary btn-sm" disabled={r.proof_gate !== 'PASS' || globalBusy === r.id}
-                    onClick={() => promoteCandidate(r)}>
-                    {r.proof_gate !== 'PASS' ? 'WATCH ONLY' : globalBusy === r.id ? 'Đang tạo…' : 'Create Project'}
-                  </button> }
-            ]}
-            rows={globalState.candidates}
-            empty="Global Candidate Pool chưa có dữ liệu. Import qua Global Opportunity API/bulk pipeline trước."
-          />
-        </div>
       </div>
 
       <div className="card" style={{ padding: 18 }}>

@@ -16,7 +16,7 @@ const verifiedCard = (productId, listingVersion) => ({
 
 (async () => {
   const moduleUrl = pathToFileURL(path.resolve(__dirname, '../src/utils/draftQualityEvaluator.js')).href;
-  const { evaluateDraftQuality, compareDraftEvaluations, selectPreviewListing } = await import(moduleUrl);
+  const { assessLanguageConsistency, evaluateDraftQuality, compareDraftEvaluations, selectPreviewListing } = await import(moduleUrl);
   const base = {
     dbId: 42,
     listingVersion: 3,
@@ -73,6 +73,46 @@ const verifiedCard = (productId, listingVersion) => ({
   const thinHistory = { dbId: 42, amazonTitle: 'Thin history row without evidence' };
   assert.strictEqual(selectPreviewListing(exact, [thinHistory], 42), exact,
     'exact current review package must win over a same-id history row');
+
+  const mixedSpanish = { ...base, listingLanguage: 'ES', etsyTitle: 'Personalizado Fleece Blanket',
+    etsyDescription: 'Regalo para hermana. Personalized fleece blanket with custom name.' };
+  const mixedAssessment = evaluateDraftQuality(mixedSpanish, 'ETSY', { ready: 8, expected: 8 });
+  assert.ok(mixedAssessment.warnings.some(item => item.includes('MIXED_LANGUAGE_COPY')),
+    'material English copy in an ES listing must be visible QA evidence');
+  assert.ok(mixedAssessment.metrics.find(item => item.key === 'readability').score
+    < shortage.metrics.find(item => item.key === 'readability').score,
+  'mixed-language copy must reduce clarity instead of scoring 100');
+  assert.equal(assessLanguageConsistency({ listingLanguage: 'EN', etsyTitle: 'Hermana Keepsake',
+    etsyDescription: 'A clear keepsake for family.' }, 'ETSY').mixed, false,
+  'one isolated foreign name/token must not trigger a mixed-language warning');
+  assert.equal(assessLanguageConsistency({ listingLanguage: 'ES', etsyTitle: 'Manta para Anna',
+    etsyDescription: 'Regalo personalizado para hermana.' }, 'ETSY').mixed, false,
+  'proper recipient names must not be treated as foreign-language copy');
+  const verifiedForeignPhrase = { ...base, listingLanguage: 'ES', etsyTitle: 'Best Friend',
+    etsyTags: ['regalo hermana'], etsyDescription: 'Regalo personalizado para hermana.',
+    canonicalQualityEvidence: { ...base.canonicalQualityEvidence, listingLanguage: 'ES',
+      languageExemptions: ['Best Friend'] } };
+  assert.equal(assessLanguageConsistency(verifiedForeignPhrase, 'ETSY').mixed, false,
+    'a multi-token brand/product/name phrase verified by Product Truth must be exempt from mixed-language warnings');
+  const unverifiedForeignPhrase = { ...verifiedForeignPhrase,
+    canonicalQualityEvidence: { ...verifiedForeignPhrase.canonicalQualityEvidence, languageExemptions: [] } };
+  assert.equal(assessLanguageConsistency(unverifiedForeignPhrase, 'ETSY').mixed, true,
+    'the same two foreign markers without Product Truth evidence must remain visible as mixed-language copy');
+  const phraseScopeLeak = { ...verifiedForeignPhrase, etsyTitle: 'best custom gift para hermana',
+    canonicalQualityEvidence: { ...verifiedForeignPhrase.canonicalQualityEvidence,
+      languageExemptions: ['Best Friend'] } };
+  assert.equal(assessLanguageConsistency(phraseScopeLeak, 'ETSY').mixed, true,
+    'tokens from a verified multi-word phrase must not become global exemptions when the phrase is absent');
+  const verifiedProductPhrase = { ...verifiedForeignPhrase, etsyTitle: 'Custom Necklace para Hija',
+    canonicalQualityEvidence: { ...verifiedForeignPhrase.canonicalQualityEvidence,
+      languageExemptions: ['Custom Necklace'] } };
+  assert.equal(assessLanguageConsistency(verifiedProductPhrase, 'ETSY').mixed, false,
+    'an exact contiguous verified product phrase may be exempt at its matched span');
+  const crossSurfacePhrase = { ...verifiedForeignPhrase, etsyTitle: 'Best', etsyTags: ['Friend'],
+    canonicalQualityEvidence: { ...verifiedForeignPhrase.canonicalQualityEvidence,
+      languageExemptions: ['Best Friend'] } };
+  assert.equal(assessLanguageConsistency(crossSurfacePhrase, 'ETSY').mixed, true,
+    'verified phrases must not match across title/tag/description surface boundaries');
 
   console.log('DRAFT_QUALITY_EVALUATOR_TESTS_PASSED');
 })().catch(error => {

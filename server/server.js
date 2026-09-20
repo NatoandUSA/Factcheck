@@ -2123,6 +2123,14 @@ app.get('/api/listings/:id/review-package', requireAuth(db), requireRole(['OWNER
     const revision = await getListingRevision(db, scope, root.id, root.head_revision_id, root.project_id);
     await assertCanonicalDependenciesCurrent(db, scope, root.project_id, revision.dependencies);
     const truth = await currentProductTruthRevision(db, scope, root.project_id);
+    const intelligence = revision.dependencies.intelligenceSnapshotId == null ? null
+      : await getIntelligenceSnapshot(db, scope, root.project_id, revision.dependencies.intelligenceSnapshotId);
+    const listingLanguage = String(revision.content?.listingLanguage || intelligence?.output?.language || '').toUpperCase();
+    const languageExemptions = ['brand', 'productName', 'productType', 'recipient', 'audience']
+      .flatMap(field => {
+        const value = truth.snapshot?.asserted?.[field]?.value;
+        return (Array.isArray(value) ? value : [value]).map(item => String(item ?? '').trim()).filter(Boolean);
+      });
     const promptItems = Array.isArray(revision.content?.imagePrompts?.prompts)
       ? revision.content.imagePrompts.prompts
       : (Array.isArray(revision.content?.imagePrompts) ? revision.content.imagePrompts : []);
@@ -2133,6 +2141,8 @@ app.get('/api/listings/:id/review-package', requireAuth(db), requireRole(['OWNER
       productTruthRevisionId: truth.id,
       productTruthHash: truth.content_hash,
       verifiedFactCount: Object.keys(truth.snapshot?.asserted || {}).length,
+      listingLanguage: ['EN','ES'].includes(listingLanguage) ? listingLanguage : null,
+      languageExemptions: Object.freeze([...new Set(languageExemptions)]),
       imagePlan: Object.freeze({ expected: promptItems.length,
         ready: promptItems.filter(item => item?.ready !== false && String(item?.prompt || '').trim()).length })
     });
@@ -2265,20 +2275,40 @@ app.post('/api/listings/:id/revisions', requireAuth(db), requireRole(['OWNER', '
     if (root.status === 'SUBMITTED') throw Object.assign(new Error('SUBMITTED_LISTING_TERMINAL'), {
       code: 'SUBMITTED_LISTING_TERMINAL', status: 409
     });
+    const parent = await getListingRevision(db, scope, listingId, Number(body.parentRevisionId), root.project_id);
+    const parentProductTruthRevisionId = Number(parent.dependencies.productTruthRevisionId);
+    const parentIntelligenceSnapshotId = parent.dependencies.intelligenceSnapshotId == null
+      ? null : Number(parent.dependencies.intelligenceSnapshotId);
+    const requestedProductTruthRevisionId = Number(body.productTruthRevisionId);
+    const requestedIntelligenceSnapshotId = body.intelligenceSnapshotId == null
+      ? null : Number(body.intelligenceSnapshotId);
+    if (requestedProductTruthRevisionId !== parentProductTruthRevisionId
+      || requestedIntelligenceSnapshotId !== parentIntelligenceSnapshotId) {
+      throw Object.assign(new Error('QA_EDIT_DEPENDENCY_DRIFT'), {
+        code: 'QA_EDIT_DEPENDENCY_DRIFT', status: 409,
+        details: { parentRevisionId: parent.id,
+          productTruthRevisionId: parentProductTruthRevisionId,
+          intelligenceSnapshotId: parentIntelligenceSnapshotId }
+      });
+    }
+    const parentDependencies = Object.freeze({
+      productTruthRevisionId: parentProductTruthRevisionId,
+      intelligenceSnapshotId: parentIntelligenceSnapshotId
+    });
     const result = await appendListingRevision(db, scope, listingId, {
       projectId: root.project_id, parentRevisionId: body.parentRevisionId,
       expectedHeadRevisionId: body.expectedHeadRevisionId, idempotencyKey: body.idempotencyKey,
       changeReason: body.changeReason, content: body.content,
-      dependencies: { productTruthRevisionId: Number(body.productTruthRevisionId),
-        intelligenceSnapshotId: body.intelligenceSnapshotId == null ? null : Number(body.intelligenceSnapshotId) }
+      dependencies: parentDependencies
     }, {
       prepareContent: async ({ content }) => {
-        const validated = await validateCanonicalDraft(db, scope, root.project_id, body.productTruthRevisionId, content,
-          body.intelligenceSnapshotId);
+        const validated = await validateCanonicalDraft(db, scope, root.project_id,
+          parentDependencies.productTruthRevisionId, content, parentDependencies.intelligenceSnapshotId);
         return { content: validated.content, validationAccounting: validated.guardAccounting };
       },
       resolveDependencies: async () => (await validateCanonicalDraft(db, scope, root.project_id,
-        body.productTruthRevisionId, body.content, body.intelligenceSnapshotId)).dependencies,
+        parentDependencies.productTruthRevisionId, body.content,
+        parentDependencies.intelligenceSnapshotId)).dependencies,
       assertDependenciesCurrent: async ({ dependencies }) => assertCanonicalDependenciesCurrent(
         db, scope, root.project_id, dependencies)
     });

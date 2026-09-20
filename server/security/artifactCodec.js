@@ -1,6 +1,7 @@
 'use strict';
 
 const crypto = require('node:crypto');
+const { types: utilTypes } = require('node:util');
 
 const VERSION = 'OMNISELLER_ARTIFACT_CODEC_V1';
 const ALGORITHM = 'sha256';
@@ -66,6 +67,9 @@ function canonicalSerializeArtifact(value, options = {}) {
     }
 
     if (!entry || typeof entry !== 'object') fail('ARTIFACT_CODEC_UNSUPPORTED_TYPE', path);
+    // Proxy traps can fabricate prototypes, keys and descriptors. Detect the
+    // wrapper with the runtime intrinsic before any reflective traversal.
+    if (utilTypes.isProxy(entry)) fail('ARTIFACT_CODEC_PROXY_FORBIDDEN', path);
     if (active.has(entry)) fail('ARTIFACT_CODEC_CYCLE', path);
     active.add(entry);
     try {

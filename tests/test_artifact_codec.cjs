@@ -53,6 +53,38 @@ check('non-JSON values and object shapes fail closed', () => {
   rejects(accessor, 'ARTIFACT_CODEC_NON_DATA_PROPERTY');
 });
 
+check('Proxy wrappers fail before any caller-controlled trap executes', () => {
+  let trapExecutions = 0;
+  const handler = {
+    getPrototypeOf() { trapExecutions += 1; return Object.prototype; },
+    ownKeys() { trapExecutions += 1; return ['x']; },
+    getOwnPropertyDescriptor() {
+      trapExecutions += 1;
+      return { enumerable: true, configurable: true, writable: true, value: 1 };
+    }
+  };
+  rejects(new Proxy({}, handler), 'ARTIFACT_CODEC_PROXY_FORBIDDEN');
+  rejects(new Proxy([], handler), 'ARTIFACT_CODEC_PROXY_FORBIDDEN');
+  assert.equal(trapExecutions, 0, 'Proxy detection must precede prototype/key/descriptor traversal');
+
+  let mutations = 0;
+  const unstableKeys = new Proxy({}, {
+    ownKeys() { mutations += 1; return mutations % 2 ? ['a'] : ['b']; }
+  });
+  rejects(unstableKeys, 'ARTIFACT_CODEC_PROXY_FORBIDDEN');
+
+  let descriptorEffects = 0;
+  const fabricatedData = new Proxy({}, {
+    getOwnPropertyDescriptor() {
+      descriptorEffects += 1;
+      return { enumerable: true, configurable: true, writable: true, value: 1 };
+    }
+  });
+  rejects(fabricatedData, 'ARTIFACT_CODEC_PROXY_FORBIDDEN');
+  assert.equal(mutations, 0);
+  assert.equal(descriptorEffects, 0);
+});
+
 check('cycles and extra array properties fail closed', () => {
   const cyclic = {}; cyclic.self = cyclic;
   rejects(cyclic, 'ARTIFACT_CODEC_CYCLE');

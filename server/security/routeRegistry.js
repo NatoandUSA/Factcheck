@@ -21,6 +21,7 @@ const ROUTES = [
   { method: 'POST', path: '/api/auth/reauth', public: false },
   { method: 'GET', path: '/api/owner/users', public: false },
   { method: 'POST', path: '/api/owner/users', public: false },
+  { method: 'POST', path: '/api/owner/users/:id/deactivate', public: false },
   { method: 'GET', path: '/api/evidence', public: false },
   { method: 'POST', path: '/api/evidence', public: false },
   { method: 'POST', path: '/api/evidence/:id/accept', public: false },

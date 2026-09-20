@@ -1,5 +1,4 @@
 const crypto = require('node:crypto');
-const { clusterDescriptor } = require('../globalOpportunityBulkParser');
 
 const ALLOWED_STATUSES = new Set(['DISCOVERED','QUALIFIED','WATCH','PROMOTE_TO_PROJECT','REJECTED','STALE','PROMOTED']);
 const PROOF_TYPES = new Set(['MARKETPLACE_SALES','ESTIMATED_SALES','ESTIMATED_REVENUE','LISTING_SALES_PROXY','ORDER_EVIDENCE','NONE']);
@@ -131,33 +130,12 @@ async function migrateGlobalOpportunityDiscovery(db) {
 }
 
 function proofGate(candidate) {
+  const proofType = PROOF_TYPES.has(candidate.proofType) ? candidate.proofType : 'NONE';
   const estimatedSales = finite(candidate.estimatedSales);
   const estimatedRevenue = finite(candidate.estimatedRevenue);
-  // proofType is provenance metadata, never authority by itself.
-  // Global qualification requires an observed positive commercial metric.
-  const hasCommercialProof = (estimatedSales != null && estimatedSales > 0) ||
+  const hasCommercialProof = proofType !== 'NONE' || (estimatedSales != null && estimatedSales > 0) ||
     (estimatedRevenue != null && estimatedRevenue > 0);
   return hasCommercialProof ? 'PASS' : 'WATCH_ONLY';
-}
-
-function freshnessScore(rawTimestamp, nowMs = Date.now()) {
-  const value = Date.parse(String(rawTimestamp || ''));
-  if (!Number.isFinite(value)) return 0;
-  const ageMs = nowMs - value;
-  if (ageMs < -5 * 60 * 1000) return 0;
-  const ageDays = Math.max(0, ageMs) / 86400000;
-  if (ageDays <= 7) return 5;
-  if (ageDays <= 30) return 3;
-  if (ageDays <= 90) return 1;
-  return 0;
-}
-
-function competitionScore(raw) {
-  const value = finite(raw);
-  if (value == null || value < 0) return 5;
-  if (value <= 1) return clamp(15 * (1 - value), 0, 15);
-  if (value <= 100) return clamp(15 * (1 - (value / 100)), 0, 15);
-  return clamp(15 / (1 + Math.log10(value)), 0, 15);
 }
 
 function scoreCandidate(candidate) {
@@ -174,12 +152,12 @@ function scoreCandidate(candidate) {
     ? clamp(8 + (sales > 0 ? Math.log10(1 + sales) * 5 : 0) + (revenue > 0 ? Math.log10(1 + revenue) * 2 : 0), 0, 25)
     : 0;
   const demand = volume == null ? 0 : clamp(Math.log10(1 + Math.max(0, volume)) * 4, 0, 15);
-  const competition = competitionScore(competitionRaw);
+  const competition = competitionRaw == null ? 5 : clamp(15 - competitionRaw, 0, 15);
   const priceMargin = price == null ? 0 : clamp(price / 10, 0, 10);
   const trendScore = trend == null ? 0 : clamp(trend, 0, 10);
   const crossScore = clamp((cross - 1) * 2.5, 0, 10);
   const socialScore = social == null ? 0 : clamp(social, 0, 10);
-  const freshness = freshnessScore(candidate.proofTimestamp);
+  const freshness = candidate.proofTimestamp ? 5 : 2;
   const riskPenalty = clamp(finite(candidate.riskPenalty) || 0, 0, 30);
   const raw = proof + demand + competition + priceMargin + trendScore + crossScore + socialScore + freshness - riskPenalty;
   const opportunityScore = gate === 'PASS' ? clamp(Math.round(raw * 10) / 10, 0, 100) : clamp(Math.min(39, raw), 0, 39);
@@ -202,72 +180,31 @@ function projectMklCandidates(artifact, marketplace) {
   if (!artifact || typeof artifact !== 'object') return [];
   const expectedKind = marketplace === 'AMAZON' ? 'AMAZON_MASTER_KEYWORDS' : 'ETSY_MASTER_KEYWORDS';
   if (artifact.kind !== expectedKind || !Array.isArray(artifact.payload?.keywords)) return [];
-
-  if (marketplace === 'AMAZON') {
-    return artifact.payload.keywords
-      .filter(item => ['OUTLIER_REVIEW', 'RESIDUE'].includes(String(item?.tier || '').toUpperCase()))
-      .filter(item => finite(item?.metrics?.keywordSales) != null && finite(item.metrics.keywordSales) > 0)
-      .map(item => {
-        const cluster = clusterDescriptor(item.phrase);
-        return {
-          keyword: text(item.phrase),
-          clusterKey: cluster.clusterKey || text(item.phrase),
-          clusterLabel: cluster.clusterLabel || text(item.phrase),
-          searchVolume: finite(item.metrics.searchVolume),
-          estimatedSales: finite(item.metrics.keywordSales),
-          competition: finite(item.metrics.competingProducts),
-          trendVelocity: finite(item.metrics.trend),
-          crossSourceCount: 1,
-          proofType: 'MARKETPLACE_SALES',
-          proofTimestamp: artifact.createdAt || null,
-          origin: {
-            kind: 'PROJECT_MKL_HARVEST',
-            sourceProjectId: artifact.projectId,
-            sourceArtifactId: artifact.id,
-            sourceArtifactHash: artifact.artifactHash,
-            sourceTier: item.tier,
-            keywordId: item.keywordId,
-            originalOpportunityScore: item.opportunityScore ?? null
-          }
-        };
-      })
-      .filter(item => item.keyword);
-  }
-
-  // Etsy REVIEW / PATTERN_ONLY can be globally interesting, but current Etsy
-  // MKL metrics are demand/competition proxies rather than verified sales.
-  // Harvest them as WATCH_ONLY candidates; never relabel proxy evidence as sales proof.
+  if (marketplace !== 'AMAZON') return [];
   return artifact.payload.keywords
-    .filter(item => ['REVIEW', 'PATTERN_ONLY'].includes(String(item?.tier || '').toUpperCase()))
-    .map(item => {
-      const cluster = clusterDescriptor(item.phrase);
-      return {
-        keyword: text(item.phrase),
-        clusterKey: cluster.clusterKey || text(item.phrase),
-        clusterLabel: cluster.clusterLabel || text(item.phrase),
-        searchVolume: null,
-        estimatedSales: null,
-        estimatedRevenue: null,
-        competition: finite(item.competitionProxy),
-        trendVelocity: null,
-        crossSourceCount: Math.max(1, Math.trunc(finite(item.listingSpread) || 1)),
-        proofType: 'NONE',
-        proofTimestamp: artifact.createdAt || null,
-        origin: {
-          kind: 'PROJECT_MKL_HARVEST',
-          sourceProjectId: artifact.projectId,
-          sourceArtifactId: artifact.id,
-          sourceArtifactHash: artifact.artifactHash,
-          sourceTier: item.tier,
-          keywordId: item.keywordId,
-          demandProxy: finite(item.demandProxy),
-          competitionProxy: finite(item.competitionProxy),
-          listingSpread: finite(item.listingSpread),
-          shopSpread: finite(item.shopSpread),
-          originalOpportunityScore: item.opportunityScore ?? null
-        }
-      };
-    })
+    .filter(item => ['OUTLIER_REVIEW', 'RESIDUE'].includes(String(item?.tier || '').toUpperCase()))
+    .filter(item => finite(item?.metrics?.keywordSales) != null && finite(item.metrics.keywordSales) > 0)
+    .map(item => ({
+      keyword: text(item.phrase),
+      clusterKey: text(item.phrase),
+      clusterLabel: text(item.phrase),
+      searchVolume: finite(item.metrics.searchVolume),
+      estimatedSales: finite(item.metrics.keywordSales),
+      competition: null,
+      trendVelocity: finite(item.metrics.trend),
+      crossSourceCount: 1,
+      proofType: 'ESTIMATED_SALES',
+      proofTimestamp: artifact.createdAt || null,
+      origin: {
+        kind: 'PROJECT_MKL_HARVEST',
+        sourceProjectId: artifact.projectId,
+        sourceArtifactId: artifact.id,
+        sourceArtifactHash: artifact.artifactHash,
+        sourceTier: item.tier,
+        keywordId: item.keywordId,
+        originalOpportunityScore: item.opportunityScore ?? null
+      }
+    }))
     .filter(item => item.keyword);
 }
 
@@ -303,37 +240,6 @@ async function upsertScore(db, scope, candidateId, score) {
   [candidateId, ...scopeParams(scope), score.marketplaceProof, score.demand, score.competition,
     score.priceMarginPotential, score.trendVelocity, score.crossSourceValidation, score.socialMomentum,
     score.freshness, score.riskPenalty, score.opportunityScore, score.proofGate, JSON.stringify(score.explanation)]);
-}
-
-async function reconcileCrossSourceScores(db, scope) {
-  const counts = await all(db, `SELECT normalized_keyword,COUNT(DISTINCT source) AS observed_source_count
-    FROM global_keyword_candidates
-    WHERE tenant_id=? AND workspace_id=? AND marketplace=?
-    GROUP BY normalized_keyword`, scopeParams(scope));
-  const sourceCounts = new Map(counts.map(row => [row.normalized_keyword, Math.max(1, Number(row.observed_source_count || 1))]));
-  const rows = await all(db, `SELECT * FROM global_keyword_candidates
-    WHERE tenant_id=? AND workspace_id=? AND marketplace=?`, scopeParams(scope));
-  for (const row of rows) {
-    const observed = sourceCounts.get(row.normalized_keyword) || 1;
-    if (Number(row.cross_source_count || 1) !== observed) {
-      await run(db, `UPDATE global_keyword_candidates SET cross_source_count=?,updated_at=CURRENT_TIMESTAMP
-        WHERE id=? AND tenant_id=? AND workspace_id=? AND marketplace=?`,
-      [observed, row.id, ...scopeParams(scope)]);
-    }
-    const score = scoreCandidate({
-      searchVolume: row.search_volume,
-      estimatedSales: row.estimated_sales,
-      estimatedRevenue: row.estimated_revenue,
-      avgPrice: row.avg_price,
-      competition: row.competition,
-      trendVelocity: row.trend_velocity,
-      socialMomentum: row.social_momentum,
-      crossSourceCount: observed,
-      proofType: row.proof_type,
-      proofTimestamp: row.proof_timestamp
-    });
-    await upsertScore(db, scope, row.id, score);
-  }
 }
 
 async function importCandidates(db, scope, actorId, payload) {
@@ -384,7 +290,6 @@ async function importCandidates(db, scope, actorId, payload) {
       SELECT COUNT(*) FROM global_keyword_candidates c WHERE c.cluster_id=keyword_clusters.id
     ), updated_at=CURRENT_TIMESTAMP
     WHERE tenant_id=? AND workspace_id=? AND marketplace=?`, scopeParams(scope));
-    await reconcileCrossSourceScores(db, scope);
     await run(db, 'COMMIT');
   } catch (error) {
     try { await run(db, 'ROLLBACK'); } catch (_) {}
@@ -410,50 +315,6 @@ async function listCandidates(db, scope, filters = {}) {
     LEFT JOIN global_opportunity_scores s ON s.candidate_id=c.id AND s.score_version='GLOBAL_OPPORTUNITY_V1'
     WHERE c.tenant_id=? AND c.workspace_id=? AND c.marketplace=?${whereStatus}
     ORDER BY COALESCE(s.opportunity_score,0) DESC,c.updated_at DESC LIMIT ?`, params);
-}
-
-
-async function opportunitySummary(db, scope) {
-  const rows = await all(db, `SELECT c.status,s.proof_gate,COUNT(*) AS count
-    FROM global_keyword_candidates c
-    LEFT JOIN global_opportunity_scores s ON s.candidate_id=c.id AND s.score_version='GLOBAL_OPPORTUNITY_V1'
-    WHERE c.tenant_id=? AND c.workspace_id=? AND c.marketplace=?
-    GROUP BY c.status,s.proof_gate`, scopeParams(scope));
-  const clusters = await get(db, `SELECT COUNT(*) AS count FROM keyword_clusters
-    WHERE tenant_id=? AND workspace_id=? AND marketplace=?`, scopeParams(scope));
-  const candidates = await get(db, `SELECT COUNT(*) AS count FROM global_keyword_candidates
-    WHERE tenant_id=? AND workspace_id=? AND marketplace=?`, scopeParams(scope));
-  const byStatus = {}; const byProofGate = {};
-  for (const row of rows) {
-    byStatus[row.status || 'UNKNOWN'] = (byStatus[row.status || 'UNKNOWN'] || 0) + Number(row.count || 0);
-    byProofGate[row.proof_gate || 'UNSCORED'] = (byProofGate[row.proof_gate || 'UNSCORED'] || 0) + Number(row.count || 0);
-  }
-  return {
-    candidateCount: Number(candidates?.count || 0),
-    clusterCount: Number(clusters?.count || 0),
-    byStatus,
-    byProofGate,
-    qualifiedCount: Number(byStatus.QUALIFIED || 0),
-    watchCount: Number(byStatus.WATCH || 0),
-    promotedCount: Number(byStatus.PROMOTED || 0)
-  };
-}
-
-async function watchlist(db, scope, filters = {}) {
-  const limit = clamp(Math.trunc(finite(filters.limit) || 30), 1, 100);
-  return all(db, `SELECT c.id,c.keyword,c.normalized_keyword,c.source,c.source_file_id,c.proof_type,
-      c.search_volume,c.estimated_sales,c.estimated_revenue,c.avg_price,c.competition,c.trend_velocity,
-      c.social_momentum,c.updated_at,k.cluster_key,k.display_name AS cluster_name,
-      s.opportunity_score,s.proof_gate,s.marketplace_proof,s.demand,s.competition AS competition_score,
-      s.trend_velocity AS trend_score,s.cross_source_validation,s.social_momentum AS social_score,s.freshness
-    FROM global_keyword_candidates c
-    LEFT JOIN keyword_clusters k ON k.id=c.cluster_id
-    LEFT JOIN global_opportunity_scores s ON s.candidate_id=c.id AND s.score_version='GLOBAL_OPPORTUNITY_V1'
-    WHERE c.tenant_id=? AND c.workspace_id=? AND c.marketplace=?
-      AND c.status IN ('QUALIFIED','WATCH') AND c.status<>'REJECTED'
-    ORDER BY CASE WHEN s.proof_gate='PASS' THEN 0 ELSE 1 END,
-      COALESCE(s.opportunity_score,0) DESC,c.updated_at DESC LIMIT ?`,
-    [...scopeParams(scope), limit]);
 }
 
 async function setCandidateStatus(db, scope, actorId, candidateId, nextStatus, metadata = {}) {
@@ -519,5 +380,5 @@ async function promoteToProject(db, scope, actorId, candidateId, payload = {}) {
 
 module.exports = Object.freeze({
   ALLOWED_STATUSES, normalizeKeyword, normalizeClusterKey, migrateGlobalOpportunityDiscovery,
-  proofGate, freshnessScore, competitionScore, scoreCandidate, projectMklCandidates, reconcileCrossSourceScores, importCandidates, listCandidates, opportunitySummary, watchlist, setCandidateStatus, promoteToProject
+  scoreCandidate, projectMklCandidates, importCandidates, listCandidates, setCandidateStatus, promoteToProject
 });

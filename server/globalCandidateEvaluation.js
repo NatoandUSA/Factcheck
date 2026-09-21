@@ -55,7 +55,10 @@ function canEstablishProof(item) {
   if (item.kind !== 'SALES_SIGNAL' || item.value <= 0 || item.evidenceRef.authorityClassification !== 'OBSERVED_PUBLIC') return false;
   const provenance = asObject(item.fieldProvenance); const state = String(provenance.state || '').toUpperCase();
   const authority = String(provenance.authority || '').toUpperCase(); const allowedUse = String(provenance.allowedUse || '').toUpperCase();
-  return state === 'OBSERVED' && authority && authority !== 'NONE' && allowedUse && allowedUse !== 'RESEARCH_ONLY';
+  return state === 'OBSERVED'
+    && item.evidenceRef.evidenceTier === 'E1_OBSERVED_PUBLIC'
+    && authority === 'SERVER_PROVIDER'
+    && allowedUse === 'COMMERCIAL_DECISION';
 }
 
 function evaluateProof(evidence, metrics) {

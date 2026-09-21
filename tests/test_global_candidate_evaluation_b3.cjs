@@ -27,7 +27,7 @@ const candidate = (id, phrase, rows) => ({
 const researchOnlyField = value => ({ value, state: 'OBSERVED', source: 'ETSY_SEARCH_CSV',
   authority: 'NONE', allowedUse: 'RESEARCH_ONLY', raw: String(value) });
 const proofField = value => ({ value, state: 'OBSERVED', source: 'CANONICAL_MARKETPLACE_SOURCE',
-  authority: 'MARKETPLACE_OBSERVED', allowedUse: 'COMMERCIAL_DECISION', raw: String(value) });
+  authority: 'SERVER_PROVIDER', allowedUse: 'COMMERCIAL_DECISION', raw: String(value) });
 
 const modeled = candidate(1, 'modeled demand', [evidence({
   commercialEvidence: { searchVolume: 2400, keywordSales: 18, competingProducts: 700, modeled: true }

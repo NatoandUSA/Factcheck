@@ -69,6 +69,8 @@ const { recordCanonicalSubmission, requestCanonicalSubmission, reviewCanonicalLi
   authorizeCanonicalSubmission, exportCanonicalSubmission,
   reportCanonicalOperatorSubmission } = require('./canonicalReviewHandoffStore');
 const { pullAndPersistSocialHandoff } = require('./socialHandoffStore');
+const { ingestCandidateProjections, listGlobalCandidates } = require('./globalCandidatePool');
+const { projectResearchFile, projectSocialHandoff, projectWorkflowArtifact } = require('./globalCandidateProjection');
 const amazonResearchAdapter = require('./commerceIntelligence/amazonResearchAdapter');
 const amazonIntelligenceAdapter = require('./commerceIntelligence/amazonIntelligenceAdapter');
 const { selectAsinBatches } = require('./commerceIntelligence/asinSelector');
@@ -1903,6 +1905,91 @@ async function inspectCanonicalResearchFile(file, adapter) {
     : (source.headerDiagnostics?.recognizedColumns || []).map(item => item.sourceColumn);
   return { rawHash, parserHash, built, source, headerSignature };
 }
+
+app.get('/api/global-candidates', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    const candidates = await listGlobalCandidates(db, revisionScope(req.user), { limit: req.query.limit });
+    res.json({ success: true, groupingMethod: 'EXACT_NORMALIZED_V1', decisionAuthority: false,
+      promotionAuthority: false, candidates });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+app.post('/api/global-candidates/research-imports/preview', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']),
+  commerceResearchUpload.single('researchFile'), async (req, res) => {
+    try {
+      const file = canonicalResearchFile(req, new Set(['kind']), req.user.marketplace);
+      const projected = await projectResearchFile(file, req.user.marketplace);
+      res.json({ success: true, zeroWrite: true, marketplace: req.user.marketplace,
+        groupingMethod: 'EXACT_NORMALIZED_V1', candidateCount: projected.projections.length,
+        candidateSample: projected.projections.slice(0, 100).map(item => ({ phrase: item.phrase, sourceFamily: item.sourceFamily,
+          authorityClassification: item.authorityClassification, evidenceTier: item.evidenceTier })),
+        accounting: projected.accounting, sourceCoverage: projected.sourceCoverage,
+        rawHash: projected.rawHash, parserId: projected.parserId, parserHash: projected.parserHash,
+        adapterBindingHash: projected.adapterBindingHash });
+    } catch (error) { rejectRevisionStore(res, error); }
+  });
+
+app.post('/api/global-candidates/research-imports', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']),
+  commerceResearchUpload.single('researchFile'), async (req, res) => {
+    try {
+      const file = canonicalResearchFile(req, new Set(['kind']), req.user.marketplace);
+      const projected = await projectResearchFile(file, req.user.marketplace);
+      if (!projected.projections.length) throw Object.assign(new Error('GLOBAL_CANDIDATE_SOURCE_HAS_NO_CANDIDATE_PHRASES'), {
+        code: 'GLOBAL_CANDIDATE_SOURCE_HAS_NO_CANDIDATE_PHRASES', status: 422,
+        details: { kind: file.kind, note: 'Supporting-only source is not promoted into a phrase candidate in B2.' }
+      });
+      const result = await ingestCandidateProjections(db, revisionScope(req.user), projected.projections);
+      res.status(result.evidenceCreated ? 201 : 200).json({ success: true, ...result,
+        groupingMethod: 'EXACT_NORMALIZED_V1', decisionAuthority: false, promotionAuthority: false,
+        accounting: projected.accounting, rawHash: projected.rawHash });
+    } catch (error) { rejectRevisionStore(res, error); }
+  });
+
+app.post('/api/global-candidates/social-handoffs/:handoffId', requireAuth(db), requireRole(['OWNER', 'MANAGER']), async (req, res) => {
+  try {
+    const handoffId = Number(req.params.handoffId);
+    if (!Number.isInteger(handoffId) || handoffId < 1) throw Object.assign(new Error('SOCIAL_HANDOFF_ID_INVALID'), {
+      code: 'SOCIAL_HANDOFF_ID_INVALID', status: 400
+    });
+    const row = await new Promise((resolve, reject) => db.get(`SELECT * FROM external_research_handoffs
+      WHERE id=? AND tenant_id=?`, [handoffId, req.user.tenantId],
+    (error, value) => error ? reject(error) : resolve(value || null)));
+    if (!row) throw Object.assign(new Error('SOCIAL_HANDOFF_NOT_FOUND'), { code: 'SOCIAL_HANDOFF_NOT_FOUND', status: 404 });
+    if (row.authority_classification !== 'RESEARCH_ONLY' || row.market_validation_capability !== 'NOT_CONNECTED') {
+      throw Object.assign(new Error('SOCIAL_HANDOFF_AUTHORITY_INVALID'), { code: 'SOCIAL_HANDOFF_AUTHORITY_INVALID', status: 409 });
+    }
+    const projections = projectSocialHandoff(row);
+    if (!projections.length) throw Object.assign(new Error('SOCIAL_HANDOFF_HAS_NO_CANDIDATES'), {
+      code: 'SOCIAL_HANDOFF_HAS_NO_CANDIDATES', status: 422
+    });
+    const result = await ingestCandidateProjections(db, revisionScope(req.user), projections);
+    res.status(result.evidenceCreated ? 201 : 200).json({ success: true, ...result,
+      groupingMethod: 'EXACT_NORMALIZED_V1', decisionAuthority: false, promotionAuthority: false });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+app.post('/api/global-candidates/projects/:projectId/outliers', requireAuth(db), requireRole(['OWNER', 'MANAGER']), async (req, res) => {
+  try {
+    const projectId = Number(req.params.projectId);
+    if (!Number.isInteger(projectId) || projectId < 1) throw Object.assign(new Error('PROJECT_CONTEXT_REQUIRED'), {
+      code: 'PROJECT_CONTEXT_REQUIRED', status: 400
+    });
+    const state = await getArtifactState(db, revisionScope(req.user), projectId);
+    const kind = req.user.marketplace === 'AMAZON' ? 'AMAZON_MASTER_KEYWORDS' : 'ETSY_MASTER_KEYWORDS';
+    const artifact = state.heads?.[kind];
+    if (!artifact) throw Object.assign(new Error('GLOBAL_CANDIDATE_PROJECT_ARTIFACT_REQUIRED'), {
+      code: 'GLOBAL_CANDIDATE_PROJECT_ARTIFACT_REQUIRED', status: 409, details: { kind }
+    });
+    const projections = projectWorkflowArtifact(artifact);
+    if (!projections.length) throw Object.assign(new Error('GLOBAL_CANDIDATE_PROJECT_HAS_NO_OUTLIERS'), {
+      code: 'GLOBAL_CANDIDATE_PROJECT_HAS_NO_OUTLIERS', status: 422, details: { kind }
+    });
+    const result = await ingestCandidateProjections(db, revisionScope(req.user), projections);
+    res.status(result.evidenceCreated ? 201 : 200).json({ success: true, ...result,
+      sourceProjectId: projectId, sourceArtifactId: artifact.id, sourceArtifactHash: artifact.artifactHash,
+      groupingMethod: 'EXACT_NORMALIZED_V1', decisionAuthority: false, promotionAuthority: false });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
 
 app.get('/api/projects/:id/commerce-state', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
   try {

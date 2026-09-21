@@ -17,6 +17,7 @@ const OPERATOR_REPORTED_SUBMISSION_MIGRATION = '017_operator_reported_submission
 const PRODUCT_TRUTH_FAMILY_MIGRATION = '018_product_truth_family_profiles';
 const UAT_APPROVAL_EXPORT_MIGRATION = '019_uat_approval_export_authorizations';
 const SOCIAL_HANDOFF_V3_CONSUMER_MIGRATION = '020_social_handoff_v3_consumer';
+const GLOBAL_CANDIDATE_POOL_MVP_MIGRATION = '021_global_candidate_pool_mvp';
 const crypto = require('node:crypto');
 const { canonicalJson, hashBytes } = require('../revisionStore');
 
@@ -802,6 +803,56 @@ async function migrateSocialHandoffV3Consumer(db) {
   }
 }
 
+async function migrateGlobalCandidatePoolMvp(db) {
+  await run(db, `CREATE TABLE IF NOT EXISTS global_candidates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id TEXT NOT NULL,
+    workspace_id INTEGER NOT NULL REFERENCES workspaces(id),
+    marketplace TEXT NOT NULL CHECK(marketplace IN ('AMAZON','ETSY')),
+    candidate_key TEXT NOT NULL CHECK(length(candidate_key)=64),
+    normalized_phrase TEXT NOT NULL,
+    display_phrase TEXT NOT NULL,
+    grouping_method TEXT NOT NULL CHECK(grouping_method='EXACT_NORMALIZED_V1'),
+    created_by INTEGER NOT NULL REFERENCES users(id),
+    created_at DATETIME NOT NULL,
+    UNIQUE(tenant_id,workspace_id,marketplace,candidate_key)
+  )`);
+  await run(db, `CREATE INDEX IF NOT EXISTS idx_global_candidates_scope
+    ON global_candidates(tenant_id,workspace_id,marketplace,normalized_phrase,id)`);
+  await run(db, `CREATE TABLE IF NOT EXISTS global_candidate_evidence (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    candidate_id INTEGER NOT NULL REFERENCES global_candidates(id),
+    tenant_id TEXT NOT NULL,
+    workspace_id INTEGER NOT NULL REFERENCES workspaces(id),
+    marketplace TEXT NOT NULL CHECK(marketplace IN ('AMAZON','ETSY')),
+    evidence_hash TEXT NOT NULL CHECK(length(evidence_hash)=64),
+    source_family TEXT NOT NULL,
+    authority_classification TEXT NOT NULL CHECK(authority_classification IN (
+      'OBSERVED_PUBLIC','MODELED_THIRD_PARTY','RESEARCH_ONLY','PROJECT_RESEARCH'
+    )),
+    evidence_tier TEXT NOT NULL,
+    source_artifact_type TEXT NOT NULL,
+    source_artifact_id TEXT NULL,
+    source_artifact_hash TEXT NOT NULL CHECK(length(source_artifact_hash)=64),
+    provenance_json TEXT NOT NULL CHECK(json_valid(provenance_json)),
+    commercial_evidence_json TEXT NOT NULL CHECK(json_valid(commercial_evidence_json)),
+    social_evidence_json TEXT NOT NULL CHECK(json_valid(social_evidence_json)),
+    raw_evidence_json TEXT NOT NULL CHECK(json_valid(raw_evidence_json)),
+    created_by INTEGER NOT NULL REFERENCES users(id),
+    created_at DATETIME NOT NULL,
+    UNIQUE(tenant_id,workspace_id,marketplace,evidence_hash)
+  )`);
+  await run(db, `CREATE INDEX IF NOT EXISTS idx_global_candidate_evidence_candidate
+    ON global_candidate_evidence(candidate_id,id)`);
+  for (const table of ['global_candidates','global_candidate_evidence']) {
+    for (const operation of ['update','delete']) {
+      await run(db, `CREATE TRIGGER IF NOT EXISTS ${table}_immutable_${operation}
+        BEFORE ${operation.toUpperCase()} ON ${table}
+        BEGIN SELECT RAISE(ABORT,'IMMUTABLE_GLOBAL_CANDIDATE_POOL'); END`);
+    }
+  }
+}
+
 const WORKFLOW_V1_COLUMNS = Object.freeze([
   'id','tenant_id','workspace_id','marketplace','project_id','kind','revision_number','parent_revision_id',
   'dependency_manifest_json','dependency_manifest_hash','payload_json','payload_hash','accounting_json','accounting_hash',
@@ -1284,6 +1335,18 @@ async function runMigrations(db) {
       throw error;
     }
   }
+  const globalCandidateApplied = await all(db, 'SELECT id FROM schema_migrations WHERE id=?', [GLOBAL_CANDIDATE_POOL_MVP_MIGRATION]);
+  if (globalCandidateApplied.length === 0) {
+    await run(db, 'BEGIN IMMEDIATE');
+    try {
+      await migrateGlobalCandidatePoolMvp(db);
+      await run(db, 'INSERT INTO schema_migrations(id) VALUES (?)', [GLOBAL_CANDIDATE_POOL_MVP_MIGRATION]);
+      await run(db, 'COMMIT');
+    } catch (error) {
+      try { await run(db, 'ROLLBACK'); } catch (_) {}
+      throw error;
+    }
+  }
 }
 
 async function migrateAgentWorkspaceScope(db) {
@@ -1383,11 +1446,13 @@ module.exports = {
   PRODUCT_TRUTH_FAMILY_MIGRATION,
   UAT_APPROVAL_EXPORT_MIGRATION,
   SOCIAL_HANDOFF_V3_CONSUMER_MIGRATION,
+  GLOBAL_CANDIDATE_POOL_MVP_MIGRATION,
   migrateOwnerSubmissionAuthorization,
   migrateCommerceWorkflowArtifacts,
   migrateOperatorReportedSubmissionLifecycle,
   migrateUatApprovalExportAuthorizations,
   migrateSocialHandoffV3Consumer,
+  migrateGlobalCandidatePoolMvp,
   AGENT_WORKSPACE_SCOPE_MIGRATION,
   PROJECT_SCOPED_EVIDENCE_MIGRATION,
   CANONICAL_DAG_MIGRATION,

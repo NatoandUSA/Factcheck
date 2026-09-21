@@ -3,6 +3,7 @@ const { MAX_BYTES, verifySocialHandoffV3 } = require('./integrations/socialHando
 
 const OPERATION = 'PULL_SOCIAL_HANDOFF_V3';
 const RESPONSE_LIMIT = MAX_BYTES + (64 * 1024);
+const UPSTREAM_TIMEOUT_MS = 20000;
 
 class SocialHandoffStoreError extends Error {
   constructor(code, status = 500, details = {}) {
@@ -59,7 +60,27 @@ function assertIdempotencyKey(value) {
   return key;
 }
 
-async function readBoundedResponse(response) {
+function abortError() {
+  const error = new Error('SOCIAL_HANDOFF_UPSTREAM_TIMEOUT');
+  error.name = 'AbortError';
+  return error;
+}
+
+async function raceWithAbort(promise, signal) {
+  if (signal.aborted) throw abortError();
+  let onAbort;
+  const aborted = new Promise((resolve, reject) => {
+    onAbort = () => reject(abortError());
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+  try {
+    return await Promise.race([promise, aborted]);
+  } finally {
+    signal.removeEventListener('abort', onAbort);
+  }
+}
+
+async function readBoundedResponse(response, signal) {
   const declared = Number(response.headers?.get?.('content-length'));
   if (Number.isFinite(declared) && declared > RESPONSE_LIMIT) {
     throw new SocialHandoffStoreError('SOCIAL_HANDOFF_RESPONSE_TOO_LARGE', 502);
@@ -70,7 +91,7 @@ async function readBoundedResponse(response) {
     let size = 0;
     try {
       while (true) {
-        const { done, value } = await reader.read();
+        const { done, value } = await raceWithAbort(reader.read(), signal);
         if (done) break;
         size += value.byteLength;
         if (size > RESPONSE_LIMIT) {
@@ -80,11 +101,14 @@ async function readBoundedResponse(response) {
         chunks.push(Buffer.from(value));
       }
     } finally {
+      if (signal.aborted) {
+        try { await reader.cancel(); } catch (_) {}
+      }
       reader.releaseLock();
     }
     return Buffer.concat(chunks).toString('utf8');
   }
-  const text = await response.text();
+  const text = await raceWithAbort(response.text(), signal);
   if (Buffer.byteLength(text, 'utf8') > RESPONSE_LIMIT) {
     throw new SocialHandoffStoreError('SOCIAL_HANDOFF_RESPONSE_TOO_LARGE', 502);
   }
@@ -101,31 +125,32 @@ async function existingReceipt(db, tenantId, idempotencyKey, requestHash) {
   return { ...JSON.parse(row.response_json), replay: true };
 }
 
-async function fetchEnvelope(config, fetchImpl) {
+async function fetchEnvelope(config, fetchImpl, timeoutMs = UPSTREAM_TIMEOUT_MS) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 20000);
-  let response;
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    response = await fetchImpl(config.endpoint, { method: 'GET', redirect: 'error', signal: controller.signal,
+    const response = await fetchImpl(config.endpoint, { method: 'GET', redirect: 'error', signal: controller.signal,
       headers: { Accept: 'application/json', 'x-omniseller-token': config.secret } });
+    if (!response || response.status !== 200) {
+      throw new SocialHandoffStoreError('SOCIAL_HANDOFF_UPSTREAM_REJECTED', 502,
+        { upstreamStatus: response?.status || null });
+    }
+    const contentType = String(response.headers?.get?.('content-type') || '').toLowerCase();
+    if (!contentType.startsWith('application/json')) {
+      throw new SocialHandoffStoreError('SOCIAL_HANDOFF_UPSTREAM_CONTENT_TYPE_INVALID', 502);
+    }
+    return await readBoundedResponse(response, controller.signal);
   } catch (error) {
-    throw new SocialHandoffStoreError(error?.name === 'AbortError'
+    if (error instanceof SocialHandoffStoreError) throw error;
+    throw new SocialHandoffStoreError(controller.signal.aborted || error?.name === 'AbortError'
       ? 'SOCIAL_HANDOFF_UPSTREAM_TIMEOUT' : 'SOCIAL_HANDOFF_UPSTREAM_UNAVAILABLE', 502);
   } finally {
     clearTimeout(timeout);
   }
-  if (!response || response.status !== 200) {
-    throw new SocialHandoffStoreError('SOCIAL_HANDOFF_UPSTREAM_REJECTED', 502, { upstreamStatus: response?.status || null });
-  }
-  const contentType = String(response.headers?.get?.('content-type') || '').toLowerCase();
-  if (!contentType.startsWith('application/json')) {
-    throw new SocialHandoffStoreError('SOCIAL_HANDOFF_UPSTREAM_CONTENT_TYPE_INVALID', 502);
-  }
-  return readBoundedResponse(response);
 }
 
 async function pullAndPersistSocialHandoff({ db, scope, idempotencyKey, env = process.env,
-  fetchImpl = global.fetch, now = new Date() }) {
+  fetchImpl = global.fetch, now = null, upstreamTimeoutMs = UPSTREAM_TIMEOUT_MS }) {
   assertScope(scope);
   const key = assertIdempotencyKey(idempotencyKey);
   const config = assertConfiguration(env);
@@ -137,11 +162,14 @@ async function pullAndPersistSocialHandoff({ db, scope, idempotencyKey, env = pr
   const replay = await existingReceipt(db, scope.tenantId, key, requestHash);
   if (replay) return replay;
 
-  const envelopeText = await fetchEnvelope(config, fetchImpl);
+  const envelopeText = await fetchEnvelope(config, fetchImpl, upstreamTimeoutMs);
+  const verificationNow = now === null || now === undefined ? new Date()
+    : now instanceof Date ? now : new Date(now);
   let verified;
   try {
     verified = verifySocialHandoffV3(envelopeText, { secret: config.secret,
-      allowedSourceSha: config.allowedSourceSha, allowedDeploymentId: config.allowedDeploymentId, now });
+      allowedSourceSha: config.allowedSourceSha, allowedDeploymentId: config.allowedDeploymentId,
+      now: verificationNow });
   } catch (error) {
     if (error?.code) throw new SocialHandoffStoreError(error.code, error.status || 422, error.details);
     throw error;
@@ -154,7 +182,7 @@ async function pullAndPersistSocialHandoff({ db, scope, idempotencyKey, env = pr
     const nonce = await get(db, 'SELECT id FROM external_research_handoff_nonces WHERE source_system=? AND nonce=?',
       [verified.envelope.sourceSystem, verified.nonce]);
     if (nonce) throw new SocialHandoffStoreError('SOCIAL_HANDOFF_NONCE_REPLAY', 409);
-    const receivedAt = now.toISOString();
+    const receivedAt = verificationNow.toISOString();
     const artifactInsert = await run(db, `INSERT OR IGNORE INTO external_research_handoffs
       (tenant_id,source_system,schema_version,source_git_sha,source_deployment_id,artifact_issued_at,payload_json,
        source_artifact_hash,source_artifact_bytes,authority_classification,market_validation_capability,
@@ -200,4 +228,5 @@ async function pullAndPersistSocialHandoff({ db, scope, idempotencyKey, env = pr
   }
 }
 
-module.exports = Object.freeze({ OPERATION, SocialHandoffStoreError, pullAndPersistSocialHandoff });
+module.exports = Object.freeze({ OPERATION, UPSTREAM_TIMEOUT_MS, SocialHandoffStoreError,
+  pullAndPersistSocialHandoff });

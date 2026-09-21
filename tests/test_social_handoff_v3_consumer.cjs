@@ -7,7 +7,8 @@ const os = require('node:os');
 const path = require('node:path');
 const sqlite3 = require('sqlite3').verbose();
 const { migrateSocialHandoffV3Consumer } = require('../server/database/migrations');
-const { canonicalArtifactString, verifySocialHandoffV3 } = require('../server/integrations/socialHandoffV3Verifier');
+const { canonicalArtifactString, artifactIdentity,
+  verifySocialHandoffV3 } = require('../server/integrations/socialHandoffV3Verifier');
 const { pullAndPersistSocialHandoff } = require('../server/socialHandoffStore');
 
 const SOURCE_SHA = '2ae2316ba73abd1fac75b706d2d41b9487bb4321';
@@ -42,18 +43,37 @@ function expectCode(fn, code) {
   assert.throws(fn, error => error?.code === code, `expected ${code}`);
 }
 
-function envelopeWithNonce(nonce) {
+function envelopeWithNonce(nonce, timing = {}) {
   // issuedAt intentionally stays fixed: Social includes sourceRevision +
   // receipt.issuedAt in the canonical artifact metadata. Changing issuedAt
   // therefore defines a different artifact rather than a fresh delivery of A.
   const envelope = JSON.parse(GOLDEN_BASE);
   envelope.receipt.nonce = nonce;
+  if (timing.issuedAt) envelope.receipt.issuedAt = timing.issuedAt;
+  if (timing.expiresAt) envelope.receipt.expiresAt = timing.expiresAt;
   const { receipt, transportDigest, transportDigestAuthority, ...payload } = envelope;
+  const identity = artifactIdentity('OMNISELLER_HANDOFF_V3', payload,
+    { sourceRevision: payload.sourceRelease.gitSha, issuedAt: receipt.issuedAt });
+  envelope.receipt.artifact = identity;
+  envelope.transportDigest = identity.sha256;
   const { signature: _signature, ...unsignedReceipt } = receipt;
   const input = canonicalArtifactString(JSON.stringify({ payload, receipt: unsignedReceipt,
-    transportDigest, transportDigestAuthority }));
+    transportDigest: envelope.transportDigest, transportDigestAuthority }));
   envelope.receipt.signature = crypto.createHmac('sha256', SECRET).update(input, 'utf8').digest('hex');
   return JSON.stringify(envelope);
+}
+
+function stalledJsonResponse({ drip = false } = {}) {
+  let interval;
+  const body = new ReadableStream({
+    start(controller) {
+      if (!drip) return;
+      controller.enqueue(new TextEncoder().encode('{'));
+      interval = setInterval(() => controller.enqueue(new TextEncoder().encode(' ')), 5);
+    },
+    cancel() { if (interval) clearInterval(interval); }
+  });
+  return new Response(body, { status: 200, headers: { 'content-type': 'application/json' } });
 }
 
 const GOLDEN = envelopeWithNonce('123e4567-e89b-42d3-a456-426614174000');
@@ -109,6 +129,42 @@ const GOLDEN = envelopeWithNonce('123e4567-e89b-42d3-a456-426614174000');
       OMNISELLER_HANDOFF_TOKEN: SECRET, SOCIAL_HANDOFF_ALLOWED_SOURCE_SHA: SOURCE_SHA,
       SOCIAL_HANDOFF_ALLOWED_DEPLOYMENT_ID: DEPLOYMENT_ID };
     const scope = { tenantId: 'tenant-a', actorId: 1, role: 'OWNER', workspaceId: 7, marketplace: 'ETSY' };
+    await assert.rejects(() => pullAndPersistSocialHandoff({ db, scope,
+      idempotencyKey: 'timeout-headers-0001', env, upstreamTimeoutMs: 30,
+      fetchImpl: async (_url, options) => new Promise((resolve, reject) => {
+        options.signal.addEventListener('abort', () => {
+          const error = new Error('aborted');
+          error.name = 'AbortError';
+          reject(error);
+        }, { once: true });
+      }) }), error => error?.code === 'SOCIAL_HANDOFF_UPSTREAM_TIMEOUT' && error?.status === 502);
+    for (const drip of [false, true]) {
+      await assert.rejects(() => pullAndPersistSocialHandoff({ db, scope,
+        idempotencyKey: drip ? 'timeout-body-drip-0001' : 'timeout-body-silent-0001', env,
+        fetchImpl: async () => stalledJsonResponse({ drip }), upstreamTimeoutMs: 30 }),
+      error => error?.code === 'SOCIAL_HANDOFF_UPSTREAM_TIMEOUT' && error?.status === 502);
+    }
+    const issuedAt = new Date(Date.now() - 1000).toISOString();
+    const expiresAt = new Date(Date.now() + 100).toISOString();
+    const expiresDuringBody = envelopeWithNonce('623e4567-e89b-42d3-a456-426614174000',
+      { issuedAt, expiresAt });
+    await assert.rejects(() => pullAndPersistSocialHandoff({ db, scope,
+      idempotencyKey: 'expires-during-body-0001', env,
+      fetchImpl: async () => new Response(new ReadableStream({
+        start(controller) {
+          setTimeout(() => {
+            controller.enqueue(new TextEncoder().encode(expiresDuringBody));
+            controller.close();
+          }, 175);
+        }
+      }), { status: 200, headers: { 'content-type': 'application/json' } }) }),
+    error => error?.code === 'SOCIAL_HANDOFF_RECEIPT_EXPIRED');
+    assert.equal((await get(db, 'SELECT COUNT(*) AS n FROM external_research_handoffs')).n, 0);
+    assert.equal((await get(db, 'SELECT COUNT(*) AS n FROM external_research_handoff_nonces')).n, 0);
+    assert.equal((await get(db, 'SELECT COUNT(*) AS n FROM external_research_handoff_receipts')).n, 0);
+    assert.equal((await get(db, "SELECT COUNT(*) AS n FROM audit_events WHERE action='social-handoff-v3:pull'")).n, 0);
+    assert.deepStrictEqual(await commerceSnapshot(db), commerceBefore,
+      'timed-out upstream bodies must not mutate commerce or authority state');
     let fetches = 0;
     const fetchImpl = async () => { fetches += 1; return new Response(GOLDEN, { status: 200,
       headers: { 'content-type': 'application/json' } }); };

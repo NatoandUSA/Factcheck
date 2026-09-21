@@ -158,14 +158,14 @@ async function listGlobalCandidates(db, scope, options = {}) {
   return rows.map(row => {
     const candidateEvidence = byCandidate.get(row.id) || [];
     const sourceFamilies = [...new Set(candidateEvidence.map(item => item.sourceFamily))];
-    const hasCommercialEvidence = candidateEvidence.some(item => Object.keys(item.commercialEvidence).length > 0
-      && item.authorityClassification !== 'RESEARCH_ONLY');
+    const hasCommercialSignals = candidateEvidence.some(item => Object.keys(item.commercialEvidence).length > 0);
     const hasSocialEvidence = candidateEvidence.some(item => Object.keys(item.socialEvidence).length > 0);
     return { id: row.id, candidateKey: row.candidate_key, normalizedPhrase: row.normalized_phrase,
       displayPhrase: row.display_phrase, groupingMethod: row.grouping_method, createdAt: row.created_at,
       sourceFamilies, completeness: { evidenceCount: candidateEvidence.length,
-        sourceFamilyCount: sourceFamilies.length, hasCommercialEvidence, hasSocialEvidence,
-        unknowns: hasCommercialEvidence ? [] : ['COMMERCIAL_PROOF_NOT_PRESENT'] }, evidence: candidateEvidence };
+        sourceFamilyCount: sourceFamilies.length, hasCommercialSignals, hasSocialEvidence,
+        commercialProofStatus: hasCommercialSignals ? 'NOT_EVALUATED' : 'NOT_PRESENT',
+        unknowns: ['COMMERCIAL_PROOF_NOT_PRESENT'] }, evidence: candidateEvidence };
   });
 }
 

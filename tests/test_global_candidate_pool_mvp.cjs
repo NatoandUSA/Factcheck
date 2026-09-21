@@ -53,6 +53,10 @@ const sha = value => crypto.createHash('sha256').update(value).digest('hex');
     assert.equal(replayAmazon.evidenceCreated, 0);
     assert.equal((await get(db, 'SELECT COUNT(*) AS count FROM global_candidates')).count, candidateCount);
     assert.equal((await get(db, 'SELECT COUNT(*) AS count FROM global_candidate_evidence')).count, evidenceCount);
+    const modeledOnly = (await listGlobalCandidates(db, amazonScope))[0];
+    assert.equal(modeledOnly.completeness.hasCommercialSignals, true);
+    assert.equal(modeledOnly.completeness.commercialProofStatus, 'NOT_EVALUATED');
+    assert.ok(modeledOnly.completeness.unknowns.includes('COMMERCIAL_PROOF_NOT_PRESENT'));
 
     const etsyScope = { tenantId: 'tenant-a', workspaceId: 7, marketplace: 'ETSY', actorId: 1 };
     const etsy = await projectResearchFile({ kind: 'ETSY_SEARCH', fileName: 'etsy.csv',
@@ -89,6 +93,9 @@ const sha = value => crypto.createHash('sha256').update(value).digest('hex');
       .find(item => item.normalizedPhrase === 'para mi hija');
     assert.deepEqual(new Set(groupedWithOutlier.evidence.map(item => item.authorityClassification)),
       new Set(['OBSERVED_PUBLIC','RESEARCH_ONLY','PROJECT_RESEARCH']));
+    assert.equal(groupedWithOutlier.completeness.hasCommercialSignals, true);
+    assert.equal(groupedWithOutlier.completeness.commercialProofStatus, 'NOT_EVALUATED');
+    assert.ok(groupedWithOutlier.completeness.unknowns.includes('COMMERCIAL_PROOF_NOT_PRESENT'));
 
     const otherWorkspace = { ...etsyScope, workspaceId: 8 };
     await ingestCandidateProjections(db, otherWorkspace, social);

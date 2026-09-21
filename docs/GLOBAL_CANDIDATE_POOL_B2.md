@@ -39,7 +39,10 @@ that binds source family, authority, artifact hash, provenance, commercial/socia
 - `POST /api/global-candidates/projects/:projectId/outliers`
 
 The read response exposes grouping, source families, completeness/unknowns, evidence authority and original
-provenance. It exposes no score, decision authority, promotion authority, Product Truth authority, or commerce write.
+provenance. `hasCommercialSignals` means only that commercial-looking source fields exist. B2 never promotes those
+fields to proof: `commercialProofStatus` is `NOT_EVALUATED` when signals exist and `NOT_PRESENT` otherwise, while
+`COMMERCIAL_PROOF_NOT_PRESENT` remains visible until a later proof-evaluation layer establishes it. The response
+exposes no score, decision authority, promotion authority, Product Truth authority, or commerce write.
 
 ## Explicit non-goals
 

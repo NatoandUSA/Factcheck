@@ -1,0 +1,294 @@
+{
+  "schemaVersion": "GPT1_OMNISELLER_HANDOFF_V3_CONSUMER_ORACLE_V1",
+  "authority": "REVIEW_ONLY",
+  "trustedSource": {
+    "gitSha": "2ae2316ba73abd1fac75b706d2d41b9487bb4321",
+    "deploymentId": "ee11aa7d-e76f-4f72-9771-e6570ddaeb8a",
+    "schemaVersion": "OMNISELLER_INTELLIGENCE_HANDOFF_V3",
+    "sourceRoleRegistryVersion": "SOURCE_ROLE_REGISTRY_V1",
+    "market": "US"
+  },
+  "syntheticSecretPolicy": {
+    "realSecretIncluded": false,
+    "fixtureSecretId": "TEST_ONLY_HANDOFF_SECRET_V1"
+  },
+  "fixtures": [
+    {
+      "id": "H01_VALID_HANDOFF",
+      "input": {
+        "schemaValid": true,
+        "hmacValid": true,
+        "artifactIdentityValid": true,
+        "transportDigestValid": true,
+        "receiptExpired": false,
+        "nonceFresh": true,
+        "sourceShaMatches": true,
+        "deploymentIdMatches": true,
+        "authorityResearchOnly": true,
+        "scopeAuthorized": true
+      },
+      "expected": {
+        "accepted": true,
+        "persistedResearchArtifactsDelta": 1,
+        "commerceMutationDelta": 0,
+        "classification": "RESEARCH_ONLY"
+      }
+    },
+    {
+      "id": "H02_PAYLOAD_TAMPER",
+      "mutation": "Change payload after signature issuance",
+      "expected": {
+        "accepted": false,
+        "errorFamily": "HANDOFF_ARTIFACT_INTEGRITY_FAILURE_OR_SIGNATURE_INVALID",
+        "persistedResearchArtifactsDelta": 0,
+        "commerceMutationDelta": 0
+      }
+    },
+    {
+      "id": "H03_RECEIPT_TAMPER",
+      "mutation": "Change issuedAt or expiresAt without re-signing",
+      "expected": {
+        "accepted": false,
+        "errorFamily": "HANDOFF_SIGNATURE_INVALID",
+        "persistedResearchArtifactsDelta": 0
+      }
+    },
+    {
+      "id": "H04_SIGNATURE_TAMPER",
+      "mutation": "Flip one hex nibble in HMAC signature",
+      "expected": {
+        "accepted": false,
+        "errorFamily": "HANDOFF_SIGNATURE_INVALID",
+        "persistedResearchArtifactsDelta": 0
+      }
+    },
+    {
+      "id": "H05_TRANSPORT_DIGEST_TAMPER",
+      "mutation": "transportDigest differs from receipt.artifact.sha256",
+      "expected": {
+        "accepted": false,
+        "errorFamily": "HANDOFF_ARTIFACT_INTEGRITY_FAILURE",
+        "persistedResearchArtifactsDelta": 0
+      }
+    },
+    {
+      "id": "H06_EXPIRED_RECEIPT",
+      "input": {
+        "issuedAt": "2026-09-21T13:00:00.000Z",
+        "expiresAt": "2026-09-21T13:05:00.000Z",
+        "receiveAt": "2026-09-21T13:05:00.001Z"
+      },
+      "expected": {
+        "accepted": false,
+        "errorFamily": "HANDOFF_RECEIPT_EXPIRED"
+      }
+    },
+    {
+      "id": "H07_INVALID_RECEIPT_TIME_ORDER",
+      "input": {
+        "issuedAt": "2026-09-21T13:05:00.000Z",
+        "expiresAt": "2026-09-21T13:00:00.000Z"
+      },
+      "expected": {
+        "accepted": false,
+        "errorFamily": "HANDOFF_RECEIPT_TIME_INVALID"
+      }
+    },
+    {
+      "id": "H08_NONCE_REPLAY",
+      "steps": [
+        "Accept valid receipt with nonce N1",
+        "Submit same signed envelope with nonce N1 again"
+      ],
+      "expected": {
+        "firstAccepted": true,
+        "secondAccepted": false,
+        "secondErrorFamily": "HANDOFF_NONCE_REPLAY",
+        "artifactRowsAfter": 1
+      }
+    },
+    {
+      "id": "H09_SAME_ARTIFACT_NEW_RECEIPT",
+      "steps": [
+        "Accept artifact A under nonce N1",
+        "Receive exact same artifact A under a fresh valid receipt nonce N2"
+      ],
+      "expected": {
+        "accepted": true,
+        "artifactRowsAfter": 1,
+        "idempotentReplay": true,
+        "commerceMutationDelta": 0
+      }
+    },
+    {
+      "id": "H10_WRONG_SOURCE_SHA",
+      "input": {
+        "sourceReleaseGitSha": "1111111111111111111111111111111111111111"
+      },
+      "expected": {
+        "accepted": false,
+        "errorFamily": "HANDOFF_SOURCE_RELEASE_MISMATCH"
+      }
+    },
+    {
+      "id": "H11_WRONG_DEPLOYMENT_ID",
+      "input": {
+        "sourceDeploymentId": "00000000-0000-4000-8000-000000000000"
+      },
+      "expected": {
+        "accepted": false,
+        "errorFamily": "HANDOFF_SOURCE_DEPLOYMENT_MISMATCH"
+      }
+    },
+    {
+      "id": "H12_WRONG_ARTIFACT_DOMAIN",
+      "input": {
+        "receiptArtifactDomain": "OMNISELLER_HANDOFF_V2"
+      },
+      "expected": {
+        "accepted": false,
+        "errorFamily": "HANDOFF_RESEARCH_ARTIFACT_DOMAIN_INVALID"
+      }
+    },
+    {
+      "id": "H13_AUTHORITY_ESCALATION_PRODUCT_TRUTH",
+      "mutation": "authority.productTruth=true",
+      "expected": {
+        "accepted": false,
+        "errorFamily": "HANDOFF_AUTHORITY_INVALID",
+        "productTruthMutationDelta": 0
+      }
+    },
+    {
+      "id": "H14_AUTHORITY_ESCALATION_PUBLISH",
+      "mutation": "authority.publishAuthority=true or marketplaceWrite=true",
+      "expected": {
+        "accepted": false,
+        "errorFamily": "HANDOFF_AUTHORITY_INVALID",
+        "publishMutationDelta": 0,
+        "marketplaceWriteDelta": 0
+      }
+    },
+    {
+      "id": "H15_MARKET_VALIDATION_ESCALATION",
+      "mutation": "marketValidationCapability=AVAILABLE",
+      "expected": {
+        "accepted": false,
+        "errorFamily": "HANDOFF_AUTHORITY_INVALID"
+      }
+    },
+    {
+      "id": "H16_CROSS_WORKSPACE_INJECTION",
+      "input": {
+        "authenticatedTenant": "TENANT_A",
+        "authenticatedWorkspace": 1,
+        "requestedWorkspace": 2,
+        "projectBelongsToWorkspace": 2
+      },
+      "expected": {
+        "accepted": false,
+        "errorFamily": "HANDOFF_SCOPE_FORBIDDEN_OR_NOT_FOUND",
+        "enumeratesForeignScope": false
+      }
+    },
+    {
+      "id": "H17_PROJECT_SCOPE_MISMATCH",
+      "input": {
+        "tenantId": "TENANT_A",
+        "workspaceId": 1,
+        "marketplace": "AMAZON",
+        "projectMarketplace": "ETSY"
+      },
+      "expected": {
+        "accepted": false,
+        "errorFamily": "HANDOFF_PROJECT_SCOPE_MISMATCH"
+      }
+    },
+    {
+      "id": "H18_CONCURRENT_SAME_ARTIFACT",
+      "input": {
+        "parallelRequests": 2,
+        "artifact": "A",
+        "nonces": ["N1", "N2"]
+      },
+      "expected": {
+        "acceptedResponses": 2,
+        "artifactRowsAfter": 1,
+        "partialState": false,
+        "commerceMutationDelta": 0
+      }
+    },
+    {
+      "id": "H19_CONCURRENT_SAME_NONCE_DIFFERENT_ARTIFACT",
+      "input": {
+        "parallelRequests": 2,
+        "artifacts": ["A", "B"],
+        "nonce": "N1"
+      },
+      "expected": {
+        "maximumAcceptedRequests": 1,
+        "rejectedErrorFamily": "HANDOFF_NONCE_REPLAY",
+        "partialState": false
+      }
+    },
+    {
+      "id": "H20_ZERO_COMMERCE_MUTATION",
+      "input": {
+        "validHandoff": true,
+        "captureBeforeAfter": [
+          "product_truth_revisions",
+          "product_truth_families",
+          "listings",
+          "listing_revisions",
+          "submission_requests",
+          "submission_exports"
+        ]
+      },
+      "expected": {
+        "allCommerceTablesUnchanged": true,
+        "researchArtifactPersistenceOnly": true
+      }
+    },
+    {
+      "id": "H21_UNSUPPORTED_SOURCE_REGISTRY",
+      "input": {
+        "sourceRoleRegistryVersion": "SOURCE_ROLE_REGISTRY_V999"
+      },
+      "expected": {
+        "accepted": false,
+        "errorFamily": "HANDOFF_SOURCE_REGISTRY_UNSUPPORTED"
+      }
+    },
+    {
+      "id": "H22_REVIEWED_PROMOTION_WRONG_DOMAIN",
+      "input": {
+        "reviewedPromotionQueueArtifactDomain": "INTELLIGENCE_OPPORTUNITY_V1"
+      },
+      "expected": {
+        "accepted": false,
+        "errorFamily": "HANDOFF_RESEARCH_ARTIFACT_DOMAIN_INVALID"
+      }
+    },
+    {
+      "id": "H23_SECRET_ROTATION_OLD_SIGNATURE",
+      "steps": [
+        "Rotate production Handoff V3 secret",
+        "Submit envelope signed with previous secret"
+      ],
+      "expected": {
+        "accepted": false,
+        "errorFamily": "HANDOFF_SIGNATURE_INVALID"
+      }
+    },
+    {
+      "id": "H24_UI_AUTHORITY_WORDING",
+      "input": {
+        "persistedArtifactClassification": "RESEARCH_ONLY"
+      },
+      "expected": {
+        "allowedUiLabels": ["Research evidence", "Research priority", "Handoff verified"],
+        "forbiddenUiLabels": ["Sellable", "Validated demand", "Product Truth", "Approved", "Ready to publish"]
+      }
+    }
+  ]
+}

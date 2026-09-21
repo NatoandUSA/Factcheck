@@ -16,6 +16,7 @@ const COMMERCE_WORKFLOW_ARTIFACT_MIGRATION = '2026-09-12_commerce_workflow_artif
 const OPERATOR_REPORTED_SUBMISSION_MIGRATION = '017_operator_reported_submission_lifecycle';
 const PRODUCT_TRUTH_FAMILY_MIGRATION = '018_product_truth_family_profiles';
 const UAT_APPROVAL_EXPORT_MIGRATION = '019_uat_approval_export_authorizations';
+const SOCIAL_HANDOFF_V3_CONSUMER_MIGRATION = '020_social_handoff_v3_consumer';
 const crypto = require('node:crypto');
 const { canonicalJson, hashBytes } = require('../revisionStore');
 
@@ -737,6 +738,54 @@ async function migrateUatApprovalExportAuthorizations(db) {
   }
 }
 
+async function migrateSocialHandoffV3Consumer(db) {
+  await run(db, `CREATE TABLE IF NOT EXISTS external_research_handoffs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id TEXT NOT NULL,
+    source_system TEXT NOT NULL CHECK(source_system='Ecom Intelligence Command Center'),
+    schema_version TEXT NOT NULL CHECK(schema_version='OMNISELLER_INTELLIGENCE_HANDOFF_V3'),
+    source_git_sha TEXT NOT NULL CHECK(length(source_git_sha)=40),
+    source_deployment_id TEXT NOT NULL CHECK(length(source_deployment_id) BETWEEN 1 AND 200),
+    issued_at DATETIME NOT NULL,
+    expires_at DATETIME NOT NULL,
+    nonce TEXT NOT NULL,
+    envelope_json TEXT NOT NULL CHECK(json_valid(envelope_json)),
+    envelope_hash TEXT NOT NULL CHECK(length(envelope_hash)=64),
+    source_artifact_hash TEXT NOT NULL CHECK(length(source_artifact_hash)=64),
+    transport_digest TEXT NOT NULL CHECK(length(transport_digest)=64),
+    signature TEXT NOT NULL CHECK(length(signature)=64),
+    authority_classification TEXT NOT NULL CHECK(authority_classification='RESEARCH_ONLY'),
+    market_validation_capability TEXT NOT NULL CHECK(market_validation_capability='NOT_CONNECTED'),
+    received_by INTEGER NOT NULL REFERENCES users(id),
+    received_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(source_system,nonce),
+    UNIQUE(tenant_id,source_system,envelope_hash)
+  )`);
+  await run(db, `CREATE INDEX IF NOT EXISTS idx_external_research_handoffs_scope
+    ON external_research_handoffs(tenant_id,received_at DESC,id DESC)`);
+  await run(db, `CREATE TABLE IF NOT EXISTS external_research_handoff_receipts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id TEXT NOT NULL,
+    operation TEXT NOT NULL CHECK(operation='PULL_SOCIAL_HANDOFF_V3'),
+    idempotency_key TEXT NOT NULL CHECK(length(idempotency_key) BETWEEN 16 AND 160),
+    request_hash TEXT NOT NULL CHECK(length(request_hash)=64),
+    response_json TEXT NOT NULL CHECK(json_valid(response_json)),
+    handoff_id INTEGER NOT NULL REFERENCES external_research_handoffs(id),
+    created_by INTEGER NOT NULL REFERENCES users(id),
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id,operation,idempotency_key)
+  )`);
+  await run(db, `CREATE INDEX IF NOT EXISTS idx_external_research_handoff_receipts_scope
+    ON external_research_handoff_receipts(tenant_id,operation,idempotency_key)`);
+  for (const table of ['external_research_handoffs', 'external_research_handoff_receipts']) {
+    for (const operation of ['update', 'delete']) {
+      await run(db, `CREATE TRIGGER IF NOT EXISTS ${table}_immutable_${operation}
+        BEFORE ${operation.toUpperCase()} ON ${table}
+        BEGIN SELECT RAISE(ABORT,'IMMUTABLE_EXTERNAL_RESEARCH_HANDOFF'); END`);
+    }
+  }
+}
+
 const WORKFLOW_V1_COLUMNS = Object.freeze([
   'id','tenant_id','workspace_id','marketplace','project_id','kind','revision_number','parent_revision_id',
   'dependency_manifest_json','dependency_manifest_hash','payload_json','payload_hash','accounting_json','accounting_hash',
@@ -1207,6 +1256,18 @@ async function runMigrations(db) {
       throw error;
     }
   }
+  const socialHandoffApplied = await all(db, 'SELECT id FROM schema_migrations WHERE id=?', [SOCIAL_HANDOFF_V3_CONSUMER_MIGRATION]);
+  if (socialHandoffApplied.length === 0) {
+    await run(db, 'BEGIN IMMEDIATE');
+    try {
+      await migrateSocialHandoffV3Consumer(db);
+      await run(db, 'INSERT INTO schema_migrations(id) VALUES (?)', [SOCIAL_HANDOFF_V3_CONSUMER_MIGRATION]);
+      await run(db, 'COMMIT');
+    } catch (error) {
+      try { await run(db, 'ROLLBACK'); } catch (_) {}
+      throw error;
+    }
+  }
 }
 
 async function migrateAgentWorkspaceScope(db) {
@@ -1305,10 +1366,12 @@ module.exports = {
   OPERATOR_REPORTED_SUBMISSION_MIGRATION,
   PRODUCT_TRUTH_FAMILY_MIGRATION,
   UAT_APPROVAL_EXPORT_MIGRATION,
+  SOCIAL_HANDOFF_V3_CONSUMER_MIGRATION,
   migrateOwnerSubmissionAuthorization,
   migrateCommerceWorkflowArtifacts,
   migrateOperatorReportedSubmissionLifecycle,
   migrateUatApprovalExportAuthorizations,
+  migrateSocialHandoffV3Consumer,
   AGENT_WORKSPACE_SCOPE_MIGRATION,
   PROJECT_SCOPED_EVIDENCE_MIGRATION,
   CANONICAL_DAG_MIGRATION,

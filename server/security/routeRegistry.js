@@ -22,6 +22,7 @@ const ROUTES = [
   { method: 'GET', path: '/api/owner/users', public: false },
   { method: 'POST', path: '/api/owner/users', public: false },
   { method: 'POST', path: '/api/owner/users/:id/deactivate', public: false },
+  { method: 'POST', path: '/api/integrations/social-listening/handoffs/pull', public: false },
   { method: 'GET', path: '/api/evidence', public: false },
   { method: 'POST', path: '/api/evidence', public: false },
   { method: 'POST', path: '/api/evidence/:id/accept', public: false },

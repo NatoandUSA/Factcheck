@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "OMNISELLER_INTELLIGENCE_HANDOFF_V3",
+  "type": "object",
+  "required": ["schemaVersion", "sourceSystem", "sourceVersion", "sourceRelease", "generatedAt", "market", "sourceRoleRegistryVersion", "marketValidationCapability", "authority", "watchedOpportunities", "discoveryCandidates", "competitorStoreChanges", "reviewedPromotionQueue", "receipt", "transportDigest", "transportDigestAuthority"],
+  "properties": {
+    "schemaVersion": { "const": "OMNISELLER_INTELLIGENCE_HANDOFF_V3" },
+    "sourceSystem": { "const": "Ecom Intelligence Command Center" },
+    "sourceVersion": { "type": "string", "minLength": 1 },
+    "sourceRelease": {
+      "type": "object", "required": ["gitSha", "deploymentId"],
+      "properties": { "gitSha": { "type": "string", "pattern": "^[a-f0-9]{40}$" }, "deploymentId": { "type": "string", "minLength": 1 } },
+      "additionalProperties": false
+    },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "market": { "const": "US" },
+    "sourceRoleRegistryVersion": { "const": "SOURCE_ROLE_REGISTRY_V1" },
+    "marketValidationCapability": { "const": "NOT_CONNECTED" },
+    "authority": {
+      "type": "object", "required": ["classification", "productTruth", "approvalAuthority", "publishAuthority", "marketplaceWrite"],
+      "properties": {
+        "classification": { "const": "RESEARCH_ONLY" }, "productTruth": { "const": false },
+        "approvalAuthority": { "const": false }, "publishAuthority": { "const": false },
+        "marketplaceWrite": { "const": false }, "note": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "watchedOpportunities": { "type": "array", "items": { "$ref": "#/$defs/watchedOpportunity" } },
+    "discoveryCandidates": { "type": "array", "items": { "$ref": "#/$defs/discoveryCandidate" } },
+    "competitorStoreChanges": { "type": "array", "items": { "$ref": "#/$defs/storeChange" } },
+    "reviewedPromotionQueue": {
+      "type": "array", "items": {
+        "type": "object",
+        "required": ["promotionId", "opportunityKey", "classification", "opportunityArtifactHash", "opportunityArtifactIdentity", "opportunityArtifactMetadata"],
+        "properties": {
+          "promotionId": { "type": "string" }, "opportunityKey": { "type": "string" }, "phrase": { "type": "string" },
+          "market": { "const": "US" }, "classification": { "const": "RESEARCH_ONLY" },
+          "requestedBy": { "type": ["string", "null"] }, "reviewedBy": { "type": ["string", "null"] },
+          "reason": { "type": "string" }, "reviewNote": { "type": "string" },
+          "createdAt": { "type": ["string", "null"] }, "reviewedAt": { "type": ["string", "null"] },
+          "opportunityArtifactHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "opportunityArtifactIdentity": {
+            "type": "object", "required": ["codecVersion", "domain", "sha256", "bytes"],
+            "properties": { "codecVersion": { "type": "string" }, "domain": { "const": "RESEARCH_OPPORTUNITY_V2" }, "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }, "bytes": { "type": "integer", "minimum": 1 } },
+            "additionalProperties": false
+          },
+          "opportunityArtifactMetadata": {
+            "type": "object", "required": ["sourceRevision", "sourceRegistryVersion", "sourceRoleRegistryVersion"],
+            "properties": { "sourceRevision": { "type": "string", "pattern": "^[a-f0-9]{40}$" }, "sourceRegistryVersion": { "type": "string", "minLength": 1 }, "sourceRoleRegistryVersion": { "const": "SOURCE_ROLE_REGISTRY_V1" } },
+            "additionalProperties": false
+          },
+          "opportunityArtifact": { "type": "object" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "receipt": {
+      "type": "object", "required": ["artifact", "issuedAt", "expiresAt", "nonce", "authentication", "signatureScope", "signature"],
+      "properties": {
+        "artifact": {
+          "type": "object", "required": ["codecVersion", "domain", "sha256", "bytes"],
+          "properties": { "codecVersion": { "type": "string" }, "domain": { "const": "OMNISELLER_HANDOFF_V3" }, "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }, "bytes": { "type": "integer", "minimum": 1 } },
+          "additionalProperties": false
+        },
+        "issuedAt": { "type": "string", "format": "date-time" }, "expiresAt": { "type": "string", "format": "date-time" },
+        "nonce": { "type": "string", "format": "uuid" }, "authentication": { "const": "HMAC_SHA256" },
+        "signatureScope": { "const": "PAYLOAD_RECEIPT_TRANSPORT_V1" }, "signature": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      },
+      "additionalProperties": false
+    },
+    "transportDigest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "transportDigestAuthority": { "const": "SERVER_HMAC_AUTHENTICATED_ARTIFACT" }
+  },
+  "$defs": {
+    "nullableString": { "type": ["string", "null"] },
+    "watchedOpportunity": {
+      "type": "object",
+      "required": ["watchId", "keyword", "market", "watchTier", "researchPriorityScore", "researchPriorityScoreVersion", "researchRecommendation", "researchAuthority", "lifecycle", "marketValidationStatus", "sourceFamilies", "topSources", "signalCount", "commercialSignalCount", "lastSignalAt", "lastChange"],
+      "properties": {
+        "watchId": { "type": ["string", "null"] }, "keyword": { "type": "string" }, "market": { "const": "US" },
+        "watchTier": { "enum": ["A", "B", "C"] }, "researchPriorityScore": { "type": "number", "minimum": 0, "maximum": 100 },
+        "researchPriorityScoreVersion": { "const": "RESEARCH_PRIORITY_SCORE_V1" },
+        "researchRecommendation": { "enum": ["NO_DATA", "WATCH", "RESEARCH_MORE", "HANDOFF_READY"] },
+        "researchAuthority": { "const": "RESEARCH_PRIORITIZATION_ONLY" },
+        "lifecycle": { "enum": ["DISCOVERED", "SOCIAL_EVIDENCE_READY", "HANDOFF_READY"] },
+        "marketValidationStatus": { "const": "NOT_CONNECTED" },
+        "sourceFamilies": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "topSources": { "type": "array", "items": {} }, "signalCount": { "type": "number", "minimum": 0 },
+        "commercialSignalCount": { "type": "number", "minimum": 0 }, "lastSignalAt": { "$ref": "#/$defs/nullableString" }, "lastChange": {}
+      },
+      "additionalProperties": false
+    },
+    "discoveryCandidate": {
+      "type": "object", "required": ["keyword", "discoveryScore", "state", "signalCount", "observedMarketplaceSignals", "sourceFamilies", "sources", "lastSeen"],
+      "properties": {
+        "keyword": { "type": "string" }, "discoveryScore": { "type": "number", "minimum": 0, "maximum": 100 },
+        "state": { "type": "string" }, "signalCount": { "type": "number", "minimum": 0 },
+        "observedMarketplaceSignals": { "type": "number", "minimum": 0 },
+        "sourceFamilies": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "sources": { "type": "array", "items": { "type": "string" }, "uniqueItems": true }, "lastSeen": { "$ref": "#/$defs/nullableString" }
+      },
+      "additionalProperties": false
+    },
+    "storeChange": {
+      "type": "object", "required": ["changeId", "storeId", "storeName", "platform", "type", "field", "previous", "current", "itemId", "itemTitle", "materiality", "detectedAt"],
+      "properties": {
+        "changeId": { "type": "string" }, "storeId": { "type": "string" }, "storeName": { "type": "string" },
+        "platform": { "enum": ["ETSY", "AMAZON", "EBAY", "TIKTOK_SHOP"] }, "type": { "type": "string" },
+        "field": { "type": "string" }, "previous": {}, "current": {}, "itemId": { "$ref": "#/$defs/nullableString" },
+        "itemTitle": { "$ref": "#/$defs/nullableString" }, "materiality": { "enum": ["LOW", "MEDIUM", "HIGH"] },
+        "detectedAt": { "$ref": "#/$defs/nullableString" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

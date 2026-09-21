@@ -7,7 +7,8 @@ B3 evaluates the immutable B2 candidate/evidence pool and returns evidence-first
 ## Invariants
 
 - Commercial signals do not imply commercial proof.
-- Proof requires field-level provenance whose authority and allowed use permit a commercial conclusion.
+- B3 V1 proof requires `OBSERVED_PUBLIC` / `E1_OBSERVED_PUBLIC` plus field provenance `state=OBSERVED`, `authority=SERVER_PROVIDER`, and `allowedUse=COMMERCIAL_DECISION`.
+- No current B2 Etsy CSV field meets that proof gate; its canonical field provenance remains `authority=NONE` / `allowedUse=RESEARCH_ONLY`.
 - MODELED_THIRD_PARTY, PROJECT_RESEARCH, proxies, and RESEARCH_ONLY data cannot establish commercial proof.
 - Current Etsy CSV numeric fields remain research-only because canonical field provenance is authority=NONE and allowedUse=RESEARCH_ONLY.
 - Social Handoff remains RESEARCH_ONLY; it may support timing/corroboration but never substitute for marketplace evidence.

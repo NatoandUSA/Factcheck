@@ -746,23 +746,37 @@ async function migrateSocialHandoffV3Consumer(db) {
     schema_version TEXT NOT NULL CHECK(schema_version='OMNISELLER_INTELLIGENCE_HANDOFF_V3'),
     source_git_sha TEXT NOT NULL CHECK(length(source_git_sha)=40),
     source_deployment_id TEXT NOT NULL CHECK(length(source_deployment_id) BETWEEN 1 AND 200),
-    issued_at DATETIME NOT NULL,
-    expires_at DATETIME NOT NULL,
-    nonce TEXT NOT NULL,
-    envelope_json TEXT NOT NULL CHECK(json_valid(envelope_json)),
-    envelope_hash TEXT NOT NULL CHECK(length(envelope_hash)=64),
+    artifact_issued_at DATETIME NOT NULL,
+    payload_json TEXT NOT NULL CHECK(json_valid(payload_json)),
     source_artifact_hash TEXT NOT NULL CHECK(length(source_artifact_hash)=64),
-    transport_digest TEXT NOT NULL CHECK(length(transport_digest)=64),
-    signature TEXT NOT NULL CHECK(length(signature)=64),
+    source_artifact_bytes INTEGER NOT NULL CHECK(source_artifact_bytes >= 1),
     authority_classification TEXT NOT NULL CHECK(authority_classification='RESEARCH_ONLY'),
     market_validation_capability TEXT NOT NULL CHECK(market_validation_capability='NOT_CONNECTED'),
+    first_received_by INTEGER NOT NULL REFERENCES users(id),
+    first_received_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(tenant_id,source_system,source_artifact_hash)
+  )`);
+  await run(db, `CREATE INDEX IF NOT EXISTS idx_external_research_handoffs_scope
+    ON external_research_handoffs(tenant_id,first_received_at DESC,id DESC)`);
+  await run(db, `CREATE TABLE IF NOT EXISTS external_research_handoff_nonces (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id TEXT NOT NULL,
+    source_system TEXT NOT NULL CHECK(source_system='Ecom Intelligence Command Center'),
+    handoff_id INTEGER NOT NULL REFERENCES external_research_handoffs(id),
+    nonce TEXT NOT NULL,
+    issued_at DATETIME NOT NULL,
+    expires_at DATETIME NOT NULL,
+    envelope_json TEXT NOT NULL CHECK(json_valid(envelope_json)),
+    envelope_hash TEXT NOT NULL CHECK(length(envelope_hash)=64),
+    transport_digest TEXT NOT NULL CHECK(length(transport_digest)=64),
+    signature TEXT NOT NULL CHECK(length(signature)=64),
     received_by INTEGER NOT NULL REFERENCES users(id),
     received_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(source_system,nonce),
     UNIQUE(tenant_id,source_system,envelope_hash)
   )`);
-  await run(db, `CREATE INDEX IF NOT EXISTS idx_external_research_handoffs_scope
-    ON external_research_handoffs(tenant_id,received_at DESC,id DESC)`);
+  await run(db, `CREATE INDEX IF NOT EXISTS idx_external_research_handoff_nonces_scope
+    ON external_research_handoff_nonces(tenant_id,handoff_id,received_at DESC,id DESC)`);
   await run(db, `CREATE TABLE IF NOT EXISTS external_research_handoff_receipts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     tenant_id TEXT NOT NULL,
@@ -771,13 +785,15 @@ async function migrateSocialHandoffV3Consumer(db) {
     request_hash TEXT NOT NULL CHECK(length(request_hash)=64),
     response_json TEXT NOT NULL CHECK(json_valid(response_json)),
     handoff_id INTEGER NOT NULL REFERENCES external_research_handoffs(id),
+    nonce_id INTEGER NOT NULL REFERENCES external_research_handoff_nonces(id),
     created_by INTEGER NOT NULL REFERENCES users(id),
     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(tenant_id,operation,idempotency_key)
   )`);
   await run(db, `CREATE INDEX IF NOT EXISTS idx_external_research_handoff_receipts_scope
     ON external_research_handoff_receipts(tenant_id,operation,idempotency_key)`);
-  for (const table of ['external_research_handoffs', 'external_research_handoff_receipts']) {
+  for (const table of ['external_research_handoffs', 'external_research_handoff_nonces',
+    'external_research_handoff_receipts']) {
     for (const operation of ['update', 'delete']) {
       await run(db, `CREATE TRIGGER IF NOT EXISTS ${table}_immutable_${operation}
         BEFORE ${operation.toUpperCase()} ON ${table}

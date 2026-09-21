@@ -49,11 +49,15 @@ unexpected content type, redirects, and non-HTTPS/malformed endpoint configurati
 
 Migration `020_social_handoff_v3_consumer` creates:
 
-- `external_research_handoffs`: tenant-scoped immutable Handoff envelopes with globally unique source nonce.
-- `external_research_handoff_receipts`: actor-bound idempotency receipts.
+- `external_research_handoffs`: tenant-scoped immutable canonical artifacts, deduplicated by source artifact hash.
+- `external_research_handoff_nonces`: immutable signed delivery envelopes with globally unique source nonce.
+- `external_research_handoff_receipts`: actor-bound API idempotency receipts linked to the exact artifact and nonce.
 
-Both tables reject update and delete operations through SQLite triggers. Artifact, receipt, and audit-event
-writes share one `BEGIN IMMEDIATE` transaction, so an injected audit failure rolls back the entire intake.
+All three tables reject update and delete operations through SQLite triggers. A fresh signed nonce for an
+already-stored artifact creates a new nonce and API receipt while reusing the artifact row. Reuse of the same
+nonce is rejected. Artifact, nonce, receipt, and audit-event writes share one `BEGIN IMMEDIATE` transaction,
+so an injected audit failure rolls back the entire intake. Concurrent fresh-nonce delivery is serialized by
+SQLite and retains exactly one canonical artifact row.
 
 ## Deferred to Phase 2B+
 

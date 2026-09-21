@@ -151,36 +151,47 @@ async function pullAndPersistSocialHandoff({ db, scope, idempotencyKey, env = pr
   try {
     const racedReplay = await existingReceipt(db, scope.tenantId, key, requestHash);
     if (racedReplay) { await run(db, 'COMMIT'); return racedReplay; }
-    const nonce = await get(db, 'SELECT id FROM external_research_handoffs WHERE source_system=? AND nonce=?',
+    const nonce = await get(db, 'SELECT id FROM external_research_handoff_nonces WHERE source_system=? AND nonce=?',
       [verified.envelope.sourceSystem, verified.nonce]);
     if (nonce) throw new SocialHandoffStoreError('SOCIAL_HANDOFF_NONCE_REPLAY', 409);
     const receivedAt = now.toISOString();
-    const inserted = await run(db, `INSERT INTO external_research_handoffs
-      (tenant_id,source_system,schema_version,source_git_sha,source_deployment_id,issued_at,expires_at,nonce,
-       envelope_json,envelope_hash,source_artifact_hash,transport_digest,signature,authority_classification,
-       market_validation_capability,received_by,received_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [scope.tenantId, verified.envelope.sourceSystem,
+    const artifactInsert = await run(db, `INSERT OR IGNORE INTO external_research_handoffs
+      (tenant_id,source_system,schema_version,source_git_sha,source_deployment_id,artifact_issued_at,payload_json,
+       source_artifact_hash,source_artifact_bytes,authority_classification,market_validation_capability,
+       first_received_by,first_received_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`, [scope.tenantId, verified.envelope.sourceSystem,
       verified.envelope.schemaVersion, verified.envelope.sourceRelease.gitSha,
-      verified.envelope.sourceRelease.deploymentId, verified.issuedAt, verified.expiresAt, verified.nonce,
-      envelopeText, verified.envelopeHash, verified.artifact.sha256, verified.envelope.transportDigest,
-      verified.signature, verified.envelope.authority.classification,
+      verified.envelope.sourceRelease.deploymentId, verified.issuedAt, JSON.stringify(verified.payload),
+      verified.artifact.sha256, verified.artifact.bytes, verified.envelope.authority.classification,
       verified.envelope.marketValidationCapability, Number(scope.actorId), receivedAt]);
-    const response = { success: true, replay: false, handoff: { id: inserted.lastID,
+    const artifact = await get(db, `SELECT id FROM external_research_handoffs
+      WHERE tenant_id=? AND source_system=? AND source_artifact_hash=?`,
+    [scope.tenantId, verified.envelope.sourceSystem, verified.artifact.sha256]);
+    if (!artifact) throw new SocialHandoffStoreError('SOCIAL_HANDOFF_ARTIFACT_PERSIST_FAILED', 500);
+    const nonceInsert = await run(db, `INSERT INTO external_research_handoff_nonces
+      (tenant_id,source_system,handoff_id,nonce,issued_at,expires_at,envelope_json,envelope_hash,
+       transport_digest,signature,received_by,received_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, [scope.tenantId, verified.envelope.sourceSystem, artifact.id,
+      verified.nonce, verified.issuedAt, verified.expiresAt, envelopeText, verified.envelopeHash,
+      verified.envelope.transportDigest, verified.signature, Number(scope.actorId), receivedAt]);
+    const response = { success: true, replay: false, artifactReused: artifactInsert.changes === 0,
+      handoff: { id: artifact.id, nonceReceiptId: nonceInsert.lastID,
       schemaVersion: verified.envelope.schemaVersion, sourceSystem: verified.envelope.sourceSystem,
       sourceRelease: verified.envelope.sourceRelease, artifactHash: verified.artifact.sha256,
       envelopeHash: verified.envelopeHash, authority: verified.envelope.authority,
       marketValidationCapability: verified.envelope.marketValidationCapability, receivedAt } };
     await run(db, `INSERT INTO external_research_handoff_receipts
-      (tenant_id,operation,idempotency_key,request_hash,response_json,handoff_id,created_by,created_at)
-      VALUES (?,?,?,?,?,?,?,?)`, [scope.tenantId, OPERATION, key, requestHash, JSON.stringify(response),
-      inserted.lastID, Number(scope.actorId), receivedAt]);
+      (tenant_id,operation,idempotency_key,request_hash,response_json,handoff_id,nonce_id,created_by,created_at)
+      VALUES (?,?,?,?,?,?,?,?,?)`, [scope.tenantId, OPERATION, key, requestHash, JSON.stringify(response),
+      artifact.id, nonceInsert.lastID, Number(scope.actorId), receivedAt]);
     await run(db, `INSERT INTO audit_events
       (tenant_id,actor_id,workspace_id,marketplace,action,resource_type,resource_id,outcome,content_hash,metadata)
       VALUES (?,?,?,?,?,?,?,?,?,?)`, [scope.tenantId, Number(scope.actorId), scope.workspaceId || null,
-      scope.marketplace || null, 'social-handoff-v3:pull', 'external_research_handoff', String(inserted.lastID),
-      'SUCCESS', verified.envelopeHash, JSON.stringify({ classification: 'RESEARCH_ONLY',
+      scope.marketplace || null, 'social-handoff-v3:pull', 'external_research_handoff', String(artifact.id),
+      'SUCCESS', verified.artifact.sha256, JSON.stringify({ classification: 'RESEARCH_ONLY',
         marketValidationCapability: 'NOT_CONNECTED', sourceGitSha: verified.envelope.sourceRelease.gitSha,
-        sourceDeploymentId: verified.envelope.sourceRelease.deploymentId })]);
+        sourceDeploymentId: verified.envelope.sourceRelease.deploymentId, envelopeHash: verified.envelopeHash,
+        nonceReceiptId: nonceInsert.lastID, artifactReused: artifactInsert.changes === 0 })]);
     await run(db, 'COMMIT');
     return response;
   } catch (error) {

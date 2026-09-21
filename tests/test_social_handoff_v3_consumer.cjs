@@ -20,14 +20,20 @@ const run = (db, sql, params = []) => new Promise((resolve, reject) =>
   db.run(sql, params, function complete(error) { error ? reject(error) : resolve(this); }));
 const get = (db, sql, params = []) => new Promise((resolve, reject) =>
   db.get(sql, params, (error, row) => error ? reject(error) : resolve(row)));
+const all = (db, sql, params = []) => new Promise((resolve, reject) =>
+  db.all(sql, params, (error, rows) => error ? reject(error) : resolve(rows)));
 const close = db => new Promise((resolve, reject) => db.close(error => error ? reject(error) : resolve()));
-const COMMERCE_TABLES = ['product_truth_revisions', 'intelligence_snapshots', 'listings',
-  'canonical_listing_reviews', 'canonical_submission_exports', 'canonical_operator_submission_reports'];
+const COMMERCE_TABLES = [
+  'product_truth_revisions', 'product_truth_families', 'product_truth_family_revisions',
+  'intelligence_snapshots', 'listings', 'listing_revisions', 'canonical_listing_reviews',
+  'canonical_submission_requests', 'canonical_submission_authorizations', 'canonical_submission_handoffs',
+  'canonical_submission_exports', 'canonical_operator_submission_reports'
+];
 
 async function commerceSnapshot(db) {
   const snapshot = {};
   for (const table of COMMERCE_TABLES) {
-    snapshot[table] = await get(db, `SELECT COUNT(*) AS count,SUM(marker) AS marker FROM ${table}`);
+    snapshot[table] = await all(db, `SELECT * FROM ${table} ORDER BY id`);
   }
   return snapshot;
 }
@@ -37,6 +43,9 @@ function expectCode(fn, code) {
 }
 
 function envelopeWithNonce(nonce) {
+  // issuedAt intentionally stays fixed: Social includes sourceRevision +
+  // receipt.issuedAt in the canonical artifact metadata. Changing issuedAt
+  // therefore defines a different artifact rather than a fresh delivery of A.
   const envelope = JSON.parse(GOLDEN_BASE);
   envelope.receipt.nonce = nonce;
   const { receipt, transportDigest, transportDigestAuthority, ...payload } = envelope;
@@ -81,8 +90,17 @@ const GOLDEN = envelopeWithNonce('123e4567-e89b-42d3-a456-426614174000');
       workspace_id INTEGER,marketplace TEXT,action TEXT,resource_type TEXT,resource_id TEXT,outcome TEXT,
       content_hash TEXT,metadata TEXT)`);
     for (const [index, table] of COMMERCE_TABLES.entries()) {
-      await run(db, `CREATE TABLE ${table} (id INTEGER PRIMARY KEY,marker INTEGER NOT NULL)`);
-      await run(db, `INSERT INTO ${table}(id,marker) VALUES (1,?)`, [index + 101]);
+      if (table === 'listings') {
+        await run(db, `CREATE TABLE listings (id INTEGER PRIMARY KEY,marker INTEGER NOT NULL,status TEXT,
+          approved_version INTEGER,approved_hash TEXT,approved_by INTEGER,approved_at TEXT,publish_state TEXT)`);
+        await run(db, `INSERT INTO listings
+          (id,marker,status,approved_version,approved_hash,approved_by,approved_at,publish_state)
+          VALUES (1,?,'MANAGER_APPROVED',7,'approved-hash',1,'2026-09-21T00:00:00.000Z','PUBLISH_BLOCKED')`,
+        [index + 101]);
+      } else {
+        await run(db, `CREATE TABLE ${table} (id INTEGER PRIMARY KEY,marker INTEGER NOT NULL)`);
+        await run(db, `INSERT INTO ${table}(id,marker) VALUES (1,?)`, [index + 101]);
+      }
     }
     const commerceBefore = await commerceSnapshot(db);
     await migrateSocialHandoffV3Consumer(db);

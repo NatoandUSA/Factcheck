@@ -96,6 +96,7 @@
   "tests/test_schema_fingerprint.cjs",
   "tests/test_server_ai_truth_boundary.cjs",
   "tests/test_smart_pull_hardening.cjs",
+  "tests/test_social_handoff_v3_consumer.cjs",
   "tests/test_staff_account_lifecycle_http.cjs",
   "tests/test_staff_account_ui_runtime.cjs",
   "tests/test_strict_keyword_sanitizer.cjs",

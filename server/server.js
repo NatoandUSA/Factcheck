@@ -68,6 +68,7 @@ const { appendIntelligenceSnapshot, appendResearchImport, appendResearchSnapshot
 const { recordCanonicalSubmission, requestCanonicalSubmission, reviewCanonicalListing,
   authorizeCanonicalSubmission, exportCanonicalSubmission,
   reportCanonicalOperatorSubmission } = require('./canonicalReviewHandoffStore');
+const { pullAndPersistSocialHandoff } = require('./socialHandoffStore');
 const amazonResearchAdapter = require('./commerceIntelligence/amazonResearchAdapter');
 const amazonIntelligenceAdapter = require('./commerceIntelligence/amazonIntelligenceAdapter');
 const { selectAsinBatches } = require('./commerceIntelligence/asinSelector');
@@ -1137,6 +1138,23 @@ app.post('/api/owner/users/:id/deactivate', requireAuth(db), requireRole(['OWNER
 });
 
 // GET /api/evidence - Authoritative Research Evidence Ledger
+app.post('/api/integrations/social-listening/handoffs/pull', requireAuth(db), requireRole(['OWNER']), async (req, res) => {
+  try {
+    const result = await pullAndPersistSocialHandoff({
+      db,
+      scope: revisionScope(req.user),
+      idempotencyKey: req.body?.idempotencyKey,
+      env: process.env
+    });
+    return res.status(result.replay ? 200 : 201).json(result);
+  } catch (error) {
+    const status = Number.isInteger(error?.status) ? error.status : 500;
+    if (status >= 500) console.error('Social Handoff V3 pull failed:', error);
+    return res.status(status).json({ success: false, error: error?.code || 'SOCIAL_HANDOFF_PULL_FAILED',
+      ...(error?.details && typeof error.details === 'object' ? { details: error.details } : {}) });
+  }
+});
+
 app.get('/api/evidence', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
   const sendRows = (project) => {
     const scoped = project ? ' AND project_id = ?' : '';

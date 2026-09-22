@@ -3,6 +3,7 @@
 const crypto = require('node:crypto');
 const { canonicalJson } = require('./revisionStore');
 const { evaluateCandidate } = require('./globalCandidateEvaluation');
+const { createCanonicalResearchProject } = require('./canonicalProjectStore');
 
 const PROMOTION_ARTIFACT_KIND = 'GLOBAL_CANDIDATE_PROMOTION_V1';
 const PROJECT_EVIDENCE_SOURCE = 'GLOBAL_CANDIDATE_POOL';
@@ -127,19 +128,6 @@ async function existingReceiptByCandidate(db, scope, request) {
     { projectId: row.project_id, promotionId: row.id });
 }
 
-async function createEvidenceIntakeProject(db, scope, projectName, seedPhrase) {
-  const workspace = await run(db, `UPDATE workspaces
-    SET seller_account_label=COALESCE(seller_account_label,'workspace:' || id), site=COALESCE(site,'US')
-    WHERE id=? AND tenant_id=? AND marketplace=?`,
-  [Number(scope.workspaceId), scope.tenantId, scope.marketplace]);
-  if (workspace.changes !== 1) throw new GlobalCandidatePromotionError('WORKSPACE_NOT_FOUND', 404);
-  const result = await run(db, `INSERT INTO research_projects
-    (tenant_id,workspace_id,marketplace,name,seed_phrase,state,reference_asin,actor_id)
-    VALUES (?,?,?,?,?,'EVIDENCE_INTAKE',NULL,?)`,
-  [scope.tenantId, Number(scope.workspaceId), scope.marketplace, projectName, seedPhrase, Number(scope.actorId)]);
-  return result.lastID;
-}
-
 async function promoteGlobalCandidateToProject(db, scope, input, now = new Date()) {
   validateScope(scope);
   const request = normalizeRequest(input);
@@ -167,7 +155,13 @@ async function promoteGlobalCandidateToProject(db, scope, input, now = new Date(
 
     const evidence = evidenceSnapshot(candidate);
     const evalSnapshot = evaluationSnapshot(evaluation);
-    const projectId = await createEvidenceIntakeProject(db, scope, request.projectName, candidate.displayPhrase);
+    const project = await createCanonicalResearchProject(db, scope, {
+      name: request.projectName,
+      seedPhrase: candidate.displayPhrase,
+      referenceAsin: null,
+      policyContext: null
+    });
+    const projectId = project.projectId;
     const metadata = Object.freeze({
       kind: PROMOTION_ARTIFACT_KIND, authority: 'NONE', allowedUse: 'RESEARCH_ONLY',
       candidate: Object.freeze({ id: candidate.id, candidateKey: candidate.candidateKey,

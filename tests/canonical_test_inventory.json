@@ -56,6 +56,7 @@
   "tests/test_g4_etsy_intelligence_adapter.cjs",
   "tests/test_global_candidate_pool_mvp.cjs",
   "tests/test_global_candidate_evaluation_b3.cjs",
+  "tests/test_global_candidate_promotion_b4.cjs",
   "tests/test_g4_etsy_canonical_http.cjs",
   "tests/test_g4_image_prompt_generator.cjs",
   "tests/test_marketplace_research_workflows.cjs",

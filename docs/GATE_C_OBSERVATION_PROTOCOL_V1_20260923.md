@@ -7,7 +7,7 @@ Purpose: capture real operator friction before authorizing new feature behavior.
 
 Gate C Run ID:
 Marketplace: AMAZON / ETSY
-Omni Production Revision:
+Omni Production Revision (MUST equal `b911ffbfa590dfee083c572871c1286642dc4f1c` for the frozen Gate C reference build unless a later owner decision explicitly replaces the baseline):
 Intel Production Revision (only if Intel is used):
 Operator Role:
 Operator Prior Experience:

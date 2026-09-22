@@ -24,6 +24,7 @@ const ROUTES = [
   { method: 'POST', path: '/api/owner/users/:id/deactivate', public: false },
   { method: 'POST', path: '/api/integrations/social-listening/handoffs/pull', public: false },
   { method: 'GET', path: '/api/global-candidates', public: false },
+  { method: 'GET', path: '/api/global-candidates/evaluations', public: false },
   { method: 'POST', path: '/api/global-candidates/research-imports/preview', public: false },
   { method: 'POST', path: '/api/global-candidates/research-imports', public: false },
   { method: 'POST', path: '/api/global-candidates/social-handoffs/:handoffId', public: false },

@@ -70,6 +70,8 @@ const { recordCanonicalSubmission, requestCanonicalSubmission, reviewCanonicalLi
   reportCanonicalOperatorSubmission } = require('./canonicalReviewHandoffStore');
 const { pullAndPersistSocialHandoff } = require('./socialHandoffStore');
 const { ingestCandidateProjections, listGlobalCandidates } = require('./globalCandidatePool');
+const { EVALUATION_POLICY_VERSION, PROOF_POLICY_VERSION, RANKING_MODE,
+  evaluateAndPrioritizeGlobalCandidates } = require('./globalCandidateEvaluation');
 const { projectResearchFile, projectSocialHandoff, projectWorkflowArtifact } = require('./globalCandidateProjection');
 const amazonResearchAdapter = require('./commerceIntelligence/amazonResearchAdapter');
 const amazonIntelligenceAdapter = require('./commerceIntelligence/amazonIntelligenceAdapter');
@@ -1911,6 +1913,16 @@ app.get('/api/global-candidates', requireAuth(db), requireRole(['OWNER', 'MANAGE
     const candidates = await listGlobalCandidates(db, revisionScope(req.user), { limit: req.query.limit });
     res.json({ success: true, groupingMethod: 'EXACT_NORMALIZED_V1', decisionAuthority: false,
       promotionAuthority: false, candidates });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+app.get('/api/global-candidates/evaluations', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    const candidates = await listGlobalCandidates(db, revisionScope(req.user), { limit: req.query.limit });
+    const evaluated = evaluateAndPrioritizeGlobalCandidates(candidates, { marketplace: req.user.marketplace });
+    res.json({ success: true, evaluationPolicyVersion: EVALUATION_POLICY_VERSION,
+      proofPolicyVersion: PROOF_POLICY_VERSION, rankingMode: RANKING_MODE, advisoryOnly: true,
+      decisionAuthority: false, promotionAuthority: false, count: evaluated.length, candidates: evaluated });
   } catch (error) { rejectRevisionStore(res, error); }
 });
 

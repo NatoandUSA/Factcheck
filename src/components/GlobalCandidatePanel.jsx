@@ -22,6 +22,9 @@ export default function GlobalCandidatePanel({ marketplace, onPromoted, onRequir
   const [projectNames, setProjectNames] = useState({});
   const [promotingId, setPromotingId] = useState(null);
   const [pullingIntel, setPullingIntel] = useState(false);
+  const [researchFile, setResearchFile] = useState(null);
+  const [researchPreview, setResearchPreview] = useState(null);
+  const [researchBusy, setResearchBusy] = useState(false);
 
   const load = useCallback(async () => {
     if (!user?.workspaceId) return setState({ loading: false, error: '', candidates: [] });
@@ -67,6 +70,31 @@ export default function GlobalCandidatePanel({ marketplace, onPromoted, onRequir
     }
   };
 
+  const researchKind = marketplace === 'AMAZON' ? 'AMAZON_CEREBRO' : 'ETSY_SEARCH';
+  const researchLabel = marketplace === 'AMAZON' ? 'Helium 10 Cerebro' : 'Etsy public search';
+
+  const submitResearch = async confirm => {
+    if (!researchFile) return onShowToast?.(`Select one ${researchLabel} file first.`, 'error');
+    setResearchBusy(true);
+    try {
+      const form = new FormData(); form.append('kind', researchKind); form.append('researchFile', researchFile);
+      const endpoint = `/api/global-candidates/research-imports${confirm ? '' : '/preview'}`;
+      const result = await readJson(await fetch(endpoint, { method: 'POST', credentials: 'include', body: form }));
+      if (!confirm) {
+        setResearchPreview(result);
+        onShowToast?.(`Candidate evidence preview: ${result.candidateCount || 0} phrases, zero-write.`, 'success');
+      } else {
+        onShowToast?.(`Marketplace evidence added to Candidate Pool (${result.evidenceCreated || 0} new evidence rows).`, 'success');
+        setResearchPreview(null); setResearchFile(null); await load();
+      }
+    } catch (error) {
+      onShowToast?.(`Candidate evidence ${confirm ? 'import' : 'preview'} blocked: ${error.message}`, 'error');
+      setState(previous => ({ ...previous, error: error.message }));
+    } finally {
+      setResearchBusy(false);
+    }
+  };
+
   const promote = async candidate => {
     const projectName = String(projectNames[candidate.candidateId] || candidate.displayPhrase || '').trim();
     if (!projectName) return onShowToast?.('Enter a Project name before Promote.', 'error');
@@ -108,6 +136,22 @@ export default function GlobalCandidatePanel({ marketplace, onPromoted, onRequir
     </div>
 
     {state.error && <div role="alert" style={{ marginTop: 10, color: '#991b1b' }}>{state.error}</div>}
+
+    <div data-testid="global-candidate-marketplace-evidence" style={{ marginTop: 12, padding: 10, border: '1px solid #ddd6fe', borderRadius: 8 }}>
+      <strong>Add marketplace evidence to B2 Pool</strong>
+      <div style={{ color: '#64748b', fontSize: '.75rem', margin: '4px 0 8px' }}>
+        {researchLabel} is parsed by the existing canonical adapter. Preview is zero-write; Confirm preserves the source authority classification.
+      </div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        <input data-testid="global-candidate-research-file" type="file" accept=".csv,.xlsx"
+          onChange={event => { setResearchFile(event.target.files?.[0] || null); setResearchPreview(null); }} />
+        <button type="button" disabled={!researchFile || researchBusy} onClick={() => submitResearch(false)}>Preview evidence</button>
+        <button type="button" disabled={!researchPreview?.zeroWrite || researchBusy} onClick={() => submitResearch(true)}>Confirm into Candidate Pool</button>
+      </div>
+      {researchPreview && <div style={{ marginTop: 7, fontSize: '.75rem', color: '#475569' }}>
+        {researchPreview.candidateCount || 0} candidate phrases / raw {String(researchPreview.rawHash || '').slice(0, 12)}... / zero-write
+      </div>}
+    </div>
 
     {!state.loading && !state.error && state.candidates.length === 0 &&
       <div data-testid="global-candidate-empty"

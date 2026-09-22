@@ -51,6 +51,14 @@ const assert = require('assert');
       { id: 3, name: 'Existing Amazon Project', seed_phrase: 'pet memorial gift', state: 'EVIDENCE_INTAKE' },
       { id: 9, name: 'Pet Memorial Candidate Pilot', seed_phrase: 'pet memorial gift', state: 'EVIDENCE_INTAKE' }
     ] });
+    if (String(url) === '/api/global-candidates/research-imports/preview' && options.method === 'POST') return response({
+      success: true, zeroWrite: true, marketplace: activeMockMarketplace, candidateCount: 2,
+      rawHash: 'f'.repeat(64), accounting: { inputRows: 2 }, sourceCoverage: []
+    });
+    if (String(url) === '/api/global-candidates/research-imports' && options.method === 'POST') return response({
+      success: true, evidenceCreated: 2, candidateCount: 2, groupingMethod: 'EXACT_NORMALIZED_V1',
+      decisionAuthority: false, promotionAuthority: false
+    });
     if (String(url) === '/api/integrations/social-listening/handoffs/pull' && options.method === 'POST') return response({
       success: true, replay: false, handoff: { id: 44, authority: { classification: 'RESEARCH_ONLY' },
         marketValidationCapability: 'NOT_CONNECTED' }
@@ -299,6 +307,20 @@ const assert = require('assert');
     && document.body.textContent.includes('PROMOTE'),
   'authenticated operator must see B3 Global Candidate disposition in normal workspace UI');
   const intelPullButton = document.querySelector('[data-testid="pull-verified-intel-handoff"]');
+  const candidateEvidenceInput = document.querySelector('[data-testid="global-candidate-research-file"]');
+  check(Boolean(candidateEvidenceInput) && document.querySelector('[data-testid="global-candidate-marketplace-evidence"]'),
+    'operator must have a normal UI lane for B2 marketplace evidence intake');
+  const candidateEvidenceFile = new File(['Keyword Phrase,Search Volume\\npet memorial gift,5000'], 'candidate-cerebro.csv', { type: 'text/csv' });
+  Object.defineProperty(candidateEvidenceInput, 'files', { value: [candidateEvidenceFile], configurable: true });
+  await act(async () => { candidateEvidenceInput.dispatchEvent(new dom.window.Event('change', { bubbles: true })); });
+  const candidatePreviewButton = [...document.querySelectorAll('button')].find(button => button.textContent === 'Preview evidence');
+  await act(async () => { candidatePreviewButton.click(); await new Promise(resolve => setTimeout(resolve, 20)); });
+  const candidateConfirmButton = [...document.querySelectorAll('button')].find(button => button.textContent === 'Confirm into Candidate Pool');
+  check(Boolean(candidateConfirmButton) && !candidateConfirmButton.disabled, 'zero-write B2 preview must unlock explicit evidence confirm');
+  await act(async () => { candidateConfirmButton.click(); await new Promise(resolve => setTimeout(resolve, 20)); });
+  check(calls.some(call => call.url === '/api/global-candidates/research-imports/preview')
+    && calls.some(call => call.url === '/api/global-candidates/research-imports'),
+  'candidate evidence UI must reuse canonical B2 preview/confirm routes');
   check(Boolean(intelPullButton) && !intelPullButton.disabled,
     'OWNER must receive an explicit authority-safe Intel handoff pull action');
   await act(async () => { intelPullButton.click(); await new Promise(resolve => setTimeout(resolve, 20)); });

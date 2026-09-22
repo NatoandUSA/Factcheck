@@ -218,8 +218,10 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
     const ipSummary = [...new Set(ipHits.map(item => `${item.term} (${item.category || 'IP'})`))].slice(0, 6).join(', ');
     const message = errorValue?.code === 'UNVERIFIED_OUTPUT_CLAIM' && claimSummary
       ? `Draft có claim chưa được Product Truth chứng thực — ${claimSummary}`
-      : ['RESEARCH_PRODUCT_FAMILY_MISMATCH', 'PRODUCT_TRUTH_FAMILY_UNRESOLVED'].includes(errorValue?.code)
+      : errorValue?.code === 'RESEARCH_PRODUCT_FAMILY_MISMATCH'
         ? `Research không cùng dòng sản phẩm với Product Truth (khớp ${errorValue.payload?.alignedCount ?? 0}, xung đột ${errorValue.payload?.conflictingCount ?? 0}, chung chung ${errorValue.payload?.genericCount ?? 0}). Hãy dùng đúng file research cho sản phẩm này hoặc tạo project riêng.`
+      : errorValue?.code === 'PRODUCT_TRUTH_FAMILY_UNRESOLVED'
+        ? `Chưa đủ bằng chứng để nối Research với loại sản phẩm mới trong Product Truth (khớp ${errorValue.payload?.alignedCount ?? 0}/${errorValue.payload?.requiredDirectMatches ?? '?'}, identity: ${(errorValue.payload?.identityTokens || []).join(', ') || 'chưa xác định'}). Hãy kiểm tra tên/loại sản phẩm trong Product Truth và file research; không cần đổi project nếu đây đúng là cùng sản phẩm.`
       : errorValue?.code === 'CEREBRO_KEYWORDS_REQUIRED'
         ? 'Cần import Cerebro để phân bổ keyword và tạo draft. Xray là bước upstream khuyến nghị để chọn các nhóm ASIN, nhưng Cerebro có sẵn được import độc lập.'
         : errorValue?.code === 'IP_CLEARANCE_REQUIRED'

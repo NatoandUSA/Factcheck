@@ -83,6 +83,21 @@ async function main() {
   check(!productionVisible.includes('silver'), 'ambiguous silver color cannot become a material claim');
   check(productionResult.output.factClaimReview.some(item => item.field === 'colors' && item.value.includes('Silver')),
     'omitted ambiguous color remains visible in review accounting');
+  const novelProduct = structuredClone(input);
+  novelProduct.research.observations.cerebro.keywords = Array.from({ length: 12 }, (_, index) =>
+    keyword(`pet memorial keepsake dog remembrance ${index}`, 1200 - index * 25, 1.1));
+  novelProduct.research.observations.xray = [];
+  novelProduct.productTruth.snapshot.asserted = {
+    productType: asserted('Pet Memorial Keepsake'),
+    productName: asserted('Pet Memorial Keepsake'),
+    recipient: asserted('Pet owner')
+  };
+  novelProduct.configuration = { seedPhrase: 'pet memorial gift', listingLanguage: 'EN' };
+  const novelResult = await adapter.buildIntelligence(novelProduct);
+  check(novelResult.output.productFamilyAlignment.status === 'ALIGNED'
+    && novelResult.output.productFamilyAlignment.resolutionMode === 'DIRECT_IDENTITY_EVIDENCE',
+    'new product outside the closed family dictionary is admitted by positive Product Truth identity evidence');
+
   let missingCerebro;
   try {
     await adapter.buildIntelligence({ ...input, research: { observations: { marketplace: 'AMAZON', xray: [] } } });

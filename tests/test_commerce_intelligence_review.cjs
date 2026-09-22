@@ -60,6 +60,19 @@ test('corpus gate blocks shared-recipient research for another product family', 
     Array.from({ length: 12 }, (_, index) => `sister necklace ${index}`), ['Personalized Snow Globe']);
   assert.equal(unresolved.status, 'UNRESOLVED');
 
+  const novelProduct = semantic.auditProductFamilyAlignment([
+    ...Array.from({ length: 10 }, (_, index) => `pet memorial keepsake for dog loss ${index}`),
+    'sympathy gift for pet owner', 'dog remembrance memorial'
+  ], ['Pet Memorial Keepsake', 'Dog Memorial']);
+  assert.equal(novelProduct.status, 'ALIGNED');
+  assert.equal(novelProduct.resolutionMode, 'DIRECT_IDENTITY_EVIDENCE');
+  assert.ok(novelProduct.identityTokens.includes('pet') && novelProduct.identityTokens.includes('memorial'));
+  assert.ok(novelProduct.alignedCount >= novelProduct.requiredDirectMatches);
+
+  const genericOnlyNovelProduct = semantic.auditProductFamilyAlignment(
+    Array.from({ length: 12 }, (_, index) => `gift for women birthday ${index}`), ['Personalized Memorial Keepsake']);
+  assert.equal(genericOnlyNovelProduct.status, 'UNRESOLVED');
+
   const siblingJewelry = semantic.auditProductFamilyAlignment(
     Array.from({ length: 12 }, (_, index) => `sister necklace ${index}`), ['Personalized Bracelet', 'Jewelry']);
   assert.equal(siblingJewelry.status, 'MISMATCH');

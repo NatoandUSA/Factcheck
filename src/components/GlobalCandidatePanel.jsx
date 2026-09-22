@@ -42,7 +42,11 @@ const REASON_LABELS = Object.freeze({
   COMPETITION_CONTEXT_NOT_PRESENT: 'Chưa có dữ liệu cạnh tranh',
   CROSS_SOURCE_CORROBORATION_NOT_PRESENT: 'Chưa có nhiều nguồn xác nhận',
   WHY_NOW_NOT_ESTABLISHED: 'Chưa có bằng chứng rõ vì sao cơ hội đáng làm ngay lúc này',
-  OBSERVED_PUBLIC_MARKETPLACE_EVIDENCE_NOT_PRESENT: 'Chưa có bằng chứng marketplace công khai'
+  OBSERVED_PUBLIC_MARKETPLACE_EVIDENCE_NOT_PRESENT: 'Chưa có bằng chứng marketplace công khai',
+  AMAZON_CEREBRO_RESEARCH_READY: 'Cerebro có tín hiệu nhu cầu và cạnh tranh đủ để mở Project nghiên cứu',
+  ETSY_PUBLIC_SEARCH_RESEARCH_READY: 'Dữ liệu tìm kiếm Etsy có listing/competition context đủ để mở Project nghiên cứu',
+  AMAZON_MARKETPLACE_EVIDENCE_REQUIRED: 'Cần Cerebro hợp lệ có demand/sales signal và competition context',
+  ETSY_MARKETPLACE_EVIDENCE_REQUIRED: 'Cần Etsy Search CSV/HTML hợp lệ có listing/competition context'
 });
 
 function reasonLabel(code) {
@@ -106,22 +110,26 @@ export default function GlobalCandidatePanel({ marketplace, onPromoted, onRequir
   const researchKind = marketplace === 'AMAZON' ? 'AMAZON_CEREBRO' : 'ETSY_SEARCH';
   const researchLabel = marketplace === 'AMAZON' ? 'Helium 10 Cerebro' : 'Etsy public search';
 
-  const submitResearch = async confirm => {
+  const analyzeOpportunity = async () => {
     if (!researchFile) return onShowToast?.(`Hãy chọn 1 file ${researchLabel} trước.`, 'error');
-    setResearchBusy(true);
+    setResearchBusy(true); setResearchPreview(null);
     try {
-      const form = new FormData(); form.append('kind', researchKind); form.append('researchFile', researchFile);
-      const endpoint = `/api/global-candidates/research-imports${confirm ? '' : '/preview'}`;
-      const result = await readJson(await fetch(endpoint, { method: 'POST', credentials: 'include', body: form }));
-      if (!confirm) {
-        setResearchPreview(result);
-        onShowToast?.(`Xem trước thành công: ${result.candidateCount || 0} cụm từ cơ hội. Chưa ghi dữ liệu.`, 'success');
-      } else {
-        onShowToast?.(`Đã thêm dữ liệu thị trường vào danh sách cơ hội (${result.evidenceCreated || 0} dòng bằng chứng mới).`, 'success');
-        setResearchPreview(null); setResearchFile(null); await load();
-      }
+      const previewForm = new FormData(); previewForm.append('kind', researchKind); previewForm.append('researchFile', researchFile);
+      const preview = await readJson(await fetch('/api/global-candidates/research-imports/preview', {
+        method: 'POST', credentials: 'include', body: previewForm
+      }));
+      if (!preview?.zeroWrite) throw new Error('OPPORTUNITY_PREVIEW_NOT_ZERO_WRITE');
+
+      const confirmForm = new FormData(); confirmForm.append('kind', researchKind); confirmForm.append('researchFile', researchFile);
+      const confirmed = await readJson(await fetch('/api/global-candidates/research-imports', {
+        method: 'POST', credentials: 'include', body: confirmForm
+      }));
+      setResearchPreview({ ...preview, confirmed: true, evidenceCreated: confirmed.evidenceCreated || 0 });
+      onShowToast?.(`Phân tích xong: ${preview.candidateCount || 0} cụm từ cơ hội, ${confirmed.evidenceCreated || 0} bằng chứng đã được ghi nhận.`, 'success');
+      setResearchFile(null);
+      await load();
     } catch (error) {
-      onShowToast?.(`Không thể ${confirm ? 'xác nhận dữ liệu' : 'xem trước dữ liệu'}: ${error.message}`, 'error');
+      onShowToast?.(`Không thể phân tích cơ hội: ${error.message}`, 'error');
       setState(previous => ({ ...previous, error: error.message }));
     } finally {
       setResearchBusy(false);
@@ -152,47 +160,37 @@ export default function GlobalCandidatePanel({ marketplace, onPromoted, onRequir
     style={{ padding: '16px 20px', borderLeft: '4px solid #7c3aed' }}>
     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
       <div>
-        <h3 style={{ margin: 0, color: '#6d28d9' }}>Từ cơ hội thị trường → tạo Project</h3>
+        <h3 style={{ margin: 0, color: '#6d28d9' }}>Tìm cơ hội sản phẩm mới</h3>
         <p style={{ margin: '5px 0 0', color: '#475569', fontSize: '.8rem' }}>
-          Mục tiêu: chỉ tạo Project khi đã có dữ liệu thị trường đủ tin cậy. Hệ thống tự đánh giá lại trước khi tạo; chỉ OWNER/MANAGER được xác nhận tạo Project.
-        </p>
-        <p style={{ margin: '4px 0 0', color: '#64748b', fontSize: '.72rem' }}>
-          Thuật ngữ kỹ thuật: B2 = tập bằng chứng thị trường · B3 = bước đánh giá/khuyến nghị · Promote = chuyển cơ hội đạt điều kiện thành Project.
+          Chọn một nguồn dữ liệu bên dưới. OmniSeller tự kiểm tra file, ghi nhận bằng chứng và đánh giá xem cơ hội đã đủ để mở Project nghiên cứu hay chưa.
         </p>
       </div>
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        {canPullIntel && <button type="button" data-testid="pull-verified-intel-handoff"
-          onClick={pullIntel} disabled={pullingIntel || state.loading}>
-          {pullingIntel ? 'Đang nhận tín hiệu từ Intel...' : 'Nhận cơ hội đã xác minh từ Intel'}
-        </button>}
-        <button type="button" onClick={load} disabled={state.loading}>
-          {state.loading ? 'Đang tải...' : 'Làm mới danh sách cơ hội'}
+      {canPullIntel && <div>
+        <button type="button" data-testid="pull-verified-intel-handoff"
+          onClick={pullIntel} disabled={pullingIntel || state.loading || researchBusy}>
+          {pullingIntel ? 'Đang nhận tín hiệu từ Intel...' : 'Tôi chưa có sản phẩm cụ thể — lấy cơ hội từ Intel'}
         </button>
-      </div>
+      </div>}
     </div>
 
     {state.error && <div role="alert" style={{ marginTop: 10, color: '#991b1b' }}>{state.error}</div>}
 
     <div data-testid="global-candidate-marketplace-evidence" style={{ marginTop: 12, padding: 12, border: '1px solid #ddd6fe', borderRadius: 10, background: '#fff' }}>
-      <strong>1. Thêm dữ liệu thị trường để hệ thống tìm cơ hội</strong>
+      <strong>Tôi đã có dữ liệu {marketplace}</strong>
       <div style={{ color: '#475569', fontSize: '.78rem', margin: '5px 0 8px', lineHeight: 1.55 }}>
         {marketplace === 'AMAZON'
-          ? <>Dùng file <b>Helium 10 Cerebro</b>. Cách lấy: mở Helium 10 → Cerebro → nhập ASIN sản phẩm/đối thủ liên quan → chạy phân tích → Export CSV hoặc XLSX. File này cho biết người mua đang tìm từ khóa gì và mức độ nhu cầu/cạnh tranh.</>
-          : <>Dùng file dữ liệu tìm kiếm công khai Etsy ở định dạng CSV/HTML mà OmniSeller hỗ trợ. Đây là dữ liệu nghiên cứu thị trường, không phải file listing đã đăng.</>}
-      </div>
-      <div style={{ background: '#f8fafc', borderRadius: 8, padding: 9, fontSize: '.75rem', color: '#475569', lineHeight: 1.55, marginBottom: 9 }}>
-        <b>Tại sao cần bước này?</b> OmniSeller không nên tạo Project chỉ vì một ý tưởng nghe hay. Dữ liệu marketplace giúp hệ thống kiểm tra xem có tín hiệu tìm kiếm thật hay không, gom các cụm từ thành cơ hội và tránh tạo quá nhiều Project yếu.
-        <br/><b>Xem trước</b> = chỉ kiểm tra file, chưa ghi dữ liệu. <b>Xác nhận</b> = thêm bằng chứng hợp lệ vào danh sách cơ hội để hệ thống đánh giá.
+          ? <>Chọn file <b>Helium 10 Cerebro CSV/XLSX</b>. Cách lấy: Cerebro → nhập ASIN liên quan → chạy phân tích → Export. OmniSeller sẽ tự kiểm tra demand + competition rồi quyết định mức sẵn sàng để mở Project nghiên cứu.</>
+          : <>Chọn file <b>Etsy Search CSV/HTML</b> từ kết quả nghiên cứu/tìm kiếm Etsy. OmniSeller sẽ tự đọc listing, shop, giá, tag và các tín hiệu có thật trong file; trường nào không có sẽ giữ UNKNOWN.</>}
       </div>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
         <input data-testid="global-candidate-research-file" type="file"
           accept={marketplace === 'AMAZON' ? '.csv,.xlsx' : '.csv,.html,.htm,text/csv,text/html'}
           onChange={event => { setResearchFile(event.target.files?.[0] || null); setResearchPreview(null); }} />
-        <button type="button" disabled={!researchFile || researchBusy} onClick={() => submitResearch(false)}>2. Xem trước file</button>
-        <button type="button" disabled={!researchPreview?.zeroWrite || researchBusy} onClick={() => submitResearch(true)}>3. Xác nhận vào danh sách cơ hội</button>
+        <button data-testid="analyze-opportunity" type="button" disabled={!researchFile || researchBusy}
+          onClick={analyzeOpportunity}>{researchBusy ? 'Đang phân tích...' : 'Phân tích cơ hội'}</button>
       </div>
-      {researchPreview && <div style={{ marginTop: 7, fontSize: '.75rem', color: '#475569' }}>
-        Đã nhận diện {researchPreview.candidateCount || 0} cụm từ cơ hội · mã dữ liệu {String(researchPreview.rawHash || '').slice(0, 12)}... · trạng thái: chỉ xem trước, chưa ghi
+      {researchPreview?.confirmed && <div style={{ marginTop: 8, padding: 8, borderRadius: 8, background: '#ecfdf5', color: '#065f46', fontSize: '.75rem' }}>
+        Phân tích hoàn tất: {researchPreview.candidateCount || 0} cụm từ cơ hội · {researchPreview.evidenceCreated || 0} bằng chứng đã ghi nhận. Xem kết quả bên dưới để tạo Project nếu đã sẵn sàng.
       </div>}
     </div>
 
@@ -213,43 +211,52 @@ export default function GlobalCandidatePanel({ marketplace, onPromoted, onRequir
         <thead><tr>
           <th style={{ textAlign: 'left', padding: 8 }}>Ưu tiên</th>
           <th style={{ textAlign: 'left' }}>Cơ hội</th>
-          <th>Đánh giá</th>
+          <th>Sẵn sàng mở Project?</th>
+          <th>Bằng chứng thương mại</th>
           <th>Bằng chứng</th>
-          <th style={{ textAlign: 'left' }}>Lý do / còn thiếu</th>
           <th>Thao tác</th>
         </tr></thead>
         <tbody>{state.candidates.map(candidate => {
           const disposition = candidate.advisoryDisposition?.value || 'NEEDS_EVIDENCE';
-          const promotable = disposition === 'PROMOTE' && canPromote;
-          const reasons = candidate.advisoryDisposition?.reasonCodes || [];
-          const blockers = candidate.advisoryDisposition?.blockers || [];
+          const readiness = candidate.researchReadiness?.value || 'NOT_READY';
+          const promotable = readiness === 'READY' && canPromote;
+          const readinessReasons = candidate.researchReadiness?.reasonCodes || [];
           return <tr key={candidate.candidateId} style={{ borderTop: '1px solid #e2e8f0' }}>
             <td style={{ padding: 8 }}>{candidate.priorityRank}</td>
             <td>
               <strong>{candidate.displayPhrase}</strong>
               <div style={{ color: '#64748b', fontSize: '.72rem' }}>{candidate.marketplace}</div>
             </td>
-            <td style={{ textAlign: 'center', fontWeight: 800 }}>
-              {DISPOSITION_LABELS[disposition] || disposition}
-              <div style={{ fontSize: '.65rem', color: '#94a3b8', fontWeight: 600 }}>{disposition}</div>
+            <td style={{ textAlign: 'center', fontWeight: 800, color: readiness === 'READY' ? '#047857' : '#92400e' }}>
+              {readiness === 'READY' ? 'ĐỦ — có thể tạo Project' : 'CHƯA — cần thêm dữ liệu'}
+              <div style={{ fontSize: '.65rem', color: '#64748b', fontWeight: 500, marginTop: 3 }}>
+                {readinessReasons.map(reasonLabel).join(' / ')}
+              </div>
+            </td>
+            <td style={{ textAlign: 'center' }}>
+              {candidate.commercialProof?.status === 'ESTABLISHED' ? 'Đã xác lập' : 'Chưa xác lập'}
+              <div style={{ fontSize: '.65rem', color: '#94a3b8' }}>
+                Không bắt buộc để mở Project nghiên cứu
+              </div>
             </td>
             <td style={{ textAlign: 'center' }}>
               {candidate.evidenceSummary?.evidenceCount || 0} bằng chứng / {candidate.evidenceSummary?.sourceFamilyCount || 0} nguồn
-            </td>
-            <td style={{ fontSize: '.72rem', color: '#475569', maxWidth: 380 }}>
-              {(reasons.length ? reasons : blockers).map(reasonLabel).join(' / ') || 'Chưa có lý do chi tiết'}
+              <details style={{ marginTop: 4, fontSize: '.68rem', color: '#64748b' }}>
+                <summary>Chi tiết kỹ thuật</summary>
+                {DISPOSITION_LABELS[disposition] || disposition} ({disposition})
+              </details>
             </td>
             <td style={{ minWidth: 260, padding: 8 }}>
-              {disposition === 'PROMOTE' ? <>
+              {readiness === 'READY' ? <>
                 <input aria-label={`Tên Project cho ${candidate.displayPhrase}`}
                   value={projectNames[candidate.candidateId] ?? `${candidate.displayPhrase} Pilot`}
                   onChange={event => setProjectNames(previous => ({ ...previous, [candidate.candidateId]: event.target.value }))}
                   style={{ width: '100%', marginBottom: 6 }} />
                 <button type="button" disabled={!promotable || promotingId === candidate.candidateId}
                   onClick={() => promote(candidate)}>
-                  {promotingId === candidate.candidateId ? 'Đang tạo Project...' : canPromote ? '4. Tạo Project từ cơ hội này' : 'Cần quyền Manager/Owner'}
+                  {promotingId === candidate.candidateId ? 'Đang tạo Project...' : canPromote ? 'Tạo Project' : 'Cần quyền Manager/Owner'}
                 </button>
-              </> : <span style={{ color: '#64748b' }}>Chưa đủ điều kiện tạo Project — bổ sung dữ liệu theo cột bên trái.</span>}
+              </> : <span style={{ color: '#64748b' }}>Hệ thống sẽ nói rõ dữ liệu marketplace còn thiếu; không cần tạo Project thủ công.</span>}
             </td>
           </tr>;
         })}</tbody>

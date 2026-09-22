@@ -38,6 +38,8 @@ assert.equal(modeledEval.proofPolicyVersion, PROOF_POLICY_VERSION);
 assert.equal(modeledEval.commercialProof.status, 'NOT_ESTABLISHED');
 assert.ok(modeledEval.commercialProof.blockerCodes.includes('MODELED_THIRD_PARTY_NOT_COMMERCIAL_PROOF'));
 assert.equal(modeledEval.advisoryDisposition.value, 'WATCH');
+assert.equal(modeledEval.researchReadiness.value, 'READY');
+assert.ok(modeledEval.researchReadiness.reasonCodes.includes('AMAZON_CEREBRO_RESEARCH_READY'));
 assert.ok(modeledEval.advisoryDisposition.reasonCodes.includes('OBSERVED_PUBLIC_MARKETPLACE_EVIDENCE_REQUIRED_FOR_PROMOTE'));
 assert.equal(modeledEval.priorityAid.secondaryOnly, true);
 assert.equal(modeledEval.priorityAid.rankingMode, RANKING_MODE);
@@ -53,6 +55,8 @@ const socialOnly = candidate(2, 'social only', [evidence({
 const socialEval = evaluateCandidate(socialOnly, { marketplace: 'ETSY', now: '2026-09-22T00:00:00.000Z' });
 assert.equal(socialEval.commercialProof.status, 'NOT_PRESENT');
 assert.equal(socialEval.advisoryDisposition.value, 'NEEDS_EVIDENCE');
+assert.equal(socialEval.researchReadiness.value, 'NOT_READY');
+assert.ok(socialEval.researchReadiness.reasonCodes.includes('ETSY_MARKETPLACE_EVIDENCE_REQUIRED'));
 assert.ok(socialEval.advisoryDisposition.reasonCodes.includes('SOCIAL_RESEARCH_CANNOT_REPLACE_MARKETPLACE_EVIDENCE'));
 assert.equal(socialEval.socialSupport.status, 'PRESENT_RESEARCH_ONLY');
 
@@ -98,6 +102,8 @@ const establishedEval = evaluateCandidate(establishedCandidate, { marketplace: '
 assert.equal(establishedEval.commercialProof.status, 'ESTABLISHED');
 assert.ok(establishedEval.commercialProof.proofMetrics.length >= 1);
 assert.equal(establishedEval.advisoryDisposition.value, 'PROMOTE');
+assert.equal(establishedEval.researchReadiness.value, 'READY');
+assert.ok(establishedEval.researchReadiness.reasonCodes.includes('ETSY_PUBLIC_SEARCH_RESEARCH_READY'));
 assert.ok(establishedEval.advisoryDisposition.reasonCodes.includes('COMMERCIAL_PROOF_ESTABLISHED'));
 
 const zeroPublic = evidence({
@@ -109,6 +115,7 @@ const zeroPublic = evidence({
 });
 const zeroEval = evaluateCandidate(candidate(5, 'zero is not kill', [zeroPublic]), { marketplace: 'ETSY' });
 assert.equal(zeroEval.advisoryDisposition.value, 'NEEDS_EVIDENCE');
+assert.equal(zeroEval.researchReadiness.value, 'READY');
 assert.notEqual(zeroEval.advisoryDisposition.value, 'KILL');
 assert.equal(zeroEval.killPolicy, 'NO_KILL_FROM_ABSENCE_ZERO_OR_WEAK_SIGNAL_ONLY');
 

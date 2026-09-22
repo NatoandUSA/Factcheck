@@ -68,7 +68,9 @@ const assert = require('assert');
     });
     if (String(url).startsWith('/api/global-candidates/evaluations')) return response({ success: true, candidates: [{
       candidateId: 31, priorityRank: 1, displayPhrase: 'pet memorial gift', marketplace: activeMockMarketplace,
-      advisoryDisposition: { value: 'PROMOTE', reasonCodes: ['PROMOTE_FOR_PROJECT_RESEARCH_NOT_AS_COMMERCIAL_PROOF'], blockers: [] },
+      researchReadiness: { value: 'READY', reasonCodes: [activeMockMarketplace === 'AMAZON' ? 'AMAZON_CEREBRO_RESEARCH_READY' : 'ETSY_PUBLIC_SEARCH_RESEARCH_READY'] },
+      advisoryDisposition: { value: 'WATCH', reasonCodes: ['POSITIVE_MARKET_SIGNAL_PRESENT'], blockers: ['COMMERCIAL_PROOF_NOT_ESTABLISHED'] },
+      commercialProof: { status: 'NOT_ESTABLISHED' },
       evidenceSummary: { evidenceCount: 4, sourceFamilyCount: 2 }
     }] });
     if (String(url) === '/api/global-candidates/31/promote' && options.method === 'POST') return response({
@@ -304,8 +306,8 @@ const assert = require('assert');
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
   check(Boolean(document.querySelector('[data-testid="global-candidate-operator-path"]'))
     && document.body.textContent.includes('pet memorial gift')
-    && document.body.textContent.includes('PROMOTE'),
-  'authenticated operator must see B3 Global Candidate disposition in normal workspace UI');
+    && document.body.textContent.includes('ĐỦ — có thể tạo Project'),
+  'authenticated operator must see research-readiness result in normal workspace UI');
   const intelPullButton = document.querySelector('[data-testid="pull-verified-intel-handoff"]');
   const candidateEvidenceInput = document.querySelector('[data-testid="global-candidate-research-file"]');
   check(Boolean(candidateEvidenceInput) && document.querySelector('[data-testid="global-candidate-marketplace-evidence"]'),
@@ -315,22 +317,21 @@ const assert = require('assert');
   const candidateEvidenceFile = new File(['Keyword Phrase,Search Volume\\npet memorial gift,5000'], 'candidate-cerebro.csv', { type: 'text/csv' });
   Object.defineProperty(candidateEvidenceInput, 'files', { value: [candidateEvidenceFile], configurable: true });
   await act(async () => { candidateEvidenceInput.dispatchEvent(new dom.window.Event('change', { bubbles: true })); });
-  const candidatePreviewButton = [...document.querySelectorAll('button')].find(button => button.textContent === '2. Xem trước file');
-  await act(async () => { candidatePreviewButton.click(); await new Promise(resolve => setTimeout(resolve, 20)); });
-  const candidateConfirmButton = [...document.querySelectorAll('button')].find(button => button.textContent === '3. Xác nhận vào danh sách cơ hội');
-  check(Boolean(candidateConfirmButton) && !candidateConfirmButton.disabled, 'zero-write B2 preview must unlock explicit evidence confirm');
-  await act(async () => { candidateConfirmButton.click(); await new Promise(resolve => setTimeout(resolve, 20)); });
+  const analyzeOpportunityButton = document.querySelector('[data-testid="analyze-opportunity"]');
+  check(Boolean(analyzeOpportunityButton) && !analyzeOpportunityButton.disabled,
+    'one-click opportunity analysis must be available after selecting a marketplace evidence file');
+  await act(async () => { analyzeOpportunityButton.click(); await new Promise(resolve => setTimeout(resolve, 40)); });
   check(calls.some(call => call.url === '/api/global-candidates/research-imports/preview')
     && calls.some(call => call.url === '/api/global-candidates/research-imports'),
-  'candidate evidence UI must reuse canonical B2 preview/confirm routes');
+  'one-click opportunity analysis must preserve canonical zero-write preview then explicit evidence confirmation internally');
   check(Boolean(intelPullButton) && !intelPullButton.disabled,
     'OWNER must receive an explicit authority-safe Intel handoff pull action');
   await act(async () => { intelPullButton.click(); await new Promise(resolve => setTimeout(resolve, 20)); });
   check(calls.some(call => call.url === '/api/integrations/social-listening/handoffs/pull' && call.options.method === 'POST')
     && calls.some(call => call.url === '/api/global-candidates/social-handoffs/44' && call.options.method === 'POST'),
   'Intel operator action must reuse verified Social Handoff V3 then canonical B2 projection, never direct score promotion');
-  const promoteButton = [...document.querySelectorAll('button')].find(button => button.textContent.includes('Tạo Project từ cơ hội này'));
-  check(Boolean(promoteButton) && !promoteButton.disabled, 'OWNER must receive explicit Promote-to-Project action only for PROMOTE candidate');
+  const promoteButton = [...document.querySelectorAll('button')].find(button => button.textContent === 'Tạo Project');
+  check(Boolean(promoteButton) && !promoteButton.disabled, 'OWNER must receive explicit Project creation action when research readiness is READY');
   await act(async () => { promoteButton.click(); await new Promise(resolve => setTimeout(resolve, 20)); });
   check(calls.some(call => call.url === '/api/global-candidates/31/promote' && call.options.method === 'POST'),
     'operator Promote action must use canonical B4 route');

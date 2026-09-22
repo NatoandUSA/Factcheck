@@ -81,7 +81,7 @@ assert.doesNotMatch(promotionSource, /INSERT INTO research_projects/);
     await run(db, 'CREATE TABLE product_truth_revisions(id INTEGER PRIMARY KEY, marker TEXT)');
     await run(db, 'CREATE TABLE listings(id INTEGER PRIMARY KEY, marker TEXT)');
     await run(db, 'INSERT INTO users(id) VALUES (1)');
-    await run(db, "INSERT INTO workspaces(id,tenant_id,marketplace) VALUES (7,'tenant-a','ETSY'),(8,'tenant-a','ETSY')");
+    await run(db, "INSERT INTO workspaces(id,tenant_id,marketplace) VALUES (7,'tenant-a','ETSY'),(8,'tenant-a','ETSY'),(9,'tenant-a','AMAZON')");
     await run(db, `INSERT INTO research_projects
       (tenant_id,workspace_id,marketplace,name,seed_phrase,state,actor_id)
       VALUES ('tenant-a',7,'ETSY','Existing Project','existing seed','EVIDENCE_INTAKE',1)`);
@@ -101,8 +101,6 @@ assert.doesNotMatch(promotionSource, /INSERT INTO research_projects/);
     await ingestCandidateProjections(db, scope, [
       observedProjection('candidate alpha', 3, 'alpha'),
       socialProjection('candidate alpha', 'alpha'),
-      modeledProjection('candidate beta', 'beta'),
-      observedProjection('candidate beta', 0, 'beta'),
       socialProjection('candidate beta', 'beta')
     ]);
     const candidates = await listGlobalCandidates(db, scope, { limit: 20 });
@@ -138,6 +136,7 @@ assert.doesNotMatch(promotionSource, /INSERT INTO research_projects/);
     assert.equal(metadata.authority, 'NONE');
     assert.equal(metadata.allowedUse, 'RESEARCH_ONLY');
     assert.equal(metadata.candidate.candidateKey, alpha.candidateKey);
+    assert.equal(metadata.evaluation.researchReadiness.value, 'READY');
     assert.equal(metadata.evaluation.advisoryDisposition.value, 'PROMOTE');
     assert.equal(metadata.evaluation.commercialProof.status, 'NOT_ESTABLISHED');
     assert.equal(metadata.evidenceRefs.length, alpha.evidence.length);
@@ -168,8 +167,20 @@ assert.doesNotMatch(promotionSource, /INSERT INTO research_projects/);
 
     await assert.rejects(() => promoteGlobalCandidateToProject(db, scope, {
       candidateId: beta.id, projectName: 'Candidate Beta Pilot', idempotencyKey: 'beta-promote-001'
-    }), error => error?.code === 'GLOBAL_CANDIDATE_NOT_PROMOTABLE');
+    }), error => error?.code === 'GLOBAL_CANDIDATE_NOT_RESEARCH_READY');
     assert.equal((await get(db, 'SELECT COUNT(*) AS count FROM research_projects')).count, 2);
+
+    const amazonScope = { tenantId: 'tenant-a', workspaceId: 9, marketplace: 'AMAZON', actorId: 1 };
+    await ingestCandidateProjections(db, amazonScope, [modeledProjection('amazon cerebro ready', 'amazon-ready')]);
+    const amazonCandidates = await listGlobalCandidates(db, amazonScope, { limit: 20 });
+    const amazonReady = amazonCandidates.find(item => item.normalizedPhrase === 'amazon cerebro ready');
+    assert.ok(amazonReady);
+    const amazonPromoted = await promoteGlobalCandidateToProject(db, amazonScope, {
+      candidateId: amazonReady.id, projectName: 'Amazon Cerebro Research', idempotencyKey: 'amazon-ready-001'
+    }, new Date('2026-09-22T01:30:00.000Z'));
+    assert.equal(amazonPromoted.researchReadiness, 'READY');
+    assert.equal(amazonPromoted.advisoryDisposition, 'WATCH');
+    assert.equal(amazonPromoted.commercialProofStatus, 'NOT_ESTABLISHED');
 
     const otherScope = { ...scope, workspaceId: 8 };
     await assert.rejects(() => promoteGlobalCandidateToProject(db, otherScope, {

@@ -89,6 +89,7 @@ function evaluationSnapshot(evaluation) {
   return Object.freeze({
     evaluationPolicyVersion: evaluation.evaluationPolicyVersion,
     proofPolicyVersion: evaluation.proofPolicyVersion,
+    researchReadiness: evaluation.researchReadiness,
     advisoryDisposition: evaluation.advisoryDisposition,
     commercialProof: Object.freeze({ status: evaluation.commercialProof.status,
       blockerCodes: evaluation.commercialProof.blockerCodes || [] }),
@@ -146,10 +147,10 @@ async function promoteGlobalCandidateToProject(db, scope, input, now = new Date(
 
     const candidate = await loadCandidate(db, scope, request.candidateId);
     const evaluation = evaluateCandidate(candidate, { marketplace: scope.marketplace, now });
-    if (evaluation.advisoryDisposition.value !== 'PROMOTE') {
-      throw new GlobalCandidatePromotionError('GLOBAL_CANDIDATE_NOT_PROMOTABLE', 409, {
-        candidateId: candidate.id, advisoryDisposition: evaluation.advisoryDisposition.value,
-        reasonCodes: evaluation.advisoryDisposition.reasonCodes
+    if (evaluation.researchReadiness?.value !== 'READY') {
+      throw new GlobalCandidatePromotionError('GLOBAL_CANDIDATE_NOT_RESEARCH_READY', 409, {
+        candidateId: candidate.id, researchReadiness: evaluation.researchReadiness?.value || 'NOT_READY',
+        reasonCodes: evaluation.researchReadiness?.reasonCodes || []
       });
     }
 
@@ -189,7 +190,8 @@ async function promoteGlobalCandidateToProject(db, scope, input, now = new Date(
       promotionId: promotion.lastID, projectId, projectEvidenceId: projectEvidence.lastID,
       createdState: 'EVIDENCE_INTAKE', projectState: 'EVIDENCE_INTAKE',
       candidateId: candidate.id, candidateKey: candidate.candidateKey,
-      evidenceSnapshotHash: evidence.hash, advisoryDisposition: 'PROMOTE',
+      evidenceSnapshotHash: evidence.hash, researchReadiness: evaluation.researchReadiness.value,
+      advisoryDisposition: evaluation.advisoryDisposition.value,
       commercialProofStatus: evaluation.commercialProof.status, replay: false
     });
   } catch (error) {

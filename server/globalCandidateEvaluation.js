@@ -106,6 +106,20 @@ function evaluateCandidate(candidate, context = {}) {
   const selling = metrics.filter(item => item.kind === 'SALES_SIGNAL' && item.value > 0); const demand = metrics.filter(item => item.kind === 'DEMAND_SIGNAL' && item.value > 0);
   const competitionSignals = metrics.filter(item => item.kind === 'COMPETITION_SIGNAL'); const competitionPresent = competitionSignals.length > 0;
   const observedPublic = Number(authorityCounts.OBSERVED_PUBLIC || 0); const crossSource = sourceFamilies.length >= 2; const whyNow = evaluateWhyNow(evidence, metrics, context.now || new Date());
+  const amazonResearchReady = context.marketplace === 'AMAZON'
+    && evidence.some(item => item.sourceFamily === 'AMAZON_CEREBRO')
+    && positiveMarket.length > 0 && competitionPresent;
+  const etsyResearchReady = context.marketplace === 'ETSY'
+    && evidence.some(item => item.sourceFamily === 'ETSY_PUBLIC_SEARCH'
+      && Number(item.commercialEvidence?.listingCount || 0) > 0)
+    && competitionPresent;
+  const researchReady = amazonResearchReady || etsyResearchReady;
+  const researchReadiness = Object.freeze({
+    value: researchReady ? 'READY' : 'NOT_READY',
+    reasonCodes: Object.freeze(researchReady
+      ? [amazonResearchReady ? 'AMAZON_CEREBRO_RESEARCH_READY' : 'ETSY_PUBLIC_SEARCH_RESEARCH_READY']
+      : [context.marketplace === 'AMAZON' ? 'AMAZON_MARKETPLACE_EVIDENCE_REQUIRED' : 'ETSY_MARKETPLACE_EVIDENCE_REQUIRED'])
+  });
   const unknowns = [];
   if (proof.status !== 'ESTABLISHED') unknowns.push(proof.status === 'NOT_PRESENT' ? 'COMMERCIAL_PROOF_NOT_PRESENT' : 'COMMERCIAL_PROOF_NOT_ESTABLISHED');
   if (!competitionPresent) unknowns.push('COMPETITION_CONTEXT_NOT_PRESENT'); if (!crossSource) unknowns.push('CROSS_SOURCE_CORROBORATION_NOT_PRESENT');
@@ -127,13 +141,15 @@ function evaluateCandidate(candidate, context = {}) {
   }
   const summary = Object.freeze({ evidenceCount: evidence.length, sourceFamilyCount: sourceFamilies.length, sourceFamilies: Object.freeze(sourceFamilies), authorityCounts,
     commercialEvidenceCount: commercial.length, socialEvidenceCount: social.length, observedPublicEvidenceCount: observedPublic });
-  const rankingBasis = Object.freeze({ disposition, commercialProofStatus: proof.status, observedPublicEvidenceCount: observedPublic,
+  const rankingBasis = Object.freeze({ researchReadiness: researchReadiness.value, disposition,
+    commercialProofStatus: proof.status, observedPublicEvidenceCount: observedPublic,
     sourceFamilyCount: sourceFamilies.length, positiveDemandOrSalesSignalCount: positiveMarket.length, evidenceCount: evidence.length });
   return Object.freeze({ candidateId: candidate.id, candidateKey: candidate.candidateKey, normalizedPhrase: candidate.normalizedPhrase, displayPhrase: candidate.displayPhrase,
     marketplace: context.marketplace || null, evaluationPolicyVersion: EVALUATION_POLICY_VERSION, proofPolicyVersion: PROOF_POLICY_VERSION, advisoryOnly: true,
     commercialProof: proof, sellingSignals: Object.freeze(selling), demandSignals: Object.freeze(demand),
     competition: Object.freeze({ status: competitionPresent ? 'PRESENT' : 'NOT_PRESENT', signals: Object.freeze(competitionSignals) }),
     socialSupport: Object.freeze({ status: social.length ? 'PRESENT_RESEARCH_ONLY' : 'NOT_PRESENT', evidenceRefs: Object.freeze(social.map(evidenceRef)) }), whyNow,
+    researchReadiness,
     evidenceSummary: summary, unknowns: Object.freeze(unique(unknowns)), advisoryDisposition: Object.freeze({ value: disposition,
       reasonCodes: Object.freeze(unique(reasonCodes)), acceptedUnknowns: Object.freeze(disposition === 'PROMOTE' ? unique(unknowns) : []),
       blockers: Object.freeze(disposition === 'PROMOTE' ? [] : unique(unknowns)) }),
@@ -142,7 +158,8 @@ function evaluateCandidate(candidate, context = {}) {
 
 function compareEvaluations(left, right) {
   const a = left.priorityAid.rankingBasis; const b = right.priorityAid.rankingBasis;
-  return (DISPOSITION_ORDER[a.disposition] ?? 99) - (DISPOSITION_ORDER[b.disposition] ?? 99)
+  return (a.researchReadiness === 'READY' ? 0 : 1) - (b.researchReadiness === 'READY' ? 0 : 1)
+    || (DISPOSITION_ORDER[a.disposition] ?? 99) - (DISPOSITION_ORDER[b.disposition] ?? 99)
     || (PROOF_ORDER[a.commercialProofStatus] ?? 99) - (PROOF_ORDER[b.commercialProofStatus] ?? 99)
     || b.observedPublicEvidenceCount - a.observedPublicEvidenceCount || b.sourceFamilyCount - a.sourceFamilyCount
     || b.positiveDemandOrSalesSignalCount - a.positiveDemandOrSalesSignalCount || b.evidenceCount - a.evidenceCount

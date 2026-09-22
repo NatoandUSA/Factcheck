@@ -2,8 +2,18 @@
 
 Date: 2026-09-23
 Status: SEALED FOR GATE C VALIDATION — FEATURE CODE FROZEN
-Omni canonical main candidate: `5c99898a2dc3dd0cfc256d5b3b12b707c8d3f5b2`
-Omni production baseline: `b911ffbfa590dfee083c572871c1286642dc4f1c`
+Omni repository main: `5b5f60b92520692f88896ad970eec9af0d061288`
+Omni frozen release baseline: `b911ffbfa590dfee083c572871c1286642dc4f1c`
+
+## 0. Release authority lock during Gate C
+
+`LATEST MAIN != RELEASE AUTHORITY DURING GATE C`
+
+`RELEASE AUTHORITY = b911ffbfa590dfee083c572871c1286642dc4f1c UNTIL GATE C DECISION`
+
+Repository `main` is canonical development history only during Gate C. It may contain merged but intentionally un-deployed behavior, including PR #71. It MUST NOT be interpreted as production authorization.
+
+Every Gate C receipt MUST record the exact production SHA actually observed. Every deploy/release command during Gate C MUST name an explicit owner-authorized target SHA. Automation, operators, and reviewers MUST NOT infer a deploy target from `origin/main`, `latest main`, or the newest merge commit.
 
 ## 1. Owner decisions
 

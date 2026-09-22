@@ -181,14 +181,55 @@ function productFamiliesOf(phrase) {
   return observed;
 }
 
+// New products can legitimately sit outside the closed PRODUCT_FAMILIES
+// vocabulary. In that case we require positive lexical identity evidence from
+// the operator-confirmed Product Truth instead of treating "unknown family"
+// as an automatic blocker. Generic buying-language, audience, occasion and
+// style words are excluded so "gift for mom" cannot authorize an unrelated
+// research corpus.
+const PRODUCT_IDENTITY_NOISE = new Set([
+  'gift', 'gifts', 'present', 'idea', 'ideas', 'regalo', 'regalos', 'detalle', 'detalles',
+  'personalized', 'personalizado', 'personalizados', 'custom', 'customized', 'engraved', 'grabado',
+  'for', 'to', 'of', 'with', 'from', 'and', 'the', 'a', 'an', 'de', 'del', 'para', 'con', 'y', 'la', 'el',
+  ...Object.values(PATTERNS).flat()
+].flatMap(value => fold(value).split(/[^a-z0-9]+/).filter(Boolean)));
+
+function productIdentityTokens(identityTexts) {
+  return [...new Set(identityTexts.filter(Boolean)
+    .flatMap(value => fold(value).split(/[^a-z0-9]+/).filter(Boolean))
+    .filter(token => token.length >= 3 && !PRODUCT_IDENTITY_NOISE.has(token)))];
+}
+
+function directIdentityAlignment(phrases, identityTexts) {
+  const identityTokens = productIdentityTokens(identityTexts);
+  const result = { identityTokens, alignedCount: 0, genericCount: 0 };
+  if (!identityTokens.length) return result;
+  const identity = new Set(identityTokens);
+  for (const phrase of phrases) {
+    const tokens = fold(phrase).split(/[^a-z0-9]+/).filter(Boolean);
+    if (tokens.some(token => identity.has(token))) result.alignedCount++;
+    else result.genericCount++;
+  }
+  return result;
+}
+
 // Per-keyword relevance can be fooled by a shared recipient or occasion while
 // every product noun still describes a different item. Stop that wrong-product
 // corpus before it can write copy, prompts, backend terms, or PPC suggestions.
 function auditProductFamilyAlignment(phrases, identityTexts) {
   const allowedFamilies = allowedProductFamilies(identityTexts.filter(Boolean));
   const result = { status: 'UNRESOLVED', phraseCount: phrases.length, alignedCount: 0,
-    conflictingCount: 0, ambiguousCount: 0, genericCount: 0, allowedFamilies: [...allowedFamilies] };
-  if (!allowedFamilies.size) return result;
+    conflictingCount: 0, ambiguousCount: 0, genericCount: 0, allowedFamilies: [...allowedFamilies],
+    resolutionMode: allowedFamilies.size ? 'KNOWN_PRODUCT_FAMILY' : 'DIRECT_IDENTITY_EVIDENCE' };
+  if (!allowedFamilies.size) {
+    const direct = directIdentityAlignment(phrases, identityTexts);
+    result.identityTokens = direct.identityTokens;
+    result.alignedCount = direct.alignedCount;
+    result.genericCount = direct.genericCount;
+    result.requiredDirectMatches = phrases.length >= 10 ? Math.max(3, Math.ceil(phrases.length * 0.05)) : 1;
+    if (direct.identityTokens.length && direct.alignedCount >= result.requiredDirectMatches) result.status = 'ALIGNED';
+    return result;
+  }
   for (const phrase of phrases) {
     const observed = productFamiliesOf(phrase);
     if (!observed.size) result.genericCount++;

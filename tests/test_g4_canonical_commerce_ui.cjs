@@ -315,9 +315,9 @@ const assert = require('assert');
   const candidateEvidenceFile = new File(['Keyword Phrase,Search Volume\\npet memorial gift,5000'], 'candidate-cerebro.csv', { type: 'text/csv' });
   Object.defineProperty(candidateEvidenceInput, 'files', { value: [candidateEvidenceFile], configurable: true });
   await act(async () => { candidateEvidenceInput.dispatchEvent(new dom.window.Event('change', { bubbles: true })); });
-  const candidatePreviewButton = [...document.querySelectorAll('button')].find(button => button.textContent === 'Preview evidence');
+  const candidatePreviewButton = [...document.querySelectorAll('button')].find(button => button.textContent === '2. Xem trước file');
   await act(async () => { candidatePreviewButton.click(); await new Promise(resolve => setTimeout(resolve, 20)); });
-  const candidateConfirmButton = [...document.querySelectorAll('button')].find(button => button.textContent === 'Confirm into Candidate Pool');
+  const candidateConfirmButton = [...document.querySelectorAll('button')].find(button => button.textContent === '3. Xác nhận vào danh sách cơ hội');
   check(Boolean(candidateConfirmButton) && !candidateConfirmButton.disabled, 'zero-write B2 preview must unlock explicit evidence confirm');
   await act(async () => { candidateConfirmButton.click(); await new Promise(resolve => setTimeout(resolve, 20)); });
   check(calls.some(call => call.url === '/api/global-candidates/research-imports/preview')
@@ -329,7 +329,7 @@ const assert = require('assert');
   check(calls.some(call => call.url === '/api/integrations/social-listening/handoffs/pull' && call.options.method === 'POST')
     && calls.some(call => call.url === '/api/global-candidates/social-handoffs/44' && call.options.method === 'POST'),
   'Intel operator action must reuse verified Social Handoff V3 then canonical B2 projection, never direct score promotion');
-  const promoteButton = [...document.querySelectorAll('button')].find(button => button.textContent.includes('Promote to Project'));
+  const promoteButton = [...document.querySelectorAll('button')].find(button => button.textContent.includes('Tạo Project từ cơ hội này'));
   check(Boolean(promoteButton) && !promoteButton.disabled, 'OWNER must receive explicit Promote-to-Project action only for PROMOTE candidate');
   await act(async () => { promoteButton.click(); await new Promise(resolve => setTimeout(resolve, 20)); });
   check(calls.some(call => call.url === '/api/global-candidates/31/promote' && call.options.method === 'POST'),

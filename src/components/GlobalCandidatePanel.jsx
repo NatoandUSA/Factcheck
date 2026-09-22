@@ -143,7 +143,8 @@ export default function GlobalCandidatePanel({ marketplace, onPromoted, onRequir
         {researchLabel} is parsed by the existing canonical adapter. Preview is zero-write; Confirm preserves the source authority classification.
       </div>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-        <input data-testid="global-candidate-research-file" type="file" accept=".csv,.xlsx"
+        <input data-testid="global-candidate-research-file" type="file"
+          accept={marketplace === 'AMAZON' ? '.csv,.xlsx' : '.csv,.html,.htm,text/csv,text/html'}
           onChange={event => { setResearchFile(event.target.files?.[0] || null); setResearchPreview(null); }} />
         <button type="button" disabled={!researchFile || researchBusy} onClick={() => submitResearch(false)}>Preview evidence</button>
         <button type="button" disabled={!researchPreview?.zeroWrite || researchBusy} onClick={() => submitResearch(true)}>Confirm into Candidate Pool</button>

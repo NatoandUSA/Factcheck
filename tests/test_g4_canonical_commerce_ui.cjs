@@ -310,6 +310,8 @@ const assert = require('assert');
   const candidateEvidenceInput = document.querySelector('[data-testid="global-candidate-research-file"]');
   check(Boolean(candidateEvidenceInput) && document.querySelector('[data-testid="global-candidate-marketplace-evidence"]'),
     'operator must have a normal UI lane for B2 marketplace evidence intake');
+  check(candidateEvidenceInput.getAttribute('accept') === '.csv,.xlsx',
+    'Amazon candidate evidence picker must advertise only canonical Cerebro file types');
   const candidateEvidenceFile = new File(['Keyword Phrase,Search Volume\\npet memorial gift,5000'], 'candidate-cerebro.csv', { type: 'text/csv' });
   Object.defineProperty(candidateEvidenceInput, 'files', { value: [candidateEvidenceFile], configurable: true });
   await act(async () => { candidateEvidenceInput.dispatchEvent(new dom.window.Event('change', { bubbles: true })); });

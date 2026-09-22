@@ -19,6 +19,7 @@ const assert = require('assert');
   const calls = [];
   let activeMockMarketplace = 'AMAZON';
   let authMeAuthenticated = true;
+  let authRole = 'SELLER';
   let mockListings = [];
   let mockReviewPackage = null;
   let qaRevisionBody = null;
@@ -26,7 +27,7 @@ const assert = require('assert');
   global.fetch = async (url, options = {}) => {
     calls.push({ url: String(url), options });
     if (url === '/api/auth/me') return authMeAuthenticated
-      ? response({ user: { userId: 7, role: 'SELLER', workspaceId: 11, marketplace: activeMockMarketplace } })
+      ? response({ user: { userId: 7, role: authRole, workspaceId: 11, marketplace: activeMockMarketplace } })
       : { ok: false, status: 401, json: async () => ({ error: 'INVALID_SESSION' }) };
     if (String(url).endsWith('/commerce-state')) return response({ success: true, heads: {
       productTruthRevisionId: null, researchSnapshotId: activeMockMarketplace === 'ETSY' ? 21 : null, intelligenceSnapshotId: null
@@ -46,6 +47,18 @@ const assert = require('assert');
           structure: { personalizationRate: 0, giftRate: 100, averageWords: 4 }, marketContext: { uniqueShopCount: 2 }
         } }
       } : {}, artifacts: [] });
+    if (String(url) === '/api/projects') return response({ success: true, projects: [
+      { id: 3, name: 'Existing Amazon Project', seed_phrase: 'pet memorial gift', state: 'EVIDENCE_INTAKE' },
+      { id: 9, name: 'Pet Memorial Candidate Pilot', seed_phrase: 'pet memorial gift', state: 'EVIDENCE_INTAKE' }
+    ] });
+    if (String(url).startsWith('/api/global-candidates/evaluations')) return response({ success: true, candidates: [{
+      candidateId: 31, priorityRank: 1, displayPhrase: 'pet memorial gift', marketplace: activeMockMarketplace,
+      advisoryDisposition: { value: 'PROMOTE', reasonCodes: ['PROMOTE_FOR_PROJECT_RESEARCH_NOT_AS_COMMERCIAL_PROOF'], blockers: [] },
+      evidenceSummary: { evidenceCount: 4, sourceFamilyCount: 2 }
+    }] });
+    if (String(url) === '/api/global-candidates/31/promote' && options.method === 'POST') return response({
+      success: true, projectId: 9, createdState: 'EVIDENCE_INTAKE', promotionAuthority: 'HUMAN_EXPLICIT'
+    });
     if (String(url).endsWith('/product-truth/revisions')) return response({ success: true, revisions: [] });
     if (String(url).endsWith('/product-truth-families')) return response({ success: true, families: [] });
     if (String(url).endsWith('/product-truth-listing/preview')) return response({ success: true, zeroWrite: true,
@@ -162,8 +175,10 @@ const assert = require('assert');
     'one multi-file selection must preview every file through the zero-write route');
   check(document.body.textContent.includes('1099'), 'preview accounting must render');
   check(document.body.textContent.includes('aaaaaaaaaaaa'), 'raw hash must render for staff inspection');
+  check(document.body.textContent.includes('không cần chọn lại'),
+    'Amazon Cerebro lane must explicitly tell staff that accepted previews remain importable without reselecting files');
   const confirm = buttons().find(button => button.textContent.includes('Xác nhận import Cerebro'));
-  check(confirm && !confirm.disabled, 'confirm must unlock only after preview succeeds');
+  check(confirm && !confirm.disabled, 'confirm must unlock from the accepted preview set');
   await act(async () => { confirm.click(); });
   check(calls.filter(call => call.url.endsWith('/research-imports') && !call.url.endsWith('/preview')).length === 2,
     'explicit confirm must persist each previewed file separately');
@@ -266,9 +281,27 @@ const assert = require('assert');
 
   await act(async () => root.unmount());
 
-  authMeAuthenticated = false;
-  let loginRequests = 0;
   const { default: SinglePathWorkspace } = await vite.ssrLoadModule('/src/components/SinglePathMarketplaceWorkspace.jsx');
+  activeMockMarketplace = 'AMAZON'; authRole = 'OWNER'; authMeAuthenticated = true;
+  const candidateRoot = createRoot(document.getElementById('root'));
+  await act(async () => { candidateRoot.render(React.createElement(AuthProvider, null,
+    React.createElement(SinglePathWorkspace, { marketplace: 'AMAZON' }))); });
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
+  check(Boolean(document.querySelector('[data-testid="global-candidate-operator-path"]'))
+    && document.body.textContent.includes('pet memorial gift')
+    && document.body.textContent.includes('PROMOTE'),
+  'authenticated operator must see B3 Global Candidate disposition in normal workspace UI');
+  const promoteButton = [...document.querySelectorAll('button')].find(button => button.textContent.includes('Promote to Project'));
+  check(Boolean(promoteButton) && !promoteButton.disabled, 'OWNER must receive explicit Promote-to-Project action only for PROMOTE candidate');
+  await act(async () => { promoteButton.click(); await new Promise(resolve => setTimeout(resolve, 20)); });
+  check(calls.some(call => call.url === '/api/global-candidates/31/promote' && call.options.method === 'POST'),
+    'operator Promote action must use canonical B4 route');
+  check(document.querySelector('select[aria-label="Active AMAZON project"]')?.value === '9',
+    'successful promotion must move operator directly into the created canonical Project');
+  await act(async () => candidateRoot.unmount());
+
+  authMeAuthenticated = false; authRole = 'SELLER';
+  let loginRequests = 0;
   const root2 = createRoot(document.getElementById('root'));
   await act(async () => { root2.render(React.createElement(AuthProvider, null,
     React.createElement(SinglePathWorkspace, { marketplace: 'AMAZON', onRequireLogin: () => { loginRequests += 1; } }))); });

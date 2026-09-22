@@ -14,6 +14,7 @@ try { fs.unlinkSync(process.env.OMNI_DB_PATH); } catch (_) {}
 const { app, db, databaseReady } = require('../server/server');
 const { createSessionRecord } = require('../server/security/session');
 const { getArtifactState } = require('../server/commerceWorkflowArtifactStore');
+const { masterKeywordPayload, MASTER_KEYWORD_WORKING_SET_LIMIT, MASTER_KEYWORD_PROVENANCE_LIMIT } = require('../server/amazonResearchWorkflow');
 const get = (sql, params = []) => new Promise((resolve, reject) => db.get(sql, params,
   (error, row) => error ? reject(error) : resolve(row || null)));
 const key = value => `82000000-0000-4000-8000-${String(value).padStart(12, '0')}`;
@@ -39,6 +40,27 @@ async function generated(kind) {
 
 async function main() {
   await databaseReady;
+  const realScaleCount = 11294;
+  const realScaleKeywords = Array.from({ length: realScaleCount }, (_, index) => ({
+    phrase: `pet memorial gift keyword ${index}`, searchVolume: 50000 - index, keywordSales: 900 - (index % 800),
+    iq: 1200, positionRank: 1 + (index % 50), rankingCompetitorsCount: 4 + (index % 15),
+    competingProducts: 500 + index, titleDensity: index % 30, occurrences: 1,
+    provenance: [{ importId: 16, sourceRow: index + 2, rawHash: 'a'.repeat(64), parserId: 'HELIUM10_CEREBRO', parserHash: 'b'.repeat(64) }]
+  }));
+  const forcedPhrase = realScaleKeywords[realScaleKeywords.length - 1].phrase;
+  const bounded = masterKeywordPayload({ observations: { cerebro: { keywords: realScaleKeywords } },
+    accounting: { cerebroObservationCount: realScaleCount } }, 'pet memorial gift', [{ phrase: forcedPhrase, tier: 'EXCLUDED' }]);
+  check(bounded.payload.keywords.length === MASTER_KEYWORD_WORKING_SET_LIMIT,
+    'real-scale Cerebro is deterministically materialized into bounded MKL working set');
+  check(bounded.accounting.fullResearchKeywordCount === realScaleCount
+    && bounded.accounting.droppedKeywordCount === realScaleCount - MASTER_KEYWORD_WORKING_SET_LIMIT,
+  'full research count and non-materialized keywords are explicitly accounted');
+  check(bounded.payload.keywords.some(item => item.phrase === forcedPhrase && item.tier === 'EXCLUDED'),
+    'explicit staff decisions are retained even when the phrase is outside the natural top working set');
+  check(bounded.payload.keywords.every(item => item.provenance.length > 0
+    && item.provenance.length <= MASTER_KEYWORD_PROVENANCE_LIMIT), 'bounded MKL retains compact provenance for every keyword');
+  check(Buffer.byteLength(JSON.stringify(bounded), 'utf8') < 2 * 1024 * 1024,
+    'real-scale MKL preview remains below immutable revision content limit');
   server = app.listen(0, '127.0.0.1'); await new Promise(resolve => server.once('listening', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`; process.env.ALLOWED_ORIGINS = origin;
   const users = await new Promise((resolve, reject) => db.all(`SELECT u.id AS userId,u.email,w.id AS workspaceId,w.tenant_id AS tenantId

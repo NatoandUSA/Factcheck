@@ -73,6 +73,7 @@ const { ingestCandidateProjections, listGlobalCandidates } = require('./globalCa
 const { EVALUATION_POLICY_VERSION, PROOF_POLICY_VERSION, RANKING_MODE,
   evaluateAndPrioritizeGlobalCandidates } = require('./globalCandidateEvaluation');
 const { projectResearchFile, projectSocialHandoff, projectWorkflowArtifact } = require('./globalCandidateProjection');
+const { promoteGlobalCandidateToProject } = require('./globalCandidatePromotion');
 const amazonResearchAdapter = require('./commerceIntelligence/amazonResearchAdapter');
 const amazonIntelligenceAdapter = require('./commerceIntelligence/amazonIntelligenceAdapter');
 const { selectAsinBatches } = require('./commerceIntelligence/asinSelector');
@@ -1923,6 +1924,21 @@ app.get('/api/global-candidates/evaluations', requireAuth(db), requireRole(['OWN
     res.json({ success: true, evaluationPolicyVersion: EVALUATION_POLICY_VERSION,
       proofPolicyVersion: PROOF_POLICY_VERSION, rankingMode: RANKING_MODE, advisoryOnly: true,
       decisionAuthority: false, promotionAuthority: false, count: evaluated.length, candidates: evaluated });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+app.post('/api/global-candidates/:candidateId/promote', requireAuth(db), requireRole(['OWNER', 'MANAGER']), async (req, res) => {
+  try {
+    const candidateId = Number(req.params.candidateId);
+    if (!Number.isInteger(candidateId) || candidateId < 1) throw Object.assign(new Error('GLOBAL_CANDIDATE_ID_INVALID'), {
+      code: 'GLOBAL_CANDIDATE_ID_INVALID', status: 400
+    });
+    const body = requireExactDto(req.body || {}, new Set(['projectName', 'idempotencyKey']));
+    assertNoClientPolicyOverrides(body);
+    const result = await promoteGlobalCandidateToProject(db, revisionScope(req.user), {
+      candidateId, projectName: body.projectName, idempotencyKey: body.idempotencyKey
+    });
+    res.status(result.replay ? 200 : 201).json({ success: true, ...result, promotionAuthority: 'HUMAN_EXPLICIT' });
   } catch (error) { rejectRevisionStore(res, error); }
 });
 

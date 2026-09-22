@@ -12,6 +12,9 @@ const { fold, contentTokens } = require('./commerceIntelligence/text');
 const ENGINE_ID = 'amazon-research-to-mkl-v2';
 const TIERS = new Set(['PRIMARY', 'SECONDARY', 'LONG_TAIL', 'OUTLIER_REVIEW', 'RESIDUE', 'EXCLUDED']);
 const ROOT_STOP = new Set(['the', 'and', 'for', 'with', 'from', 'para', 'con', 'del', 'las', 'los', 'una', 'uno', 'de', 'la', 'el', 'a', 'to', 'of']);
+const MASTER_KEYWORD_WORKING_SET_LIMIT = 1200;
+const MASTER_KEYWORD_REVIEW_QUOTA = 120;
+const MASTER_KEYWORD_PROVENANCE_LIMIT = 5;
 
 class AmazonWorkflowError extends Error {
   constructor(code, status = 400, details = {}) { super(code); this.code = code; this.status = status; this.details = details; }
@@ -133,7 +136,6 @@ function buildRoots(keywords) {
 function masterKeywordPayload(research, seedPhrase, decisions = []) {
   const source = research.observations?.cerebro?.keywords || [];
   if (!source.length) throw new AmazonWorkflowError('CEREBRO_KEYWORDS_REQUIRED', 409);
-  if (source.length > 10000) throw new AmazonWorkflowError('MASTER_KEYWORD_ROW_LIMIT', 413, { rowCount: source.length, limit: 10000 });
   const searchVolume = normalize(source.map(item => number(item.searchVolume)), log);
   const keywordSales = normalize(source.map(item => number(item.keywordSales)), log);
   const iq = normalize(source.map(item => number(item.iq)), log);
@@ -196,17 +198,33 @@ function masterKeywordPayload(research, seedPhrase, decisions = []) {
         rankingCompetitorsCount: item.source.rankingCompetitorsCount,
         competitorRankAverage: item.source.competitorRankAverage,
         competitorPerformanceScore: item.source.competitorPerformanceScore },
-      occurrences: item.source.occurrences, provenance: item.source.provenance
+      occurrences: item.source.occurrences, provenance: (item.source.provenance || []).slice(0, MASTER_KEYWORD_PROVENANCE_LIMIT),
+      provenanceObservationCount: (item.source.provenance || []).length
     };
   });
+  const decisionKeys = new Set(decisionMap.keys());
+  const forced = keywords.filter(item => decisionKeys.has(fold(item.phrase).trim()));
+  if (forced.length > MASTER_KEYWORD_WORKING_SET_LIMIT) {
+    throw new AmazonWorkflowError('MASTER_KEYWORD_DECISION_LIMIT', 413,
+      { decisionCount: forced.length, limit: MASTER_KEYWORD_WORKING_SET_LIMIT });
+  }
+  const outlierReview = keywords.filter(item => item.tier === 'OUTLIER_REVIEW').slice(0, MASTER_KEYWORD_REVIEW_QUOTA);
+  const residueReview = keywords.filter(item => item.tier === 'RESIDUE').slice(0, MASTER_KEYWORD_REVIEW_QUOTA);
+  const selectedIds = new Set(); const selected = [];
+  const add = item => {
+    if (!item || selectedIds.has(item.keywordId) || selected.length >= MASTER_KEYWORD_WORKING_SET_LIMIT) return;
+    selectedIds.add(item.keywordId); selected.push(item);
+  };
+  forced.forEach(add); outlierReview.forEach(add); residueReview.forEach(add); keywords.forEach(add);
+  const workingKeywords = selected.sort((a, b) => a.priorityRank - b.priorityRank || a.phrase.localeCompare(b.phrase));
   const known = new Set(source.map(item => fold(item.phrase).trim()));
   const unknownDecisions = [...decisionMap.keys()].filter(key => !known.has(key));
   if (unknownDecisions.length) throw new AmazonWorkflowError('MASTER_KEYWORD_DECISION_NOT_IN_RESEARCH', 409, { unknownDecisions });
   return {
     payload: {
-      seedPhrase, keywords, roots,
-      outliers: keywords.filter(item => item.tier === 'OUTLIER_REVIEW').map(item => item.keywordId),
-      residue: keywords.filter(item => item.tier === 'RESIDUE').map(item => item.keywordId),
+      seedPhrase, keywords: workingKeywords, roots,
+      outliers: workingKeywords.filter(item => item.tier === 'OUTLIER_REVIEW').map(item => item.keywordId),
+      residue: workingKeywords.filter(item => item.tier === 'RESIDUE').map(item => item.keywordId),
       metricProvenance: {
         searchVolume: 'Cerebro Search Volume — scoring', keywordSales: 'Cerebro Keyword Sales — scoring',
         iq: 'Cerebro IQ — opportunity signal', rankingCompetitorsCount: 'Cerebro Ranking Competitors Count — niche coverage/relevancy',
@@ -220,11 +238,12 @@ function masterKeywordPayload(research, seedPhrase, decisions = []) {
       sourceObservationCount: research.accounting.cerebroObservationCount,
       uniqueKeywordCount: source.length, duplicateObservationCount: Math.max(0,
         Number(research.accounting.cerebroObservationCount || 0) - source.length),
-      masterKeywordCount: keywords.length, availableForAllocation: keywords.filter(item => item.tier !== 'EXCLUDED').length,
-      staffExcludedCount: keywords.filter(item => item.tier === 'EXCLUDED').length,
-      outlierCount: keywords.filter(item => item.tier === 'OUTLIER_REVIEW').length,
-      residueCount: keywords.filter(item => item.tier === 'RESIDUE').length,
-      rootCount: roots.length, droppedKeywordCount: 0
+      masterKeywordCount: workingKeywords.length, availableForAllocation: workingKeywords.filter(item => item.tier !== 'EXCLUDED').length,
+      staffExcludedCount: workingKeywords.filter(item => item.tier === 'EXCLUDED').length,
+      outlierCount: workingKeywords.filter(item => item.tier === 'OUTLIER_REVIEW').length,
+      residueCount: workingKeywords.filter(item => item.tier === 'RESIDUE').length,
+      rootCount: roots.length, droppedKeywordCount: Math.max(0, keywords.length - workingKeywords.length),
+      workingSetLimit: MASTER_KEYWORD_WORKING_SET_LIMIT, fullResearchKeywordCount: keywords.length
     }
   };
 }
@@ -254,4 +273,4 @@ async function saveMasterKeywords(db, scope, projectId, input) {
 }
 
 module.exports = Object.freeze({ AmazonWorkflowError, bindings, previewAsinPlan, saveAsinPlan,
-  masterKeywordPayload, previewMasterKeywords, saveMasterKeywords });
+  MASTER_KEYWORD_WORKING_SET_LIMIT, MASTER_KEYWORD_PROVENANCE_LIMIT, masterKeywordPayload, previewMasterKeywords, saveMasterKeywords });

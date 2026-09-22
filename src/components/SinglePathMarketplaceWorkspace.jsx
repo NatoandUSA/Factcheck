@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import CanonicalCommerceWorkflow from './CanonicalCommerceWorkflow';
 import ProjectSetupCard from './ProjectSetupCard';
+import GlobalCandidatePanel from './GlobalCandidatePanel';
 import { useAuth } from '../context/AuthContext';
 
 const CATEGORIES = Object.freeze([
@@ -63,6 +64,8 @@ export default function SinglePathMarketplaceWorkspace({ marketplace, onSelectLi
     [projects, activeProjectId]);
 
   return <div data-testid={`r43-single-path-${marketplace.toLowerCase()}`} style={{ display: 'grid', gap: 14 }}>
+    {user && <GlobalCandidatePanel marketplace={marketplace} onRequireLogin={onRequireLogin} onShowToast={onShowToast}
+      onPromoted={async projectId => { await refreshProjects(projectId); }} />}
     <section className="studio-panel" style={{ padding: '16px 20px', borderLeft: `4px solid ${accent}` }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', gap: 12, flexWrap: 'wrap' }}>
         <div>

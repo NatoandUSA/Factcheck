@@ -334,9 +334,9 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
     const lanePreviews = lane === 'AMAZON_XRAY' ? amazonXrayPreviews : lane === 'AMAZON_CEREBRO' ? amazonCerebroPreviews : filePreviews;
     const setLanePreviews = lane === 'AMAZON_XRAY' ? setAmazonXrayPreviews : lane === 'AMAZON_CEREBRO' ? setAmazonCerebroPreviews : setFilePreviews;
     return run(`${confirm ? 'import' : 'preview'}-${lane.toLowerCase()}`, async () => {
-    if (!laneFiles.length) throw new Error('Hãy chọn ít nhất một file trước.');
+    if (!confirm && !laneFiles.length) throw new Error('Hãy chọn ít nhất một file trước.');
     const eligible = confirm ? lanePreviews.filter(item => item.result?.zeroWrite && !item.error) : laneFiles.map(file => ({ file }));
-    if (confirm && !eligible.length) throw new Error('Không có file preview hợp lệ để xác nhận.');
+    if (confirm && !eligible.length) throw new Error('Không có file preview hợp lệ để xác nhận. Preview lại file đúng loại trước khi import.');
     const results = [];
     const committedIds = [];
     for (const entry of eligible) {
@@ -412,7 +412,7 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
       researchSnapshotId, decisions,
       ...(workflowState?.heads?.AMAZON_ASIN_BATCH_PLAN ? { asinPlanArtifactId: workflowState.heads.AMAZON_ASIN_BATCH_PLAN.id } : {})
     }));
-    setMasterPreview(result); notify(`Master KW preview: ${result.accounting?.masterKeywordCount || 0} keyword, không drop.`);
+    setMasterPreview(result); notify(`Master KW preview: ${result.accounting?.masterKeywordCount || 0}/${result.accounting?.fullResearchKeywordCount || result.accounting?.uniqueKeywordCount || 0} keyword trong canonical working set; ${result.accounting?.droppedKeywordCount || 0} keyword vẫn giữ ở Research Snapshot.`);
   });
 
   const setKeywordTier = (phrase, tier) => {
@@ -1102,7 +1102,7 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
       </div>}
       {marketplace === 'AMAZON' && <div data-testid="amazon-cerebro-upload-lane" style={{ marginTop: 14, border: '1px solid #93c5fd', borderRadius: 10, padding: 11, background: '#fff' }}>
         <b>3. Upload Cerebro sau khi đã chạy các ASIN batch trên Helium 10</b>
-        <p style={{ margin: '4px 0 9px', color: '#475569', fontSize: '.77rem' }}>Cho phép một hoặc nhiều file. Staff có thể thay đổi batch hoặc import file Cerebro hợp lệ đã có; OmniSeller không khóa batch và không yêu cầu chứng minh file thuộc batch nào.</p>
+        <p style={{ margin: '4px 0 9px', color: '#475569', fontSize: '.77rem' }}>Chỉ chọn file Helium 10 Cerebro ở lane này. File Search/Observation/Word-Frequency không phải Cerebro và sẽ bị từ chối fail-closed. Sau Preview, các file hợp lệ vẫn được giữ để bấm Xác nhận import mà không cần chọn lại.</p>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' }}>
           <input aria-label="Upload Cerebro" type="file" multiple accept=".xlsx,.csv" onChange={event => { chooseFiles(event.target.files, 'AMAZON_CEREBRO'); event.target.value = ''; }} />
           <ActionButton accent={accent} disabled={!amazonCerebroFiles.length || busy} onClick={() => upload(false, 'AMAZON_CEREBRO')}>Preview {amazonCerebroFiles.length || ''} Cerebro zero-write</ActionButton>
@@ -1127,7 +1127,7 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
       </div>}
       {marketplace === 'AMAZON' && researchReady && <div data-testid="amazon-master-keyword-workspace" style={{ marginTop: 14, borderTop: '1px solid #bfdbfe', paddingTop: 12 }}>
         <b>5. Cerebro → Master Keyword List</b>
-        <p style={{ margin: '4px 0 9px', color: '#475569', fontSize: '.77rem' }}>Nhận trực tiếp một hoặc nhiều Cerebro hợp lệ; không yêu cầu chứng minh ancestry. Điểm ưu tiên tách rõ nhu cầu (SV/Keyword Sales), độ phủ niche (Ranking Competitors), và cơ hội cạnh tranh (ít Competing Products + Title Density thấp). Outlier/residue được giữ để review, không âm thầm xóa.</p>
+        <p style={{ margin: '4px 0 9px', color: '#475569', fontSize: '.77rem' }}>Scoring đọc toàn bộ keyword trong Research Snapshot rồi materialize một canonical working set có giới hạn để tránh artifact quá lớn. Full research + raw provenance vẫn nằm trong immutable Research Snapshot; outlier/residue có quota riêng để review và staff decision đã có luôn được giữ.</p>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           <ActionButton accent={accent} disabled={busy} onClick={previewMasterKeywords}>Preview / làm mới Master KW</ActionButton>
           {masterPreview && <ActionButton accent="#166534" disabled={busy} onClick={saveMasterKeywords}>Lưu immutable Master KW</ActionButton>}
@@ -1153,7 +1153,7 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
               </select></td><td style={{ textAlign: 'center' }}>{item.provenance?.length || 0}</td>
             </tr>)}</tbody></table>
           </div>
-          {(displayedMaster.payload?.keywords || []).length > 200 && !keywordQuery && <small>Hiển thị 200 keyword đầu; dùng ô tìm kiếm để xem keyword khác. Artifact vẫn giữ toàn bộ.</small>}
+          {(displayedMaster.payload?.keywords || []).length > 200 && !keywordQuery && <small>Hiển thị 200 keyword đầu của canonical working set; dùng ô tìm kiếm để xem phần còn lại. Keyword ngoài working set vẫn được giữ đầy đủ trong Research Snapshot và được tính vào DROPPED.</small>}
         </div>}
       </div>}
       {marketplace === 'ETSY' && researchReady && <div data-testid="etsy-master-keyword-workspace" style={{ marginTop: 14, borderTop: '1px solid #fed7aa', paddingTop: 12 }}>

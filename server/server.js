@@ -74,6 +74,7 @@ const { EVALUATION_POLICY_VERSION, PROOF_POLICY_VERSION, RANKING_MODE,
   evaluateAndPrioritizeGlobalCandidates } = require('./globalCandidateEvaluation');
 const { projectResearchFile, projectSocialHandoff, projectWorkflowArtifact } = require('./globalCandidateProjection');
 const { promoteGlobalCandidateToProject } = require('./globalCandidatePromotion');
+const { createCanonicalResearchProject } = require('./canonicalProjectStore');
 const amazonResearchAdapter = require('./commerceIntelligence/amazonResearchAdapter');
 const amazonIntelligenceAdapter = require('./commerceIntelligence/amazonIntelligenceAdapter');
 const { selectAsinBatches } = require('./commerceIntelligence/asinSelector');
@@ -1532,7 +1533,7 @@ app.get('/api/projects', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELL
 });
 
 // POST /api/projects - Create new research project
-app.post('/api/projects', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), (req, res) => {
+app.post('/api/projects', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
   let body;
   try {
     body = requireExactDto(req.body, new Set(['name', 'seedPhrase', 'referenceAsin', 'locale',
@@ -1570,45 +1571,26 @@ app.post('/api/projects', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SEL
     return res.status(400).json({ success: false, error: 'UNSUPPORTED_LISTING_LOCALE' });
   }
 
-  const insertProject = () => db.run(
-    `INSERT INTO research_projects (tenant_id, workspace_id, marketplace, name, seed_phrase, state, reference_asin, actor_id,
-       locale,media_class,product_type_id,category_id,product_family_version)
-     VALUES (?, ?, ?, ?, ?, 'EVIDENCE_INTAKE', ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      req.user.tenantId,
-      req.user.workspaceId,
-      req.user.marketplace,
-      projectName,
-      normalizedSeedPhrase,
-      referenceAsin ? String(referenceAsin).trim() : null,
-      req.user.userId,
-      hasPolicyContext ? locale.trim() : null,
-      hasPolicyContext ? mediaClass.trim().toUpperCase() : null,
-      hasPolicyContext ? productTypeId.trim() : null,
-      hasPolicyContext ? categoryId.trim() : null,
-      hasPolicyContext ? productFamilyVersion.trim() : null
-    ],
-    function(err) {
-      if (err) return res.status(500).json({ success: false, error: err.message });
-      res.json({
-        success: true,
-        projectId: this.lastID,
-        state: 'EVIDENCE_INTAKE',
-        marketplace: req.user.marketplace,
-        policyContextState: hasPolicyContext ? 'COMPLETE' : 'INCOMPLETE'
-      });
+  try {
+    const project = await createCanonicalResearchProject(db, revisionScope(req.user), {
+      name: projectName,
+      seedPhrase: normalizedSeedPhrase,
+      referenceAsin,
+      policyContext: hasPolicyContext ? {
+        locale,
+        mediaClass,
+        productTypeId,
+        categoryId,
+        productFamilyVersion
+      } : null
+    });
+    res.json({ success: true, ...project });
+  } catch (error) {
+    if (!Number.isInteger(error?.status)) {
+      return res.status(500).json({ success: false, error: error?.message || 'DATABASE_ERROR' });
     }
-  );
-  // Policy target identity is server-owned. Existing workspaces are backfilled
-  // by migration; workspaces created after migration receive the same explicit
-  // internal account label here before a classified project can use it.
-  db.run(`UPDATE workspaces SET seller_account_label=COALESCE(seller_account_label,'workspace:' || id),
-      site=COALESCE(site,'US') WHERE id=? AND tenant_id=? AND marketplace=?`,
-  [req.user.workspaceId, req.user.tenantId, req.user.marketplace], function onPolicyTarget(error) {
-    if (error) return res.status(500).json({ success: false, error: 'WORKSPACE_POLICY_CONTEXT_FAILED' });
-    if (this.changes !== 1) return res.status(404).json({ success: false, error: 'WORKSPACE_NOT_FOUND' });
-    insertProject();
-  });
+    return rejectRevisionStore(res, error);
+  }
 });
 
 // Legacy projects predate canonical policy bindings. Bind the missing context

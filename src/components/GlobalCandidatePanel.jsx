@@ -21,6 +21,7 @@ export default function GlobalCandidatePanel({ marketplace, onPromoted, onRequir
   const [state, setState] = useState({ loading: false, error: '', candidates: [] });
   const [projectNames, setProjectNames] = useState({});
   const [promotingId, setPromotingId] = useState(null);
+  const [pullingIntel, setPullingIntel] = useState(false);
 
   const load = useCallback(async () => {
     if (!user?.workspaceId) return setState({ loading: false, error: '', candidates: [] });
@@ -42,6 +43,30 @@ export default function GlobalCandidatePanel({ marketplace, onPromoted, onRequir
   useEffect(() => { load(); }, [load]);
 
   const canPromote = ['OWNER', 'MANAGER'].includes(user?.role);
+  const canPullIntel = user?.role === 'OWNER';
+
+  const pullIntel = async () => {
+    setPullingIntel(true);
+    try {
+      const pulled = await readJson(await fetch('/api/integrations/social-listening/handoffs/pull', {
+        method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ idempotencyKey: uuid() })
+      }));
+      const handoffId = Number(pulled?.handoff?.id);
+      if (!Number.isInteger(handoffId) || handoffId < 1) throw new Error('SOCIAL_HANDOFF_ID_MISSING');
+      await readJson(await fetch(`/api/global-candidates/social-handoffs/${handoffId}`, {
+        method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: '{}'
+      }));
+      onShowToast?.(`Verified Intel handoff #${handoffId} projected into Global Candidate Pool.`, 'success');
+      await load();
+    } catch (error) {
+      onShowToast?.(`Intel handoff pull blocked: ${error.message}`, 'error');
+      setState(previous => ({ ...previous, error: error.message }));
+    } finally {
+      setPullingIntel(false);
+    }
+  };
+
   const promote = async candidate => {
     const projectName = String(projectNames[candidate.candidateId] || candidate.displayPhrase || '').trim();
     if (!projectName) return onShowToast?.('Enter a Project name before Promote.', 'error');
@@ -71,9 +96,15 @@ export default function GlobalCandidatePanel({ marketplace, onPromoted, onRequir
           B3 is advisory decision support. Only OWNER/MANAGER can Promote, and the server reevaluates the candidate before Project creation.
         </p>
       </div>
-      <button type="button" onClick={load} disabled={state.loading}>
-        {state.loading ? 'Loading...' : 'Refresh Candidates'}
-      </button>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        {canPullIntel && <button type="button" data-testid="pull-verified-intel-handoff"
+          onClick={pullIntel} disabled={pullingIntel || state.loading}>
+          {pullingIntel ? 'Pulling verified Intel...' : 'Pull verified Intel handoff'}
+        </button>}
+        <button type="button" onClick={load} disabled={state.loading}>
+          {state.loading ? 'Loading...' : 'Refresh Candidates'}
+        </button>
+      </div>
     </div>
 
     {state.error && <div role="alert" style={{ marginTop: 10, color: '#991b1b' }}>{state.error}</div>}
@@ -82,7 +113,7 @@ export default function GlobalCandidatePanel({ marketplace, onPromoted, onRequir
       <div data-testid="global-candidate-empty"
         style={{ marginTop: 12, padding: 12, background: '#faf5ff', borderRadius: 8, color: '#581c87' }}>
         No Global Candidate exists in {marketplace} yet. This means the pool has no qualifying evidence; it does not mean there is no market opportunity.
-        Add evidence to the Global Candidate Pool first. Do not bypass B3 by creating a Project manually.
+        OWNER can use Pull verified Intel handoff above to ingest the configured signed Social Handoff V3 as RESEARCH_ONLY evidence. Do not bypass B3 by creating a Project manually.
       </div>}
 
     {state.candidates.length > 0 && <div style={{ overflowX: 'auto', marginTop: 12 }}>

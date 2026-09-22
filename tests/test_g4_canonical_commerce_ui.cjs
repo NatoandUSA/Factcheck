@@ -51,6 +51,13 @@ const assert = require('assert');
       { id: 3, name: 'Existing Amazon Project', seed_phrase: 'pet memorial gift', state: 'EVIDENCE_INTAKE' },
       { id: 9, name: 'Pet Memorial Candidate Pilot', seed_phrase: 'pet memorial gift', state: 'EVIDENCE_INTAKE' }
     ] });
+    if (String(url) === '/api/integrations/social-listening/handoffs/pull' && options.method === 'POST') return response({
+      success: true, replay: false, handoff: { id: 44, authority: { classification: 'RESEARCH_ONLY' },
+        marketValidationCapability: 'NOT_CONNECTED' }
+    });
+    if (String(url) === '/api/global-candidates/social-handoffs/44' && options.method === 'POST') return response({
+      success: true, evidenceCreated: 2, groupingMethod: 'EXACT_NORMALIZED_V1', decisionAuthority: false, promotionAuthority: false
+    });
     if (String(url).startsWith('/api/global-candidates/evaluations')) return response({ success: true, candidates: [{
       candidateId: 31, priorityRank: 1, displayPhrase: 'pet memorial gift', marketplace: activeMockMarketplace,
       advisoryDisposition: { value: 'PROMOTE', reasonCodes: ['PROMOTE_FOR_PROJECT_RESEARCH_NOT_AS_COMMERCIAL_PROOF'], blockers: [] },
@@ -291,6 +298,13 @@ const assert = require('assert');
     && document.body.textContent.includes('pet memorial gift')
     && document.body.textContent.includes('PROMOTE'),
   'authenticated operator must see B3 Global Candidate disposition in normal workspace UI');
+  const intelPullButton = document.querySelector('[data-testid="pull-verified-intel-handoff"]');
+  check(Boolean(intelPullButton) && !intelPullButton.disabled,
+    'OWNER must receive an explicit authority-safe Intel handoff pull action');
+  await act(async () => { intelPullButton.click(); await new Promise(resolve => setTimeout(resolve, 20)); });
+  check(calls.some(call => call.url === '/api/integrations/social-listening/handoffs/pull' && call.options.method === 'POST')
+    && calls.some(call => call.url === '/api/global-candidates/social-handoffs/44' && call.options.method === 'POST'),
+  'Intel operator action must reuse verified Social Handoff V3 then canonical B2 projection, never direct score promotion');
   const promoteButton = [...document.querySelectorAll('button')].find(button => button.textContent.includes('Promote to Project'));
   check(Boolean(promoteButton) && !promoteButton.disabled, 'OWNER must receive explicit Promote-to-Project action only for PROMOTE candidate');
   await act(async () => { promoteButton.click(); await new Promise(resolve => setTimeout(resolve, 20)); });

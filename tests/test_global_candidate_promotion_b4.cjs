@@ -2,6 +2,8 @@ process.env.NODE_ENV = 'test';
 
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
+const fs = require('node:fs');
+const path = require('node:path');
 const sqlite3 = require('sqlite3').verbose();
 const { migrateGlobalCandidatePoolMvp, migrateGlobalCandidatePromotion } = require('../server/database/migrations');
 const { ingestCandidateProjections, listGlobalCandidates } = require('../server/globalCandidatePool');
@@ -53,6 +55,12 @@ function modeledProjection(phrase, suffix) {
   };
 }
 
+const serverSource = fs.readFileSync(path.join(__dirname, '..', 'server', 'server.js'), 'utf8');
+const promotionSource = fs.readFileSync(path.join(__dirname, '..', 'server', 'globalCandidatePromotion.js'), 'utf8');
+assert.match(serverSource, /createCanonicalResearchProject\(db, revisionScope\(req\.user\)/);
+assert.match(promotionSource, /createCanonicalResearchProject\(db, scope,/);
+assert.doesNotMatch(promotionSource, /INSERT INTO research_projects/);
+
 (async () => {
   const db = new sqlite3.Database(':memory:');
   try {
@@ -64,7 +72,8 @@ function modeledProjection(phrase, suffix) {
     await run(db, `CREATE TABLE research_projects(
       id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id TEXT NOT NULL, workspace_id INTEGER NOT NULL,
       marketplace TEXT NOT NULL, name TEXT NOT NULL, seed_phrase TEXT NOT NULL, state TEXT NOT NULL,
-      reference_asin TEXT, actor_id INTEGER NOT NULL)`);
+      reference_asin TEXT, actor_id INTEGER NOT NULL, locale TEXT, media_class TEXT,
+      product_type_id TEXT, category_id TEXT, product_family_version TEXT)`);
     await run(db, `CREATE TABLE research_evidence(
       id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id TEXT NOT NULL, workspace_id INTEGER NOT NULL,
       marketplace TEXT NOT NULL, project_id INTEGER, seed_phrase TEXT NOT NULL, source TEXT NOT NULL,
@@ -113,6 +122,12 @@ function modeledProjection(phrase, suffix) {
     assert.equal(project.seed_phrase, 'candidate alpha');
     assert.equal(project.state, 'EVIDENCE_INTAKE');
     assert.equal(project.actor_id, 1);
+    assert.equal(project.reference_asin, null);
+    assert.equal(project.locale, null);
+    assert.equal(project.media_class, null);
+    assert.equal(project.product_type_id, null);
+    assert.equal(project.category_id, null);
+    assert.equal(project.product_family_version, null);
 
     const intake = await get(db, 'SELECT * FROM research_evidence WHERE id=?', [promoted.projectEvidenceId]);
     assert.equal(intake.project_id, promoted.projectId);

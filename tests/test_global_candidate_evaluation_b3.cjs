@@ -112,6 +112,26 @@ assert.equal(zeroEval.advisoryDisposition.value, 'NEEDS_EVIDENCE');
 assert.notEqual(zeroEval.advisoryDisposition.value, 'KILL');
 assert.equal(zeroEval.killPolicy, 'NO_KILL_FROM_ABSENCE_ZERO_OR_WEAK_SIGNAL_ONLY');
 
+const adversarialModeled = evidence({
+  evidenceHash: hash('o'), sourceFamily: 'AMAZON_CEREBRO', authorityClassification: 'MODELED_THIRD_PARTY',
+  evidenceTier: 'E2_MODELED_THIRD_PARTY', sourceArtifactHash: hash('p'),
+  commercialEvidence: { searchVolume: 5000, keywordSales: 0, competingProducts: 300, modeled: true }
+});
+const adversarialPublic = evidence({
+  evidenceHash: hash('q'), sourceFamily: 'ETSY_PUBLIC_SEARCH', authorityClassification: 'OBSERVED_PUBLIC',
+  evidenceTier: 'E1_OBSERVED_PUBLIC', sourceArtifactHash: hash('r'),
+  commercialEvidence: { listingCount: 5, listings: [{ listingId: 'L4', sold24h: 0, totalSold: 0, revenue: 0,
+    reviewCount: 0, fieldProvenance: { sold24h: researchOnlyField(0), totalSold: researchOnlyField(0),
+      revenue: researchOnlyField(0), reviewCount: researchOnlyField(0) } }] }
+});
+const adversarialCandidate = candidate(6, 'modeled positive public zero', [adversarialModeled, adversarialPublic, social]);
+const adversarialEval = evaluateCandidate(adversarialCandidate, { marketplace: 'ETSY', now: '2026-09-22T00:00:00.000Z' });
+assert.equal(adversarialEval.commercialProof.status, 'NOT_ESTABLISHED');
+assert.equal(adversarialEval.advisoryDisposition.value, 'WATCH');
+assert.ok(!adversarialEval.advisoryDisposition.reasonCodes.includes('OBSERVED_PUBLIC_SIGNAL_PRESENT'));
+assert.ok(adversarialEval.advisoryDisposition.reasonCodes.includes('POSITIVE_OBSERVED_PUBLIC_MARKET_SIGNAL_REQUIRED_FOR_PROMOTE'));
+assert.ok(!adversarialEval.advisoryDisposition.reasonCodes.includes('PROMOTE_FOR_PROJECT_RESEARCH_NOT_AS_COMMERCIAL_PROOF'));
+
 const ranked = evaluateAndPrioritizeGlobalCandidates([modeled, socialOnly, crossCandidate, establishedCandidate],
   { marketplace: 'ETSY', now: '2026-09-22T00:00:00.000Z' });
 assert.deepEqual(ranked.map(item => item.normalizedPhrase),

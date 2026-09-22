@@ -102,6 +102,7 @@ function evaluateCandidate(candidate, context = {}) {
     const key = String(item.authorityClassification || 'UNKNOWN'); acc[key] = (acc[key] || 0) + 1; return acc;
   }, {}));
   const proof = evaluateProof(evidence, metrics); const positiveMarket = metrics.filter(item => ['DEMAND_SIGNAL','SALES_SIGNAL'].includes(item.kind) && item.value > 0);
+  const positiveObservedPublicMarket = positiveMarket.filter(item => item.evidenceRef.authorityClassification === 'OBSERVED_PUBLIC');
   const selling = metrics.filter(item => item.kind === 'SALES_SIGNAL' && item.value > 0); const demand = metrics.filter(item => item.kind === 'DEMAND_SIGNAL' && item.value > 0);
   const competitionSignals = metrics.filter(item => item.kind === 'COMPETITION_SIGNAL'); const competitionPresent = competitionSignals.length > 0;
   const observedPublic = Number(authorityCounts.OBSERVED_PUBLIC || 0); const crossSource = sourceFamilies.length >= 2; const whyNow = evaluateWhyNow(evidence, metrics, context.now || new Date());
@@ -115,13 +116,14 @@ function evaluateCandidate(candidate, context = {}) {
     if (social.length) reasonCodes.push('SOCIAL_RESEARCH_CANNOT_REPLACE_MARKETPLACE_EVIDENCE');
   } else if (proof.status === 'ESTABLISHED' && competitionPresent) {
     disposition = 'PROMOTE'; reasonCodes.push('COMMERCIAL_PROOF_ESTABLISHED', 'COMPETITION_CONTEXT_PRESENT');
-  } else if (observedPublic > 0 && competitionPresent && crossSource) {
+  } else if (positiveObservedPublicMarket.length > 0 && competitionPresent && crossSource) {
     disposition = 'PROMOTE'; reasonCodes.push('OBSERVED_PUBLIC_SIGNAL_PRESENT', 'COMPETITION_CONTEXT_PRESENT', 'CROSS_SOURCE_CORROBORATION_PRESENT');
     if (proof.status !== 'ESTABLISHED') reasonCodes.push('PROMOTE_FOR_PROJECT_RESEARCH_NOT_AS_COMMERCIAL_PROOF');
   } else {
     disposition = 'WATCH'; reasonCodes.push('POSITIVE_MARKET_SIGNAL_PRESENT');
     if (!competitionPresent) reasonCodes.push('COMPETITION_CONTEXT_REQUIRED_FOR_PROMOTE'); if (!crossSource) reasonCodes.push('MORE_SOURCE_CORROBORATION_REQUIRED_FOR_PROMOTE');
     if (!observedPublic) reasonCodes.push('OBSERVED_PUBLIC_MARKETPLACE_EVIDENCE_REQUIRED_FOR_PROMOTE');
+    else if (!positiveObservedPublicMarket.length) reasonCodes.push('POSITIVE_OBSERVED_PUBLIC_MARKET_SIGNAL_REQUIRED_FOR_PROMOTE');
   }
   const summary = Object.freeze({ evidenceCount: evidence.length, sourceFamilyCount: sourceFamilies.length, sourceFamilies: Object.freeze(sourceFamilies), authorityCounts,
     commercialEvidenceCount: commercial.length, socialEvidenceCount: social.length, observedPublicEvidenceCount: observedPublic });

@@ -79,7 +79,9 @@ function etsyProjections(inspected, file) {
     const key = normalizePhrase(context);
     if (!key) continue;
     const existing = groups.get(key);
-    groups.set(key, { phrase: context, observations: [...allSellers],
+    const queryObservations = allSellers.filter(seller =>
+      normalizePhrase(seller.sourceHints?.keywordContext?.value) === key);
+    groups.set(key, { phrase: context, observations: queryObservations,
       supportScope: 'QUERY_RESULT_SET', tagObservationCount: existing?.observations?.length || 0 });
   }
   return [...groups.values()].map(group => {

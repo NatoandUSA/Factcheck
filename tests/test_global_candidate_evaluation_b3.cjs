@@ -11,7 +11,7 @@ const evidence = (overrides = {}) => ({
   sourceArtifactType: 'RESEARCH_FILE',
   sourceArtifactId: 'source-1',
   sourceArtifactHash: hash('b'),
-  provenance: { integrityOutcome: 'VALID', sourceCapturedAt: '2026-09-22T00:00:00.000Z',
+  provenance: { integrityOutcome: 'VALID', sourceCapturedAt: '2026-09-22', sourceCaptureTimezoneOffsetMinutes: 0,
     sourceCapturedAtAuthority: 'STAFF_ASSERTED', sourceCapturedAtBasis: 'OPERATOR_EXPLICIT_INPUT' },
   commercialEvidence: {},
   socialEvidence: {},
@@ -29,7 +29,7 @@ const researchOnlyField = value => ({ value, state: 'OBSERVED', source: 'ETSY_SE
   authority: 'NONE', allowedUse: 'RESEARCH_ONLY', raw: String(value) });
 const proofField = value => ({ value, state: 'OBSERVED', source: 'CANONICAL_MARKETPLACE_SOURCE',
   authority: 'SERVER_PROVIDER', allowedUse: 'COMMERCIAL_DECISION', raw: String(value) });
-const freshSource = Object.freeze({ sourceCapturedAt: '2026-09-22T00:00:00.000Z',
+const freshSource = Object.freeze({ sourceCapturedAt: '2026-09-22', sourceCaptureTimezoneOffsetMinutes: 0,
   sourceCapturedAtAuthority: 'STAFF_ASSERTED', sourceCapturedAtBasis: 'OPERATOR_EXPLICIT_INPUT' });
 const trustedQueryBinding = value => ({
   value, state: 'OBSERVED', source: 'CANONICAL_CAPTURE_RECEIPT',
@@ -217,7 +217,7 @@ assert.equal(evaluateCandidate(candidate(9, 'degraded capture', [degradedEtsy]),
 
 const staleAmazon = evidence({
   evidenceHash: hash('5'),
-  provenance: { integrityOutcome: 'VALID', sourceCapturedAt: '2026-08-01T00:00:00.000Z',
+  provenance: { integrityOutcome: 'VALID', sourceCapturedAt: '2026-08-01', sourceCaptureTimezoneOffsetMinutes: 0,
     sourceCapturedAtAuthority: 'STAFF_ASSERTED', sourceCapturedAtBasis: 'OPERATOR_EXPLICIT_INPUT' },
   commercialEvidence: { searchVolume: 2400, keywordSales: 18, competingProducts: 700, modeled: true }
 });
@@ -237,7 +237,7 @@ assert.ok(unknownFreshnessEval.researchReadiness.reasonCodes.includes('SOURCE_CA
 
 const futureFreshness = evidence({
   evidenceHash: hash('7'),
-  provenance: { integrityOutcome: 'VALID', sourceCapturedAt: '2026-09-23T00:00:00.000Z',
+  provenance: { integrityOutcome: 'VALID', sourceCapturedAt: '2026-09-23', sourceCaptureTimezoneOffsetMinutes: 0,
     sourceCapturedAtAuthority: 'STAFF_ASSERTED', sourceCapturedAtBasis: 'OPERATOR_EXPLICIT_INPUT' },
   commercialEvidence: { searchVolume: 2400, keywordSales: 18, competingProducts: 700, modeled: true }
 });
@@ -249,7 +249,7 @@ assert.ok(futureFreshnessEval.researchReadiness.reasonCodes.includes('SOURCE_CAP
 const etsyStale = evidence({
   evidenceHash: hash('8'), sourceFamily: 'ETSY_PUBLIC_SEARCH', authorityClassification: 'OBSERVED_PUBLIC',
   evidenceTier: 'E1_OBSERVED_PUBLIC', sourceArtifactHash: hash('9'),
-  provenance: { integrityOutcome: 'VALID', sourceCapturedAt: '2026-09-01T00:00:00.000Z',
+  provenance: { integrityOutcome: 'VALID', sourceCapturedAt: '2026-09-01', sourceCaptureTimezoneOffsetMinutes: 0,
     sourceCapturedAtAuthority: 'STAFF_ASSERTED', sourceCapturedAtBasis: 'OPERATOR_EXPLICIT_INPUT',
     queryBinding: trustedQueryBinding('etsy stale') },
   commercialEvidence: { listingCount: 2, listings: [{ listingId: 'ES1', reviewCount: 5,
@@ -260,6 +260,18 @@ const etsyStaleEval = evaluateCandidate(candidate(15, 'etsy stale', [etsyStale])
   { marketplace: 'ETSY', now: '2026-09-22T00:00:00.000Z' });
 assert.equal(etsyStaleEval.researchReadiness.value, 'NOT_READY');
 assert.ok(etsyStaleEval.researchReadiness.reasonCodes.includes('ETSY_SOURCE_STALE_OVER_14_DAYS'));
+
+const timezoneFresh = evidence({
+  evidenceHash: hash('0'),
+  provenance: { integrityOutcome: 'VALID', sourceCapturedAt: '2026-09-23',
+    sourceCapturedAtAuthority: 'STAFF_ASSERTED', sourceCapturedAtBasis: 'OPERATOR_EXPLICIT_INPUT',
+    sourceCaptureTimezoneOffsetMinutes: -420 },
+  commercialEvidence: { searchVolume: 2400, keywordSales: 18, competingProducts: 700, modeled: true }
+});
+const timezoneFreshEval = evaluateCandidate(candidate(16, 'timezone local today', [timezoneFresh]),
+  { marketplace: 'AMAZON', now: '2026-09-22T17:30:00.000Z' });
+assert.equal(timezoneFreshEval.researchReadiness.value, 'READY',
+  '00:30 in UTC+7 must treat the operator local calendar date as today, not future');
 
 const ranked = evaluateAndPrioritizeGlobalCandidates([modeled, socialOnly, crossCandidate, establishedCandidate],
   { marketplace: 'ETSY', now: '2026-09-22T00:00:00.000Z' });

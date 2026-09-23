@@ -103,24 +103,31 @@ async function waitForFixtures() {
     assert.strictEqual(crossMarketplace.status, 404);
     assert.strictEqual(crossMarketplace.body.error, 'PROJECT_NOT_FOUND');
 
-    const originalCallTool = ytrendsMcp.callTool;
-    ytrendsMcp.callTool = async () => { throw new Error('provider down'); };
+    const originalPullKeywordEcosystem = ytrendsMcp.pullKeywordEcosystem;
+    ytrendsMcp.pullKeywordEcosystem = async () => { throw new Error('provider down'); };
     const unavailable = await callEtsy('/api/research/smart-pull', { projectId: etsyProjectId, query: 'nurse gift' });
     assert.strictEqual(unavailable.status, 503);
     assert.strictEqual(unavailable.body.error, 'ETSY_MCP_UNAVAILABLE');
     assert.strictEqual((await dbAll('SELECT id FROM research_evidence')).length, evidenceCountBeforeFailure, 'Provider failure must make zero evidence writes');
 
-    ytrendsMcp.callTool = async name => {
-      if (name === 'ytrends_search') return { data: { results: [{ id: 'lst:1', title: 'Nurse Gift Top', snippet: '$24.00' }] } };
-      throw new Error('hot listings down');
-    };
+    ytrendsMcp.pullKeywordEcosystem = async () => ({
+      data: {
+        adjacent_tags: [],
+        related_keywords: [],
+        top_listings: [{ listing_id: 'lst-1', title: 'Nurse Gift Top', price_usd: 24, tags: [] }]
+      },
+      _omniPulls: [
+        { tool: 'ytrends_search', status: 'SUCCESS' },
+        { tool: 'ytrends_research_keyword', status: 'FAILED' }
+      ]
+    });
     const partial = await callEtsy('/api/research/smart-pull', { projectId: etsyProjectId, query: 'nurse gift', unitCost: 10 });
     assert.strictEqual(partial.status, 200);
     assert.strictEqual(partial.body.projectId, etsyProjectId);
     assert.strictEqual(partial.body.evidenceState, 'PARTIAL_EVIDENCE');
     assert.strictEqual(partial.body.observedAt, null);
-    assert.deepStrictEqual(partial.body.tagAnalytics.selected13Tags, [], 'Search titles must not masquerade as observed tags');
-    assert.strictEqual(partial.body.providerResults.hotListings, 'FAILED');
+    assert.deepStrictEqual(partial.body.tagAnalytics.selected13Tags, [], 'Listing titles must not masquerade as observed tags');
+    assert.strictEqual(partial.body.providerResults.keywordEcosystem, 'PARTIAL');
     assert.strictEqual(partial.body.priceAnalytics.economics.publishGateEligible, false);
     assert(partial.body.evidenceId, 'Successful Smart Pull must return an immutable evidenceId');
     const etsyArtifacts = await dbAll('SELECT * FROM research_evidence WHERE id = ? AND project_id = ?', [partial.body.evidenceId, etsyProjectId]);
@@ -152,12 +159,12 @@ async function waitForFixtures() {
     assert.strictEqual(tamperedPartialTransition.status, 400);
     assert.strictEqual(tamperedPartialTransition.body.error, 'MISSING_QUALIFYING_EVIDENCE_PRECONDITION');
 
-    ytrendsMcp.callTool = async () => ({ data: {} });
+    ytrendsMcp.pullKeywordEcosystem = async () => ({ data: {}, _omniPulls: [] });
     const empty = await callEtsy('/api/research/smart-pull', { projectId: etsyProjectId, query: 'nurse gift' });
     assert.strictEqual(empty.status, 422);
     assert.strictEqual(empty.body.error, 'INSUFFICIENT_EVIDENCE');
     assert.strictEqual((await dbAll('SELECT id FROM research_evidence')).length, evidenceCountBeforeFailure + 1, 'Empty provider result must make zero additional evidence writes');
-    ytrendsMcp.callTool = originalCallTool;
+    ytrendsMcp.pullKeywordEcosystem = originalPullKeywordEcosystem;
 
     const inputOnly = await callAmazon('/api/research/smart-pull', { projectId: amazonProjectId, query: 'B012345678' });
     assert.strictEqual(inputOnly.status, 200);
@@ -183,11 +190,18 @@ async function waitForFixtures() {
     // path: it may be accepted and then unlock RESEARCH_ACCEPTED.
     const verifiedProjectResponse = await callEtsy('/api/projects', { name: 'Complete retrieval', seedPhrase: 'verified nurse gift' });
     const verifiedProjectId = verifiedProjectResponse.body.projectId ?? verifiedProjectResponse.body.project?.id;
-    ytrendsMcp.callTool = async name => {
-      if (name === 'ytrends_search') return { data: { results: [{ id: 'verified-search', title: 'Verified Nurse Gift', snippet: '$25.00' }] } };
-      if (name === 'ytrends_find_hot_listings') return { data: { listings: [{ listing_id: 'verified-hot', title: 'Verified Nurse Gift', price_usd: 25, sold_24h: 2, tags: ['nurse gift'] }] } };
-      throw new Error(`unexpected tool ${name}`);
-    };
+    ytrendsMcp.pullKeywordEcosystem = async () => ({
+      data: {
+        adjacent_tags: [],
+        related_keywords: [],
+        top_listings: [{ listing_id: 'verified-hot', title: 'Verified Nurse Gift',
+          price_usd: 25, sold_24h: 2, tags: ['nurse gift'] }]
+      },
+      _omniPulls: [
+        { tool: 'ytrends_research_keyword', status: 'SUCCESS' },
+        { tool: 'ytrends_search', status: 'SUCCESS' }
+      ]
+    });
     const retrieved = await callEtsy('/api/research/smart-pull', { projectId: verifiedProjectId, query: 'verified nurse gift' });
     assert.strictEqual(retrieved.status, 200);
     assert.strictEqual(retrieved.body.evidenceState, 'RETRIEVED_NO_OBSERVED_AT');
@@ -197,7 +211,7 @@ async function waitForFixtures() {
     const retrievedTransition = await callEtsy.patch(`/api/projects/${verifiedProjectId}/transition`, { targetState: 'RESEARCH_ACCEPTED' });
     assert.strictEqual(retrievedTransition.status, 200);
     assert.strictEqual(retrievedTransition.body.state, 'RESEARCH_ACCEPTED');
-    ytrendsMcp.callTool = originalCallTool;
+    ytrendsMcp.pullKeywordEcosystem = originalPullKeywordEcosystem;
   } finally {
     server.close();
   }

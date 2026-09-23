@@ -3672,21 +3672,6 @@ app.post('/api/mcp/pull-etsy', requireAuth(db), requireRole(['OWNER', 'MANAGER',
     }
   }
 
-  // If still no tags, extract clean tags from cleanSeed and live search listing titles
-  if (rawTags.length === 0 && rawRelatedKws.length === 0) {
-    if (cleanSeed) addObservedTag(cleanSeed);
-    topListings.forEach(lst => {
-      if (lst.title) {
-        const decoded = lst.title.replace(/&#39;/g, "'").replace(/&amp;/g, '&');
-        const chunks = decoded.split(/[,|\-–—:]/).map(c => c.trim().toLowerCase());
-        chunks.forEach(chunk => {
-          if (chunk.length >= 3 && chunk.length <= 20) addObservedTag(chunk);
-          else if (chunk.length > 20 && chunk.length <= 128) addRelatedKw(chunk);
-        });
-      }
-    });
-  }
-
   const cleanTags = [];
   const cleanRelatedKws = [];
   const blockedKeywords = [];

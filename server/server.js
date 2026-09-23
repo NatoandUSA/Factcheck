@@ -4579,8 +4579,9 @@ app.post('/api/research/smart-pull', requireAuth(db), requireRole(['OWNER', 'MAN
   const synthesis = analyticsEngine.synthesizeNicheIntelligence({
     seedPhrase: searchSeed, listings, keywords: observedTags, unitCost: parsedUnitCost
   });
+  const completeRetrieval = ecosystemListings.length > 0 && observedTags.length > 0;
   const providerResults = {
-    keywordEcosystem: ecosystem?._omniPulls?.some(item => item.status === 'SUCCESS') ? 'SUCCESS' : 'PARTIAL'
+    keywordEcosystem: completeRetrieval ? 'SUCCESS' : 'PARTIAL'
   };
 
   const responsePayload = {
@@ -4589,7 +4590,7 @@ app.post('/api/research/smart-pull', requireAuth(db), requireRole(['OWNER', 'MAN
     marketplace: 'ETSY',
     source: 'SMART_PULL_MCP',
     provider: 'YTRENDS_MCP',
-    evidenceState: providerResults.keywordEcosystem === 'SUCCESS' ? 'RETRIEVED_NO_OBSERVED_AT' : 'PARTIAL_EVIDENCE',
+    evidenceState: completeRetrieval ? 'RETRIEVED_NO_OBSERVED_AT' : 'PARTIAL_EVIDENCE',
     observedAt: null,
     importedAt,
     contentHash: evidenceAuthority.canonicalHash({ ecosystem: ecosystemData, pulls: ecosystem?._omniPulls || [] }),

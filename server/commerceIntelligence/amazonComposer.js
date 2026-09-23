@@ -115,19 +115,17 @@ function clipAtWord(value, limit) {
 }
 
 function composeTitle(truth, candidates, limit, labelLanguage = 'EN') {
-  const observedSeed = labelLanguage === 'ES'
-    ? candidates.find(candidate => titleCase(candidate.phrase).length <= limit)
-    : null;
-  const identity = observedSeed
-    ? titleCase(observedSeed.phrase)
-    : titleCase(truth.productType || truth.productName || '');
+  const productNameLead = cleanBuyerValue(truth.productName).split(/\s*(?:[,;|]|—|–)\s*/u)[0];
+  const identitySource = labelLanguage === 'ES' && productNameLead
+    ? productNameLead
+    : (truth.productType || truth.productName || '');
+  const identity = titleCase(identitySource);
   if (!identity) return pickPhrases(candidates, { charLimit: limit, joiner: ' | ', maxPhrases: 3, seedBest: true });
 
   const used = new Set(contentTokens(identity));
-  const picked = observedSeed ? [observedSeed] : [];
+  const picked = [];
   let text = clipAtWord(identity, limit);
   for (const candidate of candidates) {
-    if (picked.includes(candidate)) continue;
     const phrase = titleCase(candidate.phrase);
     const fresh = contentTokens(candidate.phrase).filter(token => !used.has(token));
     if (!fresh.length) continue;
@@ -345,7 +343,7 @@ function compose(scoredKeywords, truthInput, options = {}) {
   // but never replace that identity or cause productName to become final copy
   // merely because the operator entered a long value.
   const title = composeTitle(truth, orderedCopy, opt.titleLimit, opt.labelLanguage);
-  const highlightSubject = opt.labelLanguage === 'ES' ? (title.picked[0]?.phrase || '') : '';
+  const highlightSubject = opt.labelLanguage === 'ES' ? title.text.split(' | ')[0] : '';
   const highlightText = buildItemHighlights(truth, opt.highlightLimit, LABEL_SETS[opt.labelLanguage], highlightSubject);
   const highlights = { text: highlightText, picked: [], used: new Set(contentTokens(highlightText)) };
 

@@ -46,7 +46,11 @@ const REASON_LABELS = Object.freeze({
   AMAZON_CEREBRO_RESEARCH_READY: 'Cerebro có tín hiệu nhu cầu và cạnh tranh đủ để mở Project nghiên cứu',
   ETSY_PUBLIC_SEARCH_RESEARCH_READY: 'Dữ liệu tìm kiếm Etsy có listing/competition context đủ để mở Project nghiên cứu',
   AMAZON_MARKETPLACE_EVIDENCE_REQUIRED: 'Cần Cerebro hợp lệ có demand/sales signal và competition context',
-  ETSY_MARKETPLACE_EVIDENCE_REQUIRED: 'Cần Etsy Search CSV/HTML hợp lệ có listing/competition context'
+  ETSY_MARKETPLACE_EVIDENCE_REQUIRED: 'Cần Etsy Search CSV/HTML hợp lệ có listing/competition context',
+  SOURCE_CAPTURE_DATE_REQUIRED: 'Cần ngày lấy/export nguồn dữ liệu',
+  SOURCE_CAPTURE_DATE_IN_FUTURE: 'Ngày lấy/export không được nằm trong tương lai',
+  AMAZON_SOURCE_STALE_OVER_30_DAYS: 'Cerebro đã quá 30 ngày — cần dữ liệu mới hơn',
+  ETSY_SOURCE_STALE_OVER_14_DAYS: 'Dữ liệu Etsy đã quá 14 ngày — cần capture mới hơn'
 });
 
 function reasonLabel(code) {
@@ -193,7 +197,6 @@ export default function GlobalCandidatePanel({ marketplace, onPromoted, onRequir
         <label style={{ fontSize: '.75rem', color: '#475569' }}>
           Ngày lấy/export file
           <input data-testid="global-candidate-source-captured-at" type="date" value={sourceCapturedAt}
-            max={new Date().toISOString().slice(0, 10)}
             onChange={event => { setSourceCapturedAt(event.target.value); setResearchPreview(null); }}
             style={{ marginLeft: 6 }} />
         </label>

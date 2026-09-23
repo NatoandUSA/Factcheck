@@ -102,6 +102,53 @@ function pickPhrases(candidates, { charLimit, joiner, used = new Set(), maxPhras
   return { text, picked, used };
 }
 
+function clipAtWord(value, limit) {
+  const text = String(value || '').trim();
+  if (text.length <= limit) return text;
+  const boundary = text.slice(0, limit + 1).lastIndexOf(' ');
+  return text.slice(0, boundary > Math.floor(limit * 0.60) ? boundary : limit).replace(/[\s,;:.|]+$/, '');
+}
+
+function composeTitle(truth, candidates, limit) {
+  const identity = titleCase(truth.productType || truth.productName || '');
+  if (!identity) return pickPhrases(candidates, { charLimit: limit, joiner: ' | ', maxPhrases: 3, seedBest: true });
+
+  const used = new Set(contentTokens(identity));
+  const picked = [];
+  let text = clipAtWord(identity, limit);
+  for (const candidate of candidates) {
+    const phrase = titleCase(candidate.phrase);
+    const fresh = contentTokens(candidate.phrase).filter(token => !used.has(token));
+    if (!fresh.length) continue;
+    const next = `${text} | ${phrase}`;
+    if (next.length > limit) continue;
+    text = next;
+    picked.push(candidate);
+    contentTokens(candidate.phrase).forEach(token => used.add(token));
+    if (picked.length >= 2) break;
+  }
+  return { text, picked, used };
+}
+
+function buildItemHighlights(truth, limit = 125, L = LABEL_SETS.EN) {
+  const subject = truth.productType || truth.productName || '';
+  const pieces = [];
+  if (subject) pieces.push(titleCase(subject));
+  if (truth.recipient) pieces.push(`${L.forWord} ${truth.recipient}`);
+  if (truth.occasion) pieces.push(`— ${truth.occasion}`);
+
+  const details = [];
+  if (truth.materials.length) details.push(`${L.material.charAt(0) + L.material.slice(1).toLowerCase()}: ${truth.materials.join(', ')}`);
+  else if (truth.personalization) details.push(`${L.personalizationWord}: ${truth.personalization}`);
+  else if (truth.sizes.length) details.push(`${L.sizes}: ${truth.sizes.join(', ')}`);
+  else if (truth.quantity) details.push(`Quantity: ${truth.quantity}`);
+  else if (truth.features.length) details.push(truth.features[0]);
+
+  const base = pieces.join(' ').replace(/\s+—\s+/g, ' — ');
+  const text = details.length ? `${base}${base ? '. ' : ''}${details[0]}` : base;
+  return clipAtWord(text, limit);
+}
+
 function buildBullets(truth, keywords, limit = 230, L = LABEL_SETS.EN, consumed = []) {
   const clip = value => {
     if (value.length <= limit) return value;
@@ -150,57 +197,10 @@ function buildBullets(truth, keywords, limit = 230, L = LABEL_SETS.EN, consumed 
     ? `${L.packaging} — ${closing.join('. ')}.`
     : `${L.packaging} — ${GAP('đóng gói / nơi gửi hàng đã xác nhận')}`));
 
-  // Use the researched phrase bank to make each bullet commercially useful,
-  // while keeping every appended phrase inside the adapter's relevance,
-  // language, IP and Product Truth screens. 90–99% is a composition target,
-  // not permission to invent facts or repeat roots.
-  const targetMin = Math.ceil(limit * 0.90);
-  const targetMax = Math.floor(limit * 0.99);
-  const globallyUsed = new Set(contentTokens(bullets.join(' ')));
-  const remaining = [...keywords];
-  return bullets.map(base => {
-    let output = clip(base);
-    let keywordAdds = 0;
-    for (let index = 0; index < remaining.length && output.length < targetMin && keywordAdds < 2;) {
-      const candidate = remaining[index];
-      const fresh = contentTokens(candidate.phrase).filter(token => !globallyUsed.has(token));
-      const phrase = titleCase(candidate.phrase);
-      const next = `${output.replace(/[.!?]+$/, '')}; ${phrase}`;
-      if (!fresh.length || next.length > targetMax) { index++; continue; }
-      output = next;
-      consumed.push(candidate.phrase);
-      fresh.forEach(token => globallyUsed.add(token));
-      remaining.splice(index, 1);
-      keywordAdds++;
-    }
-    // Prefer verified Product Truth prose over a third/fourth keyword phrase.
-    // This keeps bullets useful to shoppers and preserves additional distinct
-    // roots for the byte-capped Generic Keywords field.
-    const truthFillers = [
-      subject && `${subject}${forWhom}`,
-      truth.occasion && `Occasion: ${truth.occasion}`,
-      truth.materials.length && `${L.material}: ${truth.materials.join(', ')}`,
-      truth.sizes.length && `${L.sizes}: ${truth.sizes.join(', ')}`,
-      truth.colors.length && `${L.colors}: ${truth.colors.join(', ')}`,
-      truth.personalization && `${L.personalizationWord}: ${truth.personalization}`,
-      truth.packaging && `${L.packagingWord}: ${truth.packaging}`,
-      truth.shipFrom && `${L.shipsFrom}: ${truth.shipFrom}`
-    ].filter(Boolean);
-    const outputTokens = new Set(contentTokens(output));
-    for (const filler of truthFillers) {
-      if (output.length >= targetMin) break;
-      const fresh = contentTokens(filler).filter(token => !outputTokens.has(token));
-      if (!fresh.length) continue;
-      let addition = String(filler);
-      const room = targetMax - output.length - 2;
-      if (room < 4) break;
-      if (addition.length > room) continue;
-      if (!addition) continue;
-      output = `${output.replace(/[.!?]+$/, '')}; ${addition}`;
-      contentTokens(addition).forEach(token => outputTokens.add(token));
-    }
-    return output;
-  });
+  // Keep bullets focused on verified buyer-facing facts. Keyword coverage is
+  // handled by the title/highlight/backend fields rather than by filling each
+  // bullet toward the character ceiling.
+  return bullets;
 }
 
 function escapeHtml(value) {
@@ -208,44 +208,40 @@ function escapeHtml(value) {
 }
 
 function buildDescription(truth, keywords, L = LABEL_SETS.EN, consumed = [], extraPhraseCount = 4) {
-  const lead = titleCase(keywords[0]?.phrase || truth.productType || '');
-  if (keywords[0]) consumed.push(keywords[0].phrase);
-  const subject = truth.productName || truth.productType;
+  const subject = truth.productName || truth.productType || GAP('tên/loại sản phẩm');
   const parts = [];
-  parts.push(`<p><b>${escapeHtml(lead)}</b></p>`);
-  parts.push(`<p>${escapeHtml(subject || GAP('tên/loại sản phẩm'))}${truth.recipient ? escapeHtml(' ' + L.forWord + ' ' + truth.recipient) : ''}.${truth.occasion ? escapeHtml(' ' + truth.occasion + '.') : ''}</p>`);
-  const spec = [];
-  if (truth.materials.length) spec.push(`<li>${L.material.charAt(0) + L.material.slice(1).toLowerCase()}: ${escapeHtml(truth.materials.join(', '))}</li>`);
-  if (truth.purity) spec.push(`<li>Purity / plating: ${escapeHtml(truth.purity)}</li>`);
-  if (truth.finish) spec.push(`<li>Finish: ${escapeHtml(truth.finish)}</li>`);
-  if (truth.gemstones.length) spec.push(`<li>Gemstones: ${escapeHtml(truth.gemstones.join(', '))}</li>`);
-  if (truth.components.length) spec.push(`<li>Components: ${escapeHtml(truth.components.join(', '))}</li>`);
-  if (truth.sizes.length) spec.push(`<li>${L.sizes}: ${escapeHtml(truth.sizes.join(', '))}</li>`);
-  if (truth.dimensions.length) spec.push(`<li>Dimensions: ${escapeHtml(truth.dimensions.join(', '))}</li>`);
-  if (truth.weight) spec.push(`<li>Weight: ${escapeHtml(truth.weight)}</li>`);
-  if (truth.quantity) spec.push(`<li>Quantity: ${escapeHtml(truth.quantity)}</li>`);
-  if (truth.colors.length) spec.push(`<li>${L.colors}: ${escapeHtml(truth.colors.join(', '))}</li>`);
-  if (truth.personalization) spec.push(`<li>${L.personalizationWord}: ${escapeHtml(truth.personalization)}</li>`);
-  if (truth.packaging) spec.push(`<li>${L.packagingWord}: ${escapeHtml(truth.packaging)}</li>`);
-  if (truth.care) spec.push(`<li>${L.care}: ${escapeHtml(truth.care)}</li>`);
-  if (truth.shipFrom) spec.push(`<li>${L.shipsFrom}: ${escapeHtml(truth.shipFrom)}</li>`);
-  if (truth.origin) spec.push(`<li>Origin: ${escapeHtml(truth.origin)}</li>`);
-  if (truth.style) spec.push(`<li>Style: ${escapeHtml(truth.style)}</li>`);
-  if (truth.design) spec.push(`<li>Design: ${escapeHtml(truth.design)}</li>`);
-  if (truth.theme) spec.push(`<li>Theme: ${escapeHtml(truth.theme)}</li>`);
-  parts.push(spec.length ? `<ul>${spec.join('')}</ul>` : `<p>${escapeHtml(GAP('thông số sản phẩm đã xác minh'))}</p>`);
-  for (const feature of truth.features) parts.push(`<p>${escapeHtml(feature)}</p>`);
-  // A closing line built from real occasion/recipient phrases the copy has not
-  // used yet. It is descriptive, not a claim, so it carries no truth risk while
-  // still putting more of the researched vocabulary on the page.
-  const used = new Set(consumed.map(p => String(p).toLowerCase()));
-  const extra = keywords
-    .filter(k => !used.has(k.phrase.toLowerCase()))
-    .filter(k => (k.clusters || []).some(c => c === 'occasion' || c === 'recipient'))
-    .slice(0, extraPhraseCount);
-  if (extra.length) {
-    for (const keyword of extra) consumed.push(keyword.phrase);
-    parts.push(`<p>${escapeHtml(extra.map(k => titleCase(k.phrase)).join(' · '))}</p>`);
+  const opening = [
+    subject,
+    truth.recipient ? `${L.forWord} ${truth.recipient}` : '',
+    truth.occasion ? `— ${truth.occasion}` : ''
+  ].filter(Boolean).join(' ').replace(/\s+—\s+/g, ' — ');
+  parts.push(`<p>${escapeHtml(opening)}.</p>`);
+
+  const details = [];
+  if (truth.materials.length) details.push(`${L.material.charAt(0) + L.material.slice(1).toLowerCase()}: ${truth.materials.join(', ')}`);
+  if (truth.purity) details.push(`Purity / plating: ${truth.purity}`);
+  if (truth.finish) details.push(`Finish: ${truth.finish}`);
+  if (truth.gemstones.length) details.push(`Gemstones: ${truth.gemstones.join(', ')}`);
+  if (truth.components.length) details.push(`Components: ${truth.components.join(', ')}`);
+  if (truth.sizes.length) details.push(`${L.sizes}: ${truth.sizes.join(', ')}`);
+  if (truth.dimensions.length) details.push(`Dimensions: ${truth.dimensions.join(', ')}`);
+  if (truth.weight) details.push(`Weight: ${truth.weight}`);
+  if (truth.quantity) details.push(`Quantity: ${truth.quantity}`);
+  if (truth.colors.length) details.push(`${L.colors}: ${truth.colors.join(', ')}`);
+  if (truth.personalization) details.push(`${L.personalizationWord}: ${truth.personalization}`);
+  if (truth.packaging) details.push(`${L.packagingWord}: ${truth.packaging}`);
+  if (truth.care) details.push(`${L.care}: ${truth.care}`);
+  if (truth.shipFrom) details.push(`${L.shipsFrom}: ${truth.shipFrom}`);
+  if (truth.origin) details.push(`Origin: ${truth.origin}`);
+  if (truth.style) details.push(`Style: ${truth.style}`);
+  if (truth.design) details.push(`Design: ${truth.design}`);
+  if (truth.theme) details.push(`Theme: ${truth.theme}`);
+  if (details.length) parts.push(`<p>${escapeHtml(details.join('. '))}.</p>`);
+  else parts.push(`<p>${escapeHtml(GAP('thông số sản phẩm đã xác minh'))}</p>`);
+
+  if (truth.features.length) {
+    const featureText = truth.features.map(value => /[.!?]$/.test(value) ? value : value + '.').join(' ');
+    parts.push(`<p>${escapeHtml(featureText)}</p>`);
   }
   return parts.join('\n');
 }
@@ -335,24 +331,12 @@ function compose(scoredKeywords, truthInput, options = {}) {
   const productCopy = forCopy.filter(k => namesProduct(k.phrase));
   const orderedCopy = [...productCopy, ...forCopy.filter(k => !productCopy.includes(k))];
 
-  const usedTitleTokens = new Set();
-  // Product Truth owns product identity. A supplier/own-listing name that
-  // already fills the title target should not be displaced by a higher-volume
-  // but less exact competitor phrase.
-  const truthTitle = titleCase(truth.productName || '');
-  const title = truthTitle && truthTitle.length >= Math.ceil(opt.titlePolicyLimit * 0.90)
-    ? { text: truthTitle.length <= opt.titleLimit
-      ? truthTitle
-      : truthTitle.slice(0, truthTitle.slice(0, opt.titleLimit + 1).lastIndexOf(' ')).trim(),
-      picked: [], used: new Set(contentTokens(truthTitle)) }
-    : pickPhrases(orderedCopy, { charLimit: opt.titleLimit, joiner: ' | ', used: usedTitleTokens, maxPhrases: 4, seedBest: true });
-  // A title must still name the product. If no safe research phrase does,
-  // seed it from Product Truth before adding relevant researched context.
-  if (!namesProduct(title.text) && (truth.productName || truth.productType)) {
-    const identity = titleCase(truth.productName || truth.productType).slice(0, opt.titleLimit);
-    title.text = identity; title.picked = []; title.used = new Set(contentTokens(identity));
-  }
-  const highlights = pickPhrases(forCopy, { charLimit: opt.highlightLimit, joiner: ', ', used: new Set(title.used), maxPhrases: 8 });
+  // Product Truth supplies the identity anchor; research can enrich the title
+  // but never replace that identity or cause productName to become final copy
+  // merely because the operator entered a long value.
+  const title = composeTitle(truth, orderedCopy, opt.titleLimit);
+  const highlightText = buildItemHighlights(truth, opt.highlightLimit, LABEL_SETS[opt.labelLanguage]);
+  const highlights = { text: highlightText, picked: [], used: new Set(contentTokens(highlightText)) };
 
   // Finalize all visible copy BEFORE backend terms, so Generic Keywords can
   // exclude every token already indexed visibly.
@@ -385,8 +369,11 @@ function compose(scoredKeywords, truthInput, options = {}) {
   }
   const seen = new Set();
   const orderedPool = searchTokenPool.filter(t => seen.has(t) ? false : (seen.add(t), true));
+  const backendEligibleTokens = orderedPool.filter(token => !visibleIndexed.has(token));
   const packed = packTokens(orderedPool, opt.searchTermBytes, new Set(visibleIndexed));
   const searchTermSets = packed.text ? [packed] : [];
+  const packedTokens = new Set(packed.tokens);
+  const unusedEligibleTokens = backendEligibleTokens.filter(token => !packedTokens.has(token));
 
   const indexedTokens = new Set([...visibleIndexed, ...packed.tokens]);
   const ladder = buildLadder({
@@ -414,7 +401,16 @@ function compose(scoredKeywords, truthInput, options = {}) {
       metricAvailability: scoredKeywords.meta?.metricAvailability || {},
       rareReviewTokens: [...(scoredKeywords.meta?.rareReviewTokens || [])].sort(),
       suspectedBrandTokens: [...(scoredKeywords.meta?.brandTokens || [])].sort(),
-      inputUniquePhrases: scoredKeywords.meta?.inputUniquePhrases ?? scoredKeywords.length
+      inputUniquePhrases: scoredKeywords.meta?.inputUniquePhrases ?? scoredKeywords.length,
+      searchDiagnostics: {
+        eligibleSafeRoots: orderedPool.length,
+        visibleRoots: orderedPool.filter(token => visibleIndexed.has(token)).length,
+        backendEligibleRoots: backendEligibleTokens.length,
+        backendRoots: packed.tokens.length,
+        unusedEligibleRoots: unusedEligibleTokens.length,
+        blockedKeywords: rejected.length,
+        searchTermsBytes: packed.bytes
+      }
     },
     keywordsUsed: {
       title: title.picked.length,
@@ -425,16 +421,16 @@ function compose(scoredKeywords, truthInput, options = {}) {
       review: scoredKeywords.filter(k => k.ipVerdict === 'REVIEW').length
     },
     capacityTargets: {
-      title: { policyLimit: opt.titlePolicyLimit, minimum: Math.ceil(opt.titlePolicyLimit * 0.90),
-        targetMaximum: Math.floor(opt.titlePolicyLimit * 0.99), actual: title.text.length },
-      itemHighlights: { policyLimit: opt.highlightPolicyLimit, minimum: Math.ceil(opt.highlightPolicyLimit * 0.90),
-        targetMaximum: Math.floor(opt.highlightPolicyLimit * 0.99), actual: highlights.text.length },
-      bullets: bullets.map(value => ({ minimum: Math.ceil(opt.bulletLimit * 0.90),
-        targetMaximum: Math.floor(opt.bulletLimit * 0.99), workingLimit: opt.bulletLimit, actual: value.length,
-        authority: 'COMPOSITION_TARGET_PENDING_PRODUCT_TYPE_DEFINITION' })),
-      genericKeywords: { policyLimit: opt.searchTermPolicyBytes, minimum: Math.ceil(opt.searchTermPolicyBytes * 0.90),
-        targetMaximum: Math.floor(opt.searchTermPolicyBytes * 0.99), actual: packed.bytes,
-        gapReason: packed.bytes < Math.ceil(249 * 0.90) ? 'NO_ADDITIONAL_UNIQUE_RELEVANT_NON_REDUNDANT_ROOTS' : null }
+      title: { policyLimit: opt.titlePolicyLimit, actual: title.text.length,
+        qualityBasis: 'IDENTITY_PLUS_SAFE_CONTEXT' },
+      itemHighlights: { policyLimit: opt.highlightPolicyLimit, actual: highlights.text.length,
+        qualityBasis: 'VERIFIED_BUYER_DETAIL' },
+      bullets: bullets.map(value => ({ workingLimit: opt.bulletLimit, actual: value.length,
+        qualityBasis: 'ONE_VERIFIED_BUYER_IDEA_NO_CAPACITY_FILL' })),
+      genericKeywords: { policyLimit: opt.searchTermPolicyBytes, actual: packed.bytes,
+        unusedEligibleRoots: unusedEligibleTokens.length,
+        gapReason: unusedEligibleTokens.length ? 'BYTE_BUDGET_EXHAUSTED_WITH_ELIGIBLE_ROOTS_REMAINING'
+          : 'NO_ADDITIONAL_UNIQUE_RELEVANT_NON_REDUNDANT_ROOTS' }
     }
   };
 }

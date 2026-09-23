@@ -1,4 +1,4 @@
-import { validateAmazonListing, validateEtsyListing, getUtf8Bytes } from './complianceValidator.js';
+import { validateAmazonListing, validateEtsyListing } from './complianceValidator.js';
 import { validateProductTruthCard } from '../../shared/productTruth.js';
 
 const clamp = value => Math.max(0, Math.min(100, Math.round(value)));
@@ -72,6 +72,9 @@ function amazonAssessment(listing) {
   const bullets = Array.isArray(listing?.amazonBullets) ? listing.amazonBullets.filter(Boolean) : [];
   const description = String(listing?.amazonDescription || '').trim();
   const searchTerms = String(listing?.amazonSearchTerms || '').trim();
+  const searchDiagnostics = listing?.searchDiagnostics
+    || listing?.canonicalQualityEvidence?.searchDiagnostics
+    || null;
   const mediaClass = String(listing?.mediaClass || listing?.media_class || '').toUpperCase();
   const blockers = [...validation.issues];
   const warnings = [...validation.warnings];
@@ -82,10 +85,13 @@ function amazonAssessment(listing) {
   if (highlights.length > 125) blockers.push(`Item Highlights exceed 125 characters (${highlights.length}/125).`);
   if (!description) warnings.push('Product description is empty.');
 
+  if (searchDiagnostics && Number(searchDiagnostics.unusedEligibleRoots) > 0) {
+    warnings.push(`SEARCH_ROOTS_UNUSED: ${Number(searchDiagnostics.unusedEligibleRoots)} eligible safe roots remain unused.`);
+  }
   const searchScore = clamp(
-    (title.length >= 45 && title.length <= 75 ? 45 : title ? 25 : 0)
+    (title.length > 0 && title.length <= 75 ? 45 : 0)
     + (searchTerms ? 35 : 0)
-    + (searchTerms && getUtf8Bytes(searchTerms) >= 150 && getUtf8Bytes(searchTerms) <= 249 ? 20 : 0)
+    + (searchDiagnostics && Number(searchDiagnostics.unusedEligibleRoots) === 0 ? 20 : 0)
   );
   const language = assessLanguageConsistency(listing, 'AMAZON');
   if (language.mixed) warnings.push(`MIXED_LANGUAGE_COPY: ${language.target} listing contains material ${[...new Set(language.foreignMarkers.map(item => item.language))].join('/')} copy.`);

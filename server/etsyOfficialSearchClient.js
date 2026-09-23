@@ -204,15 +204,15 @@ async function captureOfficialEtsySearch(queryPhrase, options = {}) {
     sort_order: 'desc'
   });
   const path = `${DEFAULT_PATH}?${params.toString()}`;
-  const capturedAt = options.now instanceof Date ? options.now : new Date(options.now || Date.now());
-  if (Number.isNaN(capturedAt.getTime())) {
-    throw new EtsyOfficialSearchError('ETSY_OFFICIAL_CAPTURE_TIME_INVALID', 'Server capture time is invalid.');
-  }
   const response = await requestJson({
     hostname: options.hostname || DEFAULT_HOST,
     path,
     apiKey
   }, options.requestImpl);
+  const capturedAt = options.now instanceof Date ? options.now : new Date(options.now || Date.now());
+  if (Number.isNaN(capturedAt.getTime())) {
+    throw new EtsyOfficialSearchError('ETSY_OFFICIAL_CAPTURE_TIME_INVALID', 'Server capture time is invalid.');
+  }
   return Object.freeze({
     projection: projectCapture({
       queryPhrase: normalizedPhrase,

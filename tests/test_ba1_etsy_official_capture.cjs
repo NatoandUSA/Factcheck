@@ -5,7 +5,8 @@ const { EventEmitter } = require('node:events');
 const fs = require('node:fs');
 const path = require('node:path');
 const {
-  captureOfficialEtsySearch
+  captureOfficialEtsySearch,
+  normalizeQuery
 } = require('../server/etsyOfficialSearchClient');
 const { evaluateCandidate } = require('../server/globalCandidateEvaluation');
 
@@ -30,6 +31,9 @@ function fakeRequestFactory(payload, record) {
 }
 
 (async () => {
+  assert.equal(normalizeQuery('  quinceañera   gift  '), 'quinceañera gift',
+    'provider query normalization must preserve Unicode semantics');
+
   await assert.rejects(
     () => captureOfficialEtsySearch('adhd college student planner', { env: {} }),
     error => error?.code === 'ETSY_OFFICIAL_API_NOT_CONFIGURED'
@@ -90,6 +94,17 @@ function fakeRequestFactory(payload, record) {
   assert.deepEqual(evaluated.researchReadiness.reasonCodes, ['ETSY_PUBLIC_SEARCH_RESEARCH_READY']);
   assert.notEqual(evaluated.commercialProof.status, 'ESTABLISHED',
     'official query capture must not manufacture Commercial Proof');
+
+  const tampered = evaluateCandidate({
+    id: 13, candidateKey: 'c'.repeat(64), normalizedPhrase: projection.phrase,
+    displayPhrase: projection.phrase, evidence: [{
+      ...projection,
+      evidenceHash: 'd'.repeat(64),
+      provenance: { ...projection.provenance, provider: 'CLIENT_ECHO' }
+    }]
+  }, { marketplace: 'ETSY', now: '2026-09-24T02:00:00.000Z' });
+  assert.equal(tampered.researchReadiness.value, 'NOT_READY',
+    'non-official provider metadata must not inherit trusted server freshness');
 
   const serverSource = fs.readFileSync(path.join(__dirname, '..', 'server', 'server.js'), 'utf8');
   assert.match(serverSource, /\/api\/global-candidates\/etsy-provider-captures/);

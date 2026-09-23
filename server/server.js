@@ -3565,7 +3565,8 @@ app.post('/api/listings/:id/feedback', requireAuth(db), requireRole(['OWNER', 'M
 app.get('/api/mcp/tools', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
   try {
     const tools = await ytrendsMcp.listTools();
-    res.json({ success: true, count: tools.length, tools });
+    const allowed = tools.filter(tool => ytrendsMcp.isReadOnlyTool(tool?.name));
+    res.json({ success: true, count: allowed.length, tools: allowed });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -3576,12 +3577,16 @@ app.get('/api/mcp/tools', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SEL
 app.post('/api/mcp/call', requireAuth(db), requireRole(['OWNER', 'MANAGER']), async (req, res) => {
   const { toolName, args = {} } = req.body;
   if (!toolName) return res.status(400).json({ error: 'toolName is required' });
+  if (!ytrendsMcp.isReadOnlyTool(toolName)) {
+    return res.status(403).json({ success: false, error: 'YTRENDS_TOOL_NOT_ALLOWED' });
+  }
 
   try {
     const result = await ytrendsMcp.callTool(toolName, args);
     res.json({ success: true, toolName, result });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    const status = err?.code === 'YTRENDS_TOOL_NOT_ALLOWED' ? 403 : 500;
+    res.status(status).json({ error: err?.code || err.message });
   }
 });
 

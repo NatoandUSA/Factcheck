@@ -39,6 +39,10 @@ assert.ok(canonical.indexOf('1. Upload Xray từ seed') < canonical.indexOf('2. 
 assert.strictEqual(canonical.includes('Chứng minh file Cerebro thuộc batch nào'), false,
   'Cerebro ancestry proof must not return to the active staff workflow');
 assert.ok(canonical.includes('data-testid="etsy-ytrends-e3-panel"'), 'Etsy must expose a readable YTrends E3 status panel');
+assert.ok(canonical.includes('/api/projects/${projectId}/etsy/patterns/ytrends'),
+  'Canonical Etsy YTrends must remain project-bound');
+assert.ok(canonical.includes("let transport = 'SERVER_DIRECT'") && canonical.includes("transport = 'BROWSER_DIRECT'"),
+  'Canonical Etsy YTrends must preserve SERVER_DIRECT to BROWSER_DIRECT fallback semantics');
 assert.ok(canonical.includes('Pull mở rộng YTrends E3'), 'Etsy must expose the multi-tool YTrends research action');
 assert.ok(canonical.includes('Tool lỗi riêng không làm mất kết quả từ tool khác'), 'Etsy must explain partial multi-tool resilience');
 assert.ok(canonical.includes('E3_SUPPLEMENTAL_INDEX'), 'Etsy YTrends UI must retain the E3 evidence label');

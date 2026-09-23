@@ -15,10 +15,6 @@ import CanonicalCommerceWorkflow from './CanonicalCommerceWorkflow';
 import { parseJsonResponse } from '../utils/apiResponse';
 import { createProjectBoundLoader } from '../utils/projectBoundLoader.js';
 
-// Keep the optional provider visibly unavailable until its session handshake is
-// certified. File/paste research and the canonical workflow remain usable.
-const YTRENDS_CONNECTOR_READY = false;
-
 export default function EtsyWorkspace({ onSelectListing, onApproveListing, onShowToast, onViewHistory }) {
   const [seedPhrase, setSeedPhrase] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('✨ Custom Jewelry');
@@ -524,27 +520,6 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
             <span>📥 Nạp kết quả Etsy kiểu cũ (tùy chọn)</span>
           </button>
 
-          <button
-            onClick={handleMcpPull}
-            disabled={!YTRENDS_CONNECTOR_READY || mcpPulling || !activeProject || !seedPhrase.trim()}
-            className="btn btn-primary"
-            style={{
-              background: '#ea580c',
-              fontWeight: 800,
-              padding: '9px 18px',
-              borderRadius: '8px',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px',
-              cursor: 'not-allowed',
-              opacity: 0.6,
-              marginTop: '15px',
-              boxShadow: '0 4px 12px rgba(234, 88, 12, 0.25)'
-            }}
-          >
-            <RefreshCw size={16} className={mcpPulling ? 'spinner' : ''} />
-            <span>YTrends MCP tùy chọn — đang kiểm tra connector</span>
-          </button>
         </div>
       </div>
 

@@ -130,8 +130,15 @@ function hasQualifyingResearchAuthorityAndIntegrity(item, marketplace) {
 
 function freshnessState(item, marketplace, now = new Date()) {
   const provenance = asObject(item?.provenance);
-  if (String(provenance.sourceCapturedAtAuthority || '').toUpperCase() !== 'STAFF_ASSERTED') return 'UNKNOWN';
-  if (String(provenance.sourceCapturedAtBasis || '').toUpperCase() !== 'OPERATOR_EXPLICIT_INPUT') return 'UNKNOWN';
+  const captureAuthority = String(provenance.sourceCapturedAtAuthority || '').toUpperCase();
+  const captureBasis = String(provenance.sourceCapturedAtBasis || '').toUpperCase();
+  const staffAttested = captureAuthority === 'STAFF_ASSERTED' && captureBasis === 'OPERATOR_EXPLICIT_INPUT';
+  const serverProviderCaptured = marketplace === 'ETSY'
+    && captureAuthority === 'SERVER_PROVIDER'
+    && captureBasis === 'SERVER_RESPONSE_CAPTURE'
+    && String(provenance.queryBinding?.authority || '').toUpperCase() === 'SERVER_PROVIDER'
+    && Boolean(provenance.queryBinding?.captureId || provenance.queryBinding?.receiptId);
+  if (!staffAttested && !serverProviderCaptured) return 'UNKNOWN';
   const capturedText = String(provenance.sourceCapturedAt || '');
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(capturedText);
   const offset = Number(provenance.sourceCaptureTimezoneOffsetMinutes);

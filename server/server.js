@@ -72,6 +72,7 @@ const { ingestCandidateProjections, listGlobalCandidates } = require('./globalCa
 const { EVALUATION_POLICY_VERSION, PROOF_POLICY_VERSION, RANKING_MODE,
   evaluateAndPrioritizeGlobalCandidates } = require('./globalCandidateEvaluation');
 const { projectResearchFile, projectSocialHandoff, projectWorkflowArtifact } = require('./globalCandidateProjection');
+const { captureOfficialEtsySearch } = require('./etsyOfficialSearchClient');
 const { promoteGlobalCandidateToProject } = require('./globalCandidatePromotion');
 const { createCanonicalResearchProject } = require('./canonicalProjectStore');
 const amazonResearchAdapter = require('./commerceIntelligence/amazonResearchAdapter');
@@ -1927,6 +1928,33 @@ app.get('/api/global-candidates/evaluations', requireAuth(db), requireRole(['OWN
     res.json({ success: true, evaluationPolicyVersion: EVALUATION_POLICY_VERSION,
       proofPolicyVersion: PROOF_POLICY_VERSION, rankingMode: RANKING_MODE, advisoryOnly: true,
       decisionAuthority: false, promotionAuthority: false, count: evaluated.length, candidates: evaluated });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+app.post('/api/global-candidates/etsy-provider-captures', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    if (req.user.marketplace !== 'ETSY') throw Object.assign(new Error('MARKETPLACE_MISMATCH'), {
+      code: 'MARKETPLACE_MISMATCH', status: 403
+    });
+    const body = requireExactDto(req.body || {}, new Set(['queryPhrase']));
+    assertNoClientPolicyOverrides(body);
+    const captured = await captureOfficialEtsySearch(body.queryPhrase);
+    const result = await ingestCandidateProjections(db, revisionScope(req.user), [captured.projection]);
+    res.status(result.evidenceCreated ? 201 : 200).json({
+      success: true,
+      provider: 'ETSY_OPEN_API_V3',
+      providerStatus: captured.providerStatus,
+      queryPhrase: captured.projection.phrase,
+      captureId: captured.projection.provenance.queryBinding.captureId,
+      sourceArtifactHash: captured.projection.sourceArtifactHash,
+      listingCount: captured.projection.commercialEvidence.listingCount,
+      sourceCapturedAt: captured.projection.provenance.sourceCapturedAt,
+      authorityClassification: captured.projection.authorityClassification,
+      evidenceTier: captured.projection.evidenceTier,
+      decisionAuthority: false,
+      commercialProofAuthority: false,
+      ...result
+    });
   } catch (error) { rejectRevisionStore(res, error); }
 });
 

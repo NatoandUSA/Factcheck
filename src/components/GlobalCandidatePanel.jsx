@@ -67,6 +67,8 @@ export default function GlobalCandidatePanel({ marketplace, onPromoted, onRequir
   const [sourceCapturedAt, setSourceCapturedAt] = useState('');
   const [researchPreview, setResearchPreview] = useState(null);
   const [researchBusy, setResearchBusy] = useState(false);
+  const [etsyProviderQuery, setEtsyProviderQuery] = useState('');
+  const [etsyProviderBusy, setEtsyProviderBusy] = useState(false);
 
   const load = useCallback(async () => {
     if (!user?.workspaceId) return setState({ loading: false, error: '', candidates: [] });
@@ -148,6 +150,26 @@ export default function GlobalCandidatePanel({ marketplace, onPromoted, onRequir
     }
   };
 
+  const captureOfficialEtsy = async () => {
+    const queryPhrase = etsyProviderQuery.trim();
+    if (!queryPhrase) return onShowToast?.('Hãy nhập exact Etsy query trước.', 'error');
+    setEtsyProviderBusy(true);
+    try {
+      const result = await readJson(await fetch('/api/global-candidates/etsy-provider-captures', {
+        method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ queryPhrase })
+      }));
+      onShowToast?.(`Đã capture Etsy official: ${result.listingCount || 0} listing cho "${result.queryPhrase}".`, 'success');
+      setEtsyProviderQuery('');
+      await load();
+    } catch (error) {
+      onShowToast?.(`Không thể capture Etsy official: ${error.message}`, 'error');
+      setState(previous => ({ ...previous, error: error.message }));
+    } finally {
+      setEtsyProviderBusy(false);
+    }
+  };
+
   const promote = async candidate => {
     const projectName = String(projectNames[candidate.candidateId] || candidate.displayPhrase || '').trim();
     if (!projectName) return onShowToast?.('Hãy nhập tên Project trước khi tạo.', 'error');
@@ -186,6 +208,25 @@ export default function GlobalCandidatePanel({ marketplace, onPromoted, onRequir
     </div>
 
     {state.error && <div role="alert" style={{ marginTop: 10, color: '#991b1b' }}>{state.error}</div>}
+
+    {marketplace === 'ETSY' && <div data-testid="global-candidate-etsy-official-provider"
+      style={{ marginTop: 12, padding: 12, border: '1px solid #bbf7d0', borderRadius: 10, background: '#f0fdf4' }}>
+      <strong>Etsy official query capture</strong>
+      <div style={{ color: '#475569', fontSize: '.78rem', margin: '5px 0 8px', lineHeight: 1.55 }}>
+        OmniSeller gửi exact query trực tiếp từ server tới Etsy Open API. Kết quả này dùng cho Research Readiness;
+        không phải Commercial Proof và không thay đổi Product Truth.
+      </div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        <input data-testid="global-candidate-etsy-provider-query" type="text" value={etsyProviderQuery}
+          onChange={event => setEtsyProviderQuery(event.target.value)}
+          placeholder="Exact Etsy query" style={{ minWidth: 280 }} />
+        <button data-testid="capture-etsy-official-query" type="button"
+          disabled={!etsyProviderQuery.trim() || etsyProviderBusy}
+          onClick={captureOfficialEtsy}>
+          {etsyProviderBusy ? 'Đang capture Etsy...' : 'Capture từ Etsy official'}
+        </button>
+      </div>
+    </div>}
 
     <div data-testid="global-candidate-marketplace-evidence" style={{ marginTop: 12, padding: 12, border: '1px solid #ddd6fe', borderRadius: 10, background: '#fff' }}>
       <strong>Tôi đã có dữ liệu {marketplace}</strong>

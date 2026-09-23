@@ -26,7 +26,7 @@ function observedProjection(phrase, sold24h, suffix) {
     evidenceTier: 'E1_OBSERVED_PUBLIC', sourceArtifactType: 'RESEARCH_FILE',
     sourceArtifactId: 'etsy-' + suffix, sourceArtifactHash: sha('etsy-' + suffix),
     provenance: { parser: 'canonical-etsy', integrityOutcome: 'VALID',
-      sourceCapturedAt: '2026-09-22T00:00:00.000Z', sourceCapturedAtAuthority: 'STAFF_ASSERTED',
+      sourceCapturedAt: '2026-09-22', sourceCaptureTimezoneOffsetMinutes: 0, sourceCapturedAtAuthority: 'STAFF_ASSERTED',
       sourceCapturedAtBasis: 'OPERATOR_EXPLICIT_INPUT',
       queryBinding: { value: phrase, state: 'OBSERVED', source: 'CANONICAL_CAPTURE_RECEIPT',
         authority: 'SERVER_CAPTURE_RECEIPT', captureId: 'capture-' + suffix, receiptId: null } },
@@ -54,7 +54,7 @@ function modeledProjection(phrase, suffix) {
     evidenceTier: 'E2_MODELED_THIRD_PARTY', sourceArtifactType: 'RESEARCH_FILE',
     sourceArtifactId: 'modeled-' + suffix, sourceArtifactHash: sha('modeled-' + suffix),
     provenance: { parser: 'canonical-amazon', integrityOutcome: 'VALID',
-      sourceCapturedAt: '2026-09-22T00:00:00.000Z', sourceCapturedAtAuthority: 'STAFF_ASSERTED',
+      sourceCapturedAt: '2026-09-22', sourceCaptureTimezoneOffsetMinutes: 0, sourceCapturedAtAuthority: 'STAFF_ASSERTED',
       sourceCapturedAtBasis: 'OPERATOR_EXPLICIT_INPUT' },
     commercialEvidence: { searchVolume: 5000, competingProducts: 250, modeled: true },
     socialEvidence: {}, rawEvidence: { phrase }

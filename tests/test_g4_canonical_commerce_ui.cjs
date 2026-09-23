@@ -318,8 +318,18 @@ const assert = require('assert');
   Object.defineProperty(candidateEvidenceInput, 'files', { value: [candidateEvidenceFile], configurable: true });
   await act(async () => { candidateEvidenceInput.dispatchEvent(new dom.window.Event('change', { bubbles: true })); });
   const analyzeOpportunityButton = document.querySelector('[data-testid="analyze-opportunity"]');
-  check(Boolean(analyzeOpportunityButton) && !analyzeOpportunityButton.disabled,
-    'one-click opportunity analysis must be available after selecting a marketplace evidence file');
+  const captureDateInput = document.querySelector('[data-testid="global-candidate-source-captured-at"]');
+  check(Boolean(analyzeOpportunityButton) && analyzeOpportunityButton.disabled,
+    'Freshness V1 must keep opportunity analysis disabled until source capture/export date is provided');
+  check(Boolean(captureDateInput), 'Freshness V1 must expose an explicit capture/export date input');
+  const inputValueSetter = Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value').set;
+  await act(async () => {
+    inputValueSetter.call(captureDateInput, '2026-09-22');
+    captureDateInput.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+    captureDateInput.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+  });
+  check(!analyzeOpportunityButton.disabled,
+    'one-click opportunity analysis must be available after selecting evidence and its capture/export date');
   await act(async () => { analyzeOpportunityButton.click(); await new Promise(resolve => setTimeout(resolve, 40)); });
   check(calls.some(call => call.url === '/api/global-candidates/research-imports/preview')
     && calls.some(call => call.url === '/api/global-candidates/research-imports'),

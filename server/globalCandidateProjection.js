@@ -55,6 +55,11 @@ function amazonProjections(inspected, file) {
     provenance: { fileName: file.fileName, parserId: inspected.adapter.PARSER_ID,
       parserHash: inspected.parserHash, adapterBindingHash: inspected.built.adapterBindingHash,
       integrityOutcome: parserIntegrity(inspected, 'AMAZON'),
+      sourceCapturedAt: file.sourceCapturedAt || null,
+      sourceCapturedAtAuthority: file.sourceCapturedAt ? 'STAFF_ASSERTED' : 'NONE',
+      sourceCapturedAtBasis: file.sourceCapturedAt ? 'OPERATOR_EXPLICIT_INPUT' : 'UNKNOWN',
+      sourceCaptureTimezoneOffsetMinutes: Number.isInteger(file.sourceCaptureTimezoneOffsetMinutes)
+        ? file.sourceCaptureTimezoneOffsetMinutes : null,
       rows: clean(keyword.provenance || []), source: clean(source) },
     commercialEvidence: clean({ searchVolume: keyword.searchVolume, keywordSales: keyword.keywordSales,
       competingProducts: keyword.competingProducts, titleDensity: keyword.titleDensity, cpr: keyword.cpr,
@@ -114,6 +119,11 @@ function etsyProjections(inspected, file) {
       provenance: clean({ fileName: file.fileName, parserId: inspected.adapter.PARSER_ID,
         parserHash: inspected.parserHash, adapterBindingHash: inspected.built.adapterBindingHash,
         integrityOutcome: parserIntegrity(inspected, 'ETSY'), supportScope: group.supportScope,
+        sourceCapturedAt: file.sourceCapturedAt || null,
+        sourceCapturedAtAuthority: file.sourceCapturedAt ? 'STAFF_ASSERTED' : 'NONE',
+        sourceCapturedAtBasis: file.sourceCapturedAt ? 'OPERATOR_EXPLICIT_INPUT' : 'UNKNOWN',
+        sourceCaptureTimezoneOffsetMinutes: Number.isInteger(file.sourceCaptureTimezoneOffsetMinutes)
+          ? file.sourceCaptureTimezoneOffsetMinutes : null,
         queryBinding: group.queryBinding || null,
         listingRefs: listings.map(item => ({ listingId: item.listingId, provenance: item.provenance })) }),
       commercialEvidence: clean({ listingCount: listings.length, listings, modeledFieldsRemainLabeled: true }),

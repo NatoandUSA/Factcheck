@@ -95,6 +95,21 @@ function evaluateWhyNow(evidence, metrics, now = new Date()) {
     unknowns: Object.freeze(deduped.length ? [] : ['WHY_NOW_NOT_ESTABLISHED']) });
 }
 
+function isQualifyingResearchEvidence(item, marketplace) {
+  if (String(item?.provenance?.integrityOutcome || '').toUpperCase() !== 'VALID') return false;
+  if (marketplace === 'AMAZON') {
+    return item.sourceFamily === 'AMAZON_CEREBRO'
+      && item.authorityClassification === 'MODELED_THIRD_PARTY'
+      && item.evidenceTier === 'E2_MODELED_THIRD_PARTY';
+  }
+  if (marketplace === 'ETSY') {
+    return item.sourceFamily === 'ETSY_PUBLIC_SEARCH'
+      && item.authorityClassification === 'OBSERVED_PUBLIC'
+      && item.evidenceTier === 'E1_OBSERVED_PUBLIC';
+  }
+  return false;
+}
+
 function evaluateCandidate(candidate, context = {}) {
   const evidence = Array.isArray(candidate?.evidence) ? candidate.evidence : []; const metrics = Object.freeze(evidence.flatMap(extractMetrics));
   const commercial = evidence.filter(item => hasKeys(item.commercialEvidence)); const social = evidence.filter(item => hasKeys(item.socialEvidence));
@@ -105,14 +120,20 @@ function evaluateCandidate(candidate, context = {}) {
   const positiveObservedPublicMarket = positiveMarket.filter(item => item.evidenceRef.authorityClassification === 'OBSERVED_PUBLIC');
   const selling = metrics.filter(item => item.kind === 'SALES_SIGNAL' && item.value > 0); const demand = metrics.filter(item => item.kind === 'DEMAND_SIGNAL' && item.value > 0);
   const competitionSignals = metrics.filter(item => item.kind === 'COMPETITION_SIGNAL'); const competitionPresent = competitionSignals.length > 0;
+  const qualifyingEvidence = evidence.filter(item => isQualifyingResearchEvidence(item, context.marketplace));
+  const qualifyingHashes = new Set(qualifyingEvidence.map(item => item.evidenceHash));
+  const qualifyingMetrics = metrics.filter(item => qualifyingHashes.has(item.evidenceRef.evidenceHash));
+  const qualifyingPositiveMarket = qualifyingMetrics.filter(item => ['DEMAND_SIGNAL','SALES_SIGNAL'].includes(item.kind) && item.value > 0);
+  const qualifyingCompetition = qualifyingMetrics.filter(item => item.kind === 'COMPETITION_SIGNAL');
   const observedPublic = Number(authorityCounts.OBSERVED_PUBLIC || 0); const crossSource = sourceFamilies.length >= 2; const whyNow = evaluateWhyNow(evidence, metrics, context.now || new Date());
   const amazonResearchReady = context.marketplace === 'AMAZON'
-    && evidence.some(item => item.sourceFamily === 'AMAZON_CEREBRO')
-    && positiveMarket.length > 0 && competitionPresent;
+    && qualifyingEvidence.length > 0
+    && qualifyingPositiveMarket.length > 0
+    && qualifyingCompetition.length > 0;
   const etsyResearchReady = context.marketplace === 'ETSY'
-    && evidence.some(item => item.sourceFamily === 'ETSY_PUBLIC_SEARCH'
+    && qualifyingEvidence.some(item => item.rawEvidence?.supportScope === 'QUERY_RESULT_SET'
       && Number(item.commercialEvidence?.listingCount || 0) > 0)
-    && competitionPresent;
+    && qualifyingCompetition.length > 0;
   const researchReady = amazonResearchReady || etsyResearchReady;
   const researchReadiness = Object.freeze({
     value: researchReady ? 'READY' : 'NOT_READY',
@@ -124,6 +145,7 @@ function evaluateCandidate(candidate, context = {}) {
   if (proof.status !== 'ESTABLISHED') unknowns.push(proof.status === 'NOT_PRESENT' ? 'COMMERCIAL_PROOF_NOT_PRESENT' : 'COMMERCIAL_PROOF_NOT_ESTABLISHED');
   if (!competitionPresent) unknowns.push('COMPETITION_CONTEXT_NOT_PRESENT'); if (!crossSource) unknowns.push('CROSS_SOURCE_CORROBORATION_NOT_PRESENT');
   if (whyNow.status === 'NOT_ESTABLISHED') unknowns.push('WHY_NOW_NOT_ESTABLISHED'); if (!observedPublic) unknowns.push('OBSERVED_PUBLIC_MARKETPLACE_EVIDENCE_NOT_PRESENT');
+  if (!qualifyingEvidence.length) unknowns.push('QUALIFYING_MARKETPLACE_EVIDENCE_NOT_PRESENT_OR_INVALID');
   let disposition; const reasonCodes = [];
   if (!commercial.length || !positiveMarket.length) {
     disposition = 'NEEDS_EVIDENCE'; reasonCodes.push(!commercial.length ? 'COMMERCIAL_SIGNALS_NOT_PRESENT' : 'POSITIVE_DEMAND_OR_SALES_SIGNAL_NOT_PRESENT');

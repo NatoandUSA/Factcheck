@@ -81,8 +81,21 @@ function etsyProjections(inspected, file) {
     const existing = groups.get(key);
     const queryObservations = allSellers.filter(seller =>
       normalizePhrase(seller.sourceHints?.keywordContext?.value) === key);
+    const hintBindings = queryObservations.map(seller => seller.sourceHints?.keywordContext).filter(Boolean);
+    const authorities = [...new Set(hintBindings.map(item => String(item.authority || 'NONE').toUpperCase()))];
+    const states = [...new Set(hintBindings.map(item => String(item.state || 'UNKNOWN').toUpperCase()))];
+    const sources = [...new Set(hintBindings.map(item => String(item.source || 'UNKNOWN')))];
+    const queryBinding = {
+      value: context,
+      state: states.length === 1 ? states[0] : 'MIXED',
+      authority: authorities.length === 1 ? authorities[0] : 'NONE',
+      source: sources.length === 1 ? sources[0] : 'MIXED',
+      captureId: null,
+      receiptId: null
+    };
     groups.set(key, { phrase: context, observations: queryObservations,
-      supportScope: 'QUERY_RESULT_SET', tagObservationCount: existing?.observations?.length || 0 });
+      supportScope: 'QUERY_CONTEXT_HINT', queryBinding,
+      tagObservationCount: existing?.observations?.length || 0 });
   }
   return [...groups.values()].map(group => {
     const listings = group.observations.map(seller => ({ listingId: seller.listingId, title: seller.title,
@@ -101,6 +114,7 @@ function etsyProjections(inspected, file) {
       provenance: clean({ fileName: file.fileName, parserId: inspected.adapter.PARSER_ID,
         parserHash: inspected.parserHash, adapterBindingHash: inspected.built.adapterBindingHash,
         integrityOutcome: parserIntegrity(inspected, 'ETSY'), supportScope: group.supportScope,
+        queryBinding: group.queryBinding || null,
         listingRefs: listings.map(item => ({ listingId: item.listingId, provenance: item.provenance })) }),
       commercialEvidence: clean({ listingCount: listings.length, listings, modeledFieldsRemainLabeled: true }),
       socialEvidence: {}, rawEvidence: clean({ phrase: group.phrase, listingCount: listings.length,

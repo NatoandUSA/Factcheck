@@ -7,6 +7,14 @@ const DEFAULT_URL = 'https://mcp.trends.ytuong.ai/mcp';
 const PROTOCOL_VERSION = '2025-06-18';
 const MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
 const REQUIRED_TOOLS = new Set(['ytrends_explore_niche', 'ytrends_research_keyword', 'ytrends_find_trending_keywords', 'ytrends_search']);
+const READ_ONLY_TOOLS = new Set([
+  'ytrends_explore_niche',
+  'ytrends_research_keyword',
+  'ytrends_find_trending_keywords',
+  'ytrends_search',
+  'ytrends_find_hidden_gems',
+  'ytrends_scout_opportunities'
+]);
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const dataOf = value => value?.data && typeof value.data === 'object' ? value.data : {};
 const hasKeywordPhrases = value => {
@@ -156,6 +164,11 @@ class YTrendsMcpClient {
   }
 
   async callTool(toolName, args = {}, retriedSession = false) {
+    if (!READ_ONLY_TOOLS.has(toolName)) {
+      throw new YTrendsMcpError('YTRENDS_TOOL_NOT_ALLOWED',
+        `YTrends tool is not in OmniSeller's read-only research allowlist: ${String(toolName || '')}`,
+        { toolName });
+    }
     await this.ensureSession();
     const response = await this._request({ jsonrpc: '2.0', id: Date.now(), method: 'tools/call',
       params: { name: toolName, arguments: args } }, this.sessionId);
@@ -230,4 +243,6 @@ const client = new YTrendsMcpClient();
 client.YTrendsMcpClient = YTrendsMcpClient;
 client.YTrendsMcpError = YTrendsMcpError;
 client.PROTOCOL_VERSION = PROTOCOL_VERSION;
+client.READ_ONLY_TOOLS = Object.freeze([...READ_ONLY_TOOLS]);
+client.isReadOnlyTool = toolName => READ_ONLY_TOOLS.has(toolName);
 module.exports = client;

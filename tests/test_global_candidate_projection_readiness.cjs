@@ -80,10 +80,12 @@ const { headers, buildCsv, sourceRow } = require('./fixtures/etsy_search_rich_67
     'seed phrase must never be relabeled as an observed provider tag');
   assert.doesNotMatch(serverSource, /extract clean tags from cleanSeed and live search listing titles/,
     'listing-title derivation fallback must remain removed from observed provider evidence');
-  assert.match(serverSource, /new Set\(\['kind', 'capturedAt'\]\)/,
-    'global opportunity intake must explicitly accept capturedAt');
+  assert.match(serverSource, /new Set\(\['kind', 'capturedAt', 'captureTimezoneOffsetMinutes'\]\)/,
+    'global opportunity intake must explicitly accept capturedAt and operator timezone');
   assert.match(serverSource, /SOURCE_CAPTURE_DATE_REQUIRED/,
     'global opportunity intake must fail closed when capturedAt is missing');
+  assert.match(serverSource, /SOURCE_CAPTURE_TIMEZONE_REQUIRED/,
+    'global opportunity intake must fail closed when operator timezone is missing');
 
   console.log('GLOBAL_CANDIDATE_PROJECTION_READINESS_PASSED');
 })().catch(error => { console.error(error); process.exitCode = 1; });

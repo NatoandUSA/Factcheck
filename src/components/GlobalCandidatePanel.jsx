@@ -60,6 +60,7 @@ export default function GlobalCandidatePanel({ marketplace, onPromoted, onRequir
   const [promotingId, setPromotingId] = useState(null);
   const [pullingIntel, setPullingIntel] = useState(false);
   const [researchFile, setResearchFile] = useState(null);
+  const [sourceCapturedAt, setSourceCapturedAt] = useState('');
   const [researchPreview, setResearchPreview] = useState(null);
   const [researchBusy, setResearchBusy] = useState(false);
 
@@ -112,21 +113,24 @@ export default function GlobalCandidatePanel({ marketplace, onPromoted, onRequir
 
   const analyzeOpportunity = async () => {
     if (!researchFile) return onShowToast?.(`Hãy chọn 1 file ${researchLabel} trước.`, 'error');
+    if (!sourceCapturedAt) return onShowToast?.('Hãy chọn ngày file được lấy/export trước.', 'error');
     setResearchBusy(true); setResearchPreview(null);
     try {
-      const previewForm = new FormData(); previewForm.append('kind', researchKind); previewForm.append('researchFile', researchFile);
+      const previewForm = new FormData(); previewForm.append('kind', researchKind);
+      previewForm.append('capturedAt', sourceCapturedAt); previewForm.append('researchFile', researchFile);
       const preview = await readJson(await fetch('/api/global-candidates/research-imports/preview', {
         method: 'POST', credentials: 'include', body: previewForm
       }));
       if (!preview?.zeroWrite) throw new Error('OPPORTUNITY_PREVIEW_NOT_ZERO_WRITE');
 
-      const confirmForm = new FormData(); confirmForm.append('kind', researchKind); confirmForm.append('researchFile', researchFile);
+      const confirmForm = new FormData(); confirmForm.append('kind', researchKind);
+      confirmForm.append('capturedAt', sourceCapturedAt); confirmForm.append('researchFile', researchFile);
       const confirmed = await readJson(await fetch('/api/global-candidates/research-imports', {
         method: 'POST', credentials: 'include', body: confirmForm
       }));
       setResearchPreview({ ...preview, confirmed: true, evidenceCreated: confirmed.evidenceCreated || 0 });
       onShowToast?.(`Phân tích xong: ${preview.candidateCount || 0} cụm từ cơ hội, ${confirmed.evidenceCreated || 0} bằng chứng đã được ghi nhận.`, 'success');
-      setResearchFile(null);
+      setResearchFile(null); setSourceCapturedAt('');
       await load();
     } catch (error) {
       onShowToast?.(`Không thể phân tích cơ hội: ${error.message}`, 'error');
@@ -186,7 +190,14 @@ export default function GlobalCandidatePanel({ marketplace, onPromoted, onRequir
         <input data-testid="global-candidate-research-file" type="file"
           accept={marketplace === 'AMAZON' ? '.csv,.xlsx' : '.csv,.html,.htm,text/csv,text/html'}
           onChange={event => { setResearchFile(event.target.files?.[0] || null); setResearchPreview(null); }} />
-        <button data-testid="analyze-opportunity" type="button" disabled={!researchFile || researchBusy}
+        <label style={{ fontSize: '.75rem', color: '#475569' }}>
+          Ngày lấy/export file
+          <input data-testid="global-candidate-source-captured-at" type="date" value={sourceCapturedAt}
+            max={new Date().toISOString().slice(0, 10)}
+            onChange={event => { setSourceCapturedAt(event.target.value); setResearchPreview(null); }}
+            style={{ marginLeft: 6 }} />
+        </label>
+        <button data-testid="analyze-opportunity" type="button" disabled={!researchFile || !sourceCapturedAt || researchBusy}
           onClick={analyzeOpportunity}>{researchBusy ? 'Đang phân tích...' : 'Phân tích cơ hội'}</button>
       </div>
       {researchPreview?.confirmed && <div style={{ marginTop: 8, padding: 8, borderRadius: 8, background: '#ecfdf5', color: '#065f46', fontSize: '.75rem' }}>

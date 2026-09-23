@@ -3565,7 +3565,8 @@ app.post('/api/listings/:id/feedback', requireAuth(db), requireRole(['OWNER', 'M
 app.get('/api/mcp/tools', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
   try {
     const tools = await ytrendsMcp.listTools();
-    res.json({ success: true, count: tools.length, tools });
+    const allowed = tools.filter(tool => ytrendsMcp.isReadOnlyTool(tool?.name));
+    res.json({ success: true, count: allowed.length, tools: allowed });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -3576,12 +3577,16 @@ app.get('/api/mcp/tools', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SEL
 app.post('/api/mcp/call', requireAuth(db), requireRole(['OWNER', 'MANAGER']), async (req, res) => {
   const { toolName, args = {} } = req.body;
   if (!toolName) return res.status(400).json({ error: 'toolName is required' });
+  if (!ytrendsMcp.isReadOnlyTool(toolName)) {
+    return res.status(403).json({ success: false, error: 'YTRENDS_TOOL_NOT_ALLOWED' });
+  }
 
   try {
     const result = await ytrendsMcp.callTool(toolName, args);
     res.json({ success: true, toolName, result });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    const status = err?.code === 'YTRENDS_TOOL_NOT_ALLOWED' ? 403 : 500;
+    res.status(status).json({ error: err?.code || err.message });
   }
 });
 
@@ -3608,7 +3613,7 @@ app.post('/api/mcp/pull-etsy', requireAuth(db), requireRole(['OWNER', 'MANAGER',
 
   let mcpData;
   try {
-    mcpData = await ytrendsMcp.exploreNiche(cleanSeed);
+    mcpData = await ytrendsMcp.pullKeywordEcosystem(cleanSeed);
   } catch (mcpErr) {
     console.warn('YTrends MCP unavailable for:', cleanSeed, mcpErr.message);
     return res.status(503).json({
@@ -3640,63 +3645,11 @@ app.post('/api/mcp/pull-etsy', requireAuth(db), requireRole(['OWNER', 'MANAGER',
   (Array.isArray(liveData.adjacent_tags) ? liveData.adjacent_tags : []).forEach(addObservedTag);
   (Array.isArray(liveData.related_keywords) ? liveData.related_keywords : []).forEach(addRelatedKw);
 
-  // Fallback to deep query (search + hot listings) if topListings or tags are empty from exploreNiche
-  if (topListings.length === 0 || rawTags.length === 0) {
-    try {
-      const [searchRes, hotRes] = await Promise.allSettled([
-        ytrendsMcp.callTool('ytrends_search', { query: cleanSeed, limit: 30 }),
-        ytrendsMcp.callTool('ytrends_find_hot_listings', { search: cleanSeed, limit: 30 })
-      ]);
-
-      if (searchRes.status === 'fulfilled' && Array.isArray(searchRes.value?.data?.results)) {
-        searchRes.value.data.results.forEach((item, idx) => {
-          let price = null;
-          let country = null;
-          if (item.snippet) {
-            const priceMatch = item.snippet.match(/\$([0-9.]+)/);
-            if (priceMatch) price = `$${priceMatch[1]}`;
-            const countryMatch = item.snippet.match(/([A-Z]{2})\s+shop/i);
-            if (countryMatch) country = countryMatch[1].toUpperCase();
-          }
-          if (!topListings.some(l => l.listing_id === (item.id?.replace(/^lst:/, '') || `${idx + 1}`))) {
-            topListings.push({
-              listing_id: item.id?.replace(/^lst:/, '') || `${idx + 1}`,
-              title: item.title,
-              url: item.url,
-              price: price,
-              shop_country: country,
-              evidenceSource: 'ETSY_MCP_LIVE'
-            });
-          }
-        });
-      }
-
-      if (hotRes.status === 'fulfilled' && Array.isArray(hotRes.value?.data?.listings)) {
-        hotRes.value.data.listings.forEach((lst) => {
-          if (!topListings.some(l => l.listing_id === String(lst.listing_id))) {
-            topListings.push({
-              listing_id: String(lst.listing_id),
-              title: lst.title,
-              url: `https://www.etsy.com/listing/${lst.listing_id}`,
-              price: lst.price_usd ? `$${lst.price_usd}` : (lst.price ? `$${lst.price}` : null),
-              shop_country: lst.shop_country,
-              views24h: lst.views_24h,
-              sold24h: lst.sold_24h,
-              conversionRate: lst.conversion_rate ? Number((lst.conversion_rate * 100).toFixed(2)) : null,
-              favorites: lst.favorites,
-              evidenceSource: 'ETSY_MCP_LIVE'
-            });
-          }
-          // Extract real tags directly from hot listings
-          if (Array.isArray(lst.tags)) {
-            lst.tags.forEach(addObservedTag);
-          }
-        });
-      }
-    } catch (searchErr) {
-      console.warn('YTrends deep query fallback error:', searchErr.message);
-    }
-  }
+  // Canonical six-tool ecosystem already performs all provider fallbacks.
+  // Provider listing tags remain observed provider fields and may recover a sparse explore response.
+  topListings.forEach(listing => {
+    if (Array.isArray(listing?.tags)) listing.tags.forEach(addObservedTag);
+  });
 
   const cleanTags = [];
   const cleanRelatedKws = [];
@@ -4591,77 +4544,62 @@ app.post('/api/research/smart-pull', requireAuth(db), requireRole(['OWNER', 'MAN
     return res.json(responsePayload);
   }
 
-  const [searchResult, hotResult] = await Promise.allSettled([
-    ytrendsMcp.callTool('ytrends_search', { query: searchSeed, limit: 30 }),
-    ytrendsMcp.callTool('ytrends_find_hot_listings', { search: searchSeed, limit: 30 })
-  ]);
-  const searchRows = searchResult.status === 'fulfilled' && Array.isArray(searchResult.value?.data?.results)
-    ? searchResult.value.data.results
-    : [];
-  const hotRows = hotResult.status === 'fulfilled' && Array.isArray(hotResult.value?.data?.listings)
-    ? hotResult.value.data.listings
-    : [];
-  if (searchResult.status === 'rejected' && hotResult.status === 'rejected') {
-    return res.status(503).json({ success: false, error: 'ETSY_MCP_UNAVAILABLE', providerResults: { search: 'FAILED', hotListings: 'FAILED' } });
+  let ecosystem;
+  try {
+    ecosystem = await ytrendsMcp.pullKeywordEcosystem(searchSeed);
+  } catch (error) {
+    return res.status(503).json({ success: false, error: 'ETSY_MCP_UNAVAILABLE',
+      providerResults: { keywordEcosystem: 'FAILED' } });
   }
-  if (searchRows.length === 0 && hotRows.length === 0) {
-    return res.status(422).json({ success: false, error: 'INSUFFICIENT_EVIDENCE', providerResults: { search: searchResult.status, hotListings: hotResult.status } });
+  const ecosystemData = ecosystem?.data && typeof ecosystem.data === 'object' ? ecosystem.data : {};
+  const ecosystemListings = Array.isArray(ecosystemData.top_listings) ? ecosystemData.top_listings : [];
+  const observedTags = [...new Set([
+    ...(Array.isArray(ecosystemData.adjacent_tags) ? ecosystemData.adjacent_tags : []),
+    ...ecosystemListings.flatMap(item => Array.isArray(item?.tags) ? item.tags : [])
+  ].map(item => typeof item === 'string' ? item : (item?.tag || item?.name || item?.keyword)).filter(Boolean))];
+  if (ecosystemListings.length === 0 && observedTags.length === 0) {
+    return res.status(422).json({ success: false, error: 'INSUFFICIENT_EVIDENCE',
+      providerResults: { keywordEcosystem: 'EMPTY' } });
   }
 
-  const listings = [];
-  for (const [index, item] of searchRows.entries()) {
-    const priceMatch = String(item.snippet || '').match(/\$([0-9]+(?:\.[0-9]+)?)/);
-    listings.push({
-      id: item.id || `search-${index}`,
-      title: item.title || null,
-      url: item.url || item.link || null,
-      price: priceMatch ? Number(priceMatch[1]) : null,
-      views24h: null,
-      sold24h: null,
-      tags: [],
-      evidenceSource: 'YTRENDS_MCP_SEARCH',
-      evidenceState: 'RETRIEVED_NO_OBSERVED_AT'
-    });
-  }
-  for (const item of hotRows) {
-    const numericOrNull = value => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value))
-      ? Number(value)
-      : null;
-    listings.push({
-      id: item.listing_id,
-      title: item.title || null,
-      url: item.listing_id ? `https://www.etsy.com/listing/${item.listing_id}` : null,
-      price: numericOrNull(item.price_usd),
-      views24h: numericOrNull(item.views_24h),
-      sold24h: numericOrNull(item.sold_24h),
-      tags: Array.isArray(item.tags) ? item.tags : [],
-      evidenceSource: 'YTRENDS_MCP_HOT',
-      evidenceState: 'RETRIEVED_NO_OBSERVED_AT'
-    });
-  }
-  const observedTags = [...new Set(hotRows.flatMap(item => Array.isArray(item.tags) ? item.tags : []))];
-  const synthesis = analyticsEngine.synthesizeNicheIntelligence({ seedPhrase: searchSeed, listings: listings.slice(0, 30), keywords: observedTags, unitCost: parsedUnitCost });
-  const partial = searchResult.status !== 'fulfilled' || hotResult.status !== 'fulfilled' || searchRows.length === 0 || hotRows.length === 0;
+  const numericOrNull = value => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value))
+    ? Number(value)
+    : null;
+  const listings = ecosystemListings.slice(0, 30).map((item, index) => ({
+    id: item.listing_id || item.id || `ecosystem-${index}`,
+    title: item.title || null,
+    url: item.url || (item.listing_id ? `https://www.etsy.com/listing/${item.listing_id}` : null),
+    price: numericOrNull(item.price_usd ?? item.price),
+    views24h: numericOrNull(item.views_24h ?? item.avg_daily_views),
+    sold24h: numericOrNull(item.sold_24h),
+    tags: Array.isArray(item.tags) ? item.tags : [],
+    evidenceSource: 'YTRENDS_MCP_ECOSYSTEM',
+    evidenceState: 'RETRIEVED_NO_OBSERVED_AT'
+  }));
+  const synthesis = analyticsEngine.synthesizeNicheIntelligence({
+    seedPhrase: searchSeed, listings, keywords: observedTags, unitCost: parsedUnitCost
+  });
+  const completeRetrieval = ecosystemListings.length > 0 && observedTags.length > 0;
   const providerResults = {
-    search: searchResult.status === 'fulfilled' ? (searchRows.length ? 'SUCCESS' : 'EMPTY') : 'FAILED',
-    hotListings: hotResult.status === 'fulfilled' ? (hotRows.length ? 'SUCCESS' : 'EMPTY') : 'FAILED'
+    keywordEcosystem: completeRetrieval ? 'SUCCESS' : 'PARTIAL'
   };
+
   const responsePayload = {
     ...synthesis,
     projectId: project.id,
     marketplace: 'ETSY',
     source: 'SMART_PULL_MCP',
     provider: 'YTRENDS_MCP',
-    evidenceState: partial ? 'PARTIAL_EVIDENCE' : 'RETRIEVED_NO_OBSERVED_AT',
+    evidenceState: completeRetrieval ? 'RETRIEVED_NO_OBSERVED_AT' : 'PARTIAL_EVIDENCE',
     observedAt: null,
     importedAt,
-    contentHash: evidenceAuthority.canonicalHash({ searchRows, hotRows }),
+    contentHash: evidenceAuthority.canonicalHash({ ecosystem: ecosystemData, pulls: ecosystem?._omniPulls || [] }),
     providerResults,
     listings: listings.slice(0, 30)
   };
   try {
     responsePayload.evidenceId = await persistSmartPullArtifact(req, project, 'MCP_RETRIEVAL', searchSeed, {
-      canonicalPayload: { searchRows, hotRows },
+      canonicalPayload: { ecosystem: ecosystemData, pulls: ecosystem?._omniPulls || [] },
       contentHash: responsePayload.contentHash, provider: responsePayload.provider, providerResults,
       evidenceState: responsePayload.evidenceState, observedAt: null, importedAt, response: responsePayload
     });

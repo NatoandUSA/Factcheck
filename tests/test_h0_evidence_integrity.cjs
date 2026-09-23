@@ -95,25 +95,35 @@ async function main() {
   await reject(`/api/evidence/${legacy}/accept`, {}, 409);
   assert.deepEqual(await snapshot(), before); measured++;
   const provider = require('../server/ytuongMcpClient');
-  const original = provider.callTool;
+  const original = provider.pullKeywordEcosystem;
   try {
-    provider.callTool = async name => name === 'ytrends_search'
-      ? { data: { results: [{ id: '1', title: 'mug', snippet: '$14' }] } }
-      : { data: { listings: [{ listing_id: '1', title: 'mug', price_usd: 14, tags: ['mug'] }] } };
+    provider.pullKeywordEcosystem = async () => ({
+      data: {
+        adjacent_tags: [],
+        related_keywords: [],
+        top_listings: [{ listing_id: '1', title: 'mug', price_usd: 14, tags: ['mug'] }]
+      },
+      _omniPulls: [{ tool: 'ytrends_research_keyword', status: 'SUCCESS' }]
+    });
+    const routeFallback = await post('/api/mcp/pull-etsy', { projectId, seed: 'mug', category: 'Mug' });
+    assert.equal(routeFallback.status, 200, JSON.stringify(routeFallback)); measured++;
+    assert.deepEqual(routeFallback.body.keywords, ['mug']); measured++;
+
     const pulled = await post('/api/research/smart-pull', { projectId, query: 'mug', unitCost: 2 });
     assert.equal(pulled.status, 200, JSON.stringify(pulled)); measured++;
+    assert.equal(pulled.body.evidenceState, 'RETRIEVED_NO_OBSERVED_AT'); measured++;
     const [providerRow] = await all('SELECT * FROM research_evidence WHERE id=?', [pulled.body.evidenceId]);
     const providerMetadata = JSON.parse(providerRow.metadata);
     assert.equal(pulled.body.contentHash, providerMetadata.contentHash); measured++;
     assert.equal(providerMetadata.contentHash, authority.canonicalHash(providerMetadata.canonicalPayload)); measured++;
     assert.equal(authority.evaluateEvidenceAuthority(providerRow, scope).qualifying, true); measured++;
     assert.equal((await post(`/api/evidence/${providerRow.id}/accept`, {})).status, 200); measured++;
-    const tampered = JSON.parse(providerRow.metadata); tampered.canonicalPayload.searchRows[0].title = 'changed';
+    const tampered = JSON.parse(providerRow.metadata); tampered.canonicalPayload.ecosystem.top_listings[0].title = 'changed';
     await run('UPDATE research_evidence SET metadata=? WHERE id=?', [JSON.stringify(tampered), providerRow.id]);
     await reject(`/api/evidence/${providerRow.id}/accept`, {}, 409);
-    provider.callTool = async () => { throw new Error('synthetic outage'); };
+    provider.pullKeywordEcosystem = async () => { throw new Error('synthetic outage'); };
     await reject('/api/research/smart-pull', { projectId, query: 'mug' }, 503);
-  } finally { provider.callTool = original; }
+  } finally { provider.pullKeywordEcosystem = original; }
   assert.ok(measured > 0);
   console.log(`H0-A measured=${measured} passed=${measured} failed=0 unexecuted=0`);
 }

@@ -3,15 +3,20 @@
 //
 // Two hard rules, both deliberate:
 //   1. Every FACTUAL statement comes from the Product Truth form. A field the
-//      operator left empty is UNKNOWN and produces a visible gap marker, never
-//      invented filler.
+//      operator left empty stays UNKNOWN in QA/accounting and is omitted from
+//      buyer-facing copy; it never produces invented filler.
 //   2. Every KEYWORD comes from the operator's own Cerebro export. Nothing is
 //      generated from a hard-coded phrase list.
 const { fold, contentTokens, tokens, bytes, titleCase, packTokens } = require('./text');
 const { partition, buildLadder } = require('./allocation');
 const { allowedProductFamilies, allowedRecipientFamilies, matchesProductFamily, PRODUCT_FAMILIES } = require('./semantic');
 
-const GAP = label => `[THIẾU DỮ LIỆU: ${label}]`;
+function cleanBuyerValue(value) {
+  return String(value || '').trim()
+    .replace(/\s*(?:[-—–]\s*)?theo listing tham chiếu\s*$/iu, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
 
 // Bullet labels are the only fixed English in the output. The Spanish-market
 // listings in this catalogue need Spanish ones, so the set is switchable.
@@ -27,8 +32,8 @@ const LABEL_SETS = Object.freeze({
 });
 
 function normalizeList(value) {
-  if (Array.isArray(value)) return value.map(v => String(v).trim()).filter(Boolean);
-  return String(value || '').split(/[,;\n]/).map(v => v.trim()).filter(Boolean);
+  if (Array.isArray(value)) return value.map(cleanBuyerValue).filter(Boolean);
+  return String(value || '').split(/[,;\n]/).map(cleanBuyerValue).filter(Boolean);
 }
 
 function normalizeTruth(input = {}) {
@@ -41,29 +46,29 @@ function normalizeTruth(input = {}) {
     String(input.safetyWarnings || input.safety || '').trim()
   ].filter(Boolean);
   return {
-    productType: String(input.productType || '').trim(),
-    productName: String(input.productName || '').trim(),
-    recipient: String(input.recipient || '').trim(),
-    occasion: String(input.occasion || '').trim(),
+    productType: cleanBuyerValue(input.productType),
+    productName: cleanBuyerValue(input.productName),
+    recipient: cleanBuyerValue(input.recipient),
+    occasion: cleanBuyerValue(input.occasion),
     materials: normalizeList(input.materials || input.composition || input.ingredients),
-    purity: String(input.purity || '').trim(),
-    finish: String(input.finish || '').trim(),
+    purity: cleanBuyerValue(input.purity),
+    finish: cleanBuyerValue(input.finish),
     gemstones: normalizeList(input.gemstones),
     components: normalizeList(input.components),
     colors: normalizeList(input.colors),
     sizes: normalizeList(input.sizes),
     dimensions: normalizeList(input.dimensions),
-    weight: String(input.weight || '').trim(),
-    quantity: String(input.quantity || '').trim(),
-    features: [...new Set(universalFeatures)],
-    personalization: String(input.personalization || '').trim(),
-    packaging: String(input.packaging || '').trim(),
-    care: String(input.care || '').trim(),
-    shipFrom: String(input.shipFrom || '').trim(),
-    origin: String(input.origin || '').trim(),
-    style: String(input.style || '').trim(),
-    design: String(input.design || '').trim(),
-    theme: String(input.theme || '').trim()
+    weight: cleanBuyerValue(input.weight),
+    quantity: cleanBuyerValue(input.quantity),
+    features: [...new Set(universalFeatures.map(cleanBuyerValue).filter(Boolean))],
+    personalization: cleanBuyerValue(input.personalization),
+    packaging: cleanBuyerValue(input.packaging),
+    care: cleanBuyerValue(input.care),
+    shipFrom: cleanBuyerValue(input.shipFrom),
+    origin: cleanBuyerValue(input.origin),
+    style: cleanBuyerValue(input.style),
+    design: cleanBuyerValue(input.design),
+    theme: cleanBuyerValue(input.theme)
   };
 }
 
@@ -109,14 +114,20 @@ function clipAtWord(value, limit) {
   return text.slice(0, boundary > Math.floor(limit * 0.60) ? boundary : limit).replace(/[\s,;:.|]+$/, '');
 }
 
-function composeTitle(truth, candidates, limit) {
-  const identity = titleCase(truth.productType || truth.productName || '');
+function composeTitle(truth, candidates, limit, labelLanguage = 'EN') {
+  const observedSeed = labelLanguage === 'ES'
+    ? candidates.find(candidate => titleCase(candidate.phrase).length <= limit)
+    : null;
+  const identity = observedSeed
+    ? titleCase(observedSeed.phrase)
+    : titleCase(truth.productType || truth.productName || '');
   if (!identity) return pickPhrases(candidates, { charLimit: limit, joiner: ' | ', maxPhrases: 3, seedBest: true });
 
   const used = new Set(contentTokens(identity));
-  const picked = [];
+  const picked = observedSeed ? [observedSeed] : [];
   let text = clipAtWord(identity, limit);
   for (const candidate of candidates) {
+    if (picked.includes(candidate)) continue;
     const phrase = titleCase(candidate.phrase);
     const fresh = contentTokens(candidate.phrase).filter(token => !used.has(token));
     if (!fresh.length) continue;
@@ -130,8 +141,8 @@ function composeTitle(truth, candidates, limit) {
   return { text, picked, used };
 }
 
-function buildItemHighlights(truth, limit = 125, L = LABEL_SETS.EN) {
-  const subject = truth.productType || truth.productName || '';
+function buildItemHighlights(truth, limit = 125, L = LABEL_SETS.EN, preferredSubject = '') {
+  const subject = preferredSubject || truth.productType || truth.productName || '';
   const pieces = [];
   if (subject) pieces.push(titleCase(subject));
   if (truth.recipient) pieces.push(`${L.forWord} ${truth.recipient}`);
@@ -156,50 +167,50 @@ function buildBullets(truth, keywords, limit = 230, L = LABEL_SETS.EN, consumed 
     return value.slice(0, boundary > Math.floor(limit * 0.70) ? boundary : limit).replace(/[\s,;:.]+$/, '');
   };
   const bullets = [];
+  const add = (label, text) => {
+    const value = cleanBuyerValue(text);
+    if (!value || value.includes('[THIẾU DỮ LIỆU:')) return;
+    const sentence = /[.!?]$/.test(value) ? value : `${value}.`;
+    bullets.push(clip(`${label} — ${sentence}`));
+  };
 
-  const subject = truth.productName || truth.productType || GAP('loại sản phẩm');
+  const subject = cleanBuyerValue(truth.productName || truth.productType);
   const forWhom = truth.recipient ? ` ${L.forWord} ${truth.recipient}` : '';
   const giftLabel = truth.recipient ? `${L.gift} ${truth.recipient.toUpperCase()}` : L.product;
-  bullets.push(clip(`${giftLabel} — ${subject}${forWhom}.${truth.occasion ? ` ${truth.occasion}.` : ''}`));
+  if (subject) add(giftLabel, `${subject}${forWhom}.${truth.occasion ? ` ${truth.occasion}.` : ''}`);
 
-  bullets.push(clip(truth.materials.length
-    ? `${L.material} — ${[
-      ...truth.materials,
-      truth.purity,
-      truth.finish,
-      ...truth.gemstones,
-      ...truth.components
-    ].filter(Boolean).join(', ')}.${truth.care ? ` ${L.care}: ${truth.care}.` : ''}`
-    : `${L.material} — ${GAP('chất liệu / thành phần vải')}`));
+  const materialFacts = [
+    ...truth.materials, truth.purity, truth.finish, ...truth.gemstones, ...truth.components
+  ].filter(Boolean).join(', ');
+  if (materialFacts) add(L.material, `${materialFacts}${truth.care ? `. ${L.care}: ${truth.care}` : ''}`);
 
   const sizeColor = [];
   if (truth.sizes.length) sizeColor.push(`${L.sizes} ${truth.sizes.join(', ')}`);
   if (truth.dimensions.length) sizeColor.push(truth.dimensions.join(', '));
-  if (truth.weight) sizeColor.push(truth.weight);
-  if (truth.quantity) sizeColor.push(`Quantity ${truth.quantity}`);
   if (truth.colors.length) sizeColor.push(`${L.colors} ${truth.colors.join(', ')}`);
-  bullets.push(clip(sizeColor.length
-    ? `${L.sizeColor} — ${sizeColor.join('. ')}.`
-    : `${L.sizeColor} — ${GAP('size / màu đã xác nhận')}`));
+  const productDetails = [];
+  if (truth.weight) productDetails.push(`Weight ${truth.weight}`);
+  if (truth.quantity) productDetails.push(`Quantity ${truth.quantity}`);
+  if (sizeColor.length) add(L.sizeColor, [...sizeColor, ...productDetails].join('. '));
+  else if (productDetails.length) add(L.details, productDetails.join('. '));
 
-  const endSentence = value => (/[.!?]$/.test(String(value).trim()) ? String(value).trim() : String(value).trim() + '.');
-  bullets.push(clip(truth.personalization
-    ? `${L.personalized} — ${endSentence(truth.personalization)}`
-    : (truth.features.length
-      ? `${L.details} — ${truth.features.join('. ')}.`
-      : `${L.details} — ${GAP('điểm bán đã xác minh (features)')}`)));
+  if (truth.personalization) add(L.personalized, truth.personalization);
+  else if (truth.features.length) add(L.details, truth.features.join('. '));
+  else {
+    const secondary = [truth.style && `Style: ${truth.style}`, truth.design && `Design: ${truth.design}`,
+      truth.theme && `Theme: ${truth.theme}`, truth.origin && `Origin: ${truth.origin}`].filter(Boolean);
+    if (secondary.length) add(L.details, secondary.join('. '));
+  }
 
   const closing = [];
   if (truth.features.length && truth.personalization) closing.push(truth.features.join('. '));
   if (truth.packaging) closing.push(truth.packaging);
   if (truth.shipFrom) closing.push(`${L.shipsFrom} ${truth.shipFrom}`);
-  bullets.push(clip(closing.length
-    ? `${L.packaging} — ${closing.join('. ')}.`
-    : `${L.packaging} — ${GAP('đóng gói / nơi gửi hàng đã xác nhận')}`));
+  if (closing.length) add(L.packaging, closing.join('. '));
+  else if (truth.origin && !bullets.some(item => item.includes(`Origin: ${truth.origin}`))) add(L.details, `Origin: ${truth.origin}`);
 
-  // Keep bullets focused on verified buyer-facing facts. Keyword coverage is
-  // handled by the title/highlight/backend fields rather than by filling each
-  // bullet toward the character ceiling.
+  // Unknown facts stay in missingFacts()/QA accounting and never leak into buyer-facing copy.
+  // Keyword coverage is handled by title/highlight/backend fields rather than capacity stuffing.
   return bullets;
 }
 
@@ -208,14 +219,14 @@ function escapeHtml(value) {
 }
 
 function buildDescription(truth, keywords, L = LABEL_SETS.EN, consumed = [], extraPhraseCount = 4) {
-  const subject = truth.productName || truth.productType || GAP('tên/loại sản phẩm');
+  const subject = cleanBuyerValue(truth.productName || truth.productType);
   const parts = [];
   const opening = [
     subject,
     truth.recipient ? `${L.forWord} ${truth.recipient}` : '',
     truth.occasion ? `— ${truth.occasion}` : ''
   ].filter(Boolean).join(' ').replace(/\s+—\s+/g, ' — ');
-  parts.push(`<p>${escapeHtml(opening)}.</p>`);
+  if (opening) parts.push(`<p>${escapeHtml(opening)}.</p>`);
 
   const details = [];
   if (truth.materials.length) details.push(`${L.material.charAt(0) + L.material.slice(1).toLowerCase()}: ${truth.materials.join(', ')}`);
@@ -237,7 +248,6 @@ function buildDescription(truth, keywords, L = LABEL_SETS.EN, consumed = [], ext
   if (truth.design) details.push(`Design: ${truth.design}`);
   if (truth.theme) details.push(`Theme: ${truth.theme}`);
   if (details.length) parts.push(`<p>${escapeHtml(details.join('. '))}.</p>`);
-  else parts.push(`<p>${escapeHtml(GAP('thông số sản phẩm đã xác minh'))}</p>`);
 
   if (truth.features.length) {
     const featureText = truth.features.map(value => /[.!?]$/.test(value) ? value : value + '.').join(' ');
@@ -334,8 +344,9 @@ function compose(scoredKeywords, truthInput, options = {}) {
   // Product Truth supplies the identity anchor; research can enrich the title
   // but never replace that identity or cause productName to become final copy
   // merely because the operator entered a long value.
-  const title = composeTitle(truth, orderedCopy, opt.titleLimit);
-  const highlightText = buildItemHighlights(truth, opt.highlightLimit, LABEL_SETS[opt.labelLanguage]);
+  const title = composeTitle(truth, orderedCopy, opt.titleLimit, opt.labelLanguage);
+  const highlightSubject = opt.labelLanguage === 'ES' ? (title.picked[0]?.phrase || '') : '';
+  const highlightText = buildItemHighlights(truth, opt.highlightLimit, LABEL_SETS[opt.labelLanguage], highlightSubject);
   const highlights = { text: highlightText, picked: [], used: new Set(contentTokens(highlightText)) };
 
   // Finalize all visible copy BEFORE backend terms, so Generic Keywords can

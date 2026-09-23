@@ -11,10 +11,10 @@ const evidence = (overrides = {}) => ({
   sourceArtifactType: 'RESEARCH_FILE',
   sourceArtifactId: 'source-1',
   sourceArtifactHash: hash('b'),
-  provenance: {},
+  provenance: { integrityOutcome: 'VALID' },
   commercialEvidence: {},
   socialEvidence: {},
-  rawEvidence: {},
+  rawEvidence: { supportScope: 'QUERY_RESULT_SET' },
   ...overrides
 });
 const candidate = (id, phrase, rows) => ({
@@ -138,6 +138,39 @@ assert.equal(adversarialEval.advisoryDisposition.value, 'WATCH');
 assert.ok(!adversarialEval.advisoryDisposition.reasonCodes.includes('OBSERVED_PUBLIC_SIGNAL_PRESENT'));
 assert.ok(adversarialEval.advisoryDisposition.reasonCodes.includes('POSITIVE_OBSERVED_PUBLIC_MARKET_SIGNAL_REQUIRED_FOR_PROMOTE'));
 assert.ok(!adversarialEval.advisoryDisposition.reasonCodes.includes('PROMOTE_FOR_PROJECT_RESEARCH_NOT_AS_COMMERCIAL_PROOF'));
+
+const weakCerebro = evidence({
+  evidenceHash: hash('s'), sourceArtifactHash: hash('t'),
+  commercialEvidence: { searchVolume: 0, keywordSales: 0, competingProducts: null, modeled: true }
+});
+const positiveProjectProxy = evidence({
+  evidenceHash: hash('u'), sourceFamily: 'AMAZON_PROJECT_MKL_OUTLIER', authorityClassification: 'PROJECT_RESEARCH',
+  evidenceTier: 'E2_MODELED_THIRD_PARTY', sourceArtifactType: 'AMAZON_MASTER_KEYWORDS', sourceArtifactHash: hash('v'),
+  commercialEvidence: { metrics: { searchVolume: 9000, keywordSales: 50, competingProducts: 100 } }
+});
+const scopedEval = evaluateCandidate(candidate(7, 'qualifying scope only', [weakCerebro, positiveProjectProxy]), { marketplace: 'AMAZON' });
+assert.equal(scopedEval.researchReadiness.value, 'NOT_READY',
+  'project-research proxy metrics must not make weak Cerebro research-ready');
+
+const tagOnly = evidence({
+  evidenceHash: hash('w'), sourceFamily: 'ETSY_PUBLIC_SEARCH', authorityClassification: 'OBSERVED_PUBLIC',
+  evidenceTier: 'E1_OBSERVED_PUBLIC', sourceArtifactHash: hash('x'),
+  commercialEvidence: { listingCount: 4, listings: [{ listingId: 'TAG-1', reviewCount: 10,
+    fieldProvenance: { reviewCount: researchOnlyField(10) } }] },
+  rawEvidence: { supportScope: 'TAG_SUPPORT' }
+});
+assert.equal(evaluateCandidate(candidate(8, 'tag needs own query capture', [tagOnly]), { marketplace: 'ETSY' })
+  .researchReadiness.value, 'NOT_READY');
+
+const degradedEtsy = evidence({
+  evidenceHash: hash('y'), sourceFamily: 'ETSY_PUBLIC_SEARCH', authorityClassification: 'OBSERVED_PUBLIC',
+  evidenceTier: 'E1_OBSERVED_PUBLIC', sourceArtifactHash: hash('z'),
+  provenance: { integrityOutcome: 'DEGRADED_PARSE' },
+  commercialEvidence: { listingCount: 6, listings: [] },
+  rawEvidence: { supportScope: 'QUERY_RESULT_SET' }
+});
+assert.equal(evaluateCandidate(candidate(9, 'degraded capture', [degradedEtsy]), { marketplace: 'ETSY' })
+  .researchReadiness.value, 'NOT_READY');
 
 const ranked = evaluateAndPrioritizeGlobalCandidates([modeled, socialOnly, crossCandidate, establishedCandidate],
   { marketplace: 'ETSY', now: '2026-09-22T00:00:00.000Z' });

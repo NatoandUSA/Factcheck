@@ -121,14 +121,18 @@ export default function GlobalCandidatePanel({ marketplace, onPromoted, onRequir
     setResearchBusy(true); setResearchPreview(null);
     try {
       const previewForm = new FormData(); previewForm.append('kind', researchKind);
-      previewForm.append('capturedAt', sourceCapturedAt); previewForm.append('researchFile', researchFile);
+      previewForm.append('capturedAt', sourceCapturedAt);
+      previewForm.append('captureTimezoneOffsetMinutes', String(new Date().getTimezoneOffset()));
+      previewForm.append('researchFile', researchFile);
       const preview = await readJson(await fetch('/api/global-candidates/research-imports/preview', {
         method: 'POST', credentials: 'include', body: previewForm
       }));
       if (!preview?.zeroWrite) throw new Error('OPPORTUNITY_PREVIEW_NOT_ZERO_WRITE');
 
       const confirmForm = new FormData(); confirmForm.append('kind', researchKind);
-      confirmForm.append('capturedAt', sourceCapturedAt); confirmForm.append('researchFile', researchFile);
+      confirmForm.append('capturedAt', sourceCapturedAt);
+      confirmForm.append('captureTimezoneOffsetMinutes', String(new Date().getTimezoneOffset()));
+      confirmForm.append('researchFile', researchFile);
       const confirmed = await readJson(await fetch('/api/global-candidates/research-imports', {
         method: 'POST', credentials: 'include', body: confirmForm
       }));

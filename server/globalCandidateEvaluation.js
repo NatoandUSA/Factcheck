@@ -95,6 +95,22 @@ function evaluateWhyNow(evidence, metrics, now = new Date()) {
     unknowns: Object.freeze(deduped.length ? [] : ['WHY_NOW_NOT_ESTABLISHED']) });
 }
 
+function hasQualifyingEtsyQueryBinding(item) {
+  const binding = asObject(item?.provenance?.queryBinding);
+  const state = String(binding.state || '').toUpperCase();
+  const authority = String(binding.authority || '').toUpperCase();
+  const bindingId = binding.captureId || binding.receiptId || null;
+  return state === 'OBSERVED'
+    && ['SERVER_PROVIDER', 'SERVER_CAPTURE_RECEIPT'].includes(authority)
+    && typeof binding.value === 'string' && normalizeBindingPhrase(binding.value)
+      === normalizeBindingPhrase(item?.normalizedPhrase || item?.rawEvidence?.phrase || '')
+    && Boolean(bindingId);
+}
+
+function normalizeBindingPhrase(value) {
+  return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
 function isQualifyingResearchEvidence(item, marketplace) {
   if (String(item?.provenance?.integrityOutcome || '').toUpperCase() !== 'VALID') return false;
   if (marketplace === 'AMAZON') {
@@ -105,7 +121,9 @@ function isQualifyingResearchEvidence(item, marketplace) {
   if (marketplace === 'ETSY') {
     return item.sourceFamily === 'ETSY_PUBLIC_SEARCH'
       && item.authorityClassification === 'OBSERVED_PUBLIC'
-      && item.evidenceTier === 'E1_OBSERVED_PUBLIC';
+      && item.evidenceTier === 'E1_OBSERVED_PUBLIC'
+      && item.rawEvidence?.supportScope === 'QUERY_RESULT_SET'
+      && hasQualifyingEtsyQueryBinding(item);
   }
   return false;
 }
@@ -131,8 +149,7 @@ function evaluateCandidate(candidate, context = {}) {
     && qualifyingPositiveMarket.length > 0
     && qualifyingCompetition.length > 0;
   const etsyResearchReady = context.marketplace === 'ETSY'
-    && qualifyingEvidence.some(item => item.rawEvidence?.supportScope === 'QUERY_RESULT_SET'
-      && Number(item.commercialEvidence?.listingCount || 0) > 0)
+    && qualifyingEvidence.some(item => Number(item.commercialEvidence?.listingCount || 0) > 0)
     && qualifyingCompetition.length > 0;
   const researchReady = amazonResearchReady || etsyResearchReady;
   const researchReadiness = Object.freeze({

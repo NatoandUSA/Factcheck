@@ -25,12 +25,12 @@ function observedProjection(phrase, sold24h, suffix) {
     phrase, sourceFamily: 'ETSY_PUBLIC_SEARCH', authorityClassification: 'OBSERVED_PUBLIC',
     evidenceTier: 'E1_OBSERVED_PUBLIC', sourceArtifactType: 'RESEARCH_FILE',
     sourceArtifactId: 'etsy-' + suffix, sourceArtifactHash: sha('etsy-' + suffix),
-    provenance: { parser: 'canonical-etsy' },
+    provenance: { parser: 'canonical-etsy', integrityOutcome: 'VALID' },
     commercialEvidence: { listingCount: 5, listings: [{ listingId: 'L-' + suffix, sold24h,
       totalSold: sold24h * 10, revenue: sold24h * 100, reviewCount: sold24h,
       fieldProvenance: { sold24h: researchOnlyField(sold24h), totalSold: researchOnlyField(sold24h * 10),
         revenue: researchOnlyField(sold24h * 100), reviewCount: researchOnlyField(sold24h) } }] },
-    socialEvidence: {}, rawEvidence: { phrase, sold24h }
+    socialEvidence: {}, rawEvidence: { phrase, sold24h, supportScope: 'QUERY_RESULT_SET' }
   };
 }
 
@@ -49,7 +49,7 @@ function modeledProjection(phrase, suffix) {
     phrase, sourceFamily: 'AMAZON_CEREBRO', authorityClassification: 'MODELED_THIRD_PARTY',
     evidenceTier: 'E2_MODELED_THIRD_PARTY', sourceArtifactType: 'RESEARCH_FILE',
     sourceArtifactId: 'modeled-' + suffix, sourceArtifactHash: sha('modeled-' + suffix),
-    provenance: { parser: 'canonical-amazon' },
+    provenance: { parser: 'canonical-amazon', integrityOutcome: 'VALID' },
     commercialEvidence: { searchVolume: 5000, competingProducts: 250, modeled: true },
     socialEvidence: {}, rawEvidence: { phrase }
   };

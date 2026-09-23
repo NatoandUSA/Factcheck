@@ -12,6 +12,7 @@ const { headers, buildCsv, sourceRow } = require('./fixtures/etsy_search_rich_67
     kind: 'ETSY_SEARCH',
     fileName: 'para-mi-hija.csv',
     mediaType: 'text/csv',
+    sourceCapturedAt: '2026-09-22T00:00:00.000Z',
     rawBytes: Buffer.from(buildCsv([1, 2, 3]), 'utf8')
   }, 'ETSY');
 
@@ -20,6 +21,8 @@ const { headers, buildCsv, sourceRow } = require('./fixtures/etsy_search_rich_67
 
   assert.ok(query, 'query-context candidate must be projected');
   assert.equal(query.provenance.integrityOutcome, 'VALID');
+  assert.equal(query.provenance.sourceCapturedAt, '2026-09-22T00:00:00.000Z');
+  assert.equal(query.provenance.sourceCapturedAtAuthority, 'STAFF_ASSERTED');
   assert.equal(query.rawEvidence.supportScope, 'QUERY_CONTEXT_HINT');
   assert.equal(query.provenance.queryBinding.authority, 'NONE');
   assert.equal(query.provenance.queryBinding.state, 'SOURCE_HINT');
@@ -49,6 +52,7 @@ const { headers, buildCsv, sourceRow } = require('./fixtures/etsy_search_rich_67
     .join('\n');
   const mixed = await projectResearchFile({
     kind: 'ETSY_SEARCH', fileName: 'mixed-query.csv', mediaType: 'text/csv',
+    sourceCapturedAt: '2026-09-22T00:00:00.000Z',
     rawBytes: Buffer.from(mixedCsv, 'utf8')
   }, 'ETSY');
   const firstQuery = mixed.projections.find(item => item.phrase === 'para mi hija');
@@ -60,11 +64,24 @@ const { headers, buildCsv, sourceRow } = require('./fixtures/etsy_search_rich_67
   assert.equal(firstQuery.provenance.queryBinding.authority, 'NONE');
   assert.equal(secondQuery.provenance.queryBinding.authority, 'NONE');
 
+  const amazonFixture = {
+    kind: 'AMAZON_CEREBRO', fileName: 'freshness.csv', mediaType: 'text/csv',
+    sourceCapturedAt: '2026-09-22T00:00:00.000Z',
+    rawBytes: Buffer.from('Keyword Phrase,Search Volume,Keyword Sales,Competing Products\nmemorial gift,1000,12,300\n', 'utf8')
+  };
+  const amazonProjected = await projectResearchFile(amazonFixture, 'AMAZON');
+  assert.equal(amazonProjected.projections[0].provenance.sourceCapturedAt, '2026-09-22T00:00:00.000Z');
+  assert.equal(amazonProjected.projections[0].provenance.sourceCapturedAtBasis, 'OPERATOR_EXPLICIT_INPUT');
+
   const serverSource = fs.readFileSync(path.join(__dirname, '..', 'server', 'server.js'), 'utf8');
   assert.doesNotMatch(serverSource, /addObservedTag\(cleanSeed\)/,
     'seed phrase must never be relabeled as an observed provider tag');
   assert.doesNotMatch(serverSource, /extract clean tags from cleanSeed and live search listing titles/,
     'listing-title derivation fallback must remain removed from observed provider evidence');
+  assert.match(serverSource, /new Set\(\['kind', 'capturedAt'\]\)/,
+    'global opportunity intake must explicitly accept capturedAt');
+  assert.match(serverSource, /SOURCE_CAPTURE_DATE_REQUIRED/,
+    'global opportunity intake must fail closed when capturedAt is missing');
 
   console.log('GLOBAL_CANDIDATE_PROJECTION_READINESS_PASSED');
 })().catch(error => { console.error(error); process.exitCode = 1; });

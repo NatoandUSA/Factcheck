@@ -18,6 +18,29 @@ async function inspectResearchFile(file, marketplace) {
   return { adapter, rawHash, parserHash, built };
 }
 
+function parserIntegrity(inspected, marketplace) {
+  const accounting = inspected.built.accounting || {};
+  if (marketplace === 'AMAZON') {
+    return Number(accounting.consumedSheetCount || 0) > 0
+      && Number(accounting.inputRows || 0) > 0
+      && Number(accounting.uniqueKeywordCount || 0) > 0 ? 'VALID' : 'INVALID';
+  }
+  const sources = inspected.built.observations.sources || [];
+  if (!sources.length || Number(accounting.observationCount || 0) <= 0) return 'INVALID';
+  for (const source of sources) {
+    const receipt = source.rowAccounting;
+    if (!receipt || typeof receipt !== 'object') return 'UNKNOWN';
+    const keys = ['inputRows','validRows','uniqueRows','duplicateRowsRemoved','returnedRows','truncatedRows'];
+    if (!keys.every(key => Number.isSafeInteger(receipt[key]) && receipt[key] >= 0)) return 'INVALID';
+    if (receipt.inputRows !== receipt.validRows
+      || receipt.validRows !== receipt.uniqueRows + receipt.duplicateRowsRemoved
+      || receipt.returnedRows > receipt.uniqueRows
+      || receipt.truncatedRows !== receipt.uniqueRows - receipt.returnedRows) return 'INVALID';
+    if (receipt.truncatedRows > 0) return 'DEGRADED_PARSE';
+  }
+  return 'VALID';
+}
+
 function amazonProjections(inspected, file) {
   if (file.kind !== 'AMAZON_CEREBRO') return [];
   const source = inspected.built.observations.sources[0];
@@ -31,6 +54,7 @@ function amazonProjections(inspected, file) {
     sourceArtifactHash: inspected.rawHash,
     provenance: { fileName: file.fileName, parserId: inspected.adapter.PARSER_ID,
       parserHash: inspected.parserHash, adapterBindingHash: inspected.built.adapterBindingHash,
+      integrityOutcome: parserIntegrity(inspected, 'AMAZON'),
       rows: clean(keyword.provenance || []), source: clean(source) },
     commercialEvidence: clean({ searchVolume: keyword.searchVolume, keywordSales: keyword.keywordSales,
       competingProducts: keyword.competingProducts, titleDensity: keyword.titleDensity, cpr: keyword.cpr,
@@ -42,18 +66,21 @@ function amazonProjections(inspected, file) {
 
 function etsyProjections(inspected, file) {
   const groups = new Map();
-  for (const seller of inspected.built.observations.sellers) {
+  const allSellers = inspected.built.observations.sellers || [];
+  for (const seller of allSellers) {
     for (const tag of seller.tags || []) {
       const key = normalizePhrase(tag);
       if (!key) continue;
-      if (!groups.has(key)) groups.set(key, { phrase: tag, observations: [] });
+      if (!groups.has(key)) groups.set(key, { phrase: tag, observations: [], supportScope: 'TAG_SUPPORT' });
       groups.get(key).observations.push(seller);
     }
   }
   for (const context of inspected.built.observations.queryContexts || []) {
     const key = normalizePhrase(context);
     if (!key) continue;
-    if (!groups.has(key)) groups.set(key, { phrase: context, observations: [] });
+    const existing = groups.get(key);
+    groups.set(key, { phrase: context, observations: [...allSellers],
+      supportScope: 'QUERY_RESULT_SET', tagObservationCount: existing?.observations?.length || 0 });
   }
   return [...groups.values()].map(group => {
     const listings = group.observations.map(seller => ({ listingId: seller.listingId, title: seller.title,
@@ -71,9 +98,11 @@ function etsyProjections(inspected, file) {
       sourceArtifactHash: inspected.rawHash,
       provenance: clean({ fileName: file.fileName, parserId: inspected.adapter.PARSER_ID,
         parserHash: inspected.parserHash, adapterBindingHash: inspected.built.adapterBindingHash,
+        integrityOutcome: parserIntegrity(inspected, 'ETSY'), supportScope: group.supportScope,
         listingRefs: listings.map(item => ({ listingId: item.listingId, provenance: item.provenance })) }),
       commercialEvidence: clean({ listingCount: listings.length, listings, modeledFieldsRemainLabeled: true }),
-      socialEvidence: {}, rawEvidence: clean({ phrase: group.phrase, listingCount: listings.length })
+      socialEvidence: {}, rawEvidence: clean({ phrase: group.phrase, listingCount: listings.length,
+        supportScope: group.supportScope, tagObservationCount: group.tagObservationCount || 0 })
     };
   });
 }

@@ -71,6 +71,7 @@ function evaluateProof(evidence, metrics) {
     proofMetrics, blockerCodes: [] });
   const blockers = [];
   if (commercial.some(item => item.authorityClassification === 'MODELED_THIRD_PARTY')) blockers.push('MODELED_THIRD_PARTY_NOT_COMMERCIAL_PROOF');
+  if (commercial.some(item => item.authorityClassification === 'RESEARCH_ONLY')) blockers.push('RESEARCH_ONLY_NOT_COMMERCIAL_PROOF');
   if (commercial.some(item => item.authorityClassification === 'PROJECT_RESEARCH')) blockers.push('PROJECT_RESEARCH_NOT_COMMERCIAL_PROOF');
   const publicSales = metrics.filter(item => item.kind === 'SALES_SIGNAL' && item.value > 0 && item.evidenceRef.authorityClassification === 'OBSERVED_PUBLIC');
   if (publicSales.some(item => { const p = asObject(item.fieldProvenance); return String(p.authority || '').toUpperCase() === 'NONE' || String(p.allowedUse || '').toUpperCase() === 'RESEARCH_ONLY'; })) {
@@ -100,11 +101,15 @@ function hasQualifyingEtsyQueryBinding(item) {
   const state = String(binding.state || '').toUpperCase();
   const authority = String(binding.authority || '').toUpperCase();
   const bindingId = binding.captureId || binding.receiptId || null;
-  return state === 'OBSERVED'
-    && ['SERVER_PROVIDER', 'SERVER_CAPTURE_RECEIPT'].includes(authority)
-    && typeof binding.value === 'string' && normalizeBindingPhrase(binding.value)
-      === normalizeBindingPhrase(item?.normalizedPhrase || item?.rawEvidence?.phrase || '')
-    && Boolean(bindingId);
+  const phraseMatches = typeof binding.value === 'string' && normalizeBindingPhrase(binding.value)
+    === normalizeBindingPhrase(item?.normalizedPhrase || item?.rawEvidence?.phrase || '');
+  const trustedServerBinding = state === 'OBSERVED'
+    && ['SERVER_PROVIDER', 'SERVER_CAPTURE_RECEIPT'].includes(authority);
+  const verifiedResearchCapture = state === 'CAPTURE_ARTIFACT_VERIFIED'
+    && authority === 'THIRD_PARTY_RESEARCH_CAPTURE'
+    && String(binding.source || '').toUpperCase() === 'HEYETSY_EXTENSION_EXPORT'
+    && String(binding.artifactHash || '').toLowerCase() === String(item?.sourceArtifactHash || '').toLowerCase();
+  return (trustedServerBinding || verifiedResearchCapture) && phraseMatches && Boolean(bindingId);
 }
 
 function normalizeBindingPhrase(value) {
@@ -119,9 +124,13 @@ function hasQualifyingResearchAuthorityAndIntegrity(item, marketplace) {
       && item.evidenceTier === 'E2_MODELED_THIRD_PARTY';
   }
   if (marketplace === 'ETSY') {
+    const serverObservedPublic = item.authorityClassification === 'OBSERVED_PUBLIC'
+      && item.evidenceTier === 'E1_OBSERVED_PUBLIC';
+    const verifiedHeyEtsyResearch = item.authorityClassification === 'RESEARCH_ONLY'
+      && item.evidenceTier === 'E2_THIRD_PARTY_RESEARCH'
+      && String(item?.provenance?.provider || '').toUpperCase() === 'HEYETSY_EXTENSION_EXPORT';
     return item.sourceFamily === 'ETSY_PUBLIC_SEARCH'
-      && item.authorityClassification === 'OBSERVED_PUBLIC'
-      && item.evidenceTier === 'E1_OBSERVED_PUBLIC'
+      && (serverObservedPublic || verifiedHeyEtsyResearch)
       && item.rawEvidence?.supportScope === 'QUERY_RESULT_SET'
       && hasQualifyingEtsyQueryBinding(item);
   }
@@ -187,10 +196,13 @@ function evaluateCandidate(candidate, context = {}) {
       ? 'AMAZON_SOURCE_STALE_OVER_30_DAYS' : 'ETSY_SOURCE_STALE_OVER_14_DAYS';
     else readinessFailure = 'SOURCE_CAPTURE_DATE_REQUIRED';
   }
+  const etsyReadinessCode = qualifyingEvidence.some(item => item.authorityClassification === 'RESEARCH_ONLY'
+    && String(item?.provenance?.provider || '').toUpperCase() === 'HEYETSY_EXTENSION_EXPORT')
+    ? 'ETSY_HEYETSY_RESEARCH_READY' : 'ETSY_PUBLIC_SEARCH_RESEARCH_READY';
   const researchReadiness = Object.freeze({
     value: researchReady ? 'READY' : 'NOT_READY',
     reasonCodes: Object.freeze(researchReady
-      ? [amazonResearchReady ? 'AMAZON_CEREBRO_RESEARCH_READY' : 'ETSY_PUBLIC_SEARCH_RESEARCH_READY']
+      ? [amazonResearchReady ? 'AMAZON_CEREBRO_RESEARCH_READY' : etsyReadinessCode]
       : [readinessFailure])
   });
   const unknowns = [];

@@ -61,8 +61,14 @@ const sha = value => crypto.createHash('sha256').update(value).digest('hex');
     const etsyScope = { tenantId: 'tenant-a', workspaceId: 7, marketplace: 'ETSY', actorId: 1 };
     const etsy = await projectResearchFile({ kind: 'ETSY_SEARCH', fileName: 'etsy.csv',
       mediaType: 'text/csv', rawBytes: Buffer.from(csv) }, 'ETSY');
-    assert.ok(etsy.projections.some(item => item.phrase === 'para mi hija'));
-    assert.ok(etsy.projections.every(item => item.authorityClassification === 'OBSERVED_PUBLIC'));
+    const etsyQueryProjection = etsy.projections.find(item => item.phrase === 'para mi hija');
+    assert.ok(etsyQueryProjection);
+    assert.equal(etsyQueryProjection.authorityClassification, 'RESEARCH_ONLY');
+    assert.equal(etsyQueryProjection.evidenceTier, 'E2_THIRD_PARTY_RESEARCH');
+    assert.equal(etsyQueryProjection.provenance.queryBinding.authority, 'THIRD_PARTY_RESEARCH_CAPTURE');
+    assert.ok(etsy.projections.some(item => item.phrase !== 'para mi hija'
+      && item.authorityClassification === 'OBSERVED_PUBLIC'),
+    'tag-support projections remain observed-public research context and are not upgraded to HeyEtsy query captures');
     await ingestCandidateProjections(db, etsyScope, etsy.projections);
 
     const socialPayload = { reviewedPromotionQueue: [], discoveryCandidates: [], competitorStoreChanges: [],
@@ -75,9 +81,10 @@ const sha = value => crypto.createHash('sha256').update(value).digest('hex');
     const grouped = (await listGlobalCandidates(db, etsyScope)).find(item => item.normalizedPhrase === 'para mi hija');
     assert.equal(grouped.groupingMethod, 'EXACT_NORMALIZED_V1');
     assert.deepEqual(new Set(grouped.evidence.map(item => item.authorityClassification)),
-      new Set(['OBSERVED_PUBLIC','RESEARCH_ONLY']));
+      new Set(['RESEARCH_ONLY']));
     assert.ok(grouped.evidence.every(item => !Object.hasOwn(item, 'score')));
-    assert.deepEqual(grouped.evidence.find(item => item.authorityClassification === 'RESEARCH_ONLY').commercialEvidence, {});
+    assert.deepEqual(grouped.evidence.find(item => item.sourceFamily === 'SOCIAL_LISTENING').commercialEvidence, {},
+      'social handoff remains research-only context with no marketplace commercial evidence');
 
     const outlierArtifact = { id: 44, projectId: 3, kind: 'ETSY_MASTER_KEYWORDS', revisionNumber: 2,
       artifactHash: sha('etsy-mkl'), dependencies: { patternArtifactId: 40 }, payload: { keywords: [
@@ -92,7 +99,7 @@ const sha = value => crypto.createHash('sha256').update(value).digest('hex');
     const groupedWithOutlier = (await listGlobalCandidates(db, etsyScope))
       .find(item => item.normalizedPhrase === 'para mi hija');
     assert.deepEqual(new Set(groupedWithOutlier.evidence.map(item => item.authorityClassification)),
-      new Set(['OBSERVED_PUBLIC','RESEARCH_ONLY','PROJECT_RESEARCH']));
+      new Set(['RESEARCH_ONLY','PROJECT_RESEARCH']));
     assert.equal(groupedWithOutlier.completeness.hasCommercialSignals, true);
     assert.equal(groupedWithOutlier.completeness.commercialProofStatus, 'NOT_EVALUATED');
     assert.ok(groupedWithOutlier.completeness.unknowns.includes('COMMERCIAL_PROOF_NOT_PRESENT'));

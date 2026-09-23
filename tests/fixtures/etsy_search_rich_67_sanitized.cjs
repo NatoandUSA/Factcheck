@@ -26,7 +26,7 @@ function sourceRow(index) {
     shop_daily_sold: 0, he_discount_pct: '0', he_tags: 'para mi hija;daughter gift', he_categories: 'Jewelry, Necklaces',
     url: `https://www.etsy.com/listing/900000${String(index).padStart(3, '0')}`, keyword_context: 'para mi hija',
     keyword_match_type: 'exact_phrase_in_title_or_tags', keyword_match_confidence: '0.95', proof_scope_hint: 'SOURCE_HINT',
-    evidence_route_hint: 'etsy_search_results', data_use_hint: 'pattern_research_only', rank_position: index
+    evidence_route_hint: 'etsy_search_results', data_use_hint: 'rank_pattern_batch_candidates', rank_position: index
   };
 }
 

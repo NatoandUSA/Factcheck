@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 const amazonResearchAdapter = require('./commerceIntelligence/amazonResearchAdapter');
 const etsyResearchAdapter = require('./commerceIntelligence/etsyResearchAdapter');
 const { normalizePhrase } = require('./globalCandidatePool');
+const { verifyHeyEtsyCaptureArtifact } = require('./etsyCaptureArtifactVerifier');
 
 const clean = value => JSON.parse(JSON.stringify(value));
 const sha256 = value => crypto.createHash('sha256').update(Buffer.isBuffer(value) ? value : String(value), 'utf8').digest('hex');
@@ -72,6 +73,7 @@ function amazonProjections(inspected, file) {
 function etsyProjections(inspected, file) {
   const groups = new Map();
   const allSellers = inspected.built.observations.sellers || [];
+  const heyEtsyCapture = verifyHeyEtsyCaptureArtifact(inspected);
   for (const seller of allSellers) {
     for (const tag of seller.tags || []) {
       const key = normalizePhrase(tag);
@@ -90,7 +92,17 @@ function etsyProjections(inspected, file) {
     const authorities = [...new Set(hintBindings.map(item => String(item.authority || 'NONE').toUpperCase()))];
     const states = [...new Set(hintBindings.map(item => String(item.state || 'UNKNOWN').toUpperCase()))];
     const sources = [...new Set(hintBindings.map(item => String(item.source || 'UNKNOWN')))];
-    const queryBinding = {
+    const artifactVerified = heyEtsyCapture.verified && heyEtsyCapture.normalizedQuery === key;
+    const queryBinding = artifactVerified ? {
+      value: context,
+      state: 'CAPTURE_ARTIFACT_VERIFIED',
+      authority: heyEtsyCapture.bindingAuthority,
+      source: heyEtsyCapture.provider,
+      captureId: heyEtsyCapture.captureId,
+      receiptId: null,
+      artifactHash: heyEtsyCapture.rawHash,
+      rowCount: heyEtsyCapture.rowCount
+    } : {
       value: context,
       state: states.length === 1 ? states[0] : 'MIXED',
       authority: authorities.length === 1 ? authorities[0] : 'NONE',
@@ -99,8 +111,8 @@ function etsyProjections(inspected, file) {
       receiptId: null
     };
     groups.set(key, { phrase: context, observations: queryObservations,
-      supportScope: 'QUERY_CONTEXT_HINT', queryBinding,
-      tagObservationCount: existing?.observations?.length || 0 });
+      supportScope: artifactVerified ? 'QUERY_RESULT_SET' : 'QUERY_CONTEXT_HINT', queryBinding,
+      artifactVerified, tagObservationCount: existing?.observations?.length || 0 });
   }
   return [...groups.values()].map(group => {
     const listings = group.observations.map(seller => ({ listingId: seller.listingId, title: seller.title,
@@ -111,9 +123,9 @@ function etsyProjections(inspected, file) {
     return {
       phrase: group.phrase,
       sourceFamily: 'ETSY_PUBLIC_SEARCH',
-      authorityClassification: 'OBSERVED_PUBLIC',
-      evidenceTier: 'E1_OBSERVED_PUBLIC',
-      sourceArtifactType: 'RESEARCH_FILE',
+      authorityClassification: group.artifactVerified ? 'RESEARCH_ONLY' : 'OBSERVED_PUBLIC',
+      evidenceTier: group.artifactVerified ? 'E2_THIRD_PARTY_RESEARCH' : 'E1_OBSERVED_PUBLIC',
+      sourceArtifactType: group.artifactVerified ? 'HEYETSY_SEARCH_EXPORT' : 'RESEARCH_FILE',
       sourceArtifactId: file.fileName,
       sourceArtifactHash: inspected.rawHash,
       provenance: clean({ fileName: file.fileName, parserId: inspected.adapter.PARSER_ID,
@@ -124,6 +136,13 @@ function etsyProjections(inspected, file) {
         sourceCapturedAtBasis: file.sourceCapturedAt ? 'OPERATOR_EXPLICIT_INPUT' : 'UNKNOWN',
         sourceCaptureTimezoneOffsetMinutes: Number.isInteger(file.sourceCaptureTimezoneOffsetMinutes)
           ? file.sourceCaptureTimezoneOffsetMinutes : null,
+        provider: group.artifactVerified ? heyEtsyCapture.provider : null,
+        captureVerification: group.artifactVerified ? {
+          code: heyEtsyCapture.code,
+          rowCount: heyEtsyCapture.rowCount,
+          rankMin: heyEtsyCapture.rankMin,
+          rankMax: heyEtsyCapture.rankMax
+        } : null,
         queryBinding: group.queryBinding || null,
         listingRefs: listings.map(item => ({ listingId: item.listingId, provenance: item.provenance })) }),
       commercialEvidence: clean({ listingCount: listings.length, listings, modeledFieldsRemainLabeled: true }),

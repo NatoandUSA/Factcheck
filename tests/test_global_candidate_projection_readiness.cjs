@@ -12,7 +12,7 @@ const { headers, buildCsv, sourceRow } = require('./fixtures/etsy_search_rich_67
     kind: 'ETSY_SEARCH',
     fileName: 'para-mi-hija.csv',
     mediaType: 'text/csv',
-    sourceCapturedAt: '2026-09-22T00:00:00.000Z',
+    sourceCapturedAt: '2026-09-22', sourceCaptureTimezoneOffsetMinutes: 0,
     rawBytes: Buffer.from(buildCsv([1, 2, 3]), 'utf8')
   }, 'ETSY');
 
@@ -21,7 +21,8 @@ const { headers, buildCsv, sourceRow } = require('./fixtures/etsy_search_rich_67
 
   assert.ok(query, 'query-context candidate must be projected');
   assert.equal(query.provenance.integrityOutcome, 'VALID');
-  assert.equal(query.provenance.sourceCapturedAt, '2026-09-22T00:00:00.000Z');
+  assert.equal(query.provenance.sourceCapturedAt, '2026-09-22');
+  assert.equal(query.provenance.sourceCaptureTimezoneOffsetMinutes, 0);
   assert.equal(query.provenance.sourceCapturedAtAuthority, 'STAFF_ASSERTED');
   assert.equal(query.rawEvidence.supportScope, 'QUERY_CONTEXT_HINT');
   assert.equal(query.provenance.queryBinding.authority, 'NONE');
@@ -52,7 +53,7 @@ const { headers, buildCsv, sourceRow } = require('./fixtures/etsy_search_rich_67
     .join('\n');
   const mixed = await projectResearchFile({
     kind: 'ETSY_SEARCH', fileName: 'mixed-query.csv', mediaType: 'text/csv',
-    sourceCapturedAt: '2026-09-22T00:00:00.000Z',
+    sourceCapturedAt: '2026-09-22', sourceCaptureTimezoneOffsetMinutes: 0,
     rawBytes: Buffer.from(mixedCsv, 'utf8')
   }, 'ETSY');
   const firstQuery = mixed.projections.find(item => item.phrase === 'para mi hija');
@@ -66,11 +67,12 @@ const { headers, buildCsv, sourceRow } = require('./fixtures/etsy_search_rich_67
 
   const amazonFixture = {
     kind: 'AMAZON_CEREBRO', fileName: 'freshness.csv', mediaType: 'text/csv',
-    sourceCapturedAt: '2026-09-22T00:00:00.000Z',
+    sourceCapturedAt: '2026-09-22', sourceCaptureTimezoneOffsetMinutes: 0,
     rawBytes: Buffer.from('Keyword Phrase,Search Volume,Keyword Sales,Competing Products\nmemorial gift,1000,12,300\n', 'utf8')
   };
   const amazonProjected = await projectResearchFile(amazonFixture, 'AMAZON');
-  assert.equal(amazonProjected.projections[0].provenance.sourceCapturedAt, '2026-09-22T00:00:00.000Z');
+  assert.equal(amazonProjected.projections[0].provenance.sourceCapturedAt, '2026-09-22');
+  assert.equal(amazonProjected.projections[0].provenance.sourceCaptureTimezoneOffsetMinutes, 0);
   assert.equal(amazonProjected.projections[0].provenance.sourceCapturedAtBasis, 'OPERATOR_EXPLICIT_INPUT');
 
   const serverSource = fs.readFileSync(path.join(__dirname, '..', 'server', 'server.js'), 'utf8');

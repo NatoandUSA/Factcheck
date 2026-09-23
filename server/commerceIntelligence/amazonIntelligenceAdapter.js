@@ -106,8 +106,9 @@ function truthForComposer(facts) {
 }
 
 function aPlusPointsFromTruth(facts) {
+  const buyerText = value => text(value).replace(/\s*(?:[-—–]\s*)?theo listing tham chiếu\s*$/iu, '').trim();
   const points = [];
-  const identity = text(facts.productName || facts.productType);
+  const identity = buyerText(facts.productName || facts.productType);
   if (identity) points.push(identity);
   for (const [label, value] of [
     ['Materials', facts.materials || facts.composition], ['Purity / plating', facts.purity], ['Finish', facts.finish],
@@ -116,7 +117,7 @@ function aPlusPointsFromTruth(facts) {
     ['Packaging', facts.packaging], ['Care', facts.care], ['Recipient', facts.recipient || facts.audience],
     ['Occasion', facts.occasion], ['Style', facts.style], ['Design', facts.design], ['Theme', facts.theme],
     ['Origin', facts.origin], ['Ships from', facts.shipFrom]
-  ]) if (text(value)) points.push(`${label}: ${text(value)}`);
+  ]) if (buyerText(value)) points.push(`${label}: ${buyerText(value)}`);
   return points;
 }
 

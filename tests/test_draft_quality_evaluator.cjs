@@ -37,6 +37,28 @@ const verifiedCard = (productId, listingVersion) => ({
   assert.ok(amazon.metrics.length === 5 && amazon.score > 0 && amazon.score <= 100);
   assert.match(amazon.note, /does not predict sales/i);
 
+  const shortBackend = evaluateDraftQuality({ ...base,
+    amazonSearchTerms: 'keepsake family gift',
+    searchDiagnostics: { unusedEligibleRoots: 0 } }, 'AMAZON', { ready: 20, expected: 20 });
+  const longerBackend = evaluateDraftQuality({ ...base,
+    amazonSearchTerms: 'keepsake family gift celebration thoughtful present everyday simple message meaningful recipient',
+    searchDiagnostics: { unusedEligibleRoots: 0 } }, 'AMAZON', { ready: 20, expected: 20 });
+  assert.equal(shortBackend.metrics.find(item => item.key === 'search').score,
+    longerBackend.metrics.find(item => item.key === 'search').score,
+    'backend quality must not depend on an arbitrary 150-byte minimum');
+  assert.ok(!shortBackend.warnings.some(item => /150|bytes/i.test(item)),
+    'short but exhausted backend vocabulary must not produce a fake minimum-byte warning');
+  const rootsRemain = evaluateDraftQuality({ ...base,
+    amazonSearchTerms: 'keepsake family gift',
+    searchDiagnostics: { unusedEligibleRoots: 4 } }, 'AMAZON', { ready: 20, expected: 20 });
+  assert.ok(rootsRemain.warnings.some(item => item.includes('SEARCH_ROOTS_UNUSED')),
+    'eligible unused backend roots must produce evidence-based QA');
+  const conciseDescription = evaluateDraftQuality({ ...base,
+    amazonDescription: '<p>Verified product for family gifting.</p><p>Includes the confirmed keepsake details.</p>' },
+    'AMAZON', { ready: 20, expected: 20 });
+  assert.ok(conciseDescription.metrics.find(item => item.key === 'readability').score > 0,
+    'concise semantic description is not penalized solely for being under 300 characters');
+
   const overLimit = evaluateDraftQuality({ ...base, amazonTitle: 'X'.repeat(76) }, 'AMAZON', { ready: 20, expected: 20 });
   assert.equal(overLimit.verdict, 'BLOCKED');
   assert.ok(overLimit.blockers.some(item => item.includes('75-character')));

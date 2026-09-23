@@ -2,6 +2,7 @@
 
 const assert = require('node:assert/strict');
 const adapter = require('../server/commerceIntelligence/amazonIntelligenceAdapter');
+const { compose } = require('../server/commerceIntelligence/amazonComposer');
 
 const keyword = (phrase, searchVolume, bid = null) => ({ phrase, searchVolume, bid,
   keywordSales: null, iq: null, trend: null, competingProducts: null, cpr: null,
@@ -83,6 +84,11 @@ async function main() {
   check(!productionVisible.includes('silver'), 'ambiguous silver color cannot become a material claim');
   check(productionResult.output.factClaimReview.some(item => item.field === 'colors' && item.value.includes('Silver')),
     'omitted ambiguous color remains visible in review accounting');
+  const annotatedPackaging = structuredClone(input);
+  annotatedPackaging.productTruth.snapshot.asserted.packaging = asserted('Gift box — theo listing tham chiếu');
+  const annotatedPackagingResult = await adapter.buildIntelligence(annotatedPackaging);
+  check(!JSON.stringify(annotatedPackagingResult.output.listingDraft.amazonAPlusPoints).includes('theo listing tham chiếu'),
+    'BA-AMZ-Q1.1 internal provenance suffix is removed from A+ buyer-facing copy');
   const novelProduct = structuredClone(input);
   novelProduct.research.observations.cerebro.keywords = Array.from({ length: 12 }, (_, index) =>
     keyword(`pet memorial keepsake dog remembrance ${index}`, 1200 - index * 25, 1.1));
@@ -97,6 +103,67 @@ async function main() {
   check(novelResult.output.productFamilyAlignment.status === 'ALIGNED'
     && novelResult.output.productFamilyAlignment.resolutionMode === 'DIRECT_IDENTITY_EVIDENCE',
     'new product outside the closed family dictionary is admitted by positive Product Truth identity evidence');
+
+  const q1Keywords = [
+    ['madrina proposal mug', 0.96, 1200],
+    ['godmother proposal mug', 0.91, 900],
+    ['baptism mug for godmother', 0.88, 700],
+    ['regalo para madrina', 0.82, 650],
+    ['bautizo madrina taza', 0.78, 500],
+    ['spanish godmother keepsake', 0.72, 350]
+  ].map(([phrase, relevance, searchVolume], index) => ({
+    phrase, relevance, searchVolume, score: 100 - index, bid: 1,
+    titleDensity: 2, competingProducts: 100, ipVerdict: 'ALLOW', ipHits: [],
+    suspectedBrand: null, negativeHit: null, backendOnly: false,
+    masterTier: index < 2 ? 'PRIMARY' : 'SECONDARY', rareReviewToken: false,
+    tokenCount: phrase.split(/\s+/).length
+  }));
+  q1Keywords.meta = { inputUniquePhrases: q1Keywords.length, metricAvailability: {}, rareReviewTokens: [], brandTokens: [] };
+  const q1Truth = {
+    productType: 'Ceramic Mug',
+    productName: 'Madrina Proposal Mug Gift Set 11oz Personalized Spanish Baptism Godmother',
+    recipient: 'madrina', occasion: 'baptism', materials: 'ceramic', sizes: '11 oz',
+    personalization: 'Custom name', packaging: 'Gift box', features: ['Spanish message']
+  };
+  const q1 = compose(q1Keywords, q1Truth);
+  check(q1.title.text.toLowerCase() !== q1Truth.productName.toLowerCase(),
+    'BA-AMZ-Q1 title is composed instead of copying long Product Truth productName verbatim');
+  check(/mug/i.test(q1.title.text) && q1.title.text.length <= 75,
+    'BA-AMZ-Q1 title retains verified product identity within policy ceiling');
+  check(q1.itemHighlights.text.length <= 125 && (q1.itemHighlights.text.match(/,/g) || []).length <= 1,
+    'BA-AMZ-Q1 Item Highlights is buyer-readable rather than a keyword chain');
+  check(q1.bullets.length === 5 && q1.capacityTargets.bullets.every(item => item.minimum === undefined
+    && item.qualityBasis === 'ONE_VERIFIED_BUYER_IDEA_NO_CAPACITY_FILL'),
+  'BA-AMZ-Q1 bullets no longer use capacity-fill minimums');
+  check(!q1.description.includes('<ul>') && !q1.description.includes(' · '),
+    'BA-AMZ-Q1 description renders coherent paragraphs without spec-list or keyword-tail dump');
+  check(q1.searchTermTotalBytes <= 249 && Number.isInteger(q1.analysisMeta.searchDiagnostics.unusedEligibleRoots),
+    'BA-AMZ-Q1 backend search diagnostics account for eligible unused roots under byte cap');
+
+  const q11Keywords = [
+    ['collar para mi hija', 0.98, 1400], ['regalo collar hija', 0.92, 1000],
+    ['collar graduacion hija', 0.86, 800], ['regalo de madre para hija', 0.80, 700]
+  ].map(([phrase, relevance, searchVolume], index) => ({
+    phrase, relevance, searchVolume, score: 120 - index, bid: 1,
+    titleDensity: 2, competingProducts: 100, ipVerdict: 'ALLOW', ipHits: [],
+    suspectedBrand: null, negativeHit: null, backendOnly: false,
+    masterTier: index < 2 ? 'PRIMARY' : 'SECONDARY', rareReviewToken: false,
+    tokenCount: phrase.split(/\s+/).length
+  }));
+  q11Keywords.meta = { inputUniquePhrases: q11Keywords.length, metricAvailability: {}, rareReviewTokens: [], brandTokens: [] };
+  const q11 = compose(q11Keywords, {
+    productType: 'Necklace',
+    productName: 'Collar Para Mi Hija en Español, Regalo Para Hija de Mamá y Papá',
+    recipient: 'Daughter / Hija', occasion: 'Graduation, Birthday', materials: 'Stainless Steel',
+    weight: '5.3 ounces', quantity: '1', packaging: 'Gift box / ready-to-gift — theo listing tham chiếu', origin: 'US'
+  }, { labelLanguage: 'ES' });
+  const q11BuyerCopy = [q11.title.text, q11.itemHighlights.text, ...q11.bullets, q11.description].join(' ');
+  check(!/^Necklace\b/i.test(q11.title.text) && !/^Necklace\b/i.test(q11.itemHighlights.text),
+    'BA-AMZ-Q1.1 Spanish buyer copy prefers observed product wording over an English generic identity');
+  check(!/THIẾU DỮ LIỆU|theo listing tham chiếu/i.test(q11BuyerCopy),
+    'BA-AMZ-Q1.1 internal missing-data/provenance annotations never leak into buyer-facing copy');
+  check(!q11.bullets.some(item => /^TALLA Y COLOR\b/.test(item)),
+    'BA-AMZ-Q1.1 size/color heading is suppressed when only weight and quantity are verified');
 
   let missingCerebro;
   try {

@@ -1,8 +1,8 @@
 # BA-1 Evidence Closure — Candidates #10 and #12–#17
 
-**Authority baseline:** `9517c7c96ec6672e681bebc49f8c9e67866b0939`  
-**Production mutation:** NONE  
-**Scoring / threshold changes:** NONE  
+**Authority baseline:** `9517c7c96ec6672e681bebc49f8c9e67866b0939`
+**Production mutation:** NONE
+**Scoring / threshold changes:** NONE
 **P2 cleanup:** NONE
 
 ## Result summary

@@ -1863,7 +1863,17 @@ function canonicalSourceCapturedAt(value) {
   if (!Number.isFinite(parsed) || new Date(parsed).toISOString().slice(0, 10) !== raw) {
     throw Object.assign(new Error('SOURCE_CAPTURE_DATE_INVALID'), { code: 'SOURCE_CAPTURE_DATE_INVALID', status: 400 });
   }
-  return new Date(parsed).toISOString();
+  return raw;
+}
+
+function canonicalCaptureTimezoneOffset(value) {
+  const offset = Number(value);
+  if (!Number.isInteger(offset) || offset < -840 || offset > 720) {
+    throw Object.assign(new Error('SOURCE_CAPTURE_TIMEZONE_REQUIRED'), {
+      code: 'SOURCE_CAPTURE_TIMEZONE_REQUIRED', status: 400
+    });
+  }
+  return offset;
 }
 
 function canonicalResearchFile(req, allowedFields, marketplace) {
@@ -1939,8 +1949,9 @@ app.post('/api/global-candidates/:candidateId/promote', requireAuth(db), require
 app.post('/api/global-candidates/research-imports/preview', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']),
   commerceResearchUpload.single('researchFile'), async (req, res) => {
     try {
-      const file = canonicalResearchFile(req, new Set(['kind', 'capturedAt']), req.user.marketplace);
+      const file = canonicalResearchFile(req, new Set(['kind', 'capturedAt', 'captureTimezoneOffsetMinutes']), req.user.marketplace);
       file.sourceCapturedAt = canonicalSourceCapturedAt(file.body.capturedAt);
+      file.sourceCaptureTimezoneOffsetMinutes = canonicalCaptureTimezoneOffset(file.body.captureTimezoneOffsetMinutes);
       const projected = await projectResearchFile(file, req.user.marketplace);
       res.json({ success: true, zeroWrite: true, marketplace: req.user.marketplace,
         groupingMethod: 'EXACT_NORMALIZED_V1', candidateCount: projected.projections.length,
@@ -1955,8 +1966,9 @@ app.post('/api/global-candidates/research-imports/preview', requireAuth(db), req
 app.post('/api/global-candidates/research-imports', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']),
   commerceResearchUpload.single('researchFile'), async (req, res) => {
     try {
-      const file = canonicalResearchFile(req, new Set(['kind', 'capturedAt']), req.user.marketplace);
+      const file = canonicalResearchFile(req, new Set(['kind', 'capturedAt', 'captureTimezoneOffsetMinutes']), req.user.marketplace);
       file.sourceCapturedAt = canonicalSourceCapturedAt(file.body.capturedAt);
+      file.sourceCaptureTimezoneOffsetMinutes = canonicalCaptureTimezoneOffset(file.body.captureTimezoneOffsetMinutes);
       const projected = await projectResearchFile(file, req.user.marketplace);
       if (!projected.projections.length) throw Object.assign(new Error('GLOBAL_CANDIDATE_SOURCE_HAS_NO_CANDIDATE_PHRASES'), {
         code: 'GLOBAL_CANDIDATE_SOURCE_HAS_NO_CANDIDATE_PHRASES', status: 422,

@@ -122,6 +122,8 @@ function etsyProjections(inspected, file) {
         sourceCapturedAt: file.sourceCapturedAt || null,
         sourceCapturedAtAuthority: file.sourceCapturedAt ? 'STAFF_ASSERTED' : 'NONE',
         sourceCapturedAtBasis: file.sourceCapturedAt ? 'OPERATOR_EXPLICIT_INPUT' : 'UNKNOWN',
+        sourceCaptureTimezoneOffsetMinutes: Number.isInteger(file.sourceCaptureTimezoneOffsetMinutes)
+          ? file.sourceCaptureTimezoneOffsetMinutes : null,
         queryBinding: group.queryBinding || null,
         listingRefs: listings.map(item => ({ listingId: item.listingId, provenance: item.provenance })) }),
       commercialEvidence: clean({ listingCount: listings.length, listings, modeledFieldsRemainLabeled: true }),

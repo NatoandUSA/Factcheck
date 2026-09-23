@@ -1,4 +1,4 @@
-'use strict';
+﻿'use strict';
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -98,7 +98,7 @@ const evidenceHash = projection => crypto.createHash('sha256')
   }
 
   console.log(JSON.stringify({
-    authorityBaseline: '9517c7c96ec6672e681bebc49f8c9e67866b0939',
+    authorityBaseline: 'bafb6b6acec6b6b5d60f47c06573b7f1a9225841',
     productionMutation: false,
     capturedAt,
     now,

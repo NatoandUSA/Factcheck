@@ -1,7 +1,7 @@
 ﻿# BA1-ETSY-R1 â€” Real HeyEtsy Data Acceptance
 
 **Status:** implementation candidate
-**Baseline:** `9517c7c96ec6672e681bebc49f8c9e67866b0939`
+**Baseline:** `bafb6b6acec6b6b5d60f47c06573b7f1a9225841`
 **Production mutation:** NONE
 **Scope:** Align Etsy Research Readiness with verified HeyEtsy Chrome Extension search captures. YTrends remains supplementary `RESEARCH_ONLY`.
 

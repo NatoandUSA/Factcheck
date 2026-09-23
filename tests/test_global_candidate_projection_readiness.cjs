@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { projectResearchFile } = require('../server/globalCandidateProjection');
+const { evaluateCandidate } = require('../server/globalCandidateEvaluation');
 const { headers, buildCsv, sourceRow } = require('./fixtures/etsy_search_rich_67_sanitized.cjs');
 
 (async () => {
@@ -19,9 +20,17 @@ const { headers, buildCsv, sourceRow } = require('./fixtures/etsy_search_rich_67
 
   assert.ok(query, 'query-context candidate must be projected');
   assert.equal(query.provenance.integrityOutcome, 'VALID');
-  assert.equal(query.rawEvidence.supportScope, 'QUERY_RESULT_SET');
+  assert.equal(query.rawEvidence.supportScope, 'QUERY_CONTEXT_HINT');
+  assert.equal(query.provenance.queryBinding.authority, 'NONE');
+  assert.equal(query.provenance.queryBinding.state, 'SOURCE_HINT');
   assert.equal(query.commercialEvidence.listingCount, 3,
-    'query candidate must retain the full captured result set');
+    'query hint may retain the full captured result set for grouping/display');
+  const queryEval = evaluateCandidate({
+    id: 1, candidateKey: 'a'.repeat(64), normalizedPhrase: query.phrase,
+    displayPhrase: query.phrase, evidence: [{ ...query, evidenceHash: 'b'.repeat(64) }]
+  }, { marketplace: 'ETSY' });
+  assert.equal(queryEval.researchReadiness.value, 'NOT_READY',
+    'CSV keyword_context authority NONE must not become qualifying query-result-set evidence');
 
   assert.ok(tag, 'tag candidate must be projected');
   assert.equal(tag.provenance.integrityOutcome, 'VALID');
@@ -45,9 +54,11 @@ const { headers, buildCsv, sourceRow } = require('./fixtures/etsy_search_rich_67
   const firstQuery = mixed.projections.find(item => item.phrase === 'para mi hija');
   const secondQuery = mixed.projections.find(item => item.phrase === 'other niche');
   assert.equal(firstQuery.commercialEvidence.listingCount, 1,
-    'query candidate must not absorb listings captured for another query');
+    'query hint must not absorb listings captured for another query');
   assert.equal(secondQuery.commercialEvidence.listingCount, 1,
-    'each query context must receive only its own captured result set');
+    'each query hint must receive only its own captured result set');
+  assert.equal(firstQuery.provenance.queryBinding.authority, 'NONE');
+  assert.equal(secondQuery.provenance.queryBinding.authority, 'NONE');
 
   const serverSource = fs.readFileSync(path.join(__dirname, '..', 'server', 'server.js'), 'utf8');
   assert.doesNotMatch(serverSource, /addObservedTag\(cleanSeed\)/,

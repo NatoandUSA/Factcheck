@@ -1,8 +1,8 @@
-# BA1-ETSY-R1 — Real HeyEtsy Data Acceptance
+﻿# BA1-ETSY-R1 â€” Real HeyEtsy Data Acceptance
 
-**Status:** implementation candidate  
-**Baseline:** `9517c7c96ec6672e681bebc49f8c9e67866b0939`  
-**Production mutation:** NONE  
+**Status:** implementation candidate
+**Baseline:** `9517c7c96ec6672e681bebc49f8c9e67866b0939`
+**Production mutation:** NONE
 **Scope:** Align Etsy Research Readiness with verified HeyEtsy Chrome Extension search captures. YTrends remains supplementary `RESEARCH_ONLY`.
 
 ## Product contract
@@ -131,8 +131,8 @@ unexecuted=0
 ```
 
 Both failures are pre-existing platform/harness failures and reproduce unchanged on exact baseline `9517c7c...`:
-- `test_deploy_rollback_faults.cjs` — Unix `ln` rollback harness on Windows;
-- `test_runner_accounting.cjs` — Windows process-tree timing/shutdown behavior.
+- `test_deploy_rollback_faults.cjs` â€” Unix `ln` rollback harness on Windows;
+- `test_runner_accounting.cjs` â€” Windows process-tree timing/shutdown behavior.
 
 The failing test files, runner and deploy script have zero diff from baseline. Canonical Node 22 CI on Linux remains the merge authority.
 

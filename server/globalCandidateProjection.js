@@ -58,6 +58,8 @@ function amazonProjections(inspected, file) {
       sourceCapturedAt: file.sourceCapturedAt || null,
       sourceCapturedAtAuthority: file.sourceCapturedAt ? 'STAFF_ASSERTED' : 'NONE',
       sourceCapturedAtBasis: file.sourceCapturedAt ? 'OPERATOR_EXPLICIT_INPUT' : 'UNKNOWN',
+      sourceCaptureTimezoneOffsetMinutes: Number.isInteger(file.sourceCaptureTimezoneOffsetMinutes)
+        ? file.sourceCaptureTimezoneOffsetMinutes : null,
       rows: clean(keyword.provenance || []), source: clean(source) },
     commercialEvidence: clean({ searchVolume: keyword.searchVolume, keywordSales: keyword.keywordSales,
       competingProducts: keyword.competingProducts, titleDensity: keyword.titleDensity, cpr: keyword.cpr,

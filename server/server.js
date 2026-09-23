@@ -21,7 +21,6 @@ const ytrendsMcp = require('./ytuongMcpClient');
 const ytrendsParser = require('./ytrendsParser');
 const keywordRanker = require('./keywordRanker');
 const researchTruth = require('./researchTruth');
-const h10Mcp = require('./h10McpClient');
 const asinBatcher = require('./asinBatcher');
 const { fetchGoogleTrends } = require('./googleTrendsService');
 const { callLLM } = require('./llmService');
@@ -3777,28 +3776,6 @@ app.post('/api/mcp/pull-etsy', requireAuth(db), requireRole(['OWNER', 'MANAGER',
     );
   });
 });
-
-// API: Helium 10 MCP Status & OAuth Check (https://mcp.helium10.com/mcp)
-app.get('/api/mcp/h10/status', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
-  try {
-    const statusData = await h10Mcp.checkConnection();
-    res.json({ success: true, ...statusData });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// API: Helium 10 MCP Tools List
-app.get('/api/mcp/h10/tools', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
-  const token = req.headers.authorization?.replace('Bearer ', '') || null;
-  try {
-    const tools = await h10Mcp.listTools(token);
-    res.json({ success: true, count: tools.length, tools });
-  } catch (err) {
-    res.status(401).json({ success: false, error: err.message });
-  }
-});
-
 
 // API: Market Intelligence read-only bridge.
 // This endpoint is intentionally one-way: OmniSeller may read research observations,

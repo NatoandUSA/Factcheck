@@ -11,6 +11,8 @@
  */
 process.env.NODE_ENV = 'test';
 const assert = require('assert');
+const fs = require('node:fs');
+const path = require('node:path');
 const { ROUTES } = require('../server/security/routeRegistry');
 
 function collectApiRoutes(app) {
@@ -35,6 +37,13 @@ function collectApiRoutes(app) {
 async function main() {
   const { app } = require('../server/server.js');
   const actualRoutes = collectApiRoutes(app);
+  const serverSource = fs.readFileSync(path.resolve(__dirname, '../server/server.js'), 'utf8');
+  assert(!serverSource.includes("require('./h10McpClient')"),
+    'server runtime must not import the retired H10 MCP client');
+  assert(!serverSource.includes('/api/mcp/h10/'),
+    'server runtime must not expose the retired H10 MCP capability surface');
+  assert(!ROUTES.some(route => String(route.path).startsWith('/api/mcp/h10/')),
+    'route registry must not advertise retired H10 MCP routes');
 
   assert(actualRoutes.length > 0, 'No /api/* routes discovered — router stack introspection may be broken for this Express version');
 

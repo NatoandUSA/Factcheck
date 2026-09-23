@@ -111,7 +111,7 @@ function normalizeBindingPhrase(value) {
   return String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
-function isQualifyingResearchEvidence(item, marketplace) {
+function hasQualifyingResearchAuthorityAndIntegrity(item, marketplace) {
   if (String(item?.provenance?.integrityOutcome || '').toUpperCase() !== 'VALID') return false;
   if (marketplace === 'AMAZON') {
     return item.sourceFamily === 'AMAZON_CEREBRO'
@@ -128,6 +128,29 @@ function isQualifyingResearchEvidence(item, marketplace) {
   return false;
 }
 
+function freshnessState(item, marketplace, now = new Date()) {
+  const provenance = asObject(item?.provenance);
+  if (String(provenance.sourceCapturedAtAuthority || '').toUpperCase() !== 'STAFF_ASSERTED') return 'UNKNOWN';
+  if (String(provenance.sourceCapturedAtBasis || '').toUpperCase() !== 'OPERATOR_EXPLICIT_INPUT') return 'UNKNOWN';
+  const captured = Date.parse(String(provenance.sourceCapturedAt || ''));
+  const nowMs = new Date(now).getTime();
+  if (!Number.isFinite(captured) || !Number.isFinite(nowMs)) return 'UNKNOWN';
+  const capturedDate = new Date(captured);
+  const nowDate = new Date(nowMs);
+  const capturedUtcDay = Date.UTC(capturedDate.getUTCFullYear(), capturedDate.getUTCMonth(), capturedDate.getUTCDate());
+  const nowUtcDay = Date.UTC(nowDate.getUTCFullYear(), nowDate.getUTCMonth(), nowDate.getUTCDate());
+  const ageDays = Math.floor((nowUtcDay - capturedUtcDay) / 86400000);
+  if (ageDays < 0) return 'FUTURE';
+  const maxAgeDays = marketplace === 'AMAZON' ? 30 : marketplace === 'ETSY' ? 14 : -1;
+  if (maxAgeDays < 0) return 'UNKNOWN';
+  return ageDays <= maxAgeDays ? 'FRESH' : 'STALE';
+}
+
+function isQualifyingResearchEvidence(item, marketplace, now) {
+  return hasQualifyingResearchAuthorityAndIntegrity(item, marketplace)
+    && freshnessState(item, marketplace, now) === 'FRESH';
+}
+
 function evaluateCandidate(candidate, context = {}) {
   const evidence = Array.isArray(candidate?.evidence) ? candidate.evidence : []; const metrics = Object.freeze(evidence.flatMap(extractMetrics));
   const commercial = evidence.filter(item => hasKeys(item.commercialEvidence)); const social = evidence.filter(item => hasKeys(item.socialEvidence));
@@ -138,7 +161,8 @@ function evaluateCandidate(candidate, context = {}) {
   const positiveObservedPublicMarket = positiveMarket.filter(item => item.evidenceRef.authorityClassification === 'OBSERVED_PUBLIC');
   const selling = metrics.filter(item => item.kind === 'SALES_SIGNAL' && item.value > 0); const demand = metrics.filter(item => item.kind === 'DEMAND_SIGNAL' && item.value > 0);
   const competitionSignals = metrics.filter(item => item.kind === 'COMPETITION_SIGNAL'); const competitionPresent = competitionSignals.length > 0;
-  const qualifyingEvidence = evidence.filter(item => isQualifyingResearchEvidence(item, context.marketplace));
+  const authorityIntegrityEvidence = evidence.filter(item => hasQualifyingResearchAuthorityAndIntegrity(item, context.marketplace));
+  const qualifyingEvidence = authorityIntegrityEvidence.filter(item => isQualifyingResearchEvidence(item, context.marketplace, context.now || new Date()));
   const qualifyingHashes = new Set(qualifyingEvidence.map(item => item.evidenceHash));
   const qualifyingMetrics = metrics.filter(item => qualifyingHashes.has(item.evidenceRef.evidenceHash));
   const qualifyingPositiveMarket = qualifyingMetrics.filter(item => ['DEMAND_SIGNAL','SALES_SIGNAL'].includes(item.kind) && item.value > 0);
@@ -152,17 +176,26 @@ function evaluateCandidate(candidate, context = {}) {
     && qualifyingEvidence.some(item => Number(item.commercialEvidence?.listingCount || 0) > 0)
     && qualifyingCompetition.length > 0;
   const researchReady = amazonResearchReady || etsyResearchReady;
+  const freshnessStates = authorityIntegrityEvidence.map(item => freshnessState(item, context.marketplace, context.now || new Date()));
+  let readinessFailure = context.marketplace === 'AMAZON' ? 'AMAZON_MARKETPLACE_EVIDENCE_REQUIRED' : 'ETSY_MARKETPLACE_EVIDENCE_REQUIRED';
+  if (authorityIntegrityEvidence.length && !qualifyingEvidence.length) {
+    if (freshnessStates.includes('FUTURE')) readinessFailure = 'SOURCE_CAPTURE_DATE_IN_FUTURE';
+    else if (freshnessStates.includes('STALE')) readinessFailure = context.marketplace === 'AMAZON'
+      ? 'AMAZON_SOURCE_STALE_OVER_30_DAYS' : 'ETSY_SOURCE_STALE_OVER_14_DAYS';
+    else readinessFailure = 'SOURCE_CAPTURE_DATE_REQUIRED';
+  }
   const researchReadiness = Object.freeze({
     value: researchReady ? 'READY' : 'NOT_READY',
     reasonCodes: Object.freeze(researchReady
       ? [amazonResearchReady ? 'AMAZON_CEREBRO_RESEARCH_READY' : 'ETSY_PUBLIC_SEARCH_RESEARCH_READY']
-      : [context.marketplace === 'AMAZON' ? 'AMAZON_MARKETPLACE_EVIDENCE_REQUIRED' : 'ETSY_MARKETPLACE_EVIDENCE_REQUIRED'])
+      : [readinessFailure])
   });
   const unknowns = [];
   if (proof.status !== 'ESTABLISHED') unknowns.push(proof.status === 'NOT_PRESENT' ? 'COMMERCIAL_PROOF_NOT_PRESENT' : 'COMMERCIAL_PROOF_NOT_ESTABLISHED');
   if (!competitionPresent) unknowns.push('COMPETITION_CONTEXT_NOT_PRESENT'); if (!crossSource) unknowns.push('CROSS_SOURCE_CORROBORATION_NOT_PRESENT');
   if (whyNow.status === 'NOT_ESTABLISHED') unknowns.push('WHY_NOW_NOT_ESTABLISHED'); if (!observedPublic) unknowns.push('OBSERVED_PUBLIC_MARKETPLACE_EVIDENCE_NOT_PRESENT');
-  if (!qualifyingEvidence.length) unknowns.push('QUALIFYING_MARKETPLACE_EVIDENCE_NOT_PRESENT_OR_INVALID');
+  if (!authorityIntegrityEvidence.length) unknowns.push('QUALIFYING_MARKETPLACE_EVIDENCE_NOT_PRESENT_OR_INVALID');
+  else if (!qualifyingEvidence.length) unknowns.push('QUALIFYING_MARKETPLACE_EVIDENCE_NOT_FRESH');
   let disposition; const reasonCodes = [];
   if (!commercial.length || !positiveMarket.length) {
     disposition = 'NEEDS_EVIDENCE'; reasonCodes.push(!commercial.length ? 'COMMERCIAL_SIGNALS_NOT_PRESENT' : 'POSITIVE_DEMAND_OR_SALES_SIGNAL_NOT_PRESENT');

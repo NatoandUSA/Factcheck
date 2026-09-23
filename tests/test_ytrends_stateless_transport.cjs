@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('node:assert');
+const fs = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const clientModule = require('../server/ytuongMcpClient');
@@ -27,6 +28,31 @@ class FakeClient extends YTrendsMcpClient {
 }
 
 (async () => {
+  const expectedReadOnlyTools = [
+    'ytrends_explore_niche',
+    'ytrends_research_keyword',
+    'ytrends_find_trending_keywords',
+    'ytrends_search',
+    'ytrends_find_hidden_gems',
+    'ytrends_scout_opportunities'
+  ];
+  assert.deepEqual([...clientModule.READ_ONLY_TOOLS].sort(), expectedReadOnlyTools.sort(),
+    'generic YTrends calls must be closed to the explicit read-only research allowlist');
+
+  const blockedClient = new FakeClient([]);
+  await assert.rejects(
+    () => blockedClient.callTool('ytrends_delete_or_mutate_shop', { destructive: true }),
+    error => error?.code === 'YTRENDS_TOOL_NOT_ALLOWED'
+  );
+  assert.equal(blockedClient.requests.length, 0,
+    'blocked tools must fail before session initialization or any provider network request');
+
+  const serverSource = fs.readFileSync(path.resolve(__dirname, '../server/server.js'), 'utf8');
+  assert.match(serverSource, /tools\.filter\(tool => ytrendsMcp\.isReadOnlyTool\(tool\?\.name\)\)/,
+    'tool-list route must hide provider tools outside OmniSeller read-only allowlist');
+  assert.match(serverSource, /status\(403\)\.json\(\{ success: false, error: 'YTRENDS_TOOL_NOT_ALLOWED' \}\)/,
+    'generic MCP route must reject non-allowlisted tools with 403');
+
   const toolNames = ['ytrends_explore_niche', 'ytrends_research_keyword', 'ytrends_find_trending_keywords', 'ytrends_search'];
   const client = new FakeClient([
     response({ jsonrpc: '2.0', id: 1, result: { protocolVersion: '2025-06-18', serverInfo: { name: 'ytrends' } } }),

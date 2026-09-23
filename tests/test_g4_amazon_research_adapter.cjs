@@ -2,6 +2,8 @@
 
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
+const fs = require('node:fs');
+const path = require('node:path');
 const ExcelJS = require('exceljs');
 const adapter = require('../server/commerceIntelligence/amazonResearchAdapter');
 
@@ -16,6 +18,9 @@ async function workbookBytes(sheets) {
 }
 
 async function main() {
+  check(!fs.existsSync(path.resolve(__dirname, '../server/h10McpClient.js')),
+    'canonical Amazon Cerebro/Xray import must not depend on an H10 MCP runtime module');
+
   const cerebroBytes = await workbookBytes([
     ['Anchor A', [
       ['Keyword Phrase','Search Volume','H10 PPC Sugg. Min Bid','B0ABC12345',''],
@@ -62,7 +67,7 @@ async function main() {
   await assert.rejects(adapter.buildSnapshot([{ ...imports[0], selected_sheet: 'missing' }]),
     error => error?.code === 'RESEARCH_SELECTED_SHEET_NOT_FOUND');
   passed++;
-  console.log(`G4 Amazon research adapter: ${passed}/18 PASS`);
+  console.log(`G4 Amazon research adapter: ${passed}/19 PASS`);
 }
 
 main().catch(error => { console.error(error); process.exitCode = 1; });

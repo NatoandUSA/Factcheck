@@ -116,7 +116,7 @@ async function run() {
   console.log('  🟢 Learner source contains no legacy fake seller metrics/Product Truth fields.');
 
   const serverSrc = fs.readFileSync(path.join(ROOT, 'server', 'server.js'), 'utf8');
-  const mcpBlock = section(serverSrc, '// API: One-Click Auto-Pull LIVE Etsy Trends', '// API: Helium 10 MCP Status & OAuth Check');
+  const mcpBlock = section(serverSrc, '// API: One-Click Auto-Pull LIVE Etsy Trends', '// API: Market Intelligence read-only bridge.');
   assert.ok(mcpBlock.includes("error: 'ETSY_MCP_UNAVAILABLE'"));
   assert.ok(mcpBlock.includes("evidenceState: 'OBSERVED'"));
   assert.ok(mcpBlock.includes("source: 'ETSY_MCP_LIVE'"));

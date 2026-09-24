@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "omniseller.owner-policy-attestation.v1",
+  "attestationId": "amz-policy-auth-r1-owner-20260924",
+  "actorId": "1",
+  "capturedAt": "2026-09-24T06:04:15Z",
+  "tenantId": "8af7fc79-c563-41a4-8eaf-6a06cb7a51a8",
+  "workspaceId": "1",
+  "marketplace": "AMAZON",
+  "site": "US",
+  "sellerAccountId": "workspace:1",
+  "mediaClass": "NON_MEDIA",
+  "productTypeId": "CUSTOM_NECKLACE",
+  "categoryId": "JEWELRY_NECKLACE",
+  "statement": "Owner authorizes AMZ-POLICY-AUTH-R1 for this exact Amazon account/category scope using the existing server-owned public baseline constraints. This authority permits canonical Manager approval and exact export only when all other Product Truth, claim, IP, revision and dependency gates pass. It does not perform marketplace publishing and does not weaken any evaluator or Product Truth authority."
+}

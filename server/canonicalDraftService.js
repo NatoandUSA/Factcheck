@@ -2,7 +2,8 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { PolicyContractRegistry, createServerPolicyContext } = require('./policy/contractRegistry');
+const { createServerPolicyContext } = require('./policy/contractRegistry');
+const { policyRegistryForContext } = require('./policy/authorityLoader');
 const { bindingOf, validatePolicySurfaces } = require('./policy/enforce');
 const { canonicalJson, hashBytes } = require('./revisionStore');
 const { currentProductTruthRevision } = require('./productTruthStore');
@@ -12,10 +13,6 @@ const { getIntelligenceSnapshot } = require('./commerceSnapshotStore');
 const { getArtifact, getArtifactState } = require('./commerceWorkflowArtifactStore');
 const { guardFactsForLanguage } = require('./commerceIntelligence/amazonBuyerLanguage');
 
-const fixtureDir = path.resolve(__dirname, '../contracts/omniseller-r3/v1/policy-fixtures');
-const draftPolicyRegistry = PolicyContractRegistry.fromDirectory(fixtureDir, {
-  lifecycleSnapshot: { completeThrough: '2026-09-09T00:00:00.000Z', events: [] }
-});
 const validatorFiles = [
   path.resolve(__dirname, 'listingGuard.js'),
   path.resolve(__dirname, 'ipGuard.js'),
@@ -28,6 +25,10 @@ const validatorFiles = [
   path.resolve(__dirname, 'claimGuard/ipMatcher.js'),
   path.resolve(__dirname, 'policy/enforce.js'),
   path.resolve(__dirname, 'policy/contractRegistry.js'),
+  path.resolve(__dirname, 'policy/authorityLoader.js'),
+  path.resolve(__dirname, '../contracts/omniseller-r3/v1/policy-authority-scopes.json'),
+  path.resolve(__dirname, '../contracts/omniseller-r3/v1/policy-owner-contracts/amazon-us-workspace1-jewelry-necklace-owner-2026-09-24-v1.json'),
+  path.resolve(__dirname, '../contracts/omniseller-r3/v1/policy-owner-attestations/amz-policy-auth-r1-owner-20260924.json'),
   path.resolve(__dirname, 'policy/contractSchemaValidator.js'),
   path.resolve(__dirname, '../shared/policyContractInvariants.cjs'),
   path.resolve(__dirname, '../contracts/omniseller-r3/v1/policy-contract.schema.json'),
@@ -229,7 +230,7 @@ async function describePolicyCapability(db, scope, projectId) {
   }
   const context = serverPolicyContext(project, scope);
   try {
-    const resolution = draftPolicyRegistry.resolve(context, { purpose: 'DRAFT' });
+    const resolution = policyRegistryForContext(context).resolve(context, { purpose: 'DRAFT' });
     const eligibility = resolution.contract.approvalEligibility;
     const lifecycle = lifecycleCapability(project);
     if (lifecycle.mode === 'UAT_APPROVAL_EXPORT_ONLY') {
@@ -279,7 +280,7 @@ async function validateCanonicalDraft(db, scope, projectId, selectedTruthRevisio
   let resolution;
   let policy;
   try {
-    resolution = draftPolicyRegistry.resolve(policyContext, { purpose: uatApproval ? 'DRAFT' : purpose });
+    resolution = policyRegistryForContext(policyContext).resolve(policyContext, { purpose: uatApproval ? 'DRAFT' : purpose });
     policy = validatePolicySurfaces(policySurfaces(guarded.listing, scope.marketplace), resolution, policyContext);
   } catch (error) {
     throw new CanonicalDraftError(error.code || 'POLICY_CONTRACT_UNAVAILABLE', 409, error.details);
@@ -389,7 +390,7 @@ async function assertCanonicalDependenciesCurrent(db, scope, projectId, dependen
   const project = await projectPolicyContext(db, scope, projectId);
   const policyContext = serverPolicyContext(project, scope);
   let currentResolution;
-  try { currentResolution = draftPolicyRegistry.resolve(policyContext, { purpose: 'DRAFT' }); }
+  try { currentResolution = policyRegistryForContext(policyContext).resolve(policyContext, { purpose: 'DRAFT' }); }
   catch (error) { throw new CanonicalDraftError(error.code || 'POLICY_CONTRACT_UNAVAILABLE', 409, error.details); }
   const currentContextHash = hashBytes(canonicalJson(stablePolicyContext(project, scope)));
   if (!dependencies?.policyContractId || !dependencies?.policyContractArtifactHash || !dependencies?.policyContextHash

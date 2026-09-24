@@ -1,0 +1,10 @@
+{
+  "schemaVersion": "omniseller.policy-authority-scope-map.v1",
+  "contracts": {
+    "amazon-us-workspace1-jewelry-necklace-owner-2026-09-24-v1": {
+      "tenantId": "8af7fc79-c563-41a4-8eaf-6a06cb7a51a8",
+      "workspaceId": "1",
+      "attestationId": "amz-policy-auth-r1-owner-20260924"
+    }
+  }
+}

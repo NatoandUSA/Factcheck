@@ -16,6 +16,7 @@
   "tests/test_adversarial_staff_ui_flow.cjs",
   "tests/test_ai_boundary_and_batch.cjs",
   "tests/test_amazon_truth_boundary_remediation.cjs",
+  "tests/test_amz_policy_auth_r1.cjs",
   "tests/test_audit_fixes_014a1f4.cjs",
   "tests/test_artifact_codec.cjs",
   "tests/test_backup_restore_and_migrations.cjs",

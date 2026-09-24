@@ -309,7 +309,9 @@ class PolicyContractRegistry {
         return deepFreeze(structuredClone(event));
       })
     });
-    this.lifecycleSnapshotDigest = exactByteSha256(Buffer.from(JSON.stringify(this.lifecycleSnapshot), 'utf8'));
+    // Bind downstream revisions to the immutable lifecycle event set, not the moving completeness watermark.
+    // completeThrough is a decision-time freshness gate; event-set changes (revoke/supersede) must change the digest.
+    this.lifecycleSnapshotDigest = exactByteSha256(Buffer.from(JSON.stringify({ events: this.lifecycleSnapshot.events }), 'utf8'));
     Object.freeze(this.artifacts);
     Object.freeze(this);
   }

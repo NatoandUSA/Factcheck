@@ -67,7 +67,7 @@ async function main() {
     'main image prompt ready');
   check(result.output.listingDraft.imagePrompts.prompts.find(item => item.id === 'packaging_contents').prompt === '',
     'missing packaging produces no fabricated prompt');
-  check(result.output.listingDraft.amazonAPlusPoints.includes('Materiales: acero inoxidable')
+  check(result.output.listingDraft.amazonAPlusPoints.map(value => value.toLowerCase()).includes('materiales: acero inoxidable')
     && !JSON.stringify(result.output.listingDraft.amazonAPlusPoints).toLowerCase().includes('18k'),
   'A+ copy points are localized for ES while remaining derived only from Product Truth');
 

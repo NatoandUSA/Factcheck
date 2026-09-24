@@ -998,7 +998,7 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
         {!policyAllowsApproval && <div style={{ marginTop: 4, fontSize: '.76rem', fontWeight: 700 }}>
           Trial hiện chỉ được tạo và lưu draft. Manager approval, Owner authorization và exact export bị vô hiệu hóa — {policyCapabilityCode}.
         </div>}
-        {!policyAllowsApproval && isOwner && marketplace === 'ETSY' && listingQueue.length === 0 && <div style={{ marginTop: 8, display: 'grid', gap: 6 }}>
+        {!policyAllowsApproval && isOwner && marketplace === 'ETSY' && <div style={{ marginTop: 8, display: 'grid', gap: 6 }}>
           <label>Phạm vi UAT approval/export-only<textarea rows={2} value={uatAuthorizationReason} onChange={event => setUatAuthorizationReason(event.target.value)} /></label>
           <ActionButton accent="#7c3aed" disabled={busy || !uatAuthorizationReason.trim()} onClick={enableUatApprovalExport}>Owner bật UAT approval/export-only</ActionButton>
         </div>}

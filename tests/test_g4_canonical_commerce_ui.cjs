@@ -1,6 +1,8 @@
 'use strict';
 process.env.NODE_ENV = 'test';
 const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
 
 (async () => {
   const { JSDOM } = require('jsdom');
@@ -139,6 +141,9 @@ const assert = require('assert');
   const root = createRoot(document.getElementById('root'));
   let measured = 0;
   const check = (value, message) => { measured += 1; assert.ok(value, message); };
+  const workflowSource = fs.readFileSync(path.resolve(__dirname, '../src/components/CanonicalCommerceWorkflow.jsx'), 'utf8');
+  check(!workflowSource.includes("marketplace === 'ETSY' && listingQueue.length === 0"),
+    'Owner UAT approval/export control must remain available after a draft listing exists');
   await act(async () => { root.render(React.createElement(AuthProvider, null,
     React.createElement(Workflow, { activeProject: { id: 3, state: 'EVIDENCE_INTAKE' }, marketplace: 'AMAZON' }))); });
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });

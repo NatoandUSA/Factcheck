@@ -20,6 +20,7 @@ const SOCIAL_HANDOFF_V3_CONSUMER_MIGRATION = '020_social_handoff_v3_consumer';
 const GLOBAL_CANDIDATE_POOL_MVP_MIGRATION = '021_global_candidate_pool_mvp';
 const GLOBAL_CANDIDATE_PROMOTION_MIGRATION = '022_global_candidate_promotion';
 const GLOBAL_CANDIDATE_SHORTLIST_MIGRATION = '023_global_candidate_shortlist';
+const EXPERIMENT_CONTRACT_MIGRATION = '024_experiment_contract_v1';
 const crypto = require('node:crypto');
 const { canonicalJson, hashBytes } = require('../revisionStore');
 
@@ -890,6 +891,54 @@ async function migrateGlobalCandidateShortlist(db) {
     ON global_candidate_promotions(tenant_id,workspace_id,marketplace,shortlist_id)`);
 }
 
+async function migrateExperimentContract(db) {
+  await run(db, `CREATE TABLE IF NOT EXISTS experiment_contracts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id TEXT NOT NULL, workspace_id INTEGER NOT NULL REFERENCES workspaces(id),
+    marketplace TEXT NOT NULL CHECK(marketplace IN ('AMAZON','ETSY')),
+    project_id INTEGER NOT NULL REFERENCES research_projects(id),
+    hypothesis TEXT NOT NULL, offer TEXT NOT NULL, price_amount REAL NOT NULL CHECK(price_amount>0),
+    price_currency TEXT NOT NULL CHECK(length(price_currency)=3), variant TEXT NOT NULL, traffic_source TEXT NOT NULL,
+    start_at DATETIME NOT NULL, end_at DATETIME NOT NULL,
+    success_metrics_json TEXT NOT NULL CHECK(json_valid(success_metrics_json)),
+    stop_conditions_json TEXT NOT NULL CHECK(json_valid(stop_conditions_json)),
+    snapshot_hash TEXT NOT NULL CHECK(length(snapshot_hash)=64),
+    request_hash TEXT NOT NULL CHECK(length(request_hash)=64),
+    idempotency_key TEXT NOT NULL CHECK(length(idempotency_key) BETWEEN 8 AND 128),
+    created_by INTEGER NOT NULL REFERENCES users(id), created_at DATETIME NOT NULL,
+    UNIQUE(tenant_id,workspace_id,marketplace,idempotency_key)
+  )`);
+  await run(db, `CREATE TABLE IF NOT EXISTS experiment_outcomes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    experiment_contract_id INTEGER NOT NULL UNIQUE REFERENCES experiment_contracts(id),
+    tenant_id TEXT NOT NULL, workspace_id INTEGER NOT NULL, marketplace TEXT NOT NULL,
+    project_id INTEGER NOT NULL REFERENCES research_projects(id),
+    metrics_json TEXT NOT NULL CHECK(json_valid(metrics_json)), request_hash TEXT NOT NULL CHECK(length(request_hash)=64),
+    idempotency_key TEXT NOT NULL CHECK(length(idempotency_key) BETWEEN 8 AND 128), notes TEXT NULL,
+    captured_at DATETIME NOT NULL, created_by INTEGER NOT NULL, created_at DATETIME NOT NULL,
+    UNIQUE(tenant_id,workspace_id,marketplace,idempotency_key)
+  )`);
+  await run(db, `CREATE TABLE IF NOT EXISTS experiment_learning_receipts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    experiment_contract_id INTEGER NOT NULL UNIQUE REFERENCES experiment_contracts(id),
+    experiment_outcome_id INTEGER NOT NULL UNIQUE REFERENCES experiment_outcomes(id),
+    tenant_id TEXT NOT NULL, workspace_id INTEGER NOT NULL, marketplace TEXT NOT NULL,
+    project_id INTEGER NOT NULL REFERENCES research_projects(id),
+    contract_snapshot_hash TEXT NOT NULL CHECK(length(contract_snapshot_hash)=64),
+    classification TEXT NOT NULL CHECK(classification IN ('SUPPORTED','CONTRADICTED','INCONCLUSIVE')),
+    evaluation_json TEXT NOT NULL CHECK(json_valid(evaluation_json)),
+    created_by INTEGER NOT NULL, created_at DATETIME NOT NULL
+  )`);
+  for (const table of ['experiment_contracts','experiment_outcomes','experiment_learning_receipts']) {
+    await run(db, `CREATE TRIGGER IF NOT EXISTS ${table}_immutable_update BEFORE UPDATE ON ${table}
+      BEGIN SELECT RAISE(ABORT,'IMMUTABLE_EXPERIMENT_RECORD'); END`);
+    await run(db, `CREATE TRIGGER IF NOT EXISTS ${table}_immutable_delete BEFORE DELETE ON ${table}
+      BEGIN SELECT RAISE(ABORT,'IMMUTABLE_EXPERIMENT_RECORD'); END`);
+  }
+  await run(db, `CREATE INDEX IF NOT EXISTS idx_experiment_contracts_project
+    ON experiment_contracts(tenant_id,workspace_id,marketplace,project_id,id)`);
+}
+
 async function migrateGlobalCandidatePromotion(db) {
   await run(db, `CREATE TABLE IF NOT EXISTS global_candidate_promotions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1437,6 +1486,18 @@ async function runMigrations(db) {
       throw error;
     }
   }
+  const experimentContractApplied = await all(db, 'SELECT id FROM schema_migrations WHERE id=?', [EXPERIMENT_CONTRACT_MIGRATION]);
+  if (experimentContractApplied.length === 0) {
+    await run(db, 'BEGIN IMMEDIATE');
+    try {
+      await migrateExperimentContract(db);
+      await run(db, 'INSERT INTO schema_migrations(id) VALUES (?)', [EXPERIMENT_CONTRACT_MIGRATION]);
+      await run(db, 'COMMIT');
+    } catch (error) {
+      try { await run(db, 'ROLLBACK'); } catch (_) {}
+      throw error;
+    }
+  }
 }
 
 async function migrateAgentWorkspaceScope(db) {
@@ -1539,6 +1600,7 @@ module.exports = {
   GLOBAL_CANDIDATE_POOL_MVP_MIGRATION,
   GLOBAL_CANDIDATE_PROMOTION_MIGRATION,
   GLOBAL_CANDIDATE_SHORTLIST_MIGRATION,
+  EXPERIMENT_CONTRACT_MIGRATION,
   migrateOwnerSubmissionAuthorization,
   migrateCommerceWorkflowArtifacts,
   migrateOperatorReportedSubmissionLifecycle,
@@ -1547,6 +1609,7 @@ module.exports = {
   migrateGlobalCandidatePoolMvp,
   migrateGlobalCandidatePromotion,
   migrateGlobalCandidateShortlist,
+  migrateExperimentContract,
   AGENT_WORKSPACE_SCOPE_MIGRATION,
   PROJECT_SCOPED_EVIDENCE_MIGRATION,
   CANONICAL_DAG_MIGRATION,

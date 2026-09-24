@@ -12,6 +12,7 @@ import SmartPullAnalyticsBar from './SmartPullAnalyticsBar';
 import ProjectSetupCard from './ProjectSetupCard';
 import ProjectEvidenceGate from './ProjectEvidenceGate';
 import CanonicalCommerceWorkflow from './CanonicalCommerceWorkflow';
+import ExperimentContractPanel from './ExperimentContractPanel';
 import { parseJsonResponse } from '../utils/apiResponse';
 import { createProjectBoundLoader } from '../utils/projectBoundLoader.js';
 
@@ -531,6 +532,8 @@ export default function EtsyWorkspace({ onSelectListing, onApproveListing, onSho
         onSelectListing={onSelectListing}
         onShowToast={onShowToast}
       />
+
+      <ExperimentContractPanel activeProject={activeProject} onShowToast={onShowToast} accent="#ea580c" />
 
       <details data-testid="etsy-optional-tools" style={{ margin: '10px 0', border: '1px solid #fed7aa', borderRadius: '12px', padding: '12px', background: '#fff7ed' }}>
         <summary style={{ cursor: 'pointer', fontWeight: 800, color: '#9a3412' }}>Omni Etsy Research &amp; DNA Lab — module kế thừa đang nối vào canonical</summary>

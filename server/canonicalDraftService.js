@@ -10,6 +10,7 @@ const { evaluateListingGuard } = require('./listingGuard');
 const ipGuard = require('./ipGuard');
 const { getIntelligenceSnapshot } = require('./commerceSnapshotStore');
 const { getArtifact, getArtifactState } = require('./commerceWorkflowArtifactStore');
+const { guardFactsForLanguage } = require('./commerceIntelligence/amazonBuyerLanguage');
 
 const fixtureDir = path.resolve(__dirname, '../contracts/omniseller-r3/v1/policy-fixtures');
 const draftPolicyRegistry = PolicyContractRegistry.fromDirectory(fixtureDir, {
@@ -262,8 +263,11 @@ async function validateCanonicalDraft(db, scope, projectId, selectedTruthRevisio
   if (Number(selectedTruthRevisionId) !== truth.id) throw new CanonicalDraftError('STALE_PRODUCT_TRUTH_REVISION', 409);
   const intelligence = await resolveIntelligenceBinding(db, scope, projectId, selectedIntelligenceSnapshotId, truth);
   const listing = exactContent(rawContent, scope.marketplace);
+  const verifiedFacts = factsFromSnapshot(truth.snapshot);
+  const guardFacts = scope.marketplace === 'AMAZON' && intelligence?.output?.language === 'ES'
+    ? guardFactsForLanguage(verifiedFacts, 'ES') : verifiedFacts;
   let guarded;
-  try { guarded = evaluateListingGuard({ listing, verifiedFacts: factsFromSnapshot(truth.snapshot) }); }
+  try { guarded = evaluateListingGuard({ listing, verifiedFacts: guardFacts }); }
   catch (error) { throw new CanonicalDraftError(error.code || 'LISTING_GUARD_UNAVAILABLE', error.code === 'UNVERIFIED_OUTPUT_CLAIM' ? 422 : 503, error.details); }
   let ip;
   try { ip = ipGuard.screenListing(guarded.listing); }

@@ -67,9 +67,9 @@ async function main() {
     'main image prompt ready');
   check(result.output.listingDraft.imagePrompts.prompts.find(item => item.id === 'packaging_contents').prompt === '',
     'missing packaging produces no fabricated prompt');
-  check(result.output.listingDraft.amazonAPlusPoints.includes('Materials: stainless steel')
+  check(result.output.listingDraft.amazonAPlusPoints.map(value => value.toLowerCase()).includes('materiales: acero inoxidable')
     && !JSON.stringify(result.output.listingDraft.amazonAPlusPoints).toLowerCase().includes('18k'),
-  'A+ copy points are non-empty and derived only from Product Truth');
+  'A+ copy points are localized for ES while remaining derived only from Product Truth');
 
   const productionLike = structuredClone(input);
   productionLike.productTruth.snapshot.asserted.productName = asserted('Para Mi Hija Necklace Message Card');
@@ -80,7 +80,10 @@ async function main() {
   const productionVisible = [productionResult.output.listingDraft.amazonTitle,
     ...productionResult.output.listingDraft.amazonBullets,
     productionResult.output.listingDraft.amazonDescription].join(' ').toLowerCase();
-  check(productionVisible.includes('message card'), 'verified included message card survives claim guard');
+  check(productionVisible.includes('tarjeta con mensaje'), 'verified included message card survives ES rendering and claim guard');
+  check(!/\b(?:necklace|message card|gift box|materials|packaging|recipient|occasion)\b/i.test(
+    JSON.stringify(productionResult.output.listingDraft.amazonAPlusPoints)),
+    'BA-AMZ-Q1.2 A+ buyer points are localized for ES');
   check(!productionVisible.includes('silver'), 'ambiguous silver color cannot become a material claim');
   check(productionResult.output.factClaimReview.some(item => item.field === 'colors' && item.value.includes('Silver')),
     'omitted ambiguous color remains visible in review accounting');
@@ -162,6 +165,8 @@ async function main() {
     'BA-AMZ-Q1.1 Spanish buyer copy prefers observed product wording over an English generic identity');
   check(!/THIẾU DỮ LIỆU|theo listing tham chiếu/i.test(q11BuyerCopy),
     'BA-AMZ-Q1.1 internal missing-data/provenance annotations never leak into buyer-facing copy');
+  check(!/\b(?:Daughter|Graduation|Birthday|Stainless Steel|Weight|Quantity|Gift box|ready-to-gift|Origin|US)\b/i.test(q11BuyerCopy),
+    'BA-AMZ-Q1.2 ES buyer rendering removes the known English Product Truth leakage from visible copy');
   check(!q11.bullets.some(item => /^TALLA Y COLOR\b/.test(item)),
     'BA-AMZ-Q1.1 size/color heading is suppressed when only weight and quantity are verified');
 

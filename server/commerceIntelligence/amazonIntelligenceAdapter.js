@@ -8,6 +8,7 @@ const { evaluateText, SURFACES } = require('../claimGuard');
 const { scoreKeywords } = require('./keywordEngine');
 const { selectAsinBatches } = require('./asinSelector');
 const { compose } = require('./amazonComposer');
+const { guardFactsForLanguage, renderBuyerValue } = require('./amazonBuyerLanguage');
 const { generateImagePromptSuite } = require('../imagePromptGenerator');
 const { fold, contentTokens } = require('./text');
 const { PATTERNS, auditProductFamilyAlignment } = require('./semantic');
@@ -105,32 +106,32 @@ function truthForComposer(facts) {
   };
 }
 
-function aPlusPointsFromTruth(facts) {
-  const buyerText = value => text(value).replace(/\s*(?:[-—–]\s*)?theo listing tham chiếu\s*$/iu, '').trim();
+function aPlusPointsFromTruth(facts, language = 'EN') {
+  const buyerText = value => renderBuyerValue(text(value).replace(/\s*(?:[-—–]\s*)?theo listing tham chiếu\s*$/iu, '').trim(), language);
+  const labels = String(language).toUpperCase() === 'ES'
+    ? ['Materiales','Pureza / chapado','Acabado','Gemas','Componentes','Personalización','Talla','Peso','Cantidad','Incluye','Empaque','Cuidado','Destinatario','Ocasión','Estilo','Diseño','Tema','Origen','Enviado desde']
+    : ['Materials','Purity / plating','Finish','Gemstones','Components','Personalization','Size','Weight','Quantity','Included','Packaging','Care','Recipient','Occasion','Style','Design','Theme','Origin','Ships from'];
   const points = [];
   const identity = buyerText(facts.productName || facts.productType);
   if (identity) points.push(identity);
-  for (const [label, value] of [
-    ['Materials', facts.materials || facts.composition], ['Purity / plating', facts.purity], ['Finish', facts.finish],
-    ['Gemstones', facts.gemstones], ['Components', facts.components], ['Personalization', facts.personalization],
-    ['Size', facts.sizes || facts.dimensions], ['Weight', facts.weight], ['Quantity', facts.quantity], ['Included', facts.includedItems],
-    ['Packaging', facts.packaging], ['Care', facts.care], ['Recipient', facts.recipient || facts.audience],
-    ['Occasion', facts.occasion], ['Style', facts.style], ['Design', facts.design], ['Theme', facts.theme],
-    ['Origin', facts.origin], ['Ships from', facts.shipFrom]
-  ]) if (buyerText(value)) points.push(`${label}: ${buyerText(value)}`);
+  const values = [facts.materials || facts.composition, facts.purity, facts.finish, facts.gemstones, facts.components,
+    facts.personalization, facts.sizes || facts.dimensions, facts.weight, facts.quantity, facts.includedItems,
+    facts.packaging, facts.care, facts.recipient || facts.audience, facts.occasion, facts.style, facts.design,
+    facts.theme, facts.origin, facts.shipFrom];
+  values.forEach((value, index) => { if (buyerText(value)) points.push(`${labels[index]}: ${buyerText(value)}`); });
   return points;
 }
 
-function canonicalContent(composed, facts, extraPpc, truthSnapshot) {
+function canonicalContent(composed, facts, extraPpc, truthSnapshot, language = 'EN') {
   const ppc = [...composed.ppc.exact, ...composed.ppc.phrase, ...composed.ppc.broad].map(item => item.phrase);
-  const identity = text(facts.productName || facts.productType);
+  const identity = renderBuyerValue(text(facts.productName || facts.productType), language);
   return {
     amazonTitle: composed.title.text || identity,
     itemHighlights: composed.itemHighlights.text || identity,
     amazonBullets: composed.bullets,
     amazonSearchTerms: composed.searchTerms[0]?.text || '',
     amazonDescription: composed.description,
-    amazonAPlusPoints: aPlusPointsFromTruth(facts),
+    amazonAPlusPoints: aPlusPointsFromTruth(facts, language),
     categoryName: text(facts.category),
     ppcKeywords: [...new Set([...ppc, ...extraPpc.map(item => item.phrase)])],
     imagePrompts: generateImagePromptSuite(truthSnapshot, 'AMAZON')
@@ -276,9 +277,10 @@ async function buildIntelligence({ research, productTruth, configuration = {}, m
   // PPC remains a research-targeting surface rather than customer-visible
   // factual copy. Unverified candidates stay explicitly flagged by the
   // listing guard and must never be mistaken for upload-ready copy.
-  const content = canonicalContent(composed, facts, [...claimTargeting, ...languageTargeting], productTruth.snapshot);
+  const content = canonicalContent(composed, facts, [...claimTargeting, ...languageTargeting], productTruth.snapshot, language);
   let guarded;
-  try { guarded = evaluateListingGuard({ listing: content, verifiedFacts: facts }); }
+  const guardFacts = guardFactsForLanguage(facts, language);
+  try { guarded = evaluateListingGuard({ listing: content, verifiedFacts: guardFacts }); }
   catch (error) {
     if (error?.code === 'UNVERIFIED_OUTPUT_CLAIM') error.status = 422;
     throw error;

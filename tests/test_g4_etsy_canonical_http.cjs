@@ -159,6 +159,18 @@ async function main() {
   await assert.rejects(new Promise((resolve, reject) => db.run(`UPDATE project_uat_lifecycle_authorizations
     SET authorized_at='2000-01-01T00:00:00.000Z' WHERE id=?`, [uatAuthorization.body.uatLifecycleAuthorizationId],
   error => error ? reject(error) : resolve())), /IMMUTABLE_UAT_LIFECYCLE_AUTHORIZATION/); passed++;
+  const reboundRevision = await json(`/api/listings/${listing.body.listingId}/revisions`, 'POST', {
+    parentRevisionId: listing.body.revisionId,
+    expectedHeadRevisionId: listing.body.revisionId,
+    idempotencyKey: key(49),
+    changeReason: 'REBIND_UAT_LIFECYCLE',
+    productTruthRevisionId: truth.body.productTruthRevisionId,
+    intelligenceSnapshotId: intelligence.body.intelligenceSnapshotId,
+    content: previewListing.body.content
+  });
+  check(reboundRevision.status === 200 && reboundRevision.body.revisionNumber === 2
+    && reboundRevision.body.parentRevisionId === listing.body.revisionId,
+  `UAT lifecycle change must produce an immutable listing successor before review: ${JSON.stringify(reboundRevision.body)}`);
   const preApprovalPublishProbe = await jsonAsSeller(
     `/api/listings/${listing.body.listingId}/operator-submission-reports`, 'POST', {
       submissionAuthorizationId: 1,

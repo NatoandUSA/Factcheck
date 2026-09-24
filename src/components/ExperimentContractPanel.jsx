@@ -105,10 +105,14 @@ export default function ExperimentContractPanel({ activeProject, onShowToast, ac
       <div style={{ fontSize:'.78rem', marginTop:5 }}>
         {(exp.successMetrics || []).map((m,i)=><span key={i} style={{ marginRight:10 }}>{metricLabel[m.metric]} {m.operator} {m.target}</span>)}
       </div>
+      <div style={{ fontSize:'.76rem', marginTop:5, color:'#7c2d12' }}>
+        <b>Stop conditions:</b> {(exp.stopConditions || []).join(' · ')}
+      </div>
       {exp.learningReceipt ? <div style={{ marginTop:8, fontWeight:900, color: exp.learningReceipt.classification === 'SUPPORTED' ? '#166534' : exp.learningReceipt.classification === 'CONTRADICTED' ? '#991b1b' : '#92400e' }}>
         Learning Receipt: {exp.learningReceipt.classification}
       </div> : <div style={{ marginTop:10 }}>
-        <div style={{ fontSize:'.78rem', fontWeight:800, marginBottom:5 }}>Nhập outcome thật khi test kết thúc</div>
+        <div style={{ fontSize:'.78rem', fontWeight:800, marginBottom:2 }}>Nhập outcome thật khi test kết thúc</div>
+        <div style={{ fontSize:'.72rem', color:'#64748b', marginBottom:5 }}>Chỉ khóa outcome khi hết test window hoặc một stop condition đã xảy ra.</div>
         <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(130px,1fr))', gap:6 }}>
           {METRICS.map(metric => <input key={metric} className="form-input" type="number" step="any"
             placeholder={metricLabel[metric]} value={outcomes[exp.id]?.[metric] ?? ''}

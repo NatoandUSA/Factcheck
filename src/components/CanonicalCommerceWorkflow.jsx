@@ -680,7 +680,7 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
       body: JSON.stringify({ classificationKey: policyClassification, locale: policyLocale })
     });
     setPolicyContext(result.policyContext);
-    notify('Đã liên kết phân loại/policy cho project cũ; giữ nguyên toàn bộ Product Truth và research.');
+    notify('Đã liên kết phân loại/policy cho Project; giữ nguyên toàn bộ Product Truth và research.');
   });
 
   const enableUatApprovalExport = () => run('uat-approval-export-authority', async () => {
@@ -922,7 +922,7 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
     || (policyCapability ? 'POLICY_APPROVAL_BLOCKED' : 'POLICY_CAPABILITY_LOADING');
   const latestListing = listingQueue[0];
   const nextAction = !policyReady
-    ? 'Bước 0B: xác nhận loại sản phẩm và ngôn ngữ cho project cũ'
+    ? 'Bước 0B: xác nhận loại sản phẩm và ngôn ngữ cho Project chưa phân loại'
     : !importCoverageReady
     ? `Bước 1A: chọn và preview ${marketplace === 'AMAZON' ? 'Xray hoặc Cerebro đang có' : 'CSV/HTML Etsy'}`
     : !researchReady
@@ -1038,12 +1038,12 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
     {error && <div role="alert" style={{ background: '#fef2f2', border: '1px solid #fca5a5', color: '#991b1b', padding: 10, borderRadius: 8 }}>{error}</div>}
 
     {!policyReady && <section data-testid="legacy-policy-context-recovery" style={{ border: '2px solid #f59e0b', borderRadius: 12, padding: 14, background: '#fffbeb' }}>
-      <b>0B. Xác nhận phân loại cho project cũ — chỉ làm một lần</b>
+      <b>0B. Xác nhận phân loại cho Project chưa có policy — chỉ làm một lần</b>
       <p style={{ margin: '6px 0 10px', color: '#78350f', fontSize: '.8rem' }}>
-        Project được tạo trước R3 nên thiếu mã policy. Chọn loại sản phẩm và ngôn ngữ; thao tác này không xóa hay tạo lại Product Truth, research hoặc intelligence.
+        Project này chưa có phân loại policy. Chọn đúng loại sản phẩm và ngôn ngữ trước khi tiếp tục; thao tác này không xóa hay tạo lại Product Truth, research hoặc intelligence.
       </p>
       <div style={{ display: 'flex', gap: 9, flexWrap: 'wrap', alignItems: 'center' }}>
-        <label>Loại sản phẩm {' '}<select aria-label="Phân loại project cũ" value={policyClassification} onChange={event => setPolicyClassification(event.target.value)}>
+        <label>Loại sản phẩm {' '}<select aria-label="Phân loại Project chưa có policy" value={policyClassification} onChange={event => setPolicyClassification(event.target.value)}>
           {POLICY_CHOICES.filter(([value]) => marketplace === 'ETSY' || value !== 'UNIVERSAL_DIGITAL')
             .map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </select></label>

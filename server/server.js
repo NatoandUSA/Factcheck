@@ -1691,11 +1691,13 @@ app.post('/api/projects/:id/uat-lifecycle-authorizations', requireAuth(db), requ
           mode: existing.mode, authorizationHash: existing.authorization_hash, authorizedAt: existing.authorized_at,
           replay: true, marketplaceSubmissionAllowed: false });
       }
-      const listingCount = Number((await getUat(`SELECT COUNT(*) AS total FROM listings
-        WHERE project_id=? AND tenant_id=? AND workspace_id=? AND marketplace=?`,
-      [projectId, scope.tenantId, scope.workspaceId, scope.marketplace]))?.total || 0);
-      if (listingCount > 0) throw Object.assign(new Error('UAT_AUTHORIZATION_REQUIRES_LISTING_FREE_PROJECT'), {
-        code: 'UAT_AUTHORIZATION_REQUIRES_LISTING_FREE_PROJECT', status: 409
+      const blockingListing = await getUat(`SELECT id,status FROM listings
+        WHERE project_id=? AND tenant_id=? AND workspace_id=? AND marketplace=? AND status <> 'NEEDS_QA'
+        ORDER BY id LIMIT 1`,
+      [projectId, scope.tenantId, scope.workspaceId, scope.marketplace]);
+      if (blockingListing) throw Object.assign(new Error('UAT_AUTHORIZATION_REQUIRES_PRE_APPROVAL_LISTINGS_ONLY'), {
+        code: 'UAT_AUTHORIZATION_REQUIRES_PRE_APPROVAL_LISTINGS_ONLY', status: 409,
+        details: { listingId: blockingListing.id, status: blockingListing.status }
       });
       const authorizedAt = new Date().toISOString();
       const authority = { ...requestAuthority, authorizedAt };

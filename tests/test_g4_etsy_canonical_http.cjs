@@ -55,27 +55,6 @@ async function main() {
     reason: 'forged seller authorization', idempotencyKey: key(39)
   });
   check(sellerUatAuthorization.status === 403, 'Seller cannot create project UAT lifecycle authority');
-  const uatAuthorization = await json(`/api/projects/${projectId}/uat-lifecycle-authorizations`, 'POST', {
-    reason: 'Full Etsy business UAT: internal approval and exact audit export only; marketplace publishing forbidden.',
-    idempotencyKey: key(40)
-  });
-  check(uatAuthorization.status === 201 && uatAuthorization.body.mode === 'APPROVAL_EXPORT_ONLY'
-    && uatAuthorization.body.marketplaceSubmissionAllowed === false
-    && /Z$/.test(uatAuthorization.body.authorizedAt), JSON.stringify(uatAuthorization.body));
-  const uatReplay = await json(`/api/projects/${projectId}/uat-lifecycle-authorizations`, 'POST', {
-    reason: 'Full Etsy business UAT: internal approval and exact audit export only; marketplace publishing forbidden.',
-    idempotencyKey: key(40)
-  });
-  check(uatReplay.status === 200 && uatReplay.body.replay === true
-    && uatReplay.body.authorizationHash === uatAuthorization.body.authorizationHash
-    && uatReplay.body.authorizedAt === uatAuthorization.body.authorizedAt,
-  'UAT authorization replays exact server-owned actor/time evidence');
-  check((await get(`SELECT COUNT(*) AS n FROM audit_events WHERE action='project:authorize-uat-approval-export'
-    AND resource_id=?`, [String(projectId)])).n === 1,
-  'one immutable project authority produces one server audit event; replay does not duplicate it');
-  await assert.rejects(new Promise((resolve, reject) => db.run(`UPDATE project_uat_lifecycle_authorizations
-    SET authorized_at='2000-01-01T00:00:00.000Z' WHERE id=?`, [uatAuthorization.body.uatLifecycleAuthorizationId],
-  error => error ? reject(error) : resolve())), /IMMUTABLE_UAT_LIFECYCLE_AUTHORIZATION/); passed++;
   const csv = Buffer.from('listing_id,title,shop,he_tags,keyword_context,rank_position\n1,"Regalo para hija, collar de oro 18k",Shop A,"regalo hija|collar 18k",para mi hija,1\n2,"Collar para hija",Shop B,"cumpleanos hija|regalo especial",para mi hija,2\n');
   const file = { name: 'etsy-search.csv', bytes: csv };
   const before = (await get('SELECT COUNT(*) AS n FROM research_imports')).n;
@@ -158,6 +137,28 @@ async function main() {
     intelligenceSnapshotId: intelligence.body.intelligenceSnapshotId, content: previewListing.body.content
   });
   check(listing.status === 201 && listing.body.status === 'NEEDS_QA', JSON.stringify(listing.body));
+  // Real operator order: safe draft first, then Owner enables internal QA/export-only UAT.
+  const uatAuthorization = await json(`/api/projects/${projectId}/uat-lifecycle-authorizations`, 'POST', {
+    reason: 'Full Etsy business UAT: internal approval and exact audit export only; marketplace publishing forbidden.',
+    idempotencyKey: key(40)
+  });
+  check(uatAuthorization.status === 201 && uatAuthorization.body.mode === 'APPROVAL_EXPORT_ONLY'
+    && uatAuthorization.body.marketplaceSubmissionAllowed === false
+    && /Z$/.test(uatAuthorization.body.authorizedAt), JSON.stringify(uatAuthorization.body));
+  const uatReplay = await json(`/api/projects/${projectId}/uat-lifecycle-authorizations`, 'POST', {
+    reason: 'Full Etsy business UAT: internal approval and exact audit export only; marketplace publishing forbidden.',
+    idempotencyKey: key(40)
+  });
+  check(uatReplay.status === 200 && uatReplay.body.replay === true
+    && uatReplay.body.authorizationHash === uatAuthorization.body.authorizationHash
+    && uatReplay.body.authorizedAt === uatAuthorization.body.authorizedAt,
+  'UAT authorization replays exact server-owned actor/time evidence');
+  check((await get(`SELECT COUNT(*) AS n FROM audit_events WHERE action='project:authorize-uat-approval-export'
+    AND resource_id=?`, [String(projectId)])).n === 1,
+  'one immutable project authority produces one server audit event; replay does not duplicate it');
+  await assert.rejects(new Promise((resolve, reject) => db.run(`UPDATE project_uat_lifecycle_authorizations
+    SET authorized_at='2000-01-01T00:00:00.000Z' WHERE id=?`, [uatAuthorization.body.uatLifecycleAuthorizationId],
+  error => error ? reject(error) : resolve())), /IMMUTABLE_UAT_LIFECYCLE_AUTHORIZATION/); passed++;
   const preApprovalPublishProbe = await jsonAsSeller(
     `/api/listings/${listing.body.listingId}/operator-submission-reports`, 'POST', {
       submissionAuthorizationId: 1,

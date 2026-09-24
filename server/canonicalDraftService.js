@@ -186,6 +186,15 @@ async function resolveIntelligenceBinding(db, scope, projectId, selectedIntellig
   return intelligence;
 }
 
+function stablePolicyBinding(resolution) {
+  return Object.freeze({
+    policyContractId: resolution.policyContractId,
+    policyContractArtifactHash: resolution.policyContractArtifactHash,
+    authorityScopeHash: resolution.authorityScope?.authorityScopeHash || null,
+    lifecycleSnapshotDigest: resolution.lifecycleSnapshotDigest
+  });
+}
+
 function stablePolicyContext(project, scope) {
   return Object.freeze({ tenantId: scope.tenantId, workspaceId: String(scope.workspaceId),
     sellerAccountId: project.seller_account_label, marketplace: scope.marketplace, site: project.site,
@@ -321,7 +330,7 @@ async function validateCanonicalDraft(db, scope, projectId, selectedTruthRevisio
       masterKeywordArtifactHash: intelligence?.configuration?.masterKeywordArtifactHash ?? null,
       intelligenceSnapshotId: intelligence?.id ?? null,
       intelligenceSnapshotHash: intelligence?.snapshot_hash ?? null,
-      policyBindingHash: hashBytes(canonicalJson(policyBinding)),
+      policyBindingHash: hashBytes(canonicalJson(stablePolicyBinding(resolution))),
       policyContractId: resolution.policyContractId,
       policyContractArtifactHash: resolution.policyContractArtifactHash,
       policyContextHash,
@@ -393,7 +402,10 @@ async function assertCanonicalDependenciesCurrent(db, scope, projectId, dependen
   try { currentResolution = policyRegistryForContext(policyContext).resolve(policyContext, { purpose: 'DRAFT' }); }
   catch (error) { throw new CanonicalDraftError(error.code || 'POLICY_CONTRACT_UNAVAILABLE', 409, error.details); }
   const currentContextHash = hashBytes(canonicalJson(stablePolicyContext(project, scope)));
+  const currentPolicyBindingHash = hashBytes(canonicalJson(stablePolicyBinding(currentResolution)));
   if (!dependencies?.policyContractId || !dependencies?.policyContractArtifactHash || !dependencies?.policyContextHash
+    || !dependencies?.policyBindingHash
+    || dependencies.policyBindingHash !== currentPolicyBindingHash
     || dependencies.policyContractId !== currentResolution.policyContractId
     || dependencies.policyContractArtifactHash !== currentResolution.policyContractArtifactHash
     || dependencies.policyContextHash !== currentContextHash

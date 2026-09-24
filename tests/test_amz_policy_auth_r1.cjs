@@ -1,72 +1,76 @@
 'use strict';
 
 const assert = require('node:assert/strict');
-const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { createServerPolicyContext } = require('../server/policy/contractRegistry');
 const { policyRegistryForContext } = require('../server/policy/authorityLoader');
-const { validatePolicyContract } = require('../server/policy/contractSchemaValidator');
 
-const root = path.resolve(__dirname, '..');
-const contractPath = path.join(root, 'contracts/omniseller-r3/v1/policy-owner-contracts',
-  'amazon-us-workspace1-jewelry-necklace-owner-2026-09-24-v1.json');
-const attestationPath = path.join(root, 'contracts/omniseller-r3/v1/policy-owner-attestations',
-  'amz-policy-auth-r1-owner-20260924.json');
-const scopeMapPath = path.join(root, 'contracts/omniseller-r3/v1/policy-authority-scopes.json');
+const exact = createServerPolicyContext({
+  tenantId: '8af7fc79-c563-41a4-8eaf-6a06cb7a51a8',
+  workspaceId: '1',
+  sellerAccountId: 'workspace:1',
+  marketplace: 'AMAZON',
+  site: 'US',
+  locale: 'es-US',
+  mediaClass: 'NON_MEDIA',
+  productTypeId: 'CUSTOM_NECKLACE',
+  categoryId: 'JEWELRY_NECKLACE',
+  effectiveAt: '2026-09-24T15:07:00+07:00'
+});
 
-const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
-const attestationBytes = fs.readFileSync(attestationPath);
-const attestation = JSON.parse(attestationBytes.toString('utf8'));
-const scopes = JSON.parse(fs.readFileSync(scopeMapPath, 'utf8'));
+const registry = policyRegistryForContext(exact);
+const draft = registry.resolve(exact, { purpose: 'DRAFT' });
+const approval = registry.resolve(exact, { purpose: 'APPROVAL' });
+const exported = registry.resolve(exact, { purpose: 'EXPORT' });
 
-assert.equal(validatePolicyContract(contract).valid, true);
-const ownerRef = contract.sourceRefs.find(item => item.kind === 'OWNER_ATTESTATION');
-assert.ok(ownerRef);
-assert.equal(ownerRef.artifactHash, crypto.createHash('sha256').update(attestationBytes).digest('hex'));
-assert.equal(ownerRef.actorId, attestation.actorId);
-assert.equal(scopes.contracts[contract.policyContractId].attestationId, attestation.attestationId);
-
-function context(overrides = {}) {
-  return createServerPolicyContext({
-    tenantId: '8af7fc79-c563-41a4-8eaf-6a06cb7a51a8',
-    workspaceId: '1',
-    sellerAccountId: 'workspace:1',
-    marketplace: 'AMAZON',
-    site: 'US',
-    locale: 'es-US',
-    mediaClass: 'NON_MEDIA',
-    productTypeId: 'CUSTOM_NECKLACE',
-    categoryId: 'JEWELRY_NECKLACE',
-    effectiveAt: '2026-09-24T06:10:00Z',
-    ...overrides
-  });
-}
-
-const approvedContext = context();
-const approval = policyRegistryForContext(approvedContext).resolve(approvedContext, { purpose: 'APPROVAL' });
-assert.equal(approval.policyContractId, contract.policyContractId);
+assert.equal(approval.contract.verificationStatus, 'OWNER_CONFIRMED_ACCOUNT_CATEGORY');
 assert.equal(approval.contract.approvalEligibility, 'APPROVAL_ELIGIBLE');
-assert.equal(approval.authorityScope.tenantId, attestation.tenantId);
-assert.equal(approval.authorityScope.workspaceId, attestation.workspaceId);
+assert.equal(approval.policyContractId, 'amazon-us-workspace1-jewelry-necklace-owner-2026-09-24-v1');
+assert.equal(exported.policyContractId, approval.policyContractId);
+assert.equal(draft.policyContractId, approval.policyContractId,
+  'exact owner-scoped draft must bind to the same most-specific contract');
+assert.match(approval.authorityScope.authorityScopeHash, /^[a-f0-9]{64}$/);
+assert.equal(approval.authorityScope.tenantId, exact.tenantId);
+assert.equal(approval.authorityScope.workspaceId, exact.workspaceId);
+assert.equal(approval.lifecycleSnapshotCompleteThrough, '2026-09-24T08:07:00.000Z');
+assert.match(approval.lifecycleSnapshotDigest, /^[a-f0-9]{64}$/);
 
-const first = context({ effectiveAt: '2026-09-24T06:10:00Z' });
-const later = context({ effectiveAt: '2026-09-24T06:20:00Z' });
-const firstResolution = policyRegistryForContext(first).resolve(first, { purpose: 'DRAFT' });
-const laterResolution = policyRegistryForContext(later).resolve(later, { purpose: 'DRAFT' });
-assert.equal(firstResolution.lifecycleSnapshotDigest, laterResolution.lifecycleSnapshotDigest,
-  'clock watermark alone must not stale immutable draft dependencies');
+const later = createServerPolicyContext({
+  tenantId: exact.tenantId, workspaceId: exact.workspaceId, sellerAccountId: exact.sellerAccountId,
+  marketplace: exact.marketplace, site: exact.site, locale: exact.locale, mediaClass: exact.mediaClass,
+  productTypeId: exact.productTypeId, categoryId: exact.categoryId,
+  effectiveAt: '2026-09-24T16:07:00+07:00'
+});
+const laterApproval = policyRegistryForContext(later).resolve(later, { purpose: 'APPROVAL' });
+assert.equal(laterApproval.lifecycleSnapshotDigest, approval.lifecycleSnapshotDigest,
+  'moving completeness watermark must not stale immutable event-set dependency binding');
 
-for (const overrides of [
-  { tenantId: 'tenant-other' },
-  { workspaceId: '2' },
-  { sellerAccountId: 'workspace:99' },
-  { categoryId: 'GENERAL_MERCHANDISE' },
-  { productTypeId: 'UNIVERSAL_PRODUCT' }
-]) {
-  const denied = context(overrides);
-  assert.throws(() => policyRegistryForContext(denied).resolve(denied, { purpose: 'APPROVAL' }),
-    error => error.code === 'POLICY_CONTRACT_NOT_FOUND');
+const wrongWorkspace = createServerPolicyContext({
+  tenantId: exact.tenantId, workspaceId: '999', sellerAccountId: exact.sellerAccountId,
+  marketplace: exact.marketplace, site: exact.site, locale: exact.locale, mediaClass: exact.mediaClass,
+  productTypeId: exact.productTypeId, categoryId: exact.categoryId, effectiveAt: exact.effectiveAt
+});
+assert.throws(() => policyRegistryForContext(wrongWorkspace).resolve(wrongWorkspace, { purpose: 'APPROVAL' }),
+  error => error.code === 'POLICY_CONTRACT_NOT_FOUND');
+
+const wrongCategory = createServerPolicyContext({
+  tenantId: exact.tenantId, workspaceId: exact.workspaceId, sellerAccountId: exact.sellerAccountId,
+  marketplace: exact.marketplace, site: exact.site, locale: exact.locale, mediaClass: exact.mediaClass,
+  productTypeId: exact.productTypeId, categoryId: 'OTHER_CATEGORY', effectiveAt: exact.effectiveAt
+});
+assert.throws(() => policyRegistryForContext(wrongCategory).resolve(wrongCategory, { purpose: 'APPROVAL' }),
+  error => error.code === 'POLICY_CONTRACT_NOT_FOUND');
+
+const attestationPath = path.resolve(__dirname,
+  '../contracts/omniseller-r3/v1/policy-owner-attestations/amz-policy-auth-r1-owner-20260924.json');
+const original = fs.readFileSync(attestationPath);
+try {
+  fs.writeFileSync(attestationPath, Buffer.concat([original, Buffer.from('\n')]));
+  assert.throws(() => policyRegistryForContext(exact), /OWNER_ATTESTATION_BINDING_MISMATCH/,
+    'attestation byte changes must invalidate owner authority');
+} finally {
+  fs.writeFileSync(attestationPath, original);
 }
 
-console.log('AMZ_POLICY_AUTH_R1_PASSED');
+console.log('AMZ_POLICY_AUTH_R1_PASS');

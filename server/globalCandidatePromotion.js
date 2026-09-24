@@ -4,6 +4,7 @@ const crypto = require('node:crypto');
 const { canonicalJson } = require('./revisionStore');
 const { evaluateCandidate } = require('./globalCandidateEvaluation');
 const { createCanonicalResearchProject } = require('./canonicalProjectStore');
+const { getGlobalCandidateShortlist } = require('./globalCandidateShortlist');
 
 const PROMOTION_ARTIFACT_KIND = 'GLOBAL_CANDIDATE_PROMOTION_V1';
 const PROJECT_EVIDENCE_SOURCE = 'GLOBAL_CANDIDATE_POOL';
@@ -32,10 +33,14 @@ function validateScope(scope) {
 
 function normalizeRequest(input) {
   const candidateId = Number(input?.candidateId);
+  const shortlistId = Number(input?.shortlistId);
   const projectName = String(input?.projectName || '').trim();
   const idempotencyKey = String(input?.idempotencyKey || '').trim().toLowerCase();
   if (!Number.isInteger(candidateId) || candidateId < 1) {
     throw new GlobalCandidatePromotionError('GLOBAL_CANDIDATE_ID_INVALID', 400);
+  }
+  if (!Number.isInteger(shortlistId) || shortlistId < 1) {
+    throw new GlobalCandidatePromotionError('GLOBAL_CANDIDATE_SHORTLIST_ID_REQUIRED', 422);
   }
   if (!projectName || projectName.length > 160) {
     throw new GlobalCandidatePromotionError('GLOBAL_CANDIDATE_PROJECT_NAME_REQUIRED', 422);
@@ -43,8 +48,8 @@ function normalizeRequest(input) {
   if (idempotencyKey.length < 8 || idempotencyKey.length > 128) {
     throw new GlobalCandidatePromotionError('GLOBAL_CANDIDATE_PROMOTION_IDEMPOTENCY_KEY_INVALID', 422);
   }
-  return Object.freeze({ candidateId, projectName, idempotencyKey,
-    requestHash: hash({ candidateId, projectName }) });
+  return Object.freeze({ candidateId, shortlistId, projectName, idempotencyKey,
+    requestHash: hash({ candidateId, shortlistId, projectName }) });
 }
 
 function mapEvidence(row) {
@@ -102,6 +107,7 @@ async function replayResult(db, row, reason) {
   const project = await get(db, 'SELECT state FROM research_projects WHERE id=?', [row.project_id]);
   return Object.freeze({
     projectId: row.project_id, projectEvidenceId: row.project_evidence_id,
+    shortlistId: row.shortlist_id || null, shortlistSnapshotHash: row.shortlist_snapshot_hash || null,
     createdState: 'EVIDENCE_INTAKE', projectState: project?.state || null,
     candidateId: row.candidate_id, candidateKey: row.candidate_key,
     evidenceSnapshotHash: row.evidence_snapshot_hash, replay: true, replayReason: reason
@@ -113,7 +119,7 @@ async function existingReceiptByIdempotency(db, scope, request) {
     WHERE tenant_id=? AND workspace_id=? AND marketplace=? AND idempotency_key=?`,
   [scope.tenantId, Number(scope.workspaceId), scope.marketplace, request.idempotencyKey]);
   if (!row) return null;
-  if (row.candidate_id !== request.candidateId || row.request_hash !== request.requestHash) {
+  if (row.candidate_id !== request.candidateId || row.shortlist_id !== request.shortlistId || row.request_hash !== request.requestHash) {
     throw new GlobalCandidatePromotionError('GLOBAL_CANDIDATE_PROMOTION_IDEMPOTENCY_CONFLICT', 409,
       { projectId: row.project_id });
   }
@@ -146,6 +152,14 @@ async function promoteGlobalCandidateToProject(db, scope, input, now = new Date(
     await existingReceiptByCandidate(db, scope, request);
 
     const candidate = await loadCandidate(db, scope, request.candidateId);
+    const shortlist = await getGlobalCandidateShortlist(db, scope, request.shortlistId);
+    const selected = shortlist.selections.find(item => Number(item.candidateId) === candidate.id
+      && item.candidateKey === candidate.candidateKey);
+    if (!selected) {
+      throw new GlobalCandidatePromotionError('GLOBAL_CANDIDATE_NOT_IN_SHORTLIST', 409, {
+        candidateId: candidate.id, shortlistId: shortlist.shortlistId
+      });
+    }
     const evaluation = evaluateCandidate(candidate, { marketplace: scope.marketplace, now });
     if (evaluation.researchReadiness?.value !== 'READY') {
       throw new GlobalCandidatePromotionError('GLOBAL_CANDIDATE_NOT_RESEARCH_READY', 409, {
@@ -168,7 +182,9 @@ async function promoteGlobalCandidateToProject(db, scope, input, now = new Date(
       candidate: Object.freeze({ id: candidate.id, candidateKey: candidate.candidateKey,
         normalizedPhrase: candidate.normalizedPhrase, displayPhrase: candidate.displayPhrase,
         groupingMethod: candidate.groupingMethod }),
-      evidenceSnapshotHash: evidence.hash, evidenceRefs: evidence.refs, evaluation: evalSnapshot
+      evidenceSnapshotHash: evidence.hash, evidenceRefs: evidence.refs, evaluation: evalSnapshot,
+      shortlist: Object.freeze({ shortlistId: shortlist.shortlistId, snapshotHash: shortlist.snapshotHash,
+        selectedOrdinal: selected.ordinal, selectedEvaluation: selected.evaluation })
     });
     const projectEvidence = await run(db, `INSERT INTO research_evidence
       (tenant_id,workspace_id,marketplace,project_id,seed_phrase,source,actor_id,evidence_state,metadata)
@@ -179,15 +195,18 @@ async function promoteGlobalCandidateToProject(db, scope, input, now = new Date(
     const timestamp = (now instanceof Date ? now : new Date(now)).toISOString();
     const promotion = await run(db, `INSERT INTO global_candidate_promotions
       (tenant_id,workspace_id,marketplace,candidate_id,candidate_key,project_id,project_evidence_id,
-       idempotency_key,request_hash,evidence_snapshot_hash,evidence_refs_json,evaluation_json,created_by,created_at)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+       idempotency_key,request_hash,evidence_snapshot_hash,evidence_refs_json,evaluation_json,created_by,created_at,
+       shortlist_id,shortlist_snapshot_hash)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [scope.tenantId, Number(scope.workspaceId), scope.marketplace, candidate.id, candidate.candidateKey,
       projectId, projectEvidence.lastID, request.idempotencyKey, request.requestHash, evidence.hash,
-      canonicalJson(evidence.refs), canonicalJson(evalSnapshot), Number(scope.actorId), timestamp]);
+      canonicalJson(evidence.refs), canonicalJson(evalSnapshot), Number(scope.actorId), timestamp,
+      shortlist.shortlistId, shortlist.snapshotHash]);
 
     await run(db, 'COMMIT');
     return Object.freeze({
       promotionId: promotion.lastID, projectId, projectEvidenceId: projectEvidence.lastID,
+      shortlistId: shortlist.shortlistId, shortlistSnapshotHash: shortlist.snapshotHash,
       createdState: 'EVIDENCE_INTAKE', projectState: 'EVIDENCE_INTAKE',
       candidateId: candidate.id, candidateKey: candidate.candidateKey,
       evidenceSnapshotHash: evidence.hash, researchReadiness: evaluation.researchReadiness.value,

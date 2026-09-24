@@ -23,6 +23,7 @@ const assert = require('assert');
   let mockListings = [];
   let mockReviewPackage = null;
   let qaRevisionBody = null;
+  let candidateShortlist = null;
   const response = body => ({ ok: true, status: 200, json: async () => body });
   global.fetch = async (url, options = {}) => {
     calls.push({ url: String(url), options });
@@ -66,6 +67,14 @@ const assert = require('assert');
     if (String(url) === '/api/global-candidates/social-handoffs/44' && options.method === 'POST') return response({
       success: true, evidenceCreated: 2, groupingMethod: 'EXACT_NORMALIZED_V1', decisionAuthority: false, promotionAuthority: false
     });
+    if (String(url) === '/api/global-candidates/shortlists/latest') return response({ success: true, shortlist: candidateShortlist });
+    if (String(url) === '/api/global-candidates/shortlists' && options.method === 'POST') {
+      const body = JSON.parse(options.body || '{}');
+      candidateShortlist = { shortlistId: 71, snapshotHash: '7'.repeat(64), selectedCount: body.candidateIds?.length || 0,
+        selections: (body.candidateIds || []).map((candidateId, index) => ({ candidateId, ordinal: index + 1 })),
+        decisionNote: body.decisionNote || '', shortlistAuthority: 'HUMAN_EXPLICIT' };
+      return response({ success: true, ...candidateShortlist });
+    }
     if (String(url).startsWith('/api/global-candidates/evaluations')) return response({ success: true, candidates: [{
       candidateId: 31, priorityRank: 1, displayPhrase: 'pet memorial gift', marketplace: activeMockMarketplace,
       researchReadiness: { value: 'READY', reasonCodes: [activeMockMarketplace === 'AMAZON' ? 'AMAZON_CEREBRO_RESEARCH_READY' : 'ETSY_PUBLIC_SEARCH_RESEARCH_READY'] },
@@ -340,11 +349,24 @@ const assert = require('assert');
   check(calls.some(call => call.url === '/api/integrations/social-listening/handoffs/pull' && call.options.method === 'POST')
     && calls.some(call => call.url === '/api/global-candidates/social-handoffs/44' && call.options.method === 'POST'),
   'Intel operator action must reuse verified Social Handoff V3 then canonical B2 projection, never direct score promotion');
+  const candidateCheckbox = document.querySelector('input[aria-label="Chọn pet memorial gift vào shortlist"]');
+  const lockShortlistButton = document.querySelector('[data-testid="lock-global-candidate-shortlist"]');
+  check(Boolean(candidateCheckbox) && Boolean(lockShortlistButton),
+    'OWNER must receive explicit human shortlist controls before Project creation');
+  await act(async () => { candidateCheckbox.click(); await new Promise(resolve => setTimeout(resolve, 0)); });
+  await act(async () => { lockShortlistButton.click(); await new Promise(resolve => setTimeout(resolve, 20)); });
+  check(calls.some(call => call.url === '/api/global-candidates/shortlists' && call.options.method === 'POST'),
+    'human shortlist must be locked through canonical immutable shortlist route');
+  check(Boolean(document.querySelector('[data-testid="global-candidate-shortlist-locked"]')),
+    'locked shortlist snapshot must be visible to staff');
   const promoteButton = [...document.querySelectorAll('button')].find(button => button.textContent === 'Tạo Project');
-  check(Boolean(promoteButton) && !promoteButton.disabled, 'OWNER must receive explicit Project creation action when research readiness is READY');
+  check(Boolean(promoteButton) && !promoteButton.disabled,
+    'OWNER must receive Project creation action only after READY candidate is in locked shortlist');
   await act(async () => { promoteButton.click(); await new Promise(resolve => setTimeout(resolve, 20)); });
-  check(calls.some(call => call.url === '/api/global-candidates/31/promote' && call.options.method === 'POST'),
-    'operator Promote action must use canonical B4 route');
+  const promotionCall = calls.find(call => call.url === '/api/global-candidates/31/promote' && call.options.method === 'POST');
+  check(Boolean(promotionCall), 'operator Promote action must use canonical B4 route');
+  check(JSON.parse(promotionCall.options.body).shortlistId === 71,
+    'candidate→Project promotion must bind exact immutable shortlist snapshot');
   check(document.querySelector('select[aria-label="Active AMAZON project"]')?.value === '9',
     'successful promotion must move operator directly into the created canonical Project');
   await act(async () => candidateRoot.unmount());

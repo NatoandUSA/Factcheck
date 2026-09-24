@@ -67,15 +67,28 @@ export default function GlobalCandidatePanel({ marketplace, onPromoted, onRequir
   const [sourceCapturedAt, setSourceCapturedAt] = useState('');
   const [researchPreview, setResearchPreview] = useState(null);
   const [researchBusy, setResearchBusy] = useState(false);
+  const [shortlist, setShortlist] = useState(null);
+  const [selectedIds, setSelectedIds] = useState([]);
+  const [shortlistNote, setShortlistNote] = useState('');
+  const [shortlistBusy, setShortlistBusy] = useState(false);
 
   const load = useCallback(async () => {
     if (!user?.workspaceId) return setState({ loading: false, error: '', candidates: [] });
     setState(previous => ({ ...previous, loading: true, error: '' }));
     try {
-      const body = await readJson(await fetch('/api/global-candidates/evaluations?limit=30', {
-        credentials: 'include', cache: 'no-store'
-      }));
+      const [body, shortlistBody] = await Promise.all([
+        readJson(await fetch('/api/global-candidates/evaluations?limit=30', {
+          credentials: 'include', cache: 'no-store'
+        })),
+        readJson(await fetch('/api/global-candidates/shortlists/latest', {
+          credentials: 'include', cache: 'no-store'
+        }))
+      ]);
       setState({ loading: false, error: '', candidates: body.candidates || [] });
+      setShortlist(shortlistBody.shortlist || null);
+      if (shortlistBody.shortlist?.selections) {
+        setSelectedIds(shortlistBody.shortlist.selections.map(item => item.candidateId));
+      }
     } catch (error) {
       if (error.status === 401) {
         invalidateSession();
@@ -148,14 +161,47 @@ export default function GlobalCandidatePanel({ marketplace, onPromoted, onRequir
     }
   };
 
+  const toggleShortlist = candidateId => {
+    setSelectedIds(previous => {
+      if (previous.includes(candidateId)) return previous.filter(id => id !== candidateId);
+      if (previous.length >= 5) {
+        onShowToast?.('Shortlist tối đa 5 cơ hội.', 'error');
+        return previous;
+      }
+      return [...previous, candidateId];
+    });
+  };
+
+  const lockShortlist = async () => {
+    if (!canPromote) return onShowToast?.('Cần quyền Manager/Owner để khóa shortlist.', 'error');
+    setShortlistBusy(true);
+    try {
+      const result = await readJson(await fetch('/api/global-candidates/shortlists', {
+        method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ candidateIds: selectedIds, decisionNote: shortlistNote, idempotencyKey: uuid() })
+      }));
+      setShortlist(result);
+      setSelectedIds(result.selections?.map(item => item.candidateId) || []);
+      onShowToast?.(`Đã khóa shortlist #${result.shortlistId}: ${result.selectedCount} cơ hội.`, 'success');
+    } catch (error) {
+      onShowToast?.(`Không thể khóa shortlist: ${error.message}`, 'error');
+      setState(previous => ({ ...previous, error: error.message }));
+    } finally {
+      setShortlistBusy(false);
+    }
+  };
+
   const promote = async candidate => {
     const projectName = String(projectNames[candidate.candidateId] || candidate.displayPhrase || '').trim();
     if (!projectName) return onShowToast?.('Hãy nhập tên Project trước khi tạo.', 'error');
+    if (!shortlist?.shortlistId || !shortlist.selections?.some(item => item.candidateId === candidate.candidateId)) {
+      return onShowToast?.('Hãy khóa shortlist có chứa cơ hội này trước khi tạo Project.', 'error');
+    }
     setPromotingId(candidate.candidateId);
     try {
       const result = await readJson(await fetch(`/api/global-candidates/${candidate.candidateId}/promote`, {
         method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ projectName, idempotencyKey: uuid() })
+        body: JSON.stringify({ shortlistId: shortlist.shortlistId, projectName, idempotencyKey: uuid() })
       }));
       onShowToast?.(`Đã tạo Project #${result.projectId} từ cơ hội "${candidate.displayPhrase}".`, 'success');
       await onPromoted?.(result.projectId);
@@ -224,9 +270,35 @@ export default function GlobalCandidatePanel({ marketplace, onPromoted, onRequir
         Không nên tạo Project thủ công để bỏ qua bước đánh giá này; mục đích của bước này là ngăn ý tưởng yếu hoặc sai dữ liệu đi sâu vào workflow.
       </div>}
 
+    {state.candidates.length > 0 && <div data-testid="global-candidate-shortlist-controls"
+      style={{ marginTop: 12, padding: 12, border: '1px solid #c4b5fd', borderRadius: 10, background: '#faf5ff' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+        <div>
+          <strong>Shortlist của người vận hành: {selectedIds.length}/5</strong>
+          <div style={{ fontSize: '.72rem', color: '#64748b', marginTop: 3 }}>
+            Chọn 0–5 cơ hội. Điểm/nhãn của hệ thống chỉ để tham khảo; quyết định shortlist là của Manager/Owner.
+          </div>
+          {shortlist?.shortlistId && <div data-testid="global-candidate-shortlist-locked"
+            style={{ fontSize: '.7rem', color: '#5b21b6', marginTop: 4 }}>
+            Snapshot đang dùng: #{shortlist.shortlistId} · {shortlist.selectedCount} cơ hội · {shortlist.snapshotHash?.slice(0, 12)}…
+          </div>}
+        </div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <input data-testid="global-candidate-shortlist-note" value={shortlistNote}
+            placeholder="Lý do chọn (không bắt buộc)"
+            onChange={event => setShortlistNote(event.target.value)} style={{ minWidth: 260 }} />
+          <button data-testid="lock-global-candidate-shortlist" type="button"
+            disabled={!canPromote || shortlistBusy} onClick={lockShortlist}>
+            {shortlistBusy ? 'Đang khóa...' : 'Khóa shortlist'}
+          </button>
+        </div>
+      </div>
+    </div>}
+
     {state.candidates.length > 0 && <div style={{ overflowX: 'auto', marginTop: 12 }}>
       <table style={{ width: '100%', minWidth: 900, borderCollapse: 'collapse', background: '#fff' }}>
         <thead><tr>
+          <th style={{ textAlign: 'center', padding: 8 }}>Chọn</th>
           <th style={{ textAlign: 'left', padding: 8 }}>Ưu tiên</th>
           <th style={{ textAlign: 'left' }}>Cơ hội</th>
           <th>Sẵn sàng mở Project?</th>
@@ -237,9 +309,15 @@ export default function GlobalCandidatePanel({ marketplace, onPromoted, onRequir
         <tbody>{state.candidates.map(candidate => {
           const disposition = candidate.advisoryDisposition?.value || 'NEEDS_EVIDENCE';
           const readiness = candidate.researchReadiness?.value || 'NOT_READY';
-          const promotable = readiness === 'READY' && canPromote;
+          const inLockedShortlist = Boolean(shortlist?.selections?.some(item => item.candidateId === candidate.candidateId));
+          const promotable = readiness === 'READY' && canPromote && inLockedShortlist;
           const readinessReasons = candidate.researchReadiness?.reasonCodes || [];
           return <tr key={candidate.candidateId} style={{ borderTop: '1px solid #e2e8f0' }}>
+            <td style={{ padding: 8, textAlign: 'center' }}>
+              <input type="checkbox" aria-label={`Chọn ${candidate.displayPhrase} vào shortlist`}
+                checked={selectedIds.includes(candidate.candidateId)}
+                onChange={() => toggleShortlist(candidate.candidateId)} />
+            </td>
             <td style={{ padding: 8 }}>{candidate.priorityRank}</td>
             <td>
               <strong>{candidate.displayPhrase}</strong>

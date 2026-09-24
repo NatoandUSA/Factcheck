@@ -19,6 +19,7 @@ const UAT_APPROVAL_EXPORT_MIGRATION = '019_uat_approval_export_authorizations';
 const SOCIAL_HANDOFF_V3_CONSUMER_MIGRATION = '020_social_handoff_v3_consumer';
 const GLOBAL_CANDIDATE_POOL_MVP_MIGRATION = '021_global_candidate_pool_mvp';
 const GLOBAL_CANDIDATE_PROMOTION_MIGRATION = '022_global_candidate_promotion';
+const GLOBAL_CANDIDATE_SHORTLIST_MIGRATION = '023_global_candidate_shortlist';
 const crypto = require('node:crypto');
 const { canonicalJson, hashBytes } = require('../revisionStore');
 
@@ -854,6 +855,41 @@ async function migrateGlobalCandidatePoolMvp(db) {
   }
 }
 
+async function migrateGlobalCandidateShortlist(db) {
+  await run(db, `CREATE TABLE IF NOT EXISTS global_candidate_shortlists (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id TEXT NOT NULL,
+    workspace_id INTEGER NOT NULL REFERENCES workspaces(id),
+    marketplace TEXT NOT NULL CHECK(marketplace IN ('AMAZON','ETSY')),
+    idempotency_key TEXT NOT NULL CHECK(length(idempotency_key) BETWEEN 8 AND 128),
+    request_hash TEXT NOT NULL CHECK(length(request_hash)=64),
+    snapshot_hash TEXT NOT NULL CHECK(length(snapshot_hash)=64),
+    selected_count INTEGER NOT NULL CHECK(selected_count BETWEEN 0 AND 5),
+    selections_json TEXT NOT NULL CHECK(json_valid(selections_json)),
+    decision_note TEXT NULL,
+    created_by INTEGER NOT NULL REFERENCES users(id),
+    created_at DATETIME NOT NULL,
+    UNIQUE(tenant_id,workspace_id,marketplace,idempotency_key)
+  )`);
+  await run(db, `CREATE INDEX IF NOT EXISTS idx_global_candidate_shortlists_scope
+    ON global_candidate_shortlists(tenant_id,workspace_id,marketplace,id DESC)`);
+  for (const operation of ['update','delete']) {
+    await run(db, `CREATE TRIGGER IF NOT EXISTS global_candidate_shortlists_immutable_${operation}
+      BEFORE ${operation.toUpperCase()} ON global_candidate_shortlists
+      BEGIN SELECT RAISE(ABORT,'IMMUTABLE_GLOBAL_CANDIDATE_SHORTLIST'); END`);
+  }
+
+  const promotionColumns = await all(db, 'PRAGMA table_info(global_candidate_promotions)');
+  if (!promotionColumns.some(column => column.name === 'shortlist_id')) {
+    await run(db, 'ALTER TABLE global_candidate_promotions ADD COLUMN shortlist_id INTEGER NULL REFERENCES global_candidate_shortlists(id)');
+  }
+  if (!promotionColumns.some(column => column.name === 'shortlist_snapshot_hash')) {
+    await run(db, 'ALTER TABLE global_candidate_promotions ADD COLUMN shortlist_snapshot_hash TEXT NULL');
+  }
+  await run(db, `CREATE INDEX IF NOT EXISTS idx_global_candidate_promotions_shortlist
+    ON global_candidate_promotions(tenant_id,workspace_id,marketplace,shortlist_id)`);
+}
+
 async function migrateGlobalCandidatePromotion(db) {
   await run(db, `CREATE TABLE IF NOT EXISTS global_candidate_promotions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1389,6 +1425,18 @@ async function runMigrations(db) {
       throw error;
     }
   }
+  const globalShortlistApplied = await all(db, 'SELECT id FROM schema_migrations WHERE id=?', [GLOBAL_CANDIDATE_SHORTLIST_MIGRATION]);
+  if (globalShortlistApplied.length === 0) {
+    await run(db, 'BEGIN IMMEDIATE');
+    try {
+      await migrateGlobalCandidateShortlist(db);
+      await run(db, 'INSERT INTO schema_migrations(id) VALUES (?)', [GLOBAL_CANDIDATE_SHORTLIST_MIGRATION]);
+      await run(db, 'COMMIT');
+    } catch (error) {
+      try { await run(db, 'ROLLBACK'); } catch (_) {}
+      throw error;
+    }
+  }
 }
 
 async function migrateAgentWorkspaceScope(db) {
@@ -1490,6 +1538,7 @@ module.exports = {
   SOCIAL_HANDOFF_V3_CONSUMER_MIGRATION,
   GLOBAL_CANDIDATE_POOL_MVP_MIGRATION,
   GLOBAL_CANDIDATE_PROMOTION_MIGRATION,
+  GLOBAL_CANDIDATE_SHORTLIST_MIGRATION,
   migrateOwnerSubmissionAuthorization,
   migrateCommerceWorkflowArtifacts,
   migrateOperatorReportedSubmissionLifecycle,
@@ -1497,6 +1546,7 @@ module.exports = {
   migrateSocialHandoffV3Consumer,
   migrateGlobalCandidatePoolMvp,
   migrateGlobalCandidatePromotion,
+  migrateGlobalCandidateShortlist,
   AGENT_WORKSPACE_SCOPE_MIGRATION,
   PROJECT_SCOPED_EVIDENCE_MIGRATION,
   CANONICAL_DAG_MIGRATION,

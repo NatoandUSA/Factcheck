@@ -5,9 +5,10 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const sqlite3 = require('sqlite3').verbose();
-const { migrateGlobalCandidatePoolMvp, migrateGlobalCandidatePromotion } = require('../server/database/migrations');
+const { migrateGlobalCandidatePoolMvp, migrateGlobalCandidatePromotion, migrateGlobalCandidateShortlist } = require('../server/database/migrations');
 const { ingestCandidateProjections, listGlobalCandidates } = require('../server/globalCandidatePool');
 const { promoteGlobalCandidateToProject } = require('../server/globalCandidatePromotion');
+const { createGlobalCandidateShortlist } = require('../server/globalCandidateShortlist');
 
 const run = (db, sql, params = []) => new Promise((resolve, reject) =>
   db.run(sql, params, function done(error) { error ? reject(error) : resolve({ changes: this.changes, lastID: this.lastID }); }));
@@ -102,6 +103,8 @@ assert.doesNotMatch(promotionSource, /INSERT INTO research_projects/);
     await migrateGlobalCandidatePoolMvp(db);
     await migrateGlobalCandidatePromotion(db);
     await migrateGlobalCandidatePromotion(db);
+    await migrateGlobalCandidateShortlist(db);
+    await migrateGlobalCandidateShortlist(db);
 
     const scope = { tenantId: 'tenant-a', workspaceId: 7, marketplace: 'ETSY', actorId: 1 };
     await ingestCandidateProjections(db, scope, [
@@ -114,8 +117,23 @@ assert.doesNotMatch(promotionSource, /INSERT INTO research_projects/);
     const beta = candidates.find(item => item.normalizedPhrase === 'candidate beta');
     assert.ok(alpha && beta);
 
+    const emptyShortlist = await createGlobalCandidateShortlist(db, scope, {
+      candidateIds: [], decisionNote: 'No selection is a valid human decision.', idempotencyKey: 'shortlist-empty-001'
+    }, new Date('2026-09-22T00:30:00.000Z'));
+    assert.equal(emptyShortlist.selectedCount, 0);
+
+    const shortlist = await createGlobalCandidateShortlist(db, scope, {
+      candidateIds: [alpha.id], decisionNote: 'Human selected alpha for Project investigation.',
+      idempotencyKey: 'shortlist-alpha-001'
+    }, new Date('2026-09-22T00:45:00.000Z'));
+    assert.equal(shortlist.selectedCount, 1);
+    assert.equal(shortlist.selections[0].candidateId, alpha.id);
+    assert.equal(shortlist.selections[0].evaluation.researchReadiness.value, 'READY');
+    assert.match(shortlist.snapshotHash, /^[a-f0-9]{64}$/);
+
     const promoted = await promoteGlobalCandidateToProject(db, scope, {
-      candidateId: alpha.id, projectName: 'Candidate Alpha Pilot', idempotencyKey: 'alpha-promote-001'
+      candidateId: alpha.id, shortlistId: shortlist.shortlistId,
+      projectName: 'Candidate Alpha Pilot', idempotencyKey: 'alpha-promote-001'
     }, new Date('2026-09-22T01:00:00.000Z'));
     assert.equal(promoted.replay, false);
     assert.equal(promoted.createdState, 'EVIDENCE_INTAKE');
@@ -153,9 +171,14 @@ assert.doesNotMatch(promotionSource, /INSERT INTO research_projects/);
     assert.equal(receipt.project_id, promoted.projectId);
     assert.equal(receipt.candidate_id, alpha.id);
     assert.equal(receipt.evidence_snapshot_hash, promoted.evidenceSnapshotHash);
+    assert.equal(receipt.shortlist_id, shortlist.shortlistId);
+    assert.equal(receipt.shortlist_snapshot_hash, shortlist.snapshotHash);
+    assert.equal(metadata.shortlist.shortlistId, shortlist.shortlistId);
+    assert.equal(metadata.shortlist.snapshotHash, shortlist.snapshotHash);
 
     const replay = await promoteGlobalCandidateToProject(db, scope, {
-      candidateId: alpha.id, projectName: 'Candidate Alpha Pilot', idempotencyKey: 'alpha-promote-001'
+      candidateId: alpha.id, shortlistId: shortlist.shortlistId,
+      projectName: 'Candidate Alpha Pilot', idempotencyKey: 'alpha-promote-001'
     });
     assert.equal(replay.replay, true);
     assert.equal(replay.projectId, promoted.projectId);
@@ -164,16 +187,19 @@ assert.doesNotMatch(promotionSource, /INSERT INTO research_projects/);
     assert.equal((await get(db, "SELECT COUNT(*) AS count FROM research_evidence WHERE source='GLOBAL_CANDIDATE_POOL'")).count, 1);
 
     await assert.rejects(() => promoteGlobalCandidateToProject(db, scope, {
-      candidateId: beta.id, projectName: 'Candidate Beta', idempotencyKey: 'alpha-promote-001'
+      candidateId: beta.id, shortlistId: shortlist.shortlistId,
+      projectName: 'Candidate Beta', idempotencyKey: 'alpha-promote-001'
     }), error => error?.code === 'GLOBAL_CANDIDATE_PROMOTION_IDEMPOTENCY_CONFLICT');
 
     await assert.rejects(() => promoteGlobalCandidateToProject(db, scope, {
-      candidateId: alpha.id, projectName: 'Candidate Alpha Again', idempotencyKey: 'alpha-promote-002'
+      candidateId: alpha.id, shortlistId: shortlist.shortlistId,
+      projectName: 'Candidate Alpha Again', idempotencyKey: 'alpha-promote-002'
     }), error => error?.code === 'GLOBAL_CANDIDATE_ALREADY_PROMOTED');
 
     await assert.rejects(() => promoteGlobalCandidateToProject(db, scope, {
-      candidateId: beta.id, projectName: 'Candidate Beta Pilot', idempotencyKey: 'beta-promote-001'
-    }), error => error?.code === 'GLOBAL_CANDIDATE_NOT_RESEARCH_READY');
+      candidateId: beta.id, shortlistId: shortlist.shortlistId,
+      projectName: 'Candidate Beta Pilot', idempotencyKey: 'beta-promote-001'
+    }), error => error?.code === 'GLOBAL_CANDIDATE_NOT_IN_SHORTLIST');
     assert.equal((await get(db, 'SELECT COUNT(*) AS count FROM research_projects')).count, 2);
 
     const amazonScope = { tenantId: 'tenant-a', workspaceId: 9, marketplace: 'AMAZON', actorId: 1 };
@@ -181,8 +207,14 @@ assert.doesNotMatch(promotionSource, /INSERT INTO research_projects/);
     const amazonCandidates = await listGlobalCandidates(db, amazonScope, { limit: 20 });
     const amazonReady = amazonCandidates.find(item => item.normalizedPhrase === 'amazon cerebro ready');
     assert.ok(amazonReady);
+    const amazonShortlist = await createGlobalCandidateShortlist(db, amazonScope, {
+      candidateIds: [amazonReady.id], decisionNote: 'Human selected WATCH candidate because research readiness is READY.',
+      idempotencyKey: 'shortlist-amazon-001'
+    }, new Date('2026-09-22T01:20:00.000Z'));
+    assert.equal(amazonShortlist.selections[0].evaluation.advisoryDisposition.value, 'WATCH');
     const amazonPromoted = await promoteGlobalCandidateToProject(db, amazonScope, {
-      candidateId: amazonReady.id, projectName: 'Amazon Cerebro Research', idempotencyKey: 'amazon-ready-001'
+      candidateId: amazonReady.id, shortlistId: amazonShortlist.shortlistId,
+      projectName: 'Amazon Cerebro Research', idempotencyKey: 'amazon-ready-001'
     }, new Date('2026-09-22T01:30:00.000Z'));
     assert.equal(amazonPromoted.researchReadiness, 'READY');
     assert.equal(amazonPromoted.advisoryDisposition, 'WATCH');
@@ -190,8 +222,15 @@ assert.doesNotMatch(promotionSource, /INSERT INTO research_projects/);
 
     const otherScope = { ...scope, workspaceId: 8 };
     await assert.rejects(() => promoteGlobalCandidateToProject(db, otherScope, {
-      candidateId: alpha.id, projectName: 'Wrong Workspace', idempotencyKey: 'wrong-workspace-001'
+      candidateId: alpha.id, shortlistId: shortlist.shortlistId,
+      projectName: 'Wrong Workspace', idempotencyKey: 'wrong-workspace-001'
     }), error => error?.code === 'GLOBAL_CANDIDATE_NOT_FOUND');
+
+    await assert.rejects(() => createGlobalCandidateShortlist(db, scope, {
+      candidateIds: [alpha.id, beta.id, alpha.id], decisionNote: '', idempotencyKey: 'shortlist-dup-001'
+    }), error => error?.code === 'GLOBAL_CANDIDATE_SHORTLIST_DUPLICATE_ID');
+    await assert.rejects(() => run(db, 'UPDATE global_candidate_shortlists SET decision_note=? WHERE id=?',
+      ['mutated', shortlist.shortlistId]), /IMMUTABLE_GLOBAL_CANDIDATE_SHORTLIST/);
 
     await assert.rejects(() => run(db, 'UPDATE global_candidate_promotions SET candidate_key=? WHERE id=?',
       [sha('mutated'), promoted.promotionId]), /IMMUTABLE_GLOBAL_CANDIDATE_PROMOTION/);

@@ -73,6 +73,7 @@ const { EVALUATION_POLICY_VERSION, PROOF_POLICY_VERSION, RANKING_MODE,
   evaluateAndPrioritizeGlobalCandidates } = require('./globalCandidateEvaluation');
 const { projectResearchFile, projectSocialHandoff, projectWorkflowArtifact } = require('./globalCandidateProjection');
 const { promoteGlobalCandidateToProject } = require('./globalCandidatePromotion');
+const { createGlobalCandidateShortlist, getLatestGlobalCandidateShortlist } = require('./globalCandidateShortlist');
 const { createCanonicalResearchProject } = require('./canonicalProjectStore');
 const amazonResearchAdapter = require('./commerceIntelligence/amazonResearchAdapter');
 const amazonIntelligenceAdapter = require('./commerceIntelligence/amazonIntelligenceAdapter');
@@ -1930,16 +1931,35 @@ app.get('/api/global-candidates/evaluations', requireAuth(db), requireRole(['OWN
   } catch (error) { rejectRevisionStore(res, error); }
 });
 
+app.get('/api/global-candidates/shortlists/latest', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    const shortlist = await getLatestGlobalCandidateShortlist(db, revisionScope(req.user));
+    res.json({ success: true, shortlist });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+app.post('/api/global-candidates/shortlists', requireAuth(db), requireRole(['OWNER', 'MANAGER']), async (req, res) => {
+  try {
+    const body = requireExactDto(req.body || {}, new Set(['candidateIds', 'decisionNote', 'idempotencyKey']));
+    assertNoClientPolicyOverrides(body);
+    const shortlist = await createGlobalCandidateShortlist(db, revisionScope(req.user), body);
+    res.status(shortlist.replay ? 200 : 201).json({
+      success: true, ...shortlist, shortlistAuthority: 'HUMAN_EXPLICIT',
+      advisoryDispositionAuthority: false
+    });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
 app.post('/api/global-candidates/:candidateId/promote', requireAuth(db), requireRole(['OWNER', 'MANAGER']), async (req, res) => {
   try {
     const candidateId = Number(req.params.candidateId);
     if (!Number.isInteger(candidateId) || candidateId < 1) throw Object.assign(new Error('GLOBAL_CANDIDATE_ID_INVALID'), {
       code: 'GLOBAL_CANDIDATE_ID_INVALID', status: 400
     });
-    const body = requireExactDto(req.body || {}, new Set(['projectName', 'idempotencyKey']));
+    const body = requireExactDto(req.body || {}, new Set(['shortlistId', 'projectName', 'idempotencyKey']));
     assertNoClientPolicyOverrides(body);
     const result = await promoteGlobalCandidateToProject(db, revisionScope(req.user), {
-      candidateId, projectName: body.projectName, idempotencyKey: body.idempotencyKey
+      candidateId, shortlistId: body.shortlistId, projectName: body.projectName, idempotencyKey: body.idempotencyKey
     });
     res.status(result.replay ? 200 : 201).json({ success: true, ...result, promotionAuthority: 'HUMAN_EXPLICIT' });
   } catch (error) { rejectRevisionStore(res, error); }

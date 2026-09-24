@@ -192,7 +192,7 @@ export default function GlobalCandidatePanel({ marketplace, onPromoted, onRequir
       <div style={{ color: '#475569', fontSize: '.78rem', margin: '5px 0 8px', lineHeight: 1.55 }}>
         {marketplace === 'AMAZON'
           ? <>Chọn file <b>Helium 10 Cerebro CSV/XLSX</b>. Cách lấy: Cerebro → nhập ASIN liên quan → chạy phân tích → Export. OmniSeller sẽ tự kiểm tra demand + competition rồi quyết định mức sẵn sàng để mở Project nghiên cứu.</>
-          : <>Chọn file <b>Etsy Search CSV/HTML</b> từ kết quả nghiên cứu/tìm kiếm Etsy. OmniSeller sẽ tự đọc listing, shop, giá, tag và các tín hiệu có thật trong file; trường nào không có sẽ giữ UNKNOWN.</>}
+          : <>Ưu tiên file <b>HeyEtsy Chrome Extension CSV</b> xuất từ exact Etsy search query. OmniSeller sẽ xác minh toàn bộ capture (query, listing ID/URL, rank, raw hash), giữ sold/views/revenue/conversion là research-only và chỉ dùng cho Research Readiness. Etsy CSV/HTML khác vẫn đọc được nhưng không tự được nâng thành verified HeyEtsy capture.</>}
       </div>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
         <input data-testid="global-candidate-research-file" type="file"

@@ -24,17 +24,41 @@ const { headers, buildCsv, sourceRow } = require('./fixtures/etsy_search_rich_67
   assert.equal(query.provenance.sourceCapturedAt, '2026-09-22');
   assert.equal(query.provenance.sourceCaptureTimezoneOffsetMinutes, 0);
   assert.equal(query.provenance.sourceCapturedAtAuthority, 'STAFF_ASSERTED');
-  assert.equal(query.rawEvidence.supportScope, 'QUERY_CONTEXT_HINT');
-  assert.equal(query.provenance.queryBinding.authority, 'NONE');
-  assert.equal(query.provenance.queryBinding.state, 'SOURCE_HINT');
+  assert.equal(query.rawEvidence.supportScope, 'QUERY_RESULT_SET');
+  assert.equal(query.provenance.queryBinding.authority, 'THIRD_PARTY_RESEARCH_CAPTURE');
+  assert.equal(query.provenance.queryBinding.state, 'CAPTURE_ARTIFACT_VERIFIED');
+  assert.equal(query.provenance.queryBinding.source, 'HEYETSY_EXTENSION_EXPORT');
+  assert.match(query.provenance.queryBinding.captureId, /^heyetsy-capture-[a-f0-9]{64}$/);
+  assert.equal(query.provenance.queryBinding.artifactHash, result.rawHash);
+  assert.equal(query.authorityClassification, 'RESEARCH_ONLY');
+  assert.equal(query.evidenceTier, 'E2_THIRD_PARTY_RESEARCH');
+  assert.equal(query.provenance.provider, 'HEYETSY_EXTENSION_EXPORT');
   assert.equal(query.commercialEvidence.listingCount, 3,
-    'query hint may retain the full captured result set for grouping/display');
+    'verified HeyEtsy query capture retains its complete query result set');
   const queryEval = evaluateCandidate({
     id: 1, candidateKey: 'a'.repeat(64), normalizedPhrase: query.phrase,
     displayPhrase: query.phrase, evidence: [{ ...query, evidenceHash: 'b'.repeat(64) }]
-  }, { marketplace: 'ETSY' });
-  assert.equal(queryEval.researchReadiness.value, 'NOT_READY',
-    'CSV keyword_context authority NONE must not become qualifying query-result-set evidence');
+  }, { marketplace: 'ETSY', now: '2026-09-24T00:00:00.000Z' });
+  assert.equal(queryEval.researchReadiness.value, 'READY',
+    'artifact-verified fresh HeyEtsy capture must qualify for Etsy research readiness');
+  assert.deepEqual(queryEval.researchReadiness.reasonCodes, ['ETSY_HEYETSY_RESEARCH_READY']);
+  assert.notEqual(queryEval.commercialProof.status, 'ESTABLISHED',
+    'HeyEtsy research metrics must never establish Commercial Proof');
+  assert.ok(queryEval.commercialProof.blockerCodes.includes('RESEARCH_ONLY_NOT_COMMERCIAL_PROOF'));
+
+  const genericCsv = [
+    'listing_id,title,shop,url,keyword_context,rank_position',
+    '1234567890,Generic Etsy result,GenericShop,https://www.etsy.com/listing/1234567890/generic,para mi hija,1'
+  ].join('\n');
+  const generic = await projectResearchFile({
+    kind: 'ETSY_SEARCH', fileName: 'generic-etsy.csv', mediaType: 'text/csv',
+    sourceCapturedAt: '2026-09-22', sourceCaptureTimezoneOffsetMinutes: 0,
+    rawBytes: Buffer.from(genericCsv, 'utf8')
+  }, 'ETSY');
+  const genericQuery = generic.projections.find(item => item.phrase === 'para mi hija');
+  assert.equal(genericQuery.rawEvidence.supportScope, 'QUERY_CONTEXT_HINT');
+  assert.equal(genericQuery.provenance.queryBinding.authority, 'NONE',
+    'generic Etsy CSV must not be relabeled as a verified HeyEtsy capture');
 
   assert.ok(tag, 'tag candidate must be projected');
   assert.equal(tag.provenance.integrityOutcome, 'VALID');
@@ -64,6 +88,33 @@ const { headers, buildCsv, sourceRow } = require('./fixtures/etsy_search_rich_67
     'each query hint must receive only its own captured result set');
   assert.equal(firstQuery.provenance.queryBinding.authority, 'NONE');
   assert.equal(secondQuery.provenance.queryBinding.authority, 'NONE');
+
+  const badUrlRow = { ...sourceRow(21), url: 'https://www.etsy.com/listing/999999999/not-the-same-id' };
+  const badUrlCsv = [headers.join(','), headers.map(header => escape(badUrlRow[header])).join(',')].join('\n');
+  const badUrl = await projectResearchFile({
+    kind: 'ETSY_SEARCH', fileName: 'bad-url.csv', mediaType: 'text/csv',
+    sourceCapturedAt: '2026-09-22', sourceCaptureTimezoneOffsetMinutes: 0,
+    rawBytes: Buffer.from(badUrlCsv, 'utf8')
+  }, 'ETSY');
+  const badUrlQuery = badUrl.projections.find(item => item.phrase === 'para mi hija');
+  assert.equal(badUrlQuery.rawEvidence.supportScope, 'QUERY_CONTEXT_HINT');
+  assert.equal(badUrlQuery.provenance.queryBinding.authority, 'NONE',
+    'listing URL / listing ID mismatch must prevent artifact-level query binding');
+
+  const rankRowA = sourceRow(31);
+  const rankRowB = { ...sourceRow(32), rank_position: 31 };
+  const badRankCsv = [headers.join(','), rankRowA, rankRowB]
+    .map((row, index) => index === 0 ? row : headers.map(header => escape(row[header])).join(','))
+    .join('\n');
+  const badRank = await projectResearchFile({
+    kind: 'ETSY_SEARCH', fileName: 'bad-rank.csv', mediaType: 'text/csv',
+    sourceCapturedAt: '2026-09-22', sourceCaptureTimezoneOffsetMinutes: 0,
+    rawBytes: Buffer.from(badRankCsv, 'utf8')
+  }, 'ETSY');
+  const badRankQuery = badRank.projections.find(item => item.phrase === 'para mi hija');
+  assert.equal(badRankQuery.rawEvidence.supportScope, 'QUERY_CONTEXT_HINT');
+  assert.equal(badRankQuery.provenance.queryBinding.authority, 'NONE',
+    'duplicate/non-contiguous rank sequence must prevent artifact-level query binding');
 
   const amazonFixture = {
     kind: 'AMAZON_CEREBRO', fileName: 'freshness.csv', mediaType: 'text/csv',

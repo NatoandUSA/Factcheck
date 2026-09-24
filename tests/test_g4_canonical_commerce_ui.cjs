@@ -1,8 +1,6 @@
 'use strict';
 process.env.NODE_ENV = 'test';
 const assert = require('assert');
-const fs = require('fs');
-const path = require('path');
 
 (async () => {
   const { JSDOM } = require('jsdom');
@@ -141,9 +139,6 @@ const path = require('path');
   const root = createRoot(document.getElementById('root'));
   let measured = 0;
   const check = (value, message) => { measured += 1; assert.ok(value, message); };
-  const workflowSource = fs.readFileSync(path.resolve(__dirname, '../src/components/CanonicalCommerceWorkflow.jsx'), 'utf8');
-  check(!workflowSource.includes("marketplace === 'ETSY' && listingQueue.length === 0"),
-    'Owner UAT approval/export control must remain available after a draft listing exists');
   await act(async () => { root.render(React.createElement(AuthProvider, null,
     React.createElement(Workflow, { activeProject: { id: 3, state: 'EVIDENCE_INTAKE' }, marketplace: 'AMAZON' }))); });
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
@@ -240,6 +235,7 @@ const path = require('path');
   check(!calls.some(call => call.url.includes('/submit') || call.url.includes('/export')), 'workflow must not submit or export');
 
   activeMockMarketplace = 'ETSY';
+  authRole = 'OWNER';
   mockListings = [{ id: 7, status: 'NEEDS_QA', head_revision_id: 5, etsyTitle: 'Personalizado Fleece Blanket' }];
   mockReviewPackage = { success: true, listingId: 7, projectId: 4, status: 'NEEDS_QA', listingRevisionId: 5,
     revisionNumber: 1, contentHash: 'a'.repeat(64), dependencyHash: 'b'.repeat(64),
@@ -253,10 +249,12 @@ const path = require('path');
       etsyDescription: 'Regalo personalizado para hermana.', itemHighlights: 'Fleece Blanket',
       categoryName: 'Blankets', shopName: 'Luna Atelier Studio', priceAmount: '39.95', priceCurrency: 'USD',
       imagePrompts: { prompts: [] } } };
-  await act(async () => { root.render(React.createElement(AuthProvider, null,
+  await act(async () => { root.render(React.createElement(AuthProvider, { key: 'etsy-owner' },
     React.createElement(Workflow, { activeProject: { id: 4, state: 'EVIDENCE_INTAKE' }, marketplace: 'ETSY' }))); });
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
   check(document.querySelector('[data-testid="canonical-commerce-etsy"]'), 'Etsy canonical workflow must render');
+  check([...document.querySelectorAll('button')].some(button => button.textContent.includes('Owner bật UAT approval/export-only')),
+    'OWNER must retain the UAT approval/export-only control after a draft listing already exists');
   check(document.body.textContent.includes('1D. Dữ liệu live → Winner Set có thể sửa tự do')
     && document.body.textContent.includes('1E. Pattern Miner')
     && document.body.textContent.includes('1F. Pattern → Etsy Master Keyword List'),

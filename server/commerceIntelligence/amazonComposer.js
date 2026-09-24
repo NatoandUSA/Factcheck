@@ -10,6 +10,7 @@
 const { fold, contentTokens, tokens, bytes, titleCase, packTokens } = require('./text');
 const { partition, buildLadder } = require('./allocation');
 const { allowedProductFamilies, allowedRecipientFamilies, matchesProductFamily, PRODUCT_FAMILIES } = require('./semantic');
+const { renderBuyerValue } = require('./amazonBuyerLanguage');
 
 function cleanBuyerValue(value) {
   return String(value || '').trim()
@@ -21,14 +22,18 @@ function cleanBuyerValue(value) {
 // Bullet labels are the only fixed English in the output. The Spanish-market
 // listings in this catalogue need Spanish ones, so the set is switchable.
 const LABEL_SETS = Object.freeze({
-  EN: Object.freeze({ gift: 'GIFT FOR', product: 'PRODUCT', material: 'MATERIAL', care: 'Care',
+  EN: Object.freeze({ code: 'EN', gift: 'GIFT FOR', product: 'PRODUCT', material: 'MATERIAL', care: 'Care',
     sizeColor: 'SIZE & COLOR', sizes: 'Sizes', colors: 'Colors', personalized: 'PERSONALIZED',
     details: 'DETAILS', packaging: 'PACKAGING & SHIPPING', shipsFrom: 'Ships from', forWord: 'for',
-    personalizationWord: 'Personalization', packagingWord: 'Packaging' }),
-  ES: Object.freeze({ gift: 'REGALO PARA', product: 'PRODUCTO', material: 'MATERIAL', care: 'Cuidado',
+    personalizationWord: 'Personalization', packagingWord: 'Packaging', weight: 'Weight', quantity: 'Quantity',
+    purity: 'Purity / plating', finish: 'Finish', gemstones: 'Gemstones', components: 'Components', dimensions: 'Dimensions', origin: 'Origin',
+    style: 'Style', design: 'Design', theme: 'Theme' }),
+  ES: Object.freeze({ code: 'ES', gift: 'REGALO PARA', product: 'PRODUCTO', material: 'MATERIAL', care: 'Cuidado',
     sizeColor: 'TALLA Y COLOR', sizes: 'Tallas', colors: 'Colores', personalized: 'PERSONALIZADO',
     details: 'DETALLES', packaging: 'EMPAQUE Y ENVIO', shipsFrom: 'Enviado desde', forWord: 'para',
-    personalizationWord: 'Personalizacion', packagingWord: 'Empaque' })
+    personalizationWord: 'Personalizacion', packagingWord: 'Empaque', weight: 'Peso', quantity: 'Cantidad',
+    purity: 'Pureza / chapado', finish: 'Acabado', gemstones: 'Gemas', components: 'Componentes', dimensions: 'Dimensiones', origin: 'Origen',
+    style: 'Estilo', design: 'Diseño', theme: 'Tema' })
 });
 
 function normalizeList(value) {
@@ -70,6 +75,21 @@ function normalizeTruth(input = {}) {
     design: cleanBuyerValue(input.design),
     theme: cleanBuyerValue(input.theme)
   };
+}
+
+function renderTruthForBuyer(truth, language = 'EN') {
+  if (String(language).toUpperCase() !== 'ES') return truth;
+  const one = value => renderBuyerValue(value, 'ES');
+  const many = values => (values || []).map(one).filter(Boolean);
+  return Object.freeze({
+    ...truth,
+    productType: one(truth.productType), productName: one(truth.productName), recipient: one(truth.recipient), occasion: one(truth.occasion),
+    materials: many(truth.materials), purity: one(truth.purity), finish: one(truth.finish), gemstones: many(truth.gemstones),
+    components: many(truth.components), colors: many(truth.colors), sizes: many(truth.sizes), dimensions: many(truth.dimensions),
+    weight: one(truth.weight), quantity: one(truth.quantity), features: many(truth.features), personalization: one(truth.personalization),
+    packaging: one(truth.packaging), care: one(truth.care), shipFrom: one(truth.shipFrom), origin: one(truth.origin),
+    style: one(truth.style), design: one(truth.design), theme: one(truth.theme)
+  });
 }
 
 // Greedy set-cover over keyword tokens: each phrase is worth its score plus
@@ -187,16 +207,16 @@ function buildBullets(truth, keywords, limit = 230, L = LABEL_SETS.EN, consumed 
   if (truth.dimensions.length) sizeColor.push(truth.dimensions.join(', '));
   if (truth.colors.length) sizeColor.push(`${L.colors} ${truth.colors.join(', ')}`);
   const productDetails = [];
-  if (truth.weight) productDetails.push(`Weight ${truth.weight}`);
-  if (truth.quantity) productDetails.push(`Quantity ${truth.quantity}`);
+  if (truth.weight) productDetails.push(`${L.weight} ${truth.weight}`);
+  if (truth.quantity) productDetails.push(`${L.quantity} ${truth.quantity}`);
   if (sizeColor.length) add(L.sizeColor, [...sizeColor, ...productDetails].join('. '));
   else if (productDetails.length) add(L.details, productDetails.join('. '));
 
   if (truth.personalization) add(L.personalized, truth.personalization);
   else if (truth.features.length) add(L.details, truth.features.join('. '));
   else {
-    const secondary = [truth.style && `Style: ${truth.style}`, truth.design && `Design: ${truth.design}`,
-      truth.theme && `Theme: ${truth.theme}`, truth.origin && `Origin: ${truth.origin}`].filter(Boolean);
+    const secondary = [truth.style && `${L.style}: ${truth.style}`, truth.design && `${L.design}: ${truth.design}`,
+      truth.theme && `${L.theme}: ${truth.theme}`, truth.origin && `${L.origin}: ${truth.origin}`].filter(Boolean);
     if (secondary.length) add(L.details, secondary.join('. '));
   }
 
@@ -205,7 +225,7 @@ function buildBullets(truth, keywords, limit = 230, L = LABEL_SETS.EN, consumed 
   if (truth.packaging) closing.push(truth.packaging);
   if (truth.shipFrom) closing.push(`${L.shipsFrom} ${truth.shipFrom}`);
   if (closing.length) add(L.packaging, closing.join('. '));
-  else if (truth.origin && !bullets.some(item => item.includes(`Origin: ${truth.origin}`))) add(L.details, `Origin: ${truth.origin}`);
+  else if (truth.origin && !bullets.some(item => item.includes(`${L.origin}: ${truth.origin}`))) add(L.details, `${L.origin}: ${truth.origin}`);
 
   // Unknown facts stay in missingFacts()/QA accounting and never leak into buyer-facing copy.
   // Keyword coverage is handled by title/highlight/backend fields rather than capacity stuffing.
@@ -228,23 +248,23 @@ function buildDescription(truth, keywords, L = LABEL_SETS.EN, consumed = [], ext
 
   const details = [];
   if (truth.materials.length) details.push(`${L.material.charAt(0) + L.material.slice(1).toLowerCase()}: ${truth.materials.join(', ')}`);
-  if (truth.purity) details.push(`Purity / plating: ${truth.purity}`);
-  if (truth.finish) details.push(`Finish: ${truth.finish}`);
-  if (truth.gemstones.length) details.push(`Gemstones: ${truth.gemstones.join(', ')}`);
-  if (truth.components.length) details.push(`Components: ${truth.components.join(', ')}`);
+  if (truth.purity) details.push(`${L.purity}: ${truth.purity}`);
+  if (truth.finish) details.push(`${L.finish}: ${truth.finish}`);
+  if (truth.gemstones.length) details.push(`${L.gemstones}: ${truth.gemstones.join(', ')}`);
+  if (truth.components.length) details.push(`${L.components}: ${truth.components.join(', ')}`);
   if (truth.sizes.length) details.push(`${L.sizes}: ${truth.sizes.join(', ')}`);
-  if (truth.dimensions.length) details.push(`Dimensions: ${truth.dimensions.join(', ')}`);
-  if (truth.weight) details.push(`Weight: ${truth.weight}`);
-  if (truth.quantity) details.push(`Quantity: ${truth.quantity}`);
+  if (truth.dimensions.length) details.push(`${L.dimensions}: ${truth.dimensions.join(', ')}`);
+  if (truth.weight) details.push(`${L.weight}: ${truth.weight}`);
+  if (truth.quantity) details.push(`${L.quantity}: ${truth.quantity}`);
   if (truth.colors.length) details.push(`${L.colors}: ${truth.colors.join(', ')}`);
   if (truth.personalization) details.push(`${L.personalizationWord}: ${truth.personalization}`);
   if (truth.packaging) details.push(`${L.packagingWord}: ${truth.packaging}`);
   if (truth.care) details.push(`${L.care}: ${truth.care}`);
   if (truth.shipFrom) details.push(`${L.shipsFrom}: ${truth.shipFrom}`);
-  if (truth.origin) details.push(`Origin: ${truth.origin}`);
-  if (truth.style) details.push(`Style: ${truth.style}`);
-  if (truth.design) details.push(`Design: ${truth.design}`);
-  if (truth.theme) details.push(`Theme: ${truth.theme}`);
+  if (truth.origin) details.push(`${L.origin}: ${truth.origin}`);
+  if (truth.style) details.push(`${L.style}: ${truth.style}`);
+  if (truth.design) details.push(`${L.design}: ${truth.design}`);
+  if (truth.theme) details.push(`${L.theme}: ${truth.theme}`);
   if (details.length) parts.push(`<p>${escapeHtml(details.join('. '))}.</p>`);
 
   if (truth.features.length) {
@@ -284,6 +304,7 @@ function compose(scoredKeywords, truthInput, options = {}) {
     mustContainAny: options.mustContainAny
   };
   const truth = normalizeTruth(truthInput);
+  const buyerTruth = renderTruthForBuyer(truth, opt.labelLanguage);
 
   const allowedRecipients = allowedRecipientFamilies([
     truth.recipient, truth.productName, truth.productType, truth.occasion,
@@ -342,9 +363,9 @@ function compose(scoredKeywords, truthInput, options = {}) {
   // Product Truth supplies the identity anchor; research can enrich the title
   // but never replace that identity or cause productName to become final copy
   // merely because the operator entered a long value.
-  const title = composeTitle(truth, orderedCopy, opt.titleLimit, opt.labelLanguage);
+  const title = composeTitle(buyerTruth, orderedCopy, opt.titleLimit, opt.labelLanguage);
   const highlightSubject = opt.labelLanguage === 'ES' ? title.text.split(' | ')[0] : '';
-  const highlightText = buildItemHighlights(truth, opt.highlightLimit, LABEL_SETS[opt.labelLanguage], highlightSubject);
+  const highlightText = buildItemHighlights(buyerTruth, opt.highlightLimit, LABEL_SETS[opt.labelLanguage], highlightSubject);
   const highlights = { text: highlightText, picked: [], used: new Set(contentTokens(highlightText)) };
 
   // Finalize all visible copy BEFORE backend terms, so Generic Keywords can
@@ -352,9 +373,9 @@ function compose(scoredKeywords, truthInput, options = {}) {
   const L = LABEL_SETS[opt.labelLanguage];
   const consumed = [...title.picked.map(p => p.phrase), ...highlights.picked.map(p => p.phrase)];
   const bulletKeywords = forCopy.filter(k => !consumed.some(p => p.toLowerCase() === k.phrase.toLowerCase()));
-  const bullets = buildBullets(truth, bulletKeywords, opt.bulletLimit, L, consumed);
+  const bullets = buildBullets(buyerTruth, bulletKeywords, opt.bulletLimit, L, consumed);
   const descriptionKeywords = forCopy.filter(k => !consumed.some(p => p.toLowerCase() === k.phrase.toLowerCase()));
-  const description = buildDescription(truth, descriptionKeywords, L, consumed);
+  const description = buildDescription(buyerTruth, descriptionKeywords, L, consumed);
 
   const visibleIndexed = new Set([
     ...contentTokens(title.text), ...contentTokens(highlights.text),

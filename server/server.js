@@ -74,6 +74,7 @@ const { EVALUATION_POLICY_VERSION, PROOF_POLICY_VERSION, RANKING_MODE,
 const { projectResearchFile, projectSocialHandoff, projectWorkflowArtifact } = require('./globalCandidateProjection');
 const { promoteGlobalCandidateToProject } = require('./globalCandidatePromotion');
 const { createGlobalCandidateShortlist, getLatestGlobalCandidateShortlist } = require('./globalCandidateShortlist');
+const { createExperimentContract, listProjectExperiments, recordExperimentOutcome } = require('./experimentContract');
 const { createCanonicalResearchProject } = require('./canonicalProjectStore');
 const amazonResearchAdapter = require('./commerceIntelligence/amazonResearchAdapter');
 const amazonIntelligenceAdapter = require('./commerceIntelligence/amazonIntelligenceAdapter');
@@ -2055,6 +2056,42 @@ app.get('/api/projects/:id/commerce-state', requireAuth(db), requireRole(['OWNER
       describePolicyCapability(db, scope, req.params.id)
     ]);
     res.json({ success: true, ...state, policyCapability });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+app.get('/api/projects/:id/experiments', requireAuth(db), requireRole(['OWNER', 'MANAGER', 'SELLER']), async (req, res) => {
+  try {
+    const projectId = Number(req.params.id);
+    const experiments = await listProjectExperiments(db, revisionScope(req.user), projectId);
+    res.json({ success: true, projectId, experiments, decisionAuthority: false });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+app.post('/api/projects/:id/experiments', requireAuth(db), requireRole(['OWNER', 'MANAGER']), async (req, res) => {
+  try {
+    const body = requireExactDto(req.body || {}, new Set([
+      'hypothesis','offer','priceAmount','priceCurrency','variant','trafficSource','startAt','endAt',
+      'successMetrics','stopConditions','idempotencyKey'
+    ]));
+    assertNoClientPolicyOverrides(body);
+    const projectId = Number(req.params.id);
+    const result = await createExperimentContract(db, revisionScope(req.user), { ...body, projectId });
+    res.status(result.replay ? 200 : 201).json({ success: true, ...result, immutable: true, humanAuthorized: true });
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+app.post('/api/projects/:id/experiments/:experimentId/outcome', requireAuth(db), requireRole(['OWNER', 'MANAGER']), async (req, res) => {
+  try {
+    const body = requireExactDto(req.body || {}, new Set(['metrics','notes','capturedAt','idempotencyKey']));
+    assertNoClientPolicyOverrides(body);
+    const projectId = Number(req.params.id);
+    const experimentId = Number(req.params.experimentId);
+    const experiments = await listProjectExperiments(db, revisionScope(req.user), projectId);
+    if (!experiments.some(item => item.id === experimentId)) {
+      return res.status(404).json({ success: false, error: 'EXPERIMENT_CONTRACT_NOT_FOUND' });
+    }
+    const result = await recordExperimentOutcome(db, revisionScope(req.user), { ...body, experimentId });
+    res.status(result.replay ? 200 : 201).json({ success: true, ...result, autoDecision: false, autoRetrain: false });
   } catch (error) { rejectRevisionStore(res, error); }
 });
 

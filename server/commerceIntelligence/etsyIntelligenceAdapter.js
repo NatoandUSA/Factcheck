@@ -409,7 +409,15 @@ async function buildIntelligence({ research, productTruth, configuration = {}, m
     categoryName: text(facts.category), ppcKeywords: [],
     imagePrompts: generateImagePromptSuite(productTruth.snapshot, 'ETSY') };
   const guarded = evaluateListingGuard({ listing: content, verifiedFacts: guardFactsForLanguage(facts, language) });
-  const unallocated = safe.filter(item => !usedCorpusKeys.has(fold(item.phrase)));
+  const visibleCoverageTokens = tokens([guarded.listing.etsyTitle, ...(guarded.listing.etsyTags || [])].join(' '));
+  const unallocated = safe.filter(item => !usedCorpusKeys.has(fold(item.phrase))).map(item => {
+    const roots = [...tokens(item.phrase)];
+    const coveredTokens = roots.filter(token => visibleCoverageTokens.has(token));
+    const missingTokens = roots.filter(token => !visibleCoverageTokens.has(token));
+    return { ...item, reason: missingTokens.length === 0 ? 'SEMANTIC_ROOTS_ALREADY_COVERED'
+      : guarded.listing.etsyTags.length >= 13 ? 'ETSY_TAG_CAPACITY_LIMIT' : 'LOWER_PRIORITY_REDUNDANT_CANDIDATE',
+      coveredTokens, missingTokens };
+  });
   const allocatedCorpusCount = safe.length + claimBlocked.length + ipBlocked.length + irrelevant.length
     + languageTargeting.length + competitorShopBlocked.length + master.excluded.length + master.review.length;
   const corpusAccountingGap = master.total - allocatedCorpusCount;

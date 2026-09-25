@@ -97,6 +97,7 @@ async function main() {
     expectedHeadRevisionId: null, idempotencyKey: key(3), changeReason: 'STAFF_DRAFT', facts: {
       productType: { disposition: 'ASSERTED', value: 'Custom Necklace', basis: 'SUPPLIER_SPEC' },
       materials: { disposition: 'ASSERTED', value: 'stainless steel', basis: 'SUPPLIER_SPEC' },
+      model: { disposition: 'ASSERTED', value: '2026', basis: 'SUPPLIER_SPEC' },
       personalization: { disposition: 'ASSERTED', value: 'Custom name personalization', basis: 'PRODUCTION_WORKFLOW' },
       recipient: { disposition: 'ASSERTED', value: 'hija', basis: 'OTHER' }
     }
@@ -132,6 +133,17 @@ async function main() {
   check(previewListing.status === 200 && previewListing.body.zeroWrite === true, JSON.stringify(previewListing.body));
   check(previewListing.body.dependencies.intelligenceSnapshotId === intelligence.body.intelligenceSnapshotId,
     'Etsy listing preview binds intelligence');
+  check(previewListing.body.content.etsyDescription.includes('Modelo: 2026'),
+    'verified Spanish model metadata remains visible in buyer copy');
+  const modeloBrandProbe = await json(`/api/projects/${projectId}/listings`, 'POST', {
+    idempotencyKey: key(54), changeReason: 'NEGATIVE_MODELO_BRAND_PROBE',
+    productTruthRevisionId: truth.body.productTruthRevisionId,
+    intelligenceSnapshotId: intelligence.body.intelligenceSnapshotId,
+    content: { ...previewListing.body.content, etsyTitle: `${previewListing.body.content.etsyTitle} Modelo` }
+  });
+  check(modeloBrandProbe.status === 409 && modeloBrandProbe.body.error === 'IP_CLEARANCE_REQUIRED'
+    && modeloBrandProbe.body.details?.ipHits?.some(hit => hit.term === 'modelo'),
+  `real Modelo brand occurrence must remain blocked: ${JSON.stringify(modeloBrandProbe.body)}`);
   const listing = await json(`/api/projects/${projectId}/listings`, 'POST', {
     idempotencyKey: key(5), changeReason: 'SAVE_ETSY_DRAFT', productTruthRevisionId: truth.body.productTruthRevisionId,
     intelligenceSnapshotId: intelligence.body.intelligenceSnapshotId, content: previewListing.body.content

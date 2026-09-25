@@ -7,6 +7,8 @@ const ES_REPLACEMENTS = Object.freeze([
   [/\bGraduation\b/giu, 'Graduación'],
   [/\bBirthday\b/giu, 'Cumpleaños'],
   [/\bStainless Steel\b/giu, 'Acero inoxidable'],
+  [/\bSterling Silver\b/giu, 'Plata esterlina'],
+  [/\bSilver\b/giu, 'Plateado'],
   [/\bPolished\b/giu, 'Pulido'],
   [/\bCubic Zirconia\b/giu, 'Circonita cúbica'],
   [/\bMetal Type\b/giu, 'Tipo de metal'],
@@ -20,6 +22,8 @@ const ES_REPLACEMENTS = Object.freeze([
   [/\bGift box\b/giu, 'Caja de regalo'],
   [/\bready-to-gift\b/giu, 'lista para regalar'],
   [/\bMessage card\b/giu, 'Tarjeta con mensaje'],
+  [/\binches?\b/giu, 'pulgadas'],
+  [/\bBox\b/giu, 'Caja'],
   [/\bounces\b/giu, 'onzas'],
   [/\bUS\b/gu, 'EE. UU.']
 ]);

@@ -15,16 +15,29 @@ const physicalSnapshot = { asserted: {
 const physical = generateImagePromptSuite(physicalSnapshot, 'AMAZON');
 check(physical.productMode === 'PHYSICAL', 'physical mode selected');
 check(physical.prompts.length === 8, 'eight physical image slots');
-check(physical.prompts.find(item => item.id === 'main_product').ready, 'main image ready');
+check(physical.prompts.find(item => item.id === 'main_product').ready, 'main image prompt body is fact-complete');
+check(physical.prompts.find(item => item.id === 'main_product').status === 'REFERENCE_REQUIRED',
+  'physical prompt explicitly requires a product reference before image generation');
 check(physical.prompts.find(item => item.id === 'main_product').prompt.includes('Select exactly one variant'), 'main image selects one variant');
-check(physical.prompts.find(item => item.id === 'alternate_angle').prompt.includes('only if the attached references actually show'), 'alternate angle cannot invent unseen geometry');
+check(physical.prompts.find(item => item.id === 'alternate_angle').status === 'REFERENCE_REQUIRED'
+  && physical.prompts.find(item => item.id === 'alternate_angle').prompt.includes('only if the attached references actually show'),
+  'alternate angle is reference-required and cannot invent unseen geometry');
 check(!physical.prompts.find(item => item.id === 'packaging_contents').ready, 'packaging image blocked when missing');
+check(physical.prompts.find(item => item.id === 'packaging_contents').status === 'OWNER_FACT_REQUIRED',
+  'missing packaging is owner-fact-required');
 check(physical.prompts.find(item => item.id === 'packaging_contents').prompt === '', 'blocked prompt contains no invented copy');
 check(physical.readyCount + physical.blockedCount === 8, 'prompt accounting complete');
 const vaguePersonalization = generateImagePromptSuite({ asserted: {
   productType: asserted('Necklace'), personalization: asserted('Yes') } }, 'ETSY');
-check(!vaguePersonalization.prompts.find(item => item.id === 'personalization_detail').ready,
+check(!vaguePersonalization.prompts.find(item => item.id === 'personalization_detail').ready
+  && vaguePersonalization.prompts.find(item => item.id === 'personalization_detail').status === 'OWNER_FACT_REQUIRED',
   'boolean personalization does not claim a verified area or method');
+const annotatedPackaging = generateImagePromptSuite({ asserted: {
+  productType: asserted('Necklace'), packaging: asserted('Gift box / ready-to-gift — theo listing tham chiếu') } }, 'AMAZON');
+const packagingPrompt = annotatedPackaging.prompts.find(item => item.id === 'packaging_contents');
+check(packagingPrompt.ready && packagingPrompt.status === 'REFERENCE_REQUIRED'
+  && !/theo listing tham chiếu/i.test(packagingPrompt.prompt),
+'verified packaging prompt strips internal provenance while retaining the reference requirement');
 assert.doesNotThrow(() => evaluateListingGuard({ listing: { amazonTitle: 'Custom Necklace',
   imagePrompts: physical }, verifiedFacts: { productType: 'Custom Necklace',
   personalization: 'Custom name personalization', materials: 'stainless steel', recipient: 'daughter' } }));

@@ -129,6 +129,19 @@ test('does not carry a contextual cue across listing-surface boundaries', () => 
   assert.equal(result.hits.find(hit => hit.term === 'anna')?.matchMode, 'BOUNDARY');
 });
 
+test('downgrades Spanish numeric model-field use without globally allowing the Modelo brand', () => {
+  const generic = productionIpGuard.screenListing({ etsyDescription: 'Marca: Para Mi Hija\nModelo: 2026' });
+  assert.equal(generic.verdict, 'REVIEW');
+  const hit = generic.hits.find(item => item.term === 'modelo');
+  assert.equal(hit?.matchMode, 'CONTEXTUAL_BOUNDARY');
+  assert.match(hit?.why || '', /generic|product-field|review/i);
+
+  const branded = productionIpGuard.screenListing({ etsyDescription: 'Cerveza Modelo Especial importada' });
+  assert.equal(branded.verdict, 'BLOCK');
+  assert.equal(branded.hits.find(item => item.term === 'modelo')?.matchMode, 'BOUNDARY');
+});
+
+
 test('keeps leetspeak fuzzy matches shadow-only', () => {
   const result = screenIpText('N1K3 workout top', library);
   assert.equal(result.verdict, 'REVIEW');

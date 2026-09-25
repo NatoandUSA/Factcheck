@@ -132,8 +132,9 @@ function compileIpLibrary(library) {
         .flatMap(value => tokenize(value)));
       const contextWindow = Number.isInteger(rule?.context_window) && rule.context_window > 0
         ? Math.min(rule.context_window, 10) : 3;
-      if (canonical && previousTokens.size) contextual.set(canonical, {
-        previousTokens, disqualifyingTokens, contextWindow,
+      const followingNumeric = rule?.following_numeric === true;
+      if (canonical && (previousTokens.size || followingNumeric)) contextual.set(canonical, {
+        previousTokens, disqualifyingTokens, contextWindow, followingNumeric,
         note: String(rule?.note || 'Context indicates a common-name use; manual review required.')
       });
     }
@@ -223,11 +224,14 @@ function screenCompiled(text, compiledLibrary) {
       }
       for (const exactIndex of exactIndexes) {
         const previousToken = exactIndex > 0 ? tokens[exactIndex - 1] : '';
+        const nextToken = tokens[exactIndex + entry.tokens.length] || '';
         const start = Math.max(0, exactIndex - entry.contextualDowngrade.contextWindow);
         const end = Math.min(tokens.length, exactIndex + entry.tokens.length + entry.contextualDowngrade.contextWindow);
         const nearby = tokens.slice(start, end);
         const disqualified = nearby.some(token => entry.contextualDowngrade.disqualifyingTokens.has(token));
-        const contextualReview = entry.contextualDowngrade.previousTokens.has(previousToken) && !disqualified;
+        const numericFieldValue = entry.contextualDowngrade.followingNumeric && /^\d[0-9a-z]*$/.test(nextToken);
+        const contextualReview = (entry.contextualDowngrade.previousTokens.has(previousToken) || numericFieldValue)
+          && !disqualified;
         const matchedEntry = contextualReview ? {
           ...entry,
           disposition: 'REVIEW',

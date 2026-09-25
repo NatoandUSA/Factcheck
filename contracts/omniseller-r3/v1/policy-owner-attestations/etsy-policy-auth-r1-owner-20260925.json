@@ -1,0 +1,15 @@
+{
+  "schemaVersion": "omniseller.owner-policy-attestation.v1",
+  "attestationId": "etsy-policy-auth-r1-owner-20260925",
+  "actorId": "1",
+  "capturedAt": "2026-09-25T02:52:26Z",
+  "tenantId": "8af7fc79-c563-41a4-8eaf-6a06cb7a51a8",
+  "workspaceId": "2",
+  "marketplace": "ETSY",
+  "site": "US",
+  "sellerAccountId": "workspace:2",
+  "mediaClass": "NON_MEDIA",
+  "productTypeId": "CUSTOM_NECKLACE",
+  "categoryId": "JEWELRY_NECKLACE",
+  "statement": "Owner authorizes ETSY-POLICY-AUTH-R1 for this exact Etsy US workspace/category scope to progress Project #9 from certified UAT into the canonical live-submission workflow. This authority reuses the existing server-owned public Etsy title/tag constraints, permits canonical approval and exact export only when all Product Truth, claim, IP, revision, dependency and lifecycle gates pass, does not auto-publish, and preserves manual marketplace submission as a human action."
+}

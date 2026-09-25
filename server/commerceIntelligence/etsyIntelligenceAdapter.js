@@ -246,7 +246,8 @@ function semanticKey(value) { return [...tokens(value)].sort().join(' '); }
 const ETSY_TITLE_LIMIT = 140;
 
 function spanishBuyerValue(value) {
-  const clean = text(value).replace(/\s*(?:[-—–]\s*)?theo listing tham chiếu\s*$/iu, '').trim();
+  const clean = text(value).replace(/\s*(?:[-—–]\s*)?theo listing tham chiếu\s*$/iu, '').trim()
+    .replace(/\bpapa\b/giu, 'papá').replace(/\bmama\b/giu, 'mamá').replace(/\bespanol\b/giu, 'español');
   const dictionary = new Map([['necklace','collar'],['personalized necklace','collar personalizado'],
     ['custom necklace','collar personalizado'],['blanket','manta'],['throw blanket','manta'],
     ['daughter','hija'],['mother','madre'],['mom','mamá'],['birthday','cumpleaños'],
@@ -287,7 +288,7 @@ function composeEtsyTitle(safe, facts, language = 'EN') {
   const recipient = spanishCompatible(facts.recipient || facts.audience);
   if (recipient && !fold(proposed).includes(fold(recipient))) clauses.push(`para ${recipient}`);
   for (const candidate of safe) {
-    const phrase = text(candidate.phrase);
+    const phrase = language === 'ES' ? spanishBuyerValue(candidate.phrase) : text(candidate.phrase);
     if (languageOfPhrase(phrase) !== 'ES' || !/\b(?:collar|regalo|hija|cumplea[nñ]os|graduaci[oó]n)\b/i.test(phrase)) continue;
     const existing = fold(clauses.join(' '));
     if ([...tokens(phrase)].every(token => existing.includes(token))) continue;

@@ -48,10 +48,19 @@ function guardFactsForLanguage(facts, language = 'EN') {
   return Object.freeze({
     ...facts,
     materials: augment(facts.materials || facts.composition),
+    purity: augment(facts.purity),
+    finish: augment(facts.finish),
     gemstones: augment(facts.gemstones),
     components: augment(facts.components),
+    sizes: augment(facts.sizes),
+    dimensions: augment(facts.dimensions),
+    weight: augment(facts.weight),
+    colors: augment(facts.colors),
     packaging: augment(facts.packaging),
-    includedItems: augment(facts.includedItems)
+    includedItems: augment(facts.includedItems),
+    recipient: augment(facts.recipient || facts.audience),
+    occasion: augment(facts.occasion),
+    origin: augment(facts.origin)
   });
 }
 

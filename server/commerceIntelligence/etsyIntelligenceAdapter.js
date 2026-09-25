@@ -175,7 +175,8 @@ function isRelevant(candidate, facts, configuration, queryContexts) {
 function engineBindingHash() {
   const hash = crypto.createHash('sha256'); hash.update(`${ENGINE_ID}\0`);
   for (const file of [__filename, require.resolve('./semantic'), require.resolve('../listingGuard'),
-    require.resolve('../claimGuard'), require.resolve('../ipGuard'), require.resolve('./amazonBuyerLanguage')]) {
+    require.resolve('../claimGuard'), require.resolve('../ipGuard'), require.resolve('./amazonBuyerLanguage'),
+    require.resolve('../imagePromptGenerator')]) {
     hash.update(file.split(/[\\/]/).pop()); hash.update('\0'); hash.update(fs.readFileSync(file)); hash.update('\0');
   }
   return hash.digest('hex');

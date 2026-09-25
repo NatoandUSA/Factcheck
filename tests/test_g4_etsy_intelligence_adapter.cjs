@@ -119,6 +119,12 @@ async function main() {
   'real Hija-like mixed Product Truth produces a useful Spanish title instead of 22-character identity');
   check(!/\b(?:necklace|materials|personalization)\b/i.test(automaticSpanish.output.listingDraft.etsyDescription),
     'Spanish buyer description does not leak English product labels');
+  const orthographyTitle = adapter.composeEtsyTitle([
+    { phrase: 'regalo para mi hija de papa en espanol' }
+  ], { productType: 'Necklace', recipient: 'Hija', personalization: 'Yes' }, 'ES');
+  check(/Papá/.test(orthographyTitle) && /Español/.test(orthographyTitle)
+    && !/\bPapa\b|\bEspanol\b/.test(orthographyTitle),
+  'Spanish visible title normalizes buyer-facing accents without rewriting keyword evidence');
   check(automaticSpanish.accounting.languageTargetingCount === 0,
     'AUTO does not misroute Spanish source phrases into the other-language bucket');
   const richTitle = await adapter.buildIntelligence({

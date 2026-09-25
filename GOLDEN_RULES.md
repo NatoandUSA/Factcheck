@@ -1,6 +1,6 @@
 # OMNISELLER — GOLDEN RULES
 
-**Version:** 2.2
+**Version:** 2.3 candidate — Product Truth staff/Manager authority clarification (2026-09-25)
 **Thay thế:** v1.4 và **toàn bộ** rule/agreement trước đó, không có ngoại lệ.
 **Soạn bởi:** Claude (architecture controller) theo yêu cầu Owner, 2026-08-26
 **v2.1, 2026-08-27:** docs-only candidate — GPT1 ruling F-06/F-09, register bổ sung F-08/F-09, đóng F-03; §2.2 exit criteria; DOC-01/DOC-02 ratified. Chỉ có hiệu lực sau khi commit chứa thay đổi này vào ancestry của `main`.
@@ -447,7 +447,15 @@ Mọi rejected request phải zero-write đối với evidence row/status, accep
 6. UI/client state, labels, scores và metadata — zero authority
 ```
 
-**AI/model output không bao giờ thoả mãn hard gate:** exact SKU · supplier confirmation · material · dimensions · personalization limits · IP QA · owner-set price · publish approval.
+**AI/model output không bao giờ tự thoả mãn hard gate:** exact SKU · material · dimensions · personalization limits · IP QA · owner-set price · publish approval. Product facts do not require a second supplier-verification step after the responsible staff member has entered them and an authorized Manager/Owner has confirmed that exact Product Truth revision.
+
+### Product Truth authority for staff workflows — Owner clarification, 2026-09-25
+
+- Staff may enter Product Truth directly in the form or use CSV/workbook/listing capture as input, then edit the facts. The responsible staff member owns the accuracy of the entered values for the exact product and variation.
+- Manager/Owner confirmation of the exact current Product Truth revision and hash accepts its asserted facts as authoritative for both Amazon and Etsy workflow execution. Do not demand another supplier check, evidence upload, or re-attestation of those confirmed facts merely because the source was manually entered or imported from CSV.
+- Research files and reference listings do not promote themselves into Product Truth. The staff entry followed by Manager/Owner confirmation is the authority transition. A later revision needs its own confirmation; stale, missing, or mismatched revision/hash is not implicitly approved.
+- Missing fields remain unasserted. The workflow can continue and produce a draft with an explicit human-required gap; it must not invent a missing fact or introduce a new claim absent from the confirmed revision. Independent IP, marketplace policy, listing quality, and final publication authority checks still apply.
+- For the Omni V4 staff deliverable, a confirmed revision must not be delayed by an extra Product Truth source-verification gate. `LISTING_READY_FOR_HUMAN_USE` assesses the listing, keyword use, prompts, and stated missing fields; it is not marketplace publication approval.
 
 ---
 

@@ -39,7 +39,8 @@ Cerebro / Xray / Etsy / ytuong / YTrends / Intel
 = dữ liệu nghiên cứu
 
 Product Truth
-= factual facts được staff xác nhận trong đúng Project
+= các facts nhân viên chịu trách nhiệm nhập trong đúng Project;
+  Manager/Owner confirm đúng revision để chấp nhận dùng cho workflow
 ~~~
 
 Không copy một con số/claim từ research rồi mặc định coi đó là Product Truth.
@@ -244,15 +245,18 @@ Không padding keyword giả để đủ số.
 
 Có thể tạo Product Truth từ:
 - staff form;
+- CSV do nhân viên nhập/đối chiếu và chỉnh trên form;
 - workbook;
 - listing capture;
 - reusable family facts.
 
 Quy trình:
 1. tạo Product Truth revision;
-2. kiểm facts;
-3. unknown phải giữ unknown;
-4. confirm revision bằng human authority đúng vai.
+2. nhân viên chịu trách nhiệm về độ chính xác của facts đã nhập cho đúng sản phẩm/biến thể;
+3. fact chưa nhập giữ unknown; không tự suy ra từ research;
+4. Manager/Owner kiểm và confirm đúng revision/hash. Revision được confirm là nguồn Product Truth được chấp nhận cho workflow Amazon và Etsy, không yêu cầu nhân viên xác minh lại supplier hay nộp thêm chứng cứ cho chính các facts đã duyệt.
+
+Nếu còn field unknown, vẫn tiếp tục workflow và hiện rõ phần thiếu cho người dùng; listing không tự tạo claim cho field đó. Revision mới hoặc hash khác phải được confirm lại. Các bước kiểm IP, chính sách marketplace, chất lượng listing và quyền publish vẫn thực hiện theo luồng của chúng.
 
 Không lấy modeled competitor metric làm product fact.
 
@@ -499,11 +503,11 @@ Backend vẫn phải giữ zero-write preview, provenance, Research Readiness/Co
 Trước Confirm:
 
 - product type đúng?
-- material có source?
-- dimensions có source?
-- personalization limits có source?
-- color/size variants có source?
-- package quantity có source?
+- material đã nhập đúng sản phẩm/biến thể?
+- dimensions đã nhập đúng nếu có?
+- personalization limits đã nhập đúng nếu có?
+- color/size variants đã nhập đúng nếu có?
+- package quantity đã nhập đúng nếu có?
 - fact chưa biết để UNKNOWN?
 - có copy modeled competitor metric vào product fact không?
 

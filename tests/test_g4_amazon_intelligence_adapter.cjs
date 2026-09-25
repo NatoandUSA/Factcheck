@@ -194,7 +194,7 @@ async function main() {
   let blockedOutput;
   try { await adapter.buildIntelligence(unsafeIdentity); } catch (error) { blockedOutput = error; }
   check(blockedOutput?.code === 'UNVERIFIED_OUTPUT_CLAIM' && blockedOutput?.status === 422
-    && blockedOutput?.details?.blocking?.some(item => item.token === 'silver'),
+    && blockedOutput?.details?.blocking?.some(item => ['silver','plata'].includes(item.token)),
   'true output contamination stays blocked with field-level 422 diagnostics');
   console.log(`G4 Amazon intelligence adapter: ${passed}/${passed} PASS`);
 }

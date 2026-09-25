@@ -6,6 +6,7 @@ const ipGuard = require('../ipGuard');
 const { evaluateListingGuard } = require('../listingGuard');
 const { evaluateText, SURFACES } = require('../claimGuard');
 const { generateImagePromptSuite } = require('../imagePromptGenerator');
+const { guardFactsForLanguage } = require('./amazonBuyerLanguage');
 const { allowedRecipientFamilies, conflictingRecipient, auditProductFamilyAlignment } = require('./semantic');
 
 const ENGINE_ID = 'etsy-commerce-intelligence-v1';
@@ -174,7 +175,8 @@ function isRelevant(candidate, facts, configuration, queryContexts) {
 function engineBindingHash() {
   const hash = crypto.createHash('sha256'); hash.update(`${ENGINE_ID}\0`);
   for (const file of [__filename, require.resolve('./semantic'), require.resolve('../listingGuard'),
-    require.resolve('../claimGuard'), require.resolve('../ipGuard')]) {
+    require.resolve('../claimGuard'), require.resolve('../ipGuard'), require.resolve('./amazonBuyerLanguage'),
+    require.resolve('../imagePromptGenerator')]) {
     hash.update(file.split(/[\\/]/).pop()); hash.update('\0'); hash.update(fs.readFileSync(file)); hash.update('\0');
   }
   return hash.digest('hex');
@@ -243,8 +245,31 @@ function semanticKey(value) { return [...tokens(value)].sort().join(' '); }
 
 const ETSY_TITLE_LIMIT = 140;
 
+function spanishBuyerValue(value) {
+  const clean = text(value).replace(/\s*(?:[-—–]\s*)?theo listing tham chiếu\s*$/iu, '').trim()
+    .replace(/\bpapa\b/giu, 'papá').replace(/\bmama\b/giu, 'mamá').replace(/\bespanol\b/giu, 'español');
+  const dictionary = new Map([['necklace','collar'],['personalized necklace','collar personalizado'],
+    ['custom necklace','collar personalizado'],['blanket','manta'],['throw blanket','manta'],
+    ['daughter','hija'],['mother','madre'],['mom','mamá'],['birthday','cumpleaños'],
+    ['graduation','graduación'],['christmas','navidad'],['stainless steel','acero inoxidable'],
+    ['gift box','caja de regalo'],['gift box / ready-to-gift','caja de regalo']]);
+  if (dictionary.has(fold(clean))) return dictionary.get(fold(clean));
+  if (clean.includes(',')) {
+    const parts = clean.split(',').map(part => part.trim());
+    if (parts.every(part => dictionary.has(fold(part)))) return parts.map(part => dictionary.get(fold(part))).join(', ');
+  }
+  return clean;
+}
+
+function spanishCompatible(value) {
+  const clean = spanishBuyerValue(value);
+  return clean && !/\b(?:theo|listing tham chiếu)\b/i.test(clean)
+    && !['EN','MIXED'].includes(languageOfPhrase(clean)) ? clean : '';
+}
+
 function composeEtsyTitle(safe, facts, language = 'EN') {
-  const verifiedIdentities = [facts.productName, facts.productType].map(value => text(value)).filter(Boolean);
+  const verifiedIdentities = [facts.productName, facts.productType]
+    .map(value => language === 'ES' ? spanishCompatible(value) : text(value)).filter(Boolean);
   const identity = verifiedIdentities.find(value => Array.from(value).length <= ETSY_TITLE_LIMIT
     && value.split(/\s+/).filter(Boolean).length <= 15);
   if (!identity) throw Object.assign(new Error('ETSY_PRODUCT_TRUTH_IDENTITY_REQUIRES_REVIEW'), {
@@ -253,11 +278,26 @@ function composeEtsyTitle(safe, facts, language = 'EN') {
   const personalized = Boolean(text(facts.personalization));
   const alreadyPersonalized = /\b(custom|personalized|personalised|personalizado|personalizada|nombre)\b/i.test(identity);
   const prefix = language === 'ES' ? 'Personalizado' : 'Personalized';
-  const proposed = titleCase(`${personalized && !alreadyPersonalized ? `${prefix} ` : ''}${identity}`.trim());
+  const proposed = titleCase((personalized && !alreadyPersonalized
+    ? language === 'ES' ? `${identity} ${prefix}` : `${prefix} ${identity}` : identity).trim());
   if (Array.from(proposed).length > ETSY_TITLE_LIMIT || proposed.split(/\s+/).filter(Boolean).length > 15) {
     return titleCase(identity);
   }
-  return proposed;
+  if (language !== 'ES') return proposed;
+  const clauses = [proposed];
+  const recipient = spanishCompatible(facts.recipient || facts.audience);
+  if (recipient && !fold(proposed).includes(fold(recipient))) clauses.push(`para ${recipient}`);
+  for (const candidate of safe) {
+    const phrase = language === 'ES' ? spanishBuyerValue(candidate.phrase) : text(candidate.phrase);
+    if (languageOfPhrase(phrase) !== 'ES' || !/\b(?:collar|regalo|hija|cumplea[nñ]os|graduaci[oó]n)\b/i.test(phrase)) continue;
+    const existing = fold(clauses.join(' '));
+    if ([...tokens(phrase)].every(token => existing.includes(token))) continue;
+    const next = `${clauses.join(' ')} · ${phrase}`;
+    if (Array.from(next).length > ETSY_TITLE_LIMIT || next.split(/\s+/).length > 15) continue;
+    clauses.push(`· ${phrase}`);
+    if (clauses.length >= 3) break;
+  }
+  return titleCase(clauses.join(' ').replace(/\s+·\s+·/g, ' ·'));
 }
 
 function selectExplainedTags(safe, facts) {
@@ -282,11 +322,18 @@ function selectExplainedTags(safe, facts) {
 }
 
 function naturalDescription(facts, title, language) {
-  const identity = text(facts.productName || facts.productType); const recipient = text(facts.recipient || facts.audience);
-  const occasion = text(facts.occasion); const intro = language === 'ES'
-    ? `${identity}${recipient ? ` para ${recipient}` : ''}${occasion ? `, pensado para ${occasion}` : ''}.`
+  const es = language === 'ES';
+  const identity = es ? title : text(facts.productName || facts.productType);
+  const recipient = es ? spanishCompatible(facts.recipient || facts.audience) : text(facts.recipient || facts.audience);
+  const occasion = es ? spanishCompatible(facts.occasion) : text(facts.occasion); const intro = es
+    ? `${identity}${recipient && !fold(identity).includes(fold(recipient)) ? ` para ${recipient}` : ''}${occasion ? `, pensado para ${occasion}` : ''}.`
     : `${identity}${recipient ? ` for ${recipient}` : ''}${occasion ? `, designed for ${occasion}` : ''}.`;
   const details = [];
+  const labelsEs = { Materials:'Materiales', Personalization:'Personalización', Size:'Tamaño', Included:'Incluye',
+    Format:'Formato', Brand:'Marca', Model:'Modelo', Features:'Características', Specifications:'Especificaciones',
+    'Intended use':'Uso previsto', Compatibility:'Compatibilidad', Performance:'Rendimiento', Durability:'Durabilidad',
+    Ingredients:'Ingredientes', Allergens:'Alérgenos', Instructions:'Instrucciones', Warranty:'Garantía',
+    Safety:'Seguridad', Players:'Jugadores', Age:'Edad', Duration:'Duración', Packaging:'Presentación', Care:'Cuidado' };
   for (const [label, value] of [['Materials', facts.materials || facts.composition], ['Personalization', facts.personalization],
     ['Size', facts.sizes || facts.dimensions], ['Included', facts.includedItems], ['Format', facts.fileFormat],
     ['Brand', facts.brand], ['Model', facts.model], ['Features', facts.features || facts.capabilities],
@@ -296,7 +343,9 @@ function naturalDescription(facts, title, language) {
     ['Allergens', facts.allergens], ['Instructions', facts.instructions], ['Warranty', facts.warranty],
     ['Safety', facts.safetyWarnings || facts.safety], ['Players', facts.playerCount], ['Age', facts.minimumAge],
     ['Duration', facts.duration], ['Packaging', facts.packaging], ['Care', facts.care]]) {
-    if (text(value)) details.push(`${label}: ${text(value)}`);
+    const rendered = es ? spanishCompatible(value) : text(value);
+    if (rendered && !(label === 'Personalization' && /^(?:yes|true|sí|si)$/i.test(rendered)))
+      details.push(`${es ? labelsEs[label] : label}: ${rendered}`);
   }
   return [title, intro, ...details].filter(Boolean).join('\n\n');
 }
@@ -357,10 +406,19 @@ async function buildIntelligence({ research, productTruth, configuration = {}, m
   const content = { etsyTitle, etsyTags, etsyTagExplanations: explainedTags.map(({ corpusKey, ...item }) => item),
     etsyTagStatus: tagCapacityGap ? { code: 'TAG_SHORTAGE', missingCount: tagCapacityGap } : { code: 'COMPLETE', missingCount: 0 },
     etsyDescription: naturalDescription(facts, etsyTitle, language),
-    itemHighlights: identity, categoryName: text(facts.category), ppcKeywords: [],
+    itemHighlights: language === 'ES' ? etsyTitle : identity,
+    categoryName: text(facts.category), ppcKeywords: [],
     imagePrompts: generateImagePromptSuite(productTruth.snapshot, 'ETSY') };
-  const guarded = evaluateListingGuard({ listing: content, verifiedFacts: facts });
-  const unallocated = safe.filter(item => !usedCorpusKeys.has(fold(item.phrase)));
+  const guarded = evaluateListingGuard({ listing: content, verifiedFacts: guardFactsForLanguage(facts, language) });
+  const visibleCoverageTokens = tokens([guarded.listing.etsyTitle, ...(guarded.listing.etsyTags || [])].join(' '));
+  const unallocated = safe.filter(item => !usedCorpusKeys.has(fold(item.phrase))).map(item => {
+    const roots = [...tokens(item.phrase)];
+    const coveredTokens = roots.filter(token => visibleCoverageTokens.has(token));
+    const missingTokens = roots.filter(token => !visibleCoverageTokens.has(token));
+    return { ...item, reason: missingTokens.length === 0 ? 'SEMANTIC_ROOTS_ALREADY_COVERED'
+      : guarded.listing.etsyTags.length >= 13 ? 'ETSY_TAG_CAPACITY_LIMIT' : 'LOWER_PRIORITY_REDUNDANT_CANDIDATE',
+      coveredTokens, missingTokens };
+  });
   const allocatedCorpusCount = safe.length + claimBlocked.length + ipBlocked.length + irrelevant.length
     + languageTargeting.length + competitorShopBlocked.length + master.excluded.length + master.review.length;
   const corpusAccountingGap = master.total - allocatedCorpusCount;

@@ -50,6 +50,8 @@ function visibleCopyOf(listing = {}) {
     amazonBullets: listing.amazonBullets,
     amazonDescription: listing.amazonDescription,
     amazonAPlusPoints: listing.amazonAPlusPoints,
+    amazonAPlusModules: listing.amazonAPlusModules?.map(module => ({ headline: module.headline,
+      body: module.body, altText: module.altText })),
     etsyDescription: listing.etsyDescription
   };
 }

@@ -34,6 +34,9 @@ async function main() {
   const result = await adapter.buildIntelligence(input);
   check(/^[0-9a-f]{64}$/.test(result.engineBindingHash), 'engine code binding returned');
   check(result.output.language === 'ES', 'Spanish listing language selected');
+  check(result.output.listingDraft.amazonAPlusModules.length >= 2
+    && result.output.listingDraft.amazonAPlusModules.every(item => item.headline && item.body !== undefined
+      && item.imageBrief && item.altText), 'A+ modules contain buyer copy and image guidance from confirmed facts');
   check(result.accounting.inputKeywordCount === 7, 'entire keyword corpus counted');
   check(result.accounting.claimTargetingCount === 1, 'unverified 18k phrase diverted');
   check(result.accounting.ipBlockedKeywordCount === 1, 'canonical IP screen blocks Nike');
@@ -87,6 +90,16 @@ async function main() {
   check(!productionVisible.includes('silver'), 'ambiguous silver color cannot become a material claim');
   check(productionResult.output.factClaimReview.some(item => item.field === 'colors' && item.value.includes('Silver')),
     'omitted ambiguous color remains visible in review accounting');
+  const localizedAPlusInput = structuredClone(productionLike);
+  delete localizedAPlusInput.productTruth.snapshot.asserted.colors;
+  localizedAPlusInput.productTruth.snapshot.asserted.purity = asserted('Sterling Silver');
+  localizedAPlusInput.productTruth.snapshot.asserted.components = asserted('Metal Type: Sterling Silver; Closure Type: Box');
+  localizedAPlusInput.productTruth.snapshot.asserted.sizes = asserted('3.5 x 3.5 x 1 inches');
+  const localizedAPlusResult = await adapter.buildIntelligence(localizedAPlusInput);
+  const productionModules = JSON.stringify(localizedAPlusResult.output.listingDraft.amazonAPlusModules);
+  check(!/\b(?:Sterling Silver|inches|Box)\b/i.test(productionModules)
+    && /Plata esterlina/i.test(productionModules) && /pulgadas/i.test(productionModules),
+  'Amazon ES A+ modules localize verified material, closure and measurement values');
   const annotatedPackaging = structuredClone(input);
   annotatedPackaging.productTruth.snapshot.asserted.packaging = asserted('Gift box — theo listing tham chiếu');
   const annotatedPackagingResult = await adapter.buildIntelligence(annotatedPackaging);
@@ -181,7 +194,7 @@ async function main() {
   let blockedOutput;
   try { await adapter.buildIntelligence(unsafeIdentity); } catch (error) { blockedOutput = error; }
   check(blockedOutput?.code === 'UNVERIFIED_OUTPUT_CLAIM' && blockedOutput?.status === 422
-    && blockedOutput?.details?.blocking?.some(item => item.token === 'silver'),
+    && blockedOutput?.details?.blocking?.some(item => ['silver','plata'].includes(item.token)),
   'true output contamination stays blocked with field-level 422 diagnostics');
   console.log(`G4 Amazon intelligence adapter: ${passed}/${passed} PASS`);
 }

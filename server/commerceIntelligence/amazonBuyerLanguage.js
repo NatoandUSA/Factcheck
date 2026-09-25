@@ -7,6 +7,9 @@ const ES_REPLACEMENTS = Object.freeze([
   [/\bGraduation\b/giu, 'Graduación'],
   [/\bBirthday\b/giu, 'Cumpleaños'],
   [/\bStainless Steel\b/giu, 'Acero inoxidable'],
+  [/\bSterling Silver\b/giu, 'Plata esterlina'],
+  [/\bSilver\b/giu, 'Plata'],
+  [/\bYellow\b/giu, 'Amarillo'],
   [/\bPolished\b/giu, 'Pulido'],
   [/\bCubic Zirconia\b/giu, 'Circonita cúbica'],
   [/\bMetal Type\b/giu, 'Tipo de metal'],
@@ -20,6 +23,8 @@ const ES_REPLACEMENTS = Object.freeze([
   [/\bGift box\b/giu, 'Caja de regalo'],
   [/\bready-to-gift\b/giu, 'lista para regalar'],
   [/\bMessage card\b/giu, 'Tarjeta con mensaje'],
+  [/\binches?\b/giu, 'pulgadas'],
+  [/\bBox\b/giu, 'Caja'],
   [/\bounces\b/giu, 'onzas'],
   [/\bUS\b/gu, 'EE. UU.']
 ]);
@@ -44,10 +49,19 @@ function guardFactsForLanguage(facts, language = 'EN') {
   return Object.freeze({
     ...facts,
     materials: augment(facts.materials || facts.composition),
+    purity: augment(facts.purity),
+    finish: augment(facts.finish),
     gemstones: augment(facts.gemstones),
     components: augment(facts.components),
+    sizes: augment(facts.sizes),
+    dimensions: augment(facts.dimensions),
+    weight: augment(facts.weight),
+    colors: augment(facts.colors),
     packaging: augment(facts.packaging),
-    includedItems: augment(facts.includedItems)
+    includedItems: augment(facts.includedItems),
+    recipient: augment(facts.recipient || facts.audience),
+    occasion: augment(facts.occasion),
+    origin: augment(facts.origin)
   });
 }
 

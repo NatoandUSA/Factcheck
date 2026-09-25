@@ -51,7 +51,7 @@ const get = (db, sql, params = []) => new Promise((resolve, reject) => db.get(sq
   (error, row) => error ? reject(error) : resolve(row || null)));
 
 const COMMON_FIELDS = new Set(['categoryName', 'itemHighlights', 'imagePrompts', 'creativeAssets', 'ppcKeywords']);
-const AMAZON_FIELDS = new Set([...COMMON_FIELDS, 'amazonTitle', 'amazonBullets', 'amazonSearchTerms', 'amazonDescription', 'amazonAPlusPoints']);
+const AMAZON_FIELDS = new Set([...COMMON_FIELDS, 'amazonTitle', 'amazonBullets', 'amazonSearchTerms', 'amazonDescription', 'amazonAPlusPoints', 'amazonAPlusModules']);
 const ETSY_FIELDS = new Set([...COMMON_FIELDS, 'etsyTitle', 'etsyTags', 'etsyDescription', 'etsyTagExplanations',
   'etsyTagStatus', 'shopName', 'priceAmount', 'priceCurrency']);
 
@@ -283,7 +283,7 @@ async function validateCanonicalDraft(db, scope, projectId, selectedTruthRevisio
   const intelligence = await resolveIntelligenceBinding(db, scope, projectId, selectedIntelligenceSnapshotId, truth);
   const listing = exactContent(rawContent, scope.marketplace);
   const verifiedFacts = factsFromSnapshot(truth.snapshot);
-  const guardFacts = scope.marketplace === 'AMAZON' && intelligence?.output?.language === 'ES'
+  const guardFacts = intelligence?.output?.language === 'ES'
     ? guardFactsForLanguage(verifiedFacts, 'ES') : verifiedFacts;
   let guarded;
   try { guarded = evaluateListingGuard({ listing, verifiedFacts: guardFacts }); }

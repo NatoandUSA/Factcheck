@@ -66,6 +66,8 @@ function screenListing(listing) {
     listing.amazonSearchTerms || '',
     listing.amazonDescription || '',
     ...(Array.isArray(listing.amazonAPlusPoints) ? listing.amazonAPlusPoints : []),
+    ...(Array.isArray(listing.amazonAPlusModules) ? listing.amazonAPlusModules.flatMap(module =>
+      [module.headline, module.body, module.altText].filter(Boolean)) : []),
     listing.etsyTitle || '',
     listing.etsyDescription || '',
     ...(Array.isArray(listing.etsyTags) ? listing.etsyTags : [])

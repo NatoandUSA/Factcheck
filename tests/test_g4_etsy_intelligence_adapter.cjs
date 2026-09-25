@@ -62,6 +62,9 @@ async function main() {
   check(result.accounting.corpusAccountingGap === 0, 'every Etsy corpus candidate has exactly one disposition');
   check(result.output.keywordAllocation.unallocated.length === result.accounting.unallocatedCount,
     'unallocated keywords retained instead of silently dropped');
+  check(result.output.keywordAllocation.unallocated.every(item => item.reason
+    && Array.isArray(item.coveredTokens) && Array.isArray(item.missingTokens)),
+    'V4 Etsy unallocated keywords carry explicit omission accounting');
   check(result.output.keywordAllocation.reason.includes('NO_SELLER-SELECTED_PPC'), 'Etsy PPC limitation explicit');
   check(result.output.listingDraft.etsyDescription.includes('Materiales: acero inoxidable'), 'Spanish description renders Product Truth for buyers');
   check(result.output.competitorSummary.uniqueListingIds === 3, 'competitor identities counted');

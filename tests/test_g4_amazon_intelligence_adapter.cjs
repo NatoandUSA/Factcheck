@@ -34,6 +34,9 @@ async function main() {
   const result = await adapter.buildIntelligence(input);
   check(/^[0-9a-f]{64}$/.test(result.engineBindingHash), 'engine code binding returned');
   check(result.output.language === 'ES', 'Spanish listing language selected');
+  check(result.output.listingDraft.amazonAPlusModules.length >= 2
+    && result.output.listingDraft.amazonAPlusModules.every(item => item.headline && item.body !== undefined
+      && item.imageBrief && item.altText), 'A+ modules contain buyer copy and image guidance from confirmed facts');
   check(result.accounting.inputKeywordCount === 7, 'entire keyword corpus counted');
   check(result.accounting.claimTargetingCount === 1, 'unverified 18k phrase diverted');
   check(result.accounting.ipBlockedKeywordCount === 1, 'canonical IP screen blocks Nike');

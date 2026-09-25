@@ -122,6 +122,51 @@ function aPlusPointsFromTruth(facts, language = 'EN') {
   return points;
 }
 
+function aPlusModulesFromTruth(facts, language = 'EN') {
+  const es = String(language).toUpperCase() === 'ES';
+  const buyer = value => renderBuyerValue(text(value).replace(/\s*(?:[-—–]\s*)?theo listing tham chiếu\s*$/iu, '').trim(), language);
+  const identity = buyer(facts.productType || facts.productName);
+  const recipient = buyer(facts.recipient || facts.audience);
+  const material = buyer(facts.materials || facts.composition);
+  const components = buyer(facts.components);
+  const size = buyer(facts.sizes || facts.dimensions);
+  const weight = buyer(facts.weight);
+  const finish = buyer(facts.finish);
+  const included = buyer(facts.includedItems);
+  const packaging = buyer(facts.packaging);
+  const modules = [];
+  if (identity) modules.push({ id: 'product_story', type: 'TEXT_IMAGE',
+    headline: identity, body: [recipient && (es ? `Para ${recipient}` : `For ${recipient}`),
+      buyer(facts.occasion)].filter(Boolean).join(' · '),
+    imageBrief: es ? 'Fotografía del producto real, sin alterar el diseño ni el texto impreso.'
+      : 'Photo of the actual product, preserving its design and printed text.',
+    altText: identity });
+  if (material || included) modules.push({ id: 'product_details', type: 'TEXT_IMAGE',
+    headline: es ? 'Detalles del producto' : 'Product details',
+    body: [material && `${es ? 'Material' : 'Material'}: ${material}`,
+      included && `${es ? 'Incluye' : 'Includes'}: ${included}`].filter(Boolean).join(' · '),
+    imageBrief: es ? 'Primer plano del producto real y sus componentes visibles.' : 'Close view of the actual product and visible components.',
+    altText: identity });
+  if (components || finish) modules.push({ id: 'construction', type: 'TEXT_IMAGE',
+    headline: es ? 'Diseño y componentes' : 'Design and components',
+    body: [components && `${es ? 'Componentes' : 'Components'}: ${components}`,
+      finish && `${es ? 'Acabado' : 'Finish'}: ${finish}`].filter(Boolean).join(' · '),
+    imageBrief: es ? 'Mostrar únicamente los detalles visibles en fotografías de referencia.'
+      : 'Show only details visible in the reference photos.', altText: identity });
+  if (size || weight) modules.push({ id: 'measurements', type: 'TEXT_IMAGE',
+    headline: es ? 'Medidas' : 'Measurements',
+    body: [size && `${es ? 'Tamaño' : 'Size'}: ${size}`,
+      weight && `${es ? 'Peso' : 'Weight'}: ${weight}`].filter(Boolean).join(' · '),
+    imageBrief: es ? 'Usar solo medidas del Product Truth; no inventar escala visual.'
+      : 'Use only Product Truth measurements; do not invent a visual scale.', altText: identity });
+  if (packaging) modules.push({ id: 'packaging', type: 'TEXT_IMAGE',
+    headline: es ? 'Presentación' : 'Presentation', body: packaging,
+    imageBrief: es ? 'Mostrar únicamente el empaque real de la variante seleccionada.'
+      : 'Show only the actual packaging of the selected variant.',
+    altText: identity });
+  return modules;
+}
+
 function canonicalContent(composed, facts, extraPpc, truthSnapshot, language = 'EN') {
   const ppc = [...composed.ppc.exact, ...composed.ppc.phrase, ...composed.ppc.broad].map(item => item.phrase);
   const identity = renderBuyerValue(text(facts.productName || facts.productType), language);
@@ -132,6 +177,7 @@ function canonicalContent(composed, facts, extraPpc, truthSnapshot, language = '
     amazonSearchTerms: composed.searchTerms[0]?.text || '',
     amazonDescription: composed.description,
     amazonAPlusPoints: aPlusPointsFromTruth(facts, language),
+    amazonAPlusModules: aPlusModulesFromTruth(facts, language),
     categoryName: text(facts.category),
     ppcKeywords: [...new Set([...ppc, ...extraPpc.map(item => item.phrase)])],
     imagePrompts: generateImagePromptSuite(truthSnapshot, 'AMAZON')

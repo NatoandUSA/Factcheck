@@ -1420,6 +1420,12 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
           <label><b>Category</b><input value={listing.categoryName || ''} onChange={event => updateDraft('categoryName', event.target.value)} style={{ width: '100%' }} /></label>
           <label><b>Amazon A+ source points — giới hạn cuối được đếm riêng theo từng module/headline/body/alt-text</b><textarea value={(listing.amazonAPlusPoints || []).join('\n')} onChange={event => updateDraft('amazonAPlusPoints', event.target.value.split('\n').map(item => item.trim()).filter(Boolean))} rows={5} style={{ width: '100%' }} />
             <small>{(listing.amazonAPlusPoints || []).map((point, index) => `Point ${index + 1}: ${characterCount(point)} ký tự`).join(' · ') || 'Chưa có point'}</small></label>
+          <div><b>A+ modules từ Product Truth ({(listing.amazonAPlusModules || []).length})</b>
+            {(listing.amazonAPlusModules || []).map(module => <div key={module.id} style={{ padding: 9, border: '1px solid #cbd5e1', borderRadius: 8, marginTop: 6 }}>
+              <b>{module.headline}</b><p>{module.body}</p><small>{module.type} · {module.imageBrief} · Alt: {module.altText}</small>
+            </div>)}
+            <small>Modules là nội dung A+ và hướng dẫn ảnh; cần ảnh thật và kiểm giới hạn của mẫu A+ được chọn trước khi dùng.</small>
+          </div>
           <label><b>PPC targeting — có thể chứa keyword claim chưa xác minh, không phải copy hiển thị</b><textarea value={(listing.ppcKeywords || []).map(item => typeof item === 'string' ? item : item.phrase || '').join('\n')} onChange={event => updateDraft('ppcKeywords', event.target.value.split('\n').map(phrase => phrase.trim()).filter(Boolean))} rows={6} style={{ width: '100%' }} /></label>
         </> : <>
           <div style={{ padding: 9, borderRadius: 8, background: '#fff7ed', color: '#7c2d12', fontSize: '.76rem' }}><b>Etsy title:</b> tối đa 140 ký tự; ưu tiên tên sản phẩm rõ, tự nhiên và khoảng 15 từ trở xuống. Phần trăm dung lượng chỉ là số đo, không phải mục tiêu để nhồi keyword.</div>
@@ -1476,6 +1482,14 @@ export default function CanonicalCommerceWorkflow({ activeProject, marketplace, 
           <div style={{ color: reviewPackages[item.id].approvalReadiness?.ready ? '#166534' : '#b91c1c', fontWeight: 800 }}>
             Approval policy: {reviewPackages[item.id].approvalReadiness?.ready ? 'READY' : `BLOCKED — ${reviewPackages[item.id].approvalReadiness?.error}`}
           </div>
+          {!reviewPackages[item.id].approvalReadiness?.ready && <div style={{ color: '#991b1b', fontSize: '.8rem' }}>
+            {(reviewPackages[item.id].approvalReadiness?.blockers || []).map((blocker, index) => <div key={index}>
+              {typeof blocker === 'string' ? blocker : blocker.code || JSON.stringify(blocker)}
+            </div>)}
+            {marketplace === 'ETSY' && uatApprovalExportOnly &&
+              (!reviewPackages[item.id].content?.shopName || !reviewPackages[item.id].content?.priceAmount || !reviewPackages[item.id].content?.priceCurrency) &&
+              <div>Cần nhập shop identity, price amount và currency còn thiếu trong QA edit, lưu successor revision rồi mở lại exact package.</div>}
+          </div>}
           <details><summary>Toàn bộ listing content</summary><pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{JSON.stringify(reviewPackages[item.id].content, null, 2)}</pre></details>
           <details><summary>Dependency manifest + validation accounting</summary><pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{JSON.stringify({ dependencies: reviewPackages[item.id].dependencies, validationAccounting: reviewPackages[item.id].validationAccounting }, null, 2)}</pre></details>
           <div style={{ marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap' }}>

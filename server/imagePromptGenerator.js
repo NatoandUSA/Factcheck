@@ -16,30 +16,31 @@ function prompt(id, purpose, aspectRatio, body, missingInputs = []) {
 }
 
 function referenceRule(identity) {
-  return `Create an ecommerce image of ${identity}. Use the attached product reference images as the only visual source for product geometry, design, colors and surface details. Keep the product unchanged.`;
+  return `Create one ecommerce image for the product identified as ${identity}. The attached images may show different variants or existing promotional compositions. Select exactly one variant from one reference image; do not combine variants, duplicate a reference layout, or add another product. Use that selected reference as the only source for product geometry, artwork, structure, colors and lettering. Keep every visible product component unchanged. If small lettering cannot be reproduced exactly, leave it unchanged in the source photo instead of redrawing or inventing it.`;
 }
 
 function physicalPrompts(facts, marketplace) {
-  const identity = text(facts.productName || facts.productType);
+  const identity = text(facts.productType || facts.productName);
   const recipient = text(facts.recipient || facts.audience);
   const occasion = text(facts.occasion);
   const materials = text(facts.materials || facts.composition);
   const dimensions = text(facts.sizes || facts.dimensions);
   const personalization = text(facts.personalization);
+  const personalizationSpecified = personalization && !/^(?:yes|true|si|sí|có|personalized|personalizado)$/i.test(personalization);
   const packaging = text(facts.packaging);
   const base = referenceRule(identity);
   const mainRatio = marketplace === 'ETSY' ? '1:1' : '1:1';
   return Object.freeze([
     prompt('main_product', 'Primary marketplace image', mainRatio,
-      `${base} Pure white background, product centered, evenly lit, sharp edges, natural shadow, no props, no badge, no watermark and no added text.`),
+      `${base} Extract only the one selected product variant from its source setting; place that same product on a pure white background, centered with a natural shadow. Do not paste an entire reference image or show two variants side by side. No props, badges, watermark or added text.`),
     prompt('alternate_angle', 'Alternate product angle', '1:1',
-      `${base} Show a useful alternate angle that reveals construction without changing any component. Neutral light background, no added text.`),
+      `${base} Show an alternate view only if the attached references actually show that angle of the same selected variant. Never reconstruct unseen depth, lid, hinges, attachments, chain or lettering. If no alternate-angle reference exists, mark this slot as requiring another source photo. Neutral light background, no added text.`),
     prompt('material_detail', 'Material and surface detail', '1:1', materials
       ? `${base} Produce a macro detail showing only this verified material information: ${materials}. Preserve the real texture and finish. No added text.` : '',
     materials ? [] : ['materials']),
-    prompt('personalization_detail', 'Personalization detail', '1:1', personalization
+    prompt('personalization_detail', 'Personalization detail', '1:1', personalizationSpecified
       ? `${base} Show a close detail of the verified personalization area and method: ${personalization}. Preserve spelling and layout from the supplied personalization reference. No added text.` : '',
-    personalization ? [] : ['personalization']),
+    personalizationSpecified ? [] : ['personalization_method_and_area']),
     prompt('scale_dimensions', 'Scale and dimensions', '4:5', dimensions
       ? `${base} Create a clean scale image using only these verified measurements: ${dimensions}. Any dimension labels must reproduce those values exactly. Do not infer measurements.` : '',
     dimensions ? [] : ['sizes_or_dimensions']),

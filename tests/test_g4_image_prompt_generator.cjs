@@ -16,9 +16,15 @@ const physical = generateImagePromptSuite(physicalSnapshot, 'AMAZON');
 check(physical.productMode === 'PHYSICAL', 'physical mode selected');
 check(physical.prompts.length === 8, 'eight physical image slots');
 check(physical.prompts.find(item => item.id === 'main_product').ready, 'main image ready');
+check(physical.prompts.find(item => item.id === 'main_product').prompt.includes('Select exactly one variant'), 'main image selects one variant');
+check(physical.prompts.find(item => item.id === 'alternate_angle').prompt.includes('only if the attached references actually show'), 'alternate angle cannot invent unseen geometry');
 check(!physical.prompts.find(item => item.id === 'packaging_contents').ready, 'packaging image blocked when missing');
 check(physical.prompts.find(item => item.id === 'packaging_contents').prompt === '', 'blocked prompt contains no invented copy');
 check(physical.readyCount + physical.blockedCount === 8, 'prompt accounting complete');
+const vaguePersonalization = generateImagePromptSuite({ asserted: {
+  productType: asserted('Necklace'), personalization: asserted('Yes') } }, 'ETSY');
+check(!vaguePersonalization.prompts.find(item => item.id === 'personalization_detail').ready,
+  'boolean personalization does not claim a verified area or method');
 assert.doesNotThrow(() => evaluateListingGuard({ listing: { amazonTitle: 'Custom Necklace',
   imagePrompts: physical }, verifiedFacts: { productType: 'Custom Necklace',
   personalization: 'Custom name personalization', materials: 'stainless steel', recipient: 'daughter' } }));
@@ -36,4 +42,4 @@ assert.doesNotThrow(() => evaluateListingGuard({ listing: { etsyTitle: 'Murder M
   imagePrompts: digital }, verifiedFacts: { productType: 'Murder Mystery Game', fileFormat: 'PDF files',
   playerCount: '1-6 players', minimumAge: '14 years', duration: '2-4 hours' } }));
 passed++;
-console.log(`G4 image prompt generator: ${passed}/11 PASS`);
+console.log(`G4 image prompt generator: ${passed}/${passed} PASS`);

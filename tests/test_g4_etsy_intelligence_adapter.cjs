@@ -32,8 +32,8 @@ async function main() {
   });
   check(/^[0-9a-f]{64}$/.test(result.engineBindingHash), 'engine binding returned');
   check(result.output.listingDraft.etsyTitle.length <= 140, 'Etsy title within limit');
-  check(/custom necklace/i.test(result.output.listingDraft.etsyTitle),
-    'Etsy title retains the Product Truth identity while allocating safe Master KW phrases');
+  check(/collar personalizado/i.test(result.output.listingDraft.etsyTitle),
+    'Spanish Etsy title renders the verified product identity and safe buyer phrases');
   check(new Set(result.output.listingDraft.etsyTitle.split(',').map(value => value.trim().toLowerCase())).size
     === result.output.listingDraft.etsyTitle.split(',').length,
   'Etsy title uses distinct readable clauses instead of duplicate padding');
@@ -63,7 +63,7 @@ async function main() {
   check(result.output.keywordAllocation.unallocated.length === result.accounting.unallocatedCount,
     'unallocated keywords retained instead of silently dropped');
   check(result.output.keywordAllocation.reason.includes('NO_SELLER-SELECTED_PPC'), 'Etsy PPC limitation explicit');
-  check(result.output.listingDraft.etsyDescription.includes('Materials: stainless steel'), 'description uses Product Truth');
+  check(result.output.listingDraft.etsyDescription.includes('Materiales: acero inoxidable'), 'Spanish description renders Product Truth for buyers');
   check(result.output.competitorSummary.uniqueListingIds === 3, 'competitor identities counted');
   check(result.output.listingDraft.imagePrompts.prompts.length === 8, 'full Etsy physical image prompt suite generated');
   check(result.output.listingDraft.imagePrompts.referenceImagesRequired === true, 'image prompts require real references');
@@ -107,6 +107,15 @@ async function main() {
     masterKeywordArtifact: master(['para mi hija', 'regalo para hija', 'collar personalizado'], 3)
   });
   check(automaticSpanish.output.language === 'ES', 'AUTO infers Spanish from the canonical project seed');
+  const hijaTitle = adapter.composeEtsyTitle([
+    { phrase: 'collar para mi hija' }, { phrase: 'regalo de cumpleaños para hija' }
+  ], { productName: 'A Mi Hija Collar - Spanish Daughter Gift', productType: 'Necklace',
+    recipient: 'Hija', personalization: 'Yes' }, 'ES');
+  check(hijaTitle.length > 22 && hijaTitle.length <= 140 && /collar/i.test(hijaTitle)
+    && !/necklace|spanish daughter gift/i.test(hijaTitle),
+  'real Hija-like mixed Product Truth produces a useful Spanish title instead of 22-character identity');
+  check(!/\b(?:necklace|materials|personalization)\b/i.test(automaticSpanish.output.listingDraft.etsyDescription),
+    'Spanish buyer description does not leak English product labels');
   check(automaticSpanish.accounting.languageTargetingCount === 0,
     'AUTO does not misroute Spanish source phrases into the other-language bucket');
   const richTitle = await adapter.buildIntelligence({

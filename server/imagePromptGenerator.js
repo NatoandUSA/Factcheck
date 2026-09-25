@@ -10,9 +10,15 @@ function factsFromSnapshot(snapshot) {
     .map(([key, assertion]) => [key, assertion?.value])));
 }
 
-function prompt(id, purpose, aspectRatio, body, missingInputs = []) {
-  return Object.freeze({ id, purpose, aspectRatio, ready: missingInputs.length === 0,
-    missingInputs: Object.freeze(missingInputs), prompt: missingInputs.length ? '' : body });
+function prompt(id, purpose, aspectRatio, body, missingInputs = [], status = null) {
+  const promptReady = missingInputs.length === 0;
+  return Object.freeze({ id, purpose, aspectRatio, ready: promptReady,
+    status: status || (promptReady ? 'REFERENCE_REQUIRED' : 'OWNER_FACT_REQUIRED'),
+    missingInputs: Object.freeze(missingInputs), prompt: promptReady ? body : '' });
+}
+
+function promptFact(value) {
+  return text(value).replace(/\s*(?:[-—–]\s*)?theo listing tham chiếu\s*$/iu, '').trim();
 }
 
 function referenceRule(identity) {
@@ -21,13 +27,13 @@ function referenceRule(identity) {
 
 function physicalPrompts(facts, marketplace) {
   const identity = text(facts.productType || facts.productName);
-  const recipient = text(facts.recipient || facts.audience);
-  const occasion = text(facts.occasion);
-  const materials = text(facts.materials || facts.composition);
-  const dimensions = text(facts.sizes || facts.dimensions);
-  const personalization = text(facts.personalization);
+  const recipient = promptFact(facts.recipient || facts.audience);
+  const occasion = promptFact(facts.occasion);
+  const materials = promptFact(facts.materials || facts.composition);
+  const dimensions = promptFact(facts.sizes || facts.dimensions);
+  const personalization = promptFact(facts.personalization);
   const personalizationSpecified = personalization && !/^(?:yes|true|si|sí|có|personalized|personalizado)$/i.test(personalization);
-  const packaging = text(facts.packaging);
+  const packaging = promptFact(facts.packaging);
   const base = referenceRule(identity);
   const mainRatio = marketplace === 'ETSY' ? '1:1' : '1:1';
   return Object.freeze([

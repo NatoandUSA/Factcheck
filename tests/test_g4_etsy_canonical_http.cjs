@@ -272,6 +272,14 @@ async function main() {
     check(rejected.status === 409 && rejected.body.error === 'QA_EDIT_DEPENDENCY_DRIFT',
       `${drift.label} rebind attempt must fail against parent-bound dependencies: ${JSON.stringify(rejected)}`);
   }
+  const prematureCompletion = await json(`/api/projects/${projectId}/uat-lifecycle-completions`, 'POST', {
+    uatExportId: 1,
+    reason: 'negative probe before current exact UAT export exists',
+    idempotencyKey: key(50)
+  });
+  check(prematureCompletion.status === 409
+    && prematureCompletion.body.error === 'UAT_COMPLETION_REQUIRES_CURRENT_EXACT_EXPORT',
+  `UAT cannot complete before current exact export: ${JSON.stringify(prematureCompletion.body)}`);
   const approval = await jsonAsManager(`/api/listings/${listing.body.listingId}/canonical-review`, 'POST', {
     decision: 'APPROVED', reason: 'Manager verified exact content, commercial fields and UAT-only boundary',
     expectedListingRevisionId: successorPackage.body.listingRevisionId,
@@ -313,6 +321,47 @@ async function main() {
     `UAT policy must block marketplace report server-side: ${JSON.stringify(forbiddenReport.body)}`);
   check((await get('SELECT COUNT(*) AS n FROM canonical_operator_submission_reports WHERE listing_id=?',
     [listing.body.listingId])).n === 0, 'blocked UAT submission path writes no marketplace event');
+  const completion = await json(`/api/projects/${projectId}/uat-lifecycle-completions`, 'POST', {
+    uatExportId: exported.body.submissionExportId,
+    reason: 'Owner completed exact approval/export-only UAT after immutable export certification.',
+    idempotencyKey: key(51)
+  });
+  check(completion.status === 201 && completion.body.mode === 'MARKETPLACE_POLICY'
+    && completion.body.uatActive === false && completion.body.certifiedExports.length === 1,
+  `Owner completion requires and records exact current UAT export evidence: ${JSON.stringify(completion.body)}`);
+  const completionReplay = await json(`/api/projects/${projectId}/uat-lifecycle-completions`, 'POST', {
+    uatExportId: exported.body.submissionExportId,
+    reason: 'Owner completed exact approval/export-only UAT after immutable export certification.',
+    idempotencyKey: key(51)
+  });
+  check(completionReplay.status === 200 && completionReplay.body.replay === true
+    && completionReplay.body.uatLifecycleCompletionId === completion.body.uatLifecycleCompletionId
+    && completionReplay.body.uatLifecycleCompletionHash === completion.body.uatLifecycleCompletionHash,
+  'UAT completion idempotently replays exact immutable completion evidence');
+  await assert.rejects(new Promise((resolve, reject) => db.run(`UPDATE project_uat_lifecycle_completions
+    SET completed_at='2000-01-01T00:00:00.000Z' WHERE id=?`, [completion.body.uatLifecycleCompletionId],
+  error => error ? reject(error) : resolve())), /IMMUTABLE_UAT_LIFECYCLE_COMPLETION/); passed++;
+  const staleAfterCompletion = await json(`/api/listings/${listing.body.listingId}/review-package`, 'GET');
+  check(staleAfterCompletion.status === 409 && staleAfterCompletion.body.error === 'STALE_POLICY_OR_VALIDATOR_BINDING',
+    `UAT completion must stale the UAT-bound listing revision: ${JSON.stringify(staleAfterCompletion.body)}`);
+  const postUatRebind = await json(`/api/listings/${listing.body.listingId}/revisions`, 'POST', {
+    parentRevisionId: successor.body.revisionId,
+    expectedHeadRevisionId: successor.body.revisionId,
+    idempotencyKey: key(52), changeReason: 'REBIND_AFTER_UAT_COMPLETION',
+    productTruthRevisionId: truth.body.productTruthRevisionId,
+    intelligenceSnapshotId: intelligence.body.intelligenceSnapshotId,
+    content: successorContent
+  });
+  check(postUatRebind.status === 200 && postUatRebind.body.status === 'NEEDS_QA'
+    && postUatRebind.body.parentRevisionId === successor.body.revisionId,
+  `post-UAT lifecycle change requires an immutable successor: ${JSON.stringify(postUatRebind.body)}`);
+  const postUatPackage = await json(`/api/listings/${listing.body.listingId}/review-package`, 'GET');
+  check(postUatPackage.status === 200 && postUatPackage.body.lifecycle?.mode === 'MARKETPLACE_POLICY'
+    && postUatPackage.body.lifecycle?.uatLifecycleCompletionId === completion.body.uatLifecycleCompletionId,
+  `completed UAT returns project to marketplace policy with completion evidence: ${JSON.stringify(postUatPackage.body)}`);
+  check(postUatPackage.body.approvalReadiness?.ready === false
+    && postUatPackage.body.approvalReadiness?.error === 'POLICY_CONTRACT_NOT_FOUND',
+  'test tenant remains fail-closed after UAT completion because it has no owner-confirmed live Etsy policy authority');
   const phrase = master.body.payload.keywords.find(item => item.tier !== 'EXCLUDED').phrase;
   const newerMaster = await json(`/api/projects/${projectId}/etsy/master-keywords`, 'POST', {
     patternArtifactId: patterns.body.id, decisions: [{ phrase, tier: 'REVIEW' }], expectedHeadArtifactId: master.body.id,

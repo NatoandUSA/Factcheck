@@ -123,11 +123,16 @@ async function projectPolicyContext(db, scope, projectId) {
   const row = await get(db, `SELECT p.*,w.seller_account_label,w.site,
     u.id AS uat_lifecycle_authorization_id,u.mode AS uat_lifecycle_mode,
       u.authorization_hash AS uat_lifecycle_authorization_hash,u.authorized_by AS uat_lifecycle_authorized_by,
-      u.authorized_at AS uat_lifecycle_authorized_at
+      u.authorized_at AS uat_lifecycle_authorized_at,
+    c.id AS uat_lifecycle_completion_id,c.completion_hash AS uat_lifecycle_completion_hash,
+      c.evidence_hash AS uat_lifecycle_completion_evidence_hash,c.completed_by AS uat_lifecycle_completed_by,
+      c.completed_at AS uat_lifecycle_completed_at
     FROM research_projects p
     JOIN workspaces w ON w.id=p.workspace_id AND w.tenant_id=p.tenant_id AND w.marketplace=p.marketplace
     LEFT JOIN project_uat_lifecycle_authorizations u ON u.project_id=p.id AND u.tenant_id=p.tenant_id
       AND u.workspace_id=p.workspace_id AND u.marketplace=p.marketplace
+    LEFT JOIN project_uat_lifecycle_completions c ON c.project_id=p.id AND c.tenant_id=p.tenant_id
+      AND c.workspace_id=p.workspace_id AND c.marketplace=p.marketplace
     WHERE p.id=? AND p.tenant_id=? AND p.workspace_id=? AND p.marketplace=?`,
   [projectId, scope.tenantId, scope.workspaceId, scope.marketplace]);
   if (!row) throw new CanonicalDraftError('PROJECT_NOT_FOUND', 404);
@@ -187,31 +192,44 @@ async function resolveIntelligenceBinding(db, scope, projectId, selectedIntellig
 }
 
 function stablePolicyContext(project, scope) {
+  const uat = uatApprovalExportEnabled(project);
   return Object.freeze({ tenantId: scope.tenantId, workspaceId: String(scope.workspaceId),
     sellerAccountId: project.seller_account_label, marketplace: scope.marketplace, site: project.site,
     locale: project.locale, mediaClass: project.media_class, productTypeId: project.product_type_id,
     categoryId: project.category_id, productFamilyVersion: project.product_family_version,
-    uatLifecycleAuthorizationId: project.uat_lifecycle_authorization_id || null,
-    uatLifecycleMode: project.uat_lifecycle_mode || null,
-    uatLifecycleAuthorizationHash: project.uat_lifecycle_authorization_hash || null,
-    uatLifecycleAuthorizedBy: project.uat_lifecycle_authorized_by || null,
-    uatLifecycleAuthorizedAt: project.uat_lifecycle_authorized_at || null });
+    uatLifecycleAuthorizationId: uat ? project.uat_lifecycle_authorization_id : null,
+    uatLifecycleMode: uat ? project.uat_lifecycle_mode : null,
+    uatLifecycleAuthorizationHash: uat ? project.uat_lifecycle_authorization_hash : null,
+    uatLifecycleAuthorizedBy: uat ? project.uat_lifecycle_authorized_by : null,
+    uatLifecycleAuthorizedAt: uat ? project.uat_lifecycle_authorized_at : null,
+    uatLifecycleCompletionId: project.uat_lifecycle_completion_id || null,
+    uatLifecycleCompletionHash: project.uat_lifecycle_completion_hash || null,
+    uatLifecycleCompletionEvidenceHash: project.uat_lifecycle_completion_evidence_hash || null,
+    uatLifecycleCompletedBy: project.uat_lifecycle_completed_by || null,
+    uatLifecycleCompletedAt: project.uat_lifecycle_completed_at || null });
 }
 
 function uatApprovalExportEnabled(project) {
   return project?.uat_lifecycle_mode === 'APPROVAL_EXPORT_ONLY'
     && Number.isInteger(Number(project?.uat_lifecycle_authorization_id))
-    && /^[a-f0-9]{64}$/.test(String(project?.uat_lifecycle_authorization_hash || ''));
+    && /^[a-f0-9]{64}$/.test(String(project?.uat_lifecycle_authorization_hash || ''))
+    && project?.uat_lifecycle_completion_id == null;
 }
 
 function lifecycleCapability(project) {
   const uat = uatApprovalExportEnabled(project);
+  const completionId = project?.uat_lifecycle_completion_id == null
+    ? null : Number(project.uat_lifecycle_completion_id);
   return Object.freeze({ mode: uat ? 'UAT_APPROVAL_EXPORT_ONLY' : 'MARKETPLACE_POLICY',
     approvalAllowed: uat, exportAllowed: uat, marketplaceSubmissionAllowed: !uat,
     uatLifecycleAuthorizationId: uat ? Number(project.uat_lifecycle_authorization_id) : null,
     uatLifecycleAuthorizationHash: uat ? project.uat_lifecycle_authorization_hash : null,
     uatLifecycleAuthorizedBy: uat ? Number(project.uat_lifecycle_authorized_by) : null,
-    uatLifecycleAuthorizedAt: uat ? project.uat_lifecycle_authorized_at : null });
+    uatLifecycleAuthorizedAt: uat ? project.uat_lifecycle_authorized_at : null,
+    uatLifecycleCompletionId: Number.isInteger(completionId) && completionId > 0 ? completionId : null,
+    uatLifecycleCompletionHash: project?.uat_lifecycle_completion_hash || null,
+    uatLifecycleCompletedBy: project?.uat_lifecycle_completed_by == null ? null : Number(project.uat_lifecycle_completed_by),
+    uatLifecycleCompletedAt: project?.uat_lifecycle_completed_at || null });
 }
 
 function serverPolicyContext(project, scope) {

@@ -75,6 +75,7 @@ const { projectResearchFile, projectSocialHandoff, projectWorkflowArtifact } = r
 const { promoteGlobalCandidateToProject } = require('./globalCandidatePromotion');
 const { createGlobalCandidateShortlist, getLatestGlobalCandidateShortlist } = require('./globalCandidateShortlist');
 const { createExperimentContract, listProjectExperiments, recordExperimentOutcome } = require('./experimentContract');
+const { completeUatLifecycle } = require('./uatLifecycleStore');
 const { createCanonicalResearchProject } = require('./canonicalProjectStore');
 const amazonResearchAdapter = require('./commerceIntelligence/amazonResearchAdapter');
 const amazonIntelligenceAdapter = require('./commerceIntelligence/amazonIntelligenceAdapter');
@@ -1721,6 +1722,15 @@ app.post('/api/projects/:id/uat-lifecycle-authorizations', requireAuth(db), requ
       try { await runUat('ROLLBACK'); } catch (_) {}
       throw error;
     }
+  } catch (error) { rejectRevisionStore(res, error); }
+});
+
+app.post('/api/projects/:id/uat-lifecycle-completions', requireAuth(db), requireRole(['OWNER']), async (req, res) => {
+  try {
+    const body = requireExactDto(req.body, new Set(['uatExportId', 'reason', 'idempotencyKey']));
+    assertNoClientPolicyOverrides(body);
+    const result = await completeUatLifecycle(db, revisionScope(req.user), req.params.id, body);
+    res.status(result.replay ? 200 : 201).json({ success: true, ...result });
   } catch (error) { rejectRevisionStore(res, error); }
 });
 

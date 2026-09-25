@@ -5,6 +5,11 @@
       "tenantId": "8af7fc79-c563-41a4-8eaf-6a06cb7a51a8",
       "workspaceId": "1",
       "attestationId": "amz-policy-auth-r1-owner-20260924"
+    },
+    "etsy-us-workspace2-jewelry-necklace-owner-2026-09-25-v1": {
+      "tenantId": "8af7fc79-c563-41a4-8eaf-6a06cb7a51a8",
+      "workspaceId": "2",
+      "attestationId": "etsy-policy-auth-r1-owner-20260925"
     }
   }
 }

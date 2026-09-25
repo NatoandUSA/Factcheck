@@ -1,0 +1,56 @@
+{
+  "schemaVersion": "omniseller.policy-contract.v1",
+  "policyContractId": "etsy-us-workspace2-jewelry-necklace-owner-2026-09-25-v1",
+  "marketplace": "ETSY",
+  "site": "US",
+  "locales": [
+    "en-US"
+  ],
+  "effectiveFrom": "2026-09-25T02:52:26Z",
+  "checkedAt": "2026-09-25T02:52:26Z",
+  "verificationStatus": "OWNER_CONFIRMED_ACCOUNT_CATEGORY",
+  "approvalEligibility": "APPROVAL_ELIGIBLE",
+  "approvalCritical": true,
+  "supersedes": null,
+  "cohort": {
+    "mediaClass": "NON_MEDIA",
+    "productTypeIds": [
+      "CUSTOM_NECKLACE"
+    ],
+    "categoryIds": [
+      "JEWELRY_NECKLACE"
+    ],
+    "sellerAccountIds": [
+      "workspace:2"
+    ]
+  },
+  "sourceRefs": [
+    {
+      "kind": "PUBLIC_URL",
+      "url": "https://www.etsy.com/seller-handbook/article/382774281517",
+      "capturedAt": "2026-09-08T00:00:00Z"
+    },
+    {
+      "kind": "PUBLIC_URL",
+      "url": "https://www.etsy.com/seller-handbook/article/1399426136697",
+      "capturedAt": "2026-09-08T00:00:00Z"
+    },
+    {
+      "kind": "OWNER_ATTESTATION",
+      "artifactHash": "553de7f1fe663bf354096ce902ba5ed14ff265a49c15ae647af8ae02f6bcfbdc",
+      "capturedAt": "2026-09-25T02:52:26Z",
+      "actorId": "1"
+    }
+  ],
+  "rules": {
+    "title": {
+      "maxChars": 140,
+      "counting": "UNICODE_CODE_POINTS"
+    },
+    "tags": {
+      "maxCount": 13,
+      "targetCount": 13,
+      "maxChars": 20
+    }
+  }
+}

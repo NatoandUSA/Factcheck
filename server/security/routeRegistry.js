@@ -39,6 +39,7 @@ const ROUTES = [
   { method: 'POST', path: '/api/projects', public: false },
   { method: 'PATCH', path: '/api/projects/:id/policy-context', public: false },
   { method: 'POST', path: '/api/projects/:id/uat-lifecycle-authorizations', public: false },
+  { method: 'POST', path: '/api/projects/:id/uat-lifecycle-completions', public: false },
   { method: 'POST', path: '/api/projects/:id/product-truth-imports/preview', public: false },
   { method: 'POST', path: '/api/projects/:id/product-truth-listing/preview', public: false },
   { method: 'POST', path: '/api/projects/:id/product-truth/revisions', public: false },

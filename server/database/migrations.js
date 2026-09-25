@@ -21,6 +21,7 @@ const GLOBAL_CANDIDATE_POOL_MVP_MIGRATION = '021_global_candidate_pool_mvp';
 const GLOBAL_CANDIDATE_PROMOTION_MIGRATION = '022_global_candidate_promotion';
 const GLOBAL_CANDIDATE_SHORTLIST_MIGRATION = '023_global_candidate_shortlist';
 const EXPERIMENT_CONTRACT_MIGRATION = '024_experiment_contract_v1';
+const UAT_LIFECYCLE_COMPLETION_MIGRATION = '025_uat_lifecycle_completion';
 const crypto = require('node:crypto');
 const { canonicalJson, hashBytes } = require('../revisionStore');
 
@@ -739,6 +740,35 @@ async function migrateUatApprovalExportAuthorizations(db) {
     await run(db, `CREATE TRIGGER IF NOT EXISTS project_uat_lifecycle_authorizations_immutable_${operation}
       BEFORE ${operation.toUpperCase()} ON project_uat_lifecycle_authorizations
       BEGIN SELECT RAISE(ABORT,'IMMUTABLE_UAT_LIFECYCLE_AUTHORIZATION'); END`);
+  }
+}
+
+async function migrateUatLifecycleCompletions(db) {
+  await run(db, `CREATE TABLE IF NOT EXISTS project_uat_lifecycle_completions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id TEXT NOT NULL, workspace_id INTEGER NOT NULL,
+    marketplace TEXT NOT NULL CHECK(marketplace='ETSY'),
+    project_id INTEGER NOT NULL REFERENCES research_projects(id),
+    uat_lifecycle_authorization_id INTEGER NOT NULL REFERENCES project_uat_lifecycle_authorizations(id),
+    uat_lifecycle_authorization_hash TEXT NOT NULL CHECK(length(uat_lifecycle_authorization_hash)=64),
+    evidence_json TEXT NOT NULL CHECK(json_valid(evidence_json)),
+    evidence_hash TEXT NOT NULL CHECK(length(evidence_hash)=64),
+    reason TEXT NOT NULL CHECK(length(reason) BETWEEN 1 AND 1000),
+    completion_hash TEXT NOT NULL CHECK(length(completion_hash)=64),
+    idempotency_key TEXT NOT NULL,
+    request_hash TEXT NOT NULL CHECK(length(request_hash)=64),
+    response_json TEXT NOT NULL CHECK(json_valid(response_json)),
+    completed_by INTEGER NOT NULL REFERENCES users(id),
+    completed_at DATETIME NOT NULL,
+    UNIQUE(tenant_id,workspace_id,marketplace,project_id),
+    UNIQUE(tenant_id,workspace_id,marketplace,idempotency_key)
+  )`);
+  await run(db, `CREATE INDEX IF NOT EXISTS idx_project_uat_completion_scope
+    ON project_uat_lifecycle_completions(tenant_id,workspace_id,marketplace,project_id,id)`);
+  for (const operation of ['update', 'delete']) {
+    await run(db, `CREATE TRIGGER IF NOT EXISTS project_uat_lifecycle_completions_immutable_${operation}
+      BEFORE ${operation.toUpperCase()} ON project_uat_lifecycle_completions
+      BEGIN SELECT RAISE(ABORT,'IMMUTABLE_UAT_LIFECYCLE_COMPLETION'); END`);
   }
 }
 
@@ -1498,6 +1528,18 @@ async function runMigrations(db) {
       throw error;
     }
   }
+  const uatCompletionApplied = await all(db, 'SELECT id FROM schema_migrations WHERE id=?', [UAT_LIFECYCLE_COMPLETION_MIGRATION]);
+  if (uatCompletionApplied.length === 0) {
+    await run(db, 'BEGIN IMMEDIATE');
+    try {
+      await migrateUatLifecycleCompletions(db);
+      await run(db, 'INSERT INTO schema_migrations(id) VALUES (?)', [UAT_LIFECYCLE_COMPLETION_MIGRATION]);
+      await run(db, 'COMMIT');
+    } catch (error) {
+      try { await run(db, 'ROLLBACK'); } catch (_) {}
+      throw error;
+    }
+  }
 }
 
 async function migrateAgentWorkspaceScope(db) {
@@ -1601,6 +1643,7 @@ module.exports = {
   GLOBAL_CANDIDATE_PROMOTION_MIGRATION,
   GLOBAL_CANDIDATE_SHORTLIST_MIGRATION,
   EXPERIMENT_CONTRACT_MIGRATION,
+  UAT_LIFECYCLE_COMPLETION_MIGRATION,
   migrateOwnerSubmissionAuthorization,
   migrateCommerceWorkflowArtifacts,
   migrateOperatorReportedSubmissionLifecycle,
@@ -1610,6 +1653,7 @@ module.exports = {
   migrateGlobalCandidatePromotion,
   migrateGlobalCandidateShortlist,
   migrateExperimentContract,
+  migrateUatLifecycleCompletions,
   AGENT_WORKSPACE_SCOPE_MIGRATION,
   PROJECT_SCOPED_EVIDENCE_MIGRATION,
   CANONICAL_DAG_MIGRATION,

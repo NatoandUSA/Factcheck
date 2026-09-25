@@ -72,8 +72,8 @@ function containsCompetitorBrand(phrase, xrayRows) {
 function engineBindingHash() {
   const hash = crypto.createHash('sha256'); hash.update(`${ENGINE_ID}\0`);
   for (const file of [__filename, require.resolve('./keywordEngine'), require.resolve('./asinSelector'),
-    require.resolve('./amazonComposer'), require.resolve('./semantic'), require.resolve('../listingGuard'),
-    require.resolve('../claimGuard')]) {
+    require.resolve('./amazonComposer'), require.resolve('./semantic'), require.resolve('./amazonBuyerLanguage'),
+    require.resolve('../imagePromptGenerator'), require.resolve('../listingGuard'), require.resolve('../claimGuard')]) {
     hash.update(file.split(/[\\/]/).pop()); hash.update('\0'); hash.update(fs.readFileSync(file)); hash.update('\0');
   }
   return hash.digest('hex');

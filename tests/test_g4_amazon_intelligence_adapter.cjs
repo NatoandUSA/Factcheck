@@ -79,6 +79,9 @@ async function main() {
   productionLike.productTruth.snapshot.asserted.includedItems = asserted('Message card');
   productionLike.productTruth.snapshot.asserted.packaging = asserted('Gift box');
   productionLike.productTruth.snapshot.asserted.colors = asserted('Silver / Yellow');
+  productionLike.productTruth.snapshot.asserted.purity = asserted('Sterling Silver');
+  productionLike.productTruth.snapshot.asserted.components = asserted('Metal Type: Sterling Silver; Closure Type: Box');
+  productionLike.productTruth.snapshot.asserted.sizes = asserted('3.5 x 3.5 x 1 inches');
   const productionResult = await adapter.buildIntelligence(productionLike);
   const productionVisible = [productionResult.output.listingDraft.amazonTitle,
     ...productionResult.output.listingDraft.amazonBullets,
@@ -88,6 +91,10 @@ async function main() {
     JSON.stringify(productionResult.output.listingDraft.amazonAPlusPoints)),
     'BA-AMZ-Q1.2 A+ buyer points are localized for ES');
   check(!productionVisible.includes('silver'), 'ambiguous silver color cannot become a material claim');
+  const productionModules = JSON.stringify(productionResult.output.listingDraft.amazonAPlusModules);
+  check(!/\b(?:Sterling Silver|inches|Box)\b/i.test(productionModules)
+    && /Plata esterlina/i.test(productionModules) && /pulgadas/i.test(productionModules),
+  'Amazon ES A+ modules localize verified material, closure and measurement values');
   check(productionResult.output.factClaimReview.some(item => item.field === 'colors' && item.value.includes('Silver')),
     'omitted ambiguous color remains visible in review accounting');
   const annotatedPackaging = structuredClone(input);

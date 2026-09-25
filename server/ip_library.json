@@ -37,6 +37,13 @@
       "disqualifying_tokens": ["character", "characters", "personaje", "personajes", "franchise", "franquicia", "princess", "princesa", "disney", "frozen", "elsa", "olaf"],
       "context_window": 3,
       "note": "Anna is also a common personal name. Recipient/personalization phrasing requires review; explicit Disney/Frozen context remains blocked by its own terms."
+    },
+    "modelo": {
+      "previous_tokens": [],
+      "following_numeric": true,
+      "disqualifying_tokens": ["cerveza", "beer", "lager", "especial", "negra", "grupo", "constellation"],
+      "context_window": 3,
+      "note": "Spanish product-field use such as 'Modelo: 2026' is generic and requires review; beverage-brand context remains blocked."
     }
   },
   "review_phrases": [

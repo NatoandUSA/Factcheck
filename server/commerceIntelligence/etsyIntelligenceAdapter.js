@@ -338,12 +338,18 @@ function composeEtsyTitle(safe, facts, language = 'EN') {
   return titleCase(clauses.join(' · '));
 }
 
+function hasExplicitDimensionUnit(value) {
+  const clean = String(value == null ? '' : value).trim();
+  return /(?:\b(?:mm|cm|m|km|in|inch|inches|ft|feet|yd|yard|yards)\b|["′'])/i.test(clean);
+}
+
 function renderFactValue(value, language = 'EN') {
   if (Array.isArray(value)) return value.map(item => renderFactValue(item, language)).filter(Boolean).join(', ');
   if (value && typeof value === 'object') {
     const labelsEs = { type:'tipo', dimensions:'dimensiones', width:'ancho', height:'alto', depth:'profundidad',
       color:'color', quantity:'cantidad' };
     return Object.entries(value).map(([key, nested]) => {
+      if (key === 'dimensions' && !hasExplicitDimensionUnit(nested)) return '';
       const label = language === 'ES' ? (labelsEs[key] || key) : key.replace(/([a-z])([A-Z])/g, '$1 $2');
       const rendered = renderFactValue(nested, language);
       return rendered ? `${titleCase(label)}: ${rendered}` : '';

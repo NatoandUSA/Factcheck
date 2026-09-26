@@ -114,8 +114,12 @@ async function main() {
     && preview.body.output.commerce.capacityTargets.bullets[index].actual === bullet.length
     && !bullet.endsWith('…')), 'bullet counters are exact and composition never ends with a truncation ellipsis');
   check(draft.amazonAPlusPoints.length >= 5, 'A+ factual content points generated');
-  check(draft.imagePrompts.prompts.length === 8 && draft.imagePrompts.readyCount === 8
-    && draft.imagePrompts.blockedCount === 0, 'complete eight-prompt physical image suite generated from Product Truth');
+  const personalizationPrompt = draft.imagePrompts.prompts.find(item => item.id === 'personalization_detail');
+  check(draft.imagePrompts.prompts.length === 8 && draft.imagePrompts.readyCount === 7
+    && draft.imagePrompts.blockedCount === 1
+    && personalizationPrompt?.status === 'OWNER_FACT_REQUIRED'
+    && personalizationPrompt?.missingInputs?.includes('personalization_method_and_area'),
+  'physical image suite stays complete while unverified personalization method/area remains explicitly blocked');
   check(preview.body.accounting.masterKeywordCount
     === preview.body.accounting.allocatedKeywordCount + preview.body.accounting.staffExcludedCount,
   'every Master Keyword row is fully accounted');

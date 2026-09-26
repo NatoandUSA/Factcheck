@@ -35,7 +35,9 @@ const PRODUCT_NOUN_GROUPS = Object.freeze({
   WALLET: ['wallet','bifold','cartera'], WATCH: ['watch','reloj'], PHONE_CASE: ['phonecase','case'],
   CANDLE: ['candle','vela'], FOOTWEAR: ['sock','socks','shoe','shoes','slipper','slippers'],
   HOME_TEXTILE: ['towel','apron'], PAPER: ['journal','notebook','card','tarjeta'],
-  TOY: ['puzzle','toy','juguete'], BOTTLE: ['bottle','flask','botella']
+  TOY: ['puzzle','toy','juguete'], BOTTLE: ['bottle','flask','botella'],
+  FRAME: ['frame','marco'], SUNCATCHER: ['suncatcher'], JAR: ['jar'],
+  CHIME: ['chime','chimes','windchime'], URN: ['urn'], STONE: ['stone','rock']
 });
 const APPEARANCE_TOKENS = new Set(['colorful','multicolor','multicolored','red','blue','green','yellow','pink','purple',
   'orange','black','white','brown','gray','grey','rojo','roja','azul','verde','amarillo','amarilla','rosa','morado',
@@ -108,8 +110,9 @@ function tagVariants(value) {
     .replace(/[^\p{L}\p{N}\s'-]+/gu, ' ').replace(/(^|\s)['-]+|['-]+(?=\s|$)/g, ' ')
     .replace(/\s+/g, ' ').trim()).filter(Boolean);
   const variants = [];
-  const badStart = new Set(['and','con','de','del','en','from','of','the']);
-  const badEnd = new Set(['a','and','con','de','del','en','for','from','mi','of','para','to']);
+  const badStart = new Set(['and','con','de','del','en','from','of','the','shaped']);
+  const badEnd = new Set(['a','and','con','de','del','en','for','from','mi','of','para','to',
+    'custom','personalized','personalised','personalizado','personalizada']);
   for (const phrase of segments) {
     const words = phrase.split(' ');
     const meaningful = tokens(phrase).size > 0 && !badStart.has(fold(words[0])) && !badEnd.has(fold(words.at(-1)));
@@ -153,6 +156,11 @@ function unverifiedAppearanceTokens(candidate, facts) {
 }
 
 function unverifiedProductDescriptors(candidate, facts) {
+  const phrase = fold(candidate.phrase);
+  const verifiedText = fold(Object.values(facts).map(text).join(' '));
+  const explicit = [];
+  if (/\bheart[ -]+shaped\b/.test(phrase) && !/\bheart[ -]+shaped\b/.test(verifiedText)) explicit.push('heart shaped');
+  if (explicit.length) return explicit;
   const candidateGroups = productGroups(candidate.phrase);
   if (!candidateGroups.size) return [];
   const verified = tokens(Object.values(facts).map(text).join(' '));
@@ -283,21 +291,73 @@ function composeEtsyTitle(safe, facts, language = 'EN') {
   if (Array.from(proposed).length > ETSY_TITLE_LIMIT || proposed.split(/\s+/).filter(Boolean).length > 15) {
     return titleCase(identity);
   }
-  if (language !== 'ES') return proposed;
+
+  if (language === 'ES') {
+    const clauses = [proposed];
+    const recipient = spanishCompatible(facts.recipient || facts.audience);
+    if (recipient && !fold(proposed).includes(fold(recipient))) clauses.push(`para ${recipient}`);
+    for (const candidate of safe) {
+      const phrase = spanishBuyerValue(candidate.phrase);
+      if (languageOfPhrase(phrase) !== 'ES' || !/\b(?:collar|regalo|hija|cumplea[nñ]os|graduaci[oó]n)\b/i.test(phrase)) continue;
+      const existing = fold(clauses.join(' '));
+      if ([...tokens(phrase)].every(token => existing.includes(token))) continue;
+      const next = `${clauses.join(' ')} · ${phrase}`;
+      if (Array.from(next).length > ETSY_TITLE_LIMIT || next.split(/\s+/).length > 15) continue;
+      clauses.push(`· ${phrase}`);
+      if (clauses.length >= 3) break;
+    }
+    return titleCase(clauses.join(' ').replace(/\s+·\s+·/g, ' ·'));
+  }
+
+  const identityTokens = tokens(proposed);
+  const ranked = safe.map(candidate => {
+    const phrase = text(candidate.phrase);
+    const words = phrase.split(/\s+/).filter(Boolean);
+    const intent = candidateIntent(candidate);
+    if (!['GIFT_INTENT','RECIPIENT','OCCASION'].includes(intent)
+      || !phrase || !languageCompatible(phrase, 'EN') || words.length > 5 || Array.from(phrase).length > 40) return null;
+    const phraseTokens = [...tokens(phrase)];
+    const missing = phraseTokens.filter(token => !identityTokens.has(token));
+    if (!missing.length) return null;
+    const overlap = phraseTokens.filter(token => identityTokens.has(token)).length;
+    const petAffinity = phraseTokens.includes('pet') ? 1 : 0;
+    return { candidate, phrase, affinity: overlap + petAffinity };
+  }).filter(Boolean).sort((a, b) => b.affinity - a.affinity
+    || (a.candidate.masterPriorityRank || Number.MAX_SAFE_INTEGER)
+      - (b.candidate.masterPriorityRank || Number.MAX_SAFE_INTEGER));
+
   const clauses = [proposed];
-  const recipient = spanishCompatible(facts.recipient || facts.audience);
-  if (recipient && !fold(proposed).includes(fold(recipient))) clauses.push(`para ${recipient}`);
-  for (const candidate of safe) {
-    const phrase = language === 'ES' ? spanishBuyerValue(candidate.phrase) : text(candidate.phrase);
-    if (languageOfPhrase(phrase) !== 'ES' || !/\b(?:collar|regalo|hija|cumplea[nñ]os|graduaci[oó]n)\b/i.test(phrase)) continue;
-    const existing = fold(clauses.join(' '));
-    if ([...tokens(phrase)].every(token => existing.includes(token))) continue;
-    const next = `${clauses.join(' ')} · ${phrase}`;
-    if (Array.from(next).length > ETSY_TITLE_LIMIT || next.split(/\s+/).length > 15) continue;
-    clauses.push(`· ${phrase}`);
+  for (const item of ranked) {
+    const visible = tokens(clauses.join(' '));
+    if ([...tokens(item.phrase)].every(token => visible.has(token))) continue;
+    const next = `${clauses.join(' · ')} · ${item.phrase}`;
+    if (Array.from(next).length > ETSY_TITLE_LIMIT || next.split(/\s+/).filter(Boolean).length > 15) continue;
+    clauses.push(item.phrase);
     if (clauses.length >= 3) break;
   }
-  return titleCase(clauses.join(' ').replace(/\s+·\s+·/g, ' ·'));
+  return titleCase(clauses.join(' · '));
+}
+
+function hasExplicitDimensionUnit(value) {
+  const clean = String(value == null ? '' : value).trim();
+  return /(?:\b(?:mm|cm|m|km|in|inch|inches|ft|feet|yd|yard|yards)\b|["′'])/i.test(clean);
+}
+
+function renderFactValue(value, language = 'EN') {
+  if (Array.isArray(value)) return value.map(item => renderFactValue(item, language)).filter(Boolean).join(', ');
+  if (value && typeof value === 'object') {
+    const labelsEs = { type:'tipo', dimensions:'dimensiones', width:'ancho', height:'alto', depth:'profundidad',
+      color:'color', quantity:'cantidad' };
+    return Object.entries(value).map(([key, nested]) => {
+      if (key === 'dimensions' && !hasExplicitDimensionUnit(nested)) return '';
+      const label = language === 'ES' ? (labelsEs[key] || key) : key.replace(/([a-z])([A-Z])/g, '$1 $2');
+      const rendered = renderFactValue(nested, language);
+      return rendered ? `${titleCase(label)}: ${rendered}` : '';
+    }).filter(Boolean).join('; ');
+  }
+  const clean = text(value);
+  if (!clean) return '';
+  return language === 'ES' ? spanishCompatible(clean) : clean;
 }
 
 function selectExplainedTags(safe, facts) {
@@ -323,11 +383,14 @@ function selectExplainedTags(safe, facts) {
 
 function naturalDescription(facts, title, language) {
   const es = language === 'ES';
-  const identity = es ? title : text(facts.productName || facts.productType);
+  const identity = es ? spanishCompatible(facts.productName || facts.productType) : text(facts.productName || facts.productType);
   const recipient = es ? spanishCompatible(facts.recipient || facts.audience) : text(facts.recipient || facts.audience);
-  const occasion = es ? spanishCompatible(facts.occasion) : text(facts.occasion); const intro = es
-    ? `${identity}${recipient && !fold(identity).includes(fold(recipient)) ? ` para ${recipient}` : ''}${occasion ? `, pensado para ${occasion}` : ''}.`
-    : `${identity}${recipient ? ` for ${recipient}` : ''}${occasion ? `, designed for ${occasion}` : ''}.`;
+  const occasion = es ? spanishCompatible(facts.occasion) : text(facts.occasion);
+  const recipientMissing = recipient && !fold(title).includes(fold(recipient));
+  const occasionMissing = occasion && !fold(title).includes(fold(occasion));
+  const intro = recipientMissing || occasionMissing ? (es
+    ? `${identity}${recipientMissing ? ` para ${recipient}` : ''}${occasionMissing ? `, pensado para ${occasion}` : ''}.`
+    : `${identity}${recipientMissing ? ` for ${recipient}` : ''}${occasionMissing ? `, designed for ${occasion}` : ''}.`) : '';
   const details = [];
   const labelsEs = { Materials:'Materiales', Personalization:'Personalización', Size:'Tamaño', Included:'Incluye',
     Format:'Formato', Brand:'Marca', Model:'Modelo', Features:'Características', Specifications:'Especificaciones',
@@ -343,7 +406,7 @@ function naturalDescription(facts, title, language) {
     ['Allergens', facts.allergens], ['Instructions', facts.instructions], ['Warranty', facts.warranty],
     ['Safety', facts.safetyWarnings || facts.safety], ['Players', facts.playerCount], ['Age', facts.minimumAge],
     ['Duration', facts.duration], ['Packaging', facts.packaging], ['Care', facts.care]]) {
-    const rendered = es ? spanishCompatible(value) : text(value);
+    const rendered = renderFactValue(value, language);
     if (rendered && !(label === 'Personalization' && /^(?:yes|true|sí|si)$/i.test(rendered)))
       details.push(`${es ? labelsEs[label] : label}: ${rendered}`);
   }

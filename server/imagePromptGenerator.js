@@ -2,6 +2,26 @@
 
 function text(value) {
   if (Array.isArray(value)) return value.map(text).filter(Boolean).join(', ');
+  if (value && typeof value === 'object') return '';
+  return value == null ? '' : String(value).trim();
+}
+
+function hasExplicitDimensionUnit(value) {
+  const clean = String(value == null ? '' : value).trim();
+  return /(?:\b(?:mm|cm|m|km|in|inch|inches|ft|feet|yd|yard|yards)\b|["′'])/i.test(clean);
+}
+
+function factText(value) {
+  if (Array.isArray(value)) return value.map(factText).filter(Boolean).join(', ');
+  if (value && typeof value === 'object') {
+    return Object.entries(value).map(([key, nested]) => {
+      if (key === 'dimensions' && !hasExplicitDimensionUnit(nested)) return '';
+      const rendered = factText(nested);
+      if (!rendered) return '';
+      const label = key.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/^./, ch => ch.toUpperCase());
+      return `${label}: ${rendered}`;
+    }).filter(Boolean).join('; ');
+  }
   return value == null ? '' : String(value).trim();
 }
 
@@ -18,7 +38,17 @@ function prompt(id, purpose, aspectRatio, body, missingInputs = [], status = nul
 }
 
 function promptFact(value) {
-  return text(value).replace(/\s*(?:[-—–]\s*)?theo listing tham chiếu\s*$/iu, '').trim();
+  return factText(value).replace(/\s*(?:[-—–]\s*)?theo listing tham chiếu\s*$/iu, '').trim();
+}
+
+function personalizationMethodAndArea(facts) {
+  const raw = facts.personalization;
+  const structured = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  const method = promptFact(facts.personalizationMethod || facts.customizationMethod || structured.method);
+  const area = promptFact(facts.personalizationArea || facts.personalizationLocation
+    || facts.customizationArea || structured.area || structured.location);
+  return Object.freeze({ method, area, ready: Boolean(method && area),
+    rendered: method && area ? `method: ${method}; area: ${area}` : '' });
 }
 
 function referenceRule(identity) {
@@ -31,8 +61,7 @@ function physicalPrompts(facts, marketplace) {
   const occasion = promptFact(facts.occasion);
   const materials = promptFact(facts.materials || facts.composition);
   const dimensions = promptFact(facts.sizes || facts.dimensions);
-  const personalization = promptFact(facts.personalization);
-  const personalizationSpecified = personalization && !/^(?:yes|true|si|sí|có|personalized|personalizado)$/i.test(personalization);
+  const personalization = personalizationMethodAndArea(facts);
   const packaging = promptFact(facts.packaging);
   const base = referenceRule(identity);
   const mainRatio = marketplace === 'ETSY' ? '1:1' : '1:1';
@@ -44,9 +73,9 @@ function physicalPrompts(facts, marketplace) {
     prompt('material_detail', 'Material and surface detail', '1:1', materials
       ? `${base} Produce a macro detail showing only this verified material information: ${materials}. Preserve the real texture and finish. No added text.` : '',
     materials ? [] : ['materials']),
-    prompt('personalization_detail', 'Personalization detail', '1:1', personalizationSpecified
-      ? `${base} Show a close detail of the verified personalization area and method: ${personalization}. Preserve spelling and layout from the supplied personalization reference. No added text.` : '',
-    personalizationSpecified ? [] : ['personalization_method_and_area']),
+    prompt('personalization_detail', 'Personalization detail', '1:1', personalization.ready
+      ? `${base} Show a close detail using only this verified personalization information: ${personalization.rendered}. Preserve spelling and layout from the supplied personalization reference. No added text.` : '',
+    personalization.ready ? [] : ['personalization_method_and_area']),
     prompt('scale_dimensions', 'Scale and dimensions', '4:5', dimensions
       ? `${base} Create a clean scale image using only these verified measurements: ${dimensions}. Any dimension labels must reproduce those values exactly. Do not infer measurements.` : '',
     dimensions ? [] : ['sizes_or_dimensions']),

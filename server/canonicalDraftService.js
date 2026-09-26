@@ -14,6 +14,7 @@ const { getArtifact, getArtifactState } = require('./commerceWorkflowArtifactSto
 const { guardFactsForLanguage } = require('./commerceIntelligence/amazonBuyerLanguage');
 
 const validatorFiles = [
+  path.resolve(__dirname, 'canonicalDraftService.js'),
   path.resolve(__dirname, 'listingGuard.js'),
   path.resolve(__dirname, 'ipGuard.js'),
   path.resolve(__dirname, 'claimGuard/index.js'),
@@ -86,6 +87,19 @@ function factsFromSnapshot(snapshot) {
 
 function scalar(value) {
   return ['string', 'number', 'boolean'].includes(typeof value) ? String(value).trim() : '';
+}
+
+function ipScreeningListing(listing, marketplace, listingLanguage, verifiedFacts) {
+  if (marketplace !== 'ETSY' || listingLanguage !== 'ES') return listing;
+  const verifiedModel = scalar(verifiedFacts?.model).normalize('NFC');
+  if (!verifiedModel || !listing?.etsyDescription) return listing;
+  const etsyDescription = String(listing.etsyDescription).replace(
+    /(^|\r?\n)([ \t]*)Modelo:[ \t]*([^\r\n]*)/gu,
+    (full, prefix, indent, value) => String(value).trim().normalize('NFC') === verifiedModel
+      ? `${prefix}${indent}${String(value).trim()}`
+      : full
+  );
+  return Object.freeze({ ...listing, etsyDescription });
 }
 
 function composeTruthOnlyContent(truth, marketplace) {
@@ -289,7 +303,8 @@ async function validateCanonicalDraft(db, scope, projectId, selectedTruthRevisio
   try { guarded = evaluateListingGuard({ listing, verifiedFacts: guardFacts }); }
   catch (error) { throw new CanonicalDraftError(error.code || 'LISTING_GUARD_UNAVAILABLE', error.code === 'UNVERIFIED_OUTPUT_CLAIM' ? 422 : 503, error.details); }
   let ip;
-  try { ip = ipGuard.screenListing(guarded.listing); }
+  const ipListing = ipScreeningListing(guarded.listing, scope.marketplace, intelligence?.output?.language, verifiedFacts);
+  try { ip = ipGuard.screenListing(ipListing); }
   catch (_) { throw new CanonicalDraftError('IP_GUARD_UNAVAILABLE', 503); }
   if (ip.verdict === 'BLOCK') throw new CanonicalDraftError('IP_CLEARANCE_REQUIRED', 409, { ipHits: ip.hits });
   const policyContext = serverPolicyContext(project, scope);

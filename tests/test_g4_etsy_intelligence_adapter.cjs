@@ -192,9 +192,9 @@ async function main() {
   check(!/heart|shaped|watercolor|\b3d\b/.test(memorialVisible)
     && memorial.output.keywordAllocation.irrelevant.some(item => item.reason === 'UNVERIFIED_DESIGN_DESCRIPTOR'),
   'unverified competitor design descriptors cannot become Etsy title or tag claims');
-  check(/Packaging: gift box; dimensions: 8\*8\*3/.test(memorial.output.listingDraft.etsyDescription)
-    && !/\[object Object\]/.test(memorial.output.listingDraft.etsyDescription),
-  'structured packaging Product Truth renders as buyer-readable text instead of object coercion');
+  check(/Packaging: gift box/.test(memorial.output.listingDraft.etsyDescription)
+    && !/8\*8\*3|\[object Object\]/.test(memorial.output.listingDraft.etsyDescription),
+  'structured packaging renders buyer-readable verified type while hiding dimensions with unknown unit');
 
   const longName = Array.from({ length: 16 }, () => 'Blanket').join(' ');
   const verifiedFallback = await adapter.buildIntelligence({

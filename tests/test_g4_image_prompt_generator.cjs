@@ -38,6 +38,15 @@ const packagingPrompt = annotatedPackaging.prompts.find(item => item.id === 'pac
 check(packagingPrompt.ready && packagingPrompt.status === 'REFERENCE_REQUIRED'
   && !/theo listing tham chiếu/i.test(packagingPrompt.prompt),
 'verified packaging prompt strips internal provenance while retaining the reference requirement');
+
+const structuredPackaging = generateImagePromptSuite({ asserted: {
+  productType: asserted('Necklace'), packaging: asserted({ type: 'gift box', dimensions: '8*8*3' }) } }, 'ETSY');
+const structuredPackagingPrompt = structuredPackaging.prompts.find(item => item.id === 'packaging_contents');
+check(structuredPackagingPrompt.ready
+  && /gift box; dimensions: 8\*8\*3/i.test(structuredPackagingPrompt.prompt)
+  && !/\[object Object\]/.test(structuredPackagingPrompt.prompt),
+'structured packaging Product Truth renders deterministically in image prompts');
+
 assert.doesNotThrow(() => evaluateListingGuard({ listing: { amazonTitle: 'Custom Necklace',
   imagePrompts: physical }, verifiedFacts: { productType: 'Custom Necklace',
   personalization: 'Custom name personalization', materials: 'stainless steel', recipient: 'daughter' } }));

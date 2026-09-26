@@ -19,7 +19,12 @@ function text(value) { return Array.isArray(value) ? value.map(text).filter(Bool
 function factText(value) {
   if (Array.isArray(value)) return value.map(factText).filter(Boolean).join(', ');
   if (value && typeof value === 'object') {
-    const entries = Object.entries(value).map(([key, child]) => [key, factText(child)]).filter(([, child]) => child);
+    const rawDimensions = value.dimensions == null ? '' : String(value.dimensions).trim();
+    const explicitUnit = value.unit == null ? '' : String(value.unit).trim();
+    const unitEmbedded = /(?:\b(?:mm|cm|m|in|inch|inches|ft|feet)\b|["′″])/i.test(rawDimensions);
+    const entries = Object.entries(value)
+      .filter(([key]) => key !== 'dimensions' || explicitUnit || unitEmbedded)
+      .map(([key, child]) => [key, factText(child)]).filter(([, child]) => child);
     if (!entries.length) return '';
     const type = entries.find(([key]) => key === 'type')?.[1] || '';
     const rest = entries.filter(([key]) => key !== 'type').map(([key, child]) => `${key}: ${child}`);

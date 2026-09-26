@@ -45,12 +45,31 @@ check(structuredPersonalizationPrompt.ready && structuredPersonalizationPrompt.s
   && /method: laser engraving/i.test(structuredPersonalizationPrompt.prompt)
   && /area: pendant front/i.test(structuredPersonalizationPrompt.prompt),
 'structured Product Truth with method and area unlocks the personalization-detail prompt');
+const optionOnlyPersonalization = generateImagePromptSuite({ asserted: {
+  productType: asserted('Necklace'), personalization: asserted(['pet name','photo','date','custom message','breed']) } }, 'ETSY');
+check(!optionOnlyPersonalization.prompts.find(item => item.id === 'personalization_detail').ready
+  && optionOnlyPersonalization.prompts.find(item => item.id === 'personalization_detail').status === 'OWNER_FACT_REQUIRED',
+  'personalization options do not masquerade as a verified method and area');
+const structuredPersonalization = generateImagePromptSuite({ asserted: {
+  productType: asserted('Necklace'), personalization: asserted({
+    method: 'laser engraving', area: 'pendant front', options: ['pet name'] }) } }, 'ETSY');
+const structuredPersonalizationPrompt = structuredPersonalization.prompts.find(item => item.id === 'personalization_detail');
+check(structuredPersonalizationPrompt.ready && structuredPersonalizationPrompt.status === 'REFERENCE_REQUIRED'
+  && /method: laser engraving/i.test(structuredPersonalizationPrompt.prompt)
+  && /area: pendant front/i.test(structuredPersonalizationPrompt.prompt),
+'structured Product Truth with method and area unlocks the personalization-detail prompt');
 const annotatedPackaging = generateImagePromptSuite({ asserted: {
   productType: asserted('Necklace'), packaging: asserted('Gift box / ready-to-gift — theo listing tham chiếu') } }, 'AMAZON');
 const packagingPrompt = annotatedPackaging.prompts.find(item => item.id === 'packaging_contents');
 check(packagingPrompt.ready && packagingPrompt.status === 'REFERENCE_REQUIRED'
   && !/theo listing tham chiếu/i.test(packagingPrompt.prompt),
 'verified packaging prompt strips internal provenance while retaining the reference requirement');
+const objectPackaging = generateImagePromptSuite({ asserted: {
+  productType: asserted('Necklace'), packaging: asserted({ dimensions: '8*8*3', type: 'gift box' }) } }, 'ETSY');
+const objectPackagingPrompt = objectPackaging.prompts.find(item => item.id === 'packaging_contents');
+check(objectPackagingPrompt.ready && /Type: gift box/i.test(objectPackagingPrompt.prompt)
+  && !/\[object Object\]/i.test(objectPackagingPrompt.prompt) && !/8\*8\*3/.test(objectPackagingPrompt.prompt),
+'structured packaging renders safely and omits unitless dimensions');
 const objectPackaging = generateImagePromptSuite({ asserted: {
   productType: asserted('Necklace'), packaging: asserted({ dimensions: '8*8*3', type: 'gift box' }) } }, 'ETSY');
 const objectPackagingPrompt = objectPackaging.prompts.find(item => item.id === 'packaging_contents');

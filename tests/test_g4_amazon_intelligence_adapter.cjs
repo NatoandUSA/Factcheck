@@ -183,6 +183,20 @@ async function main() {
   check(!q11.bullets.some(item => /^TALLA Y COLOR\b/.test(item)),
     'BA-AMZ-Q1.1 size/color heading is suppressed when only weight and quantity are verified');
 
+  const q12 = compose(q1Keywords, {
+    productType: 'Mug',
+    productName: 'Madrina - Padrino Proposal Mug',
+    recipient: 'Madrina, Padrino',
+    sizes: ['11 oz', '15 oz'],
+    colors: ['White', 'Pink', 'Light Blue', 'Red', 'Navy', 'Black', 'Light Green'],
+    personalization: 'name, year'
+  }, { labelLanguage: 'ES' });
+  const q12BuyerCopy = [q12.title.text, q12.itemHighlights.text, ...q12.bullets, q12.description].join(' ');
+  check(!/\b(?:Proposal|Mug|name|year|White|Pink|Light Blue|Red|Navy|Black|Light Green)\b/i.test(q12BuyerCopy)
+    && /Taza/i.test(q12BuyerCopy) && /nombre/i.test(q12BuyerCopy) && /año/i.test(q12BuyerCopy)
+    && /Azul claro/i.test(q12BuyerCopy) && /Azul marino/i.test(q12BuyerCopy),
+  'Fresh Acceptance mug Product Truth renders generic ES buyer values without English presentation leakage');
+
   let missingCerebro;
   try {
     await adapter.buildIntelligence({ ...input, research: { observations: { marketplace: 'AMAZON', xray: [] } } });

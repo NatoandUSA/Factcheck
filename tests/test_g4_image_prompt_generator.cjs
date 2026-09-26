@@ -32,6 +32,19 @@ const vaguePersonalization = generateImagePromptSuite({ asserted: {
 check(!vaguePersonalization.prompts.find(item => item.id === 'personalization_detail').ready
   && vaguePersonalization.prompts.find(item => item.id === 'personalization_detail').status === 'OWNER_FACT_REQUIRED',
   'boolean personalization does not claim a verified area or method');
+const fieldOnlyPersonalization = generateImagePromptSuite({ asserted: {
+  productType: asserted('Mug'), personalization: asserted(['name', 'year']) } }, 'AMAZON');
+check(!fieldOnlyPersonalization.prompts.find(item => item.id === 'personalization_detail').ready
+  && fieldOnlyPersonalization.prompts.find(item => item.id === 'personalization_detail').status === 'OWNER_FACT_REQUIRED'
+  && fieldOnlyPersonalization.prompts.find(item => item.id === 'personalization_detail').missingInputs.includes('personalization_method_and_area'),
+  'personalization fields alone do not imply a verified method or area');
+const structuredPersonalization = generateImagePromptSuite({ asserted: {
+  productType: asserted('Mug'), personalization: asserted({ method: 'printing', area: 'front print area', fields: ['name', 'year'] }) } }, 'AMAZON');
+const structuredPersonalizationPrompt = structuredPersonalization.prompts.find(item => item.id === 'personalization_detail');
+check(structuredPersonalizationPrompt.ready && structuredPersonalizationPrompt.status === 'REFERENCE_REQUIRED'
+  && /method: printing/i.test(structuredPersonalizationPrompt.prompt)
+  && /area: front print area/i.test(structuredPersonalizationPrompt.prompt),
+  'structured personalization unlocks the detail prompt only with verified method and area');
 const annotatedPackaging = generateImagePromptSuite({ asserted: {
   productType: asserted('Necklace'), packaging: asserted('Gift box / ready-to-gift — theo listing tham chiếu') } }, 'AMAZON');
 const packagingPrompt = annotatedPackaging.prompts.find(item => item.id === 'packaging_contents');

@@ -146,7 +146,8 @@ function composeTitle(truth, candidates, limit, labelLanguage = 'EN') {
   const picked = [];
   let text = clipAtWord(identity, limit);
   for (const candidate of candidates) {
-    const phrase = titleCase(candidate.phrase);
+    const visiblePhrase = labelLanguage === 'ES' ? renderBuyerValue(candidate.phrase, 'ES') : candidate.phrase;
+    const phrase = titleCase(visiblePhrase);
     const fresh = contentTokens(candidate.phrase).filter(token => !used.has(token));
     if (!fresh.length) continue;
     const next = `${text} | ${phrase}`;

@@ -2,6 +2,17 @@
 
 function text(value) {
   if (Array.isArray(value)) return value.map(text).filter(Boolean).join(', ');
+  if (value && typeof value === 'object') {
+    const rawDimensions = value.dimensions == null ? '' : String(value.dimensions).trim();
+    const explicitUnit = value.unit == null ? '' : String(value.unit).trim();
+    const unitEmbedded = /(?:\b(?:mm|cm|m|in|inch|inches|ft|feet)\b|["′″])/i.test(rawDimensions);
+    const entries = Object.entries(value)
+      .filter(([key]) => key !== 'dimensions' || explicitUnit || unitEmbedded)
+      .map(([key, child]) => [key, text(child)]).filter(([, child]) => child);
+    const type = entries.find(([key]) => key === 'type')?.[1] || '';
+    const rest = entries.filter(([key]) => key !== 'type').map(([key, child]) => `${key}: ${child}`);
+    return [type, ...rest].filter(Boolean).join('; ');
+  }
   return value == null ? '' : String(value).trim();
 }
 

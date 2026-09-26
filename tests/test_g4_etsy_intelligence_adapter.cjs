@@ -160,6 +160,42 @@ async function main() {
   passed++;
   check(adapter.composeEtsyTitle([], { productName: overlongDelimitedIdentity, productType: 'Throw Blanket' }, 'EN') === 'Throw Blanket',
     'over-limit full productName falls back only to the exact shorter verified productType');
+
+  const memorial = await adapter.buildIntelligence({
+    research: { observations: { marketplace: 'ETSY', queryContexts: ['pet memorial gift'], sellers: [] } },
+    productTruth: { snapshot: { asserted: {
+      productName: asserted('Pet memorial necklace'), productType: asserted('Necklace'),
+      materials: asserted(['Silver']), personalization: asserted(['pet name','photo','date','custom message','breed']),
+      includedItems: asserted(['1 necklace','message card','gift box']),
+      packaging: asserted({ type: 'gift box', dimensions: '8*8*3' })
+    } } }, configuration: { seedPhrase: 'pet memorial gift', listingLanguage: 'EN' },
+    masterKeywordArtifact: master([
+      'pet memorial necklace','pet memorial gift','pet loss gift','custom pet memorial','dog memorial gift',
+      'Personalised Heart Shaped Pet Memorial with Photo',
+      'Pet Fur Memorial Jar','Memorial Wind Chime','Custom Pet Portrait Suncatcher',
+      'Personalized Pet Memorial Frame','Personalized Pet Memorial Stone'
+    ], 8)
+  });
+  const memorialVisible = JSON.stringify({
+    title: memorial.output.listingDraft.etsyTitle,
+    tags: memorial.output.listingDraft.etsyTags,
+    description: memorial.output.listingDraft.etsyDescription
+  }).toLowerCase();
+  check(/pet memorial necklace/i.test(memorial.output.listingDraft.etsyTitle)
+    && /(?:pet memorial gift|pet loss gift)/i.test(memorial.output.listingDraft.etsyTitle)
+    && memorial.output.listingDraft.etsyTitle.length <= 140
+    && memorial.output.listingDraft.etsyTitle.split(/\s+/).length <= 15,
+  'English Etsy title adds only concise safe buyer intent beyond verified identity');
+  check(!/jar|wind chime|suncatcher|frame|stone/.test(memorialVisible)
+    && memorial.output.keywordAllocation.irrelevant.filter(item => item.reason === 'PRODUCT_TYPE_CONFLICT').length >= 5,
+  'memorial competitor product forms cannot contaminate a verified necklace listing');
+  check(!/heart|shaped|watercolor|\b3d\b/.test(memorialVisible)
+    && memorial.output.keywordAllocation.irrelevant.some(item => item.reason === 'UNVERIFIED_DESIGN_DESCRIPTOR'),
+  'unverified competitor design descriptors cannot become Etsy title or tag claims');
+  check(/Packaging: gift box/.test(memorial.output.listingDraft.etsyDescription)
+    && !/8\*8\*3|\[object Object\]/.test(memorial.output.listingDraft.etsyDescription),
+  'structured packaging renders buyer-readable verified type while hiding dimensions with unknown unit');
+
   const longName = Array.from({ length: 16 }, () => 'Blanket').join(' ');
   const verifiedFallback = await adapter.buildIntelligence({
     research: { observations: { marketplace: 'ETSY', queryContexts: ['throw blanket'], sellers: [] } },

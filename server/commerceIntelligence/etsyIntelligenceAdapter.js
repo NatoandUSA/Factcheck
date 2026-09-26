@@ -16,6 +16,22 @@ function factsFromSnapshot(snapshot) {
     .map(([key, assertion]) => [key, assertion?.value])));
 }
 function text(value) { return Array.isArray(value) ? value.map(text).filter(Boolean).join(', ') : value == null ? '' : String(value).trim(); }
+function factText(value) {
+  if (Array.isArray(value)) return value.map(factText).filter(Boolean).join(', ');
+  if (value && typeof value === 'object') {
+    const rawDimensions = value.dimensions == null ? '' : String(value.dimensions).trim();
+    const explicitUnit = value.unit == null ? '' : String(value.unit).trim();
+    const unitEmbedded = /(?:\b(?:mm|cm|m|in|inch|inches|ft|feet)\b|["′″])/i.test(rawDimensions);
+    const entries = Object.entries(value)
+      .filter(([key]) => key !== 'dimensions' || explicitUnit || unitEmbedded)
+      .map(([key, child]) => [key, factText(child)]).filter(([, child]) => child);
+    if (!entries.length) return '';
+    const type = entries.find(([key]) => key === 'type')?.[1] || '';
+    const rest = entries.filter(([key]) => key !== 'type').map(([key, child]) => `${key}: ${child}`);
+    return [type, ...rest].filter(Boolean).join('; ');
+  }
+  return value == null ? '' : String(value).trim();
+}
 function fold(value) { return text(value).normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase(); }
 function titleCase(value) {
   return text(value).replace(/(^|[\s,])([a-záéíóúñ])/g, (_, prefix, letter) => `${prefix}${letter.toUpperCase()}`);
@@ -25,7 +41,7 @@ const CURRENCY_OR_METRIC = /(?:[$€£¥₫₹₱₩₽฿]|\b\d+(?:[.,]\d+)?\s*
 const STOP_TOKENS = new Set(['the','and','for','with','from','this','that','para','con','del','las','los','gift','gifts','regalo','custom','option','available']);
 const PRODUCT_NOUN_GROUPS = Object.freeze({
   NECKLACE: ['necklace','collar','pendant','cadena'],
-  BRACELET: ['bracelet','bangle','pulsera'], RING: ['ring','anillo'], EARRING: ['earring','earrings','pendientes'],
+  RING: ['ring','anillo'], EARRING: ['earring','earrings','pendientes'],
   APPAREL: ['sweatshirt','sweater','hoodie','shirt','camisa','jacket'], BLANKET: ['blanket','manta'],
   HAT: ['hat','cap','gorra'], LAMP: ['lamp','light','lampara'], DRINKWARE: ['mug','cup','tumbler','vaso'],
   GAME: ['game','printable','pdf','mystery'], BAG: ['bag','backpack','mochila'],
@@ -34,12 +50,15 @@ const PRODUCT_NOUN_GROUPS = Object.freeze({
   ORNAMENT: ['ornament','decoration'], KEYCHAIN: ['keychain','keyring','llavero'],
   WALLET: ['wallet','bifold','cartera'], WATCH: ['watch','reloj'], PHONE_CASE: ['phonecase','case'],
   CANDLE: ['candle','vela'], FOOTWEAR: ['sock','socks','shoe','shoes','slipper','slippers'],
+  SUNCATCHER: ['suncatcher'], MEMORIAL_JAR: ['jar','urn'], FRAME: ['frame'], STONE: ['stone'],
+  WIND_CHIME: ['windchime','chime','chimes'], BRACELET: ['bracelet','bangle','pulsera'],
   HOME_TEXTILE: ['towel','apron'], PAPER: ['journal','notebook','card','tarjeta'],
   TOY: ['puzzle','toy','juguete'], BOTTLE: ['bottle','flask','botella']
 });
 const APPEARANCE_TOKENS = new Set(['colorful','multicolor','multicolored','red','blue','green','yellow','pink','purple',
   'orange','black','white','brown','gray','grey','rojo','roja','azul','verde','amarillo','amarilla','rosa','morado',
   'morada','negro','negra','blanco','blanca','marron','gris']);
+const DESIGN_DESCRIPTOR_TOKENS = new Set(['heart','shaped','shape','round','oval','square','rectangle','watercolor','3d']);
 const SAFE_INTENT_TOKENS = new Set(['dad','daddy','father','mom','mommy','mother','mama','family','wife','husband',
   'son','daughter','hija','hijo','sister','brother','abuela','abuelo','birthday','cumpleanos','christmas','navidad',
   'anniversary','wedding','graduation','love','amor','memorial','gift','gifts','regalo','present']);
@@ -160,6 +179,12 @@ function unverifiedProductDescriptors(candidate, facts) {
     && !PRODUCT_NOUN_TOKENS.has(token) && !SAFE_INTENT_TOKENS.has(token));
 }
 
+function unverifiedDesignDescriptors(candidate, facts) {
+  const verified = tokens([facts.productName, facts.productType, facts.style, facts.design, facts.shape,
+    facts.features, facts.capabilities, facts.personalization].map(factText).join(' '));
+  return [...tokens(candidate.phrase)].filter(token => DESIGN_DESCRIPTOR_TOKENS.has(token) && !verified.has(token));
+}
+
 function isRelevant(candidate, facts, configuration, queryContexts) {
   if (queryContexts.some(context => fold(context) === fold(candidate.phrase))) return true;
   const anchorTokens = tokens([configuration.seedPhrase, facts.productName, facts.productType,
@@ -227,7 +252,7 @@ function descriptionFromTruth(facts, title) {
     ['Size', facts.sizes || facts.dimensions], ['Included', facts.includedItems],
     ['Format', facts.fileFormat], ['Players', facts.playerCount], ['Age', facts.minimumAge],
     ['Duration', facts.duration], ['Packaging', facts.packaging], ['Care', facts.care]
-  ]) if (text(value)) lines.push(`${label}: ${text(value)}`);
+  ]) if (factText(value)) lines.push(`${label}: ${factText(value)}`);
   return lines.join('\n\n');
 }
 
@@ -283,7 +308,21 @@ function composeEtsyTitle(safe, facts, language = 'EN') {
   if (Array.from(proposed).length > ETSY_TITLE_LIMIT || proposed.split(/\s+/).filter(Boolean).length > 15) {
     return titleCase(identity);
   }
-  if (language !== 'ES') return proposed;
+  if (language !== 'ES') {
+    const clauses = [proposed];
+    const covered = tokens(proposed);
+    for (const candidate of safe) {
+      const phrase = text(candidate.phrase);
+      const roots = [...tokens(phrase)];
+      if (!phrase || !roots.length || roots.every(token => covered.has(token))) continue;
+      const next = `${clauses.join(' · ')} · ${titleCase(phrase)}`;
+      if (Array.from(next).length > ETSY_TITLE_LIMIT || next.split(/\s+/).filter(Boolean).length > 15) continue;
+      clauses.push(titleCase(phrase));
+      roots.forEach(token => covered.add(token));
+      if (clauses.length >= 3) break;
+    }
+    return clauses.join(' · ');
+  }
   const clauses = [proposed];
   const recipient = spanishCompatible(facts.recipient || facts.audience);
   if (recipient && !fold(proposed).includes(fold(recipient))) clauses.push(`para ${recipient}`);
@@ -343,7 +382,7 @@ function naturalDescription(facts, title, language) {
     ['Allergens', facts.allergens], ['Instructions', facts.instructions], ['Warranty', facts.warranty],
     ['Safety', facts.safetyWarnings || facts.safety], ['Players', facts.playerCount], ['Age', facts.minimumAge],
     ['Duration', facts.duration], ['Packaging', facts.packaging], ['Care', facts.care]]) {
-    const rendered = es ? spanishCompatible(value) : text(value);
+    const rendered = es ? spanishCompatible(value) : factText(value);
     if (rendered && !(label === 'Personalization' && /^(?:yes|true|sí|si)$/i.test(rendered)))
       details.push(`${es ? labelsEs[label] : label}: ${rendered}`);
   }
@@ -395,6 +434,9 @@ async function buildIntelligence({ research, productTruth, configuration = {}, m
     } else if (unverifiedProductDescriptors(candidate, facts).length) {
       irrelevant.push({ ...candidate, reason: 'UNVERIFIED_PRODUCT_DESCRIPTOR',
         tokens: unverifiedProductDescriptors(candidate, facts) });
+    } else if (unverifiedDesignDescriptors(candidate, facts).length) {
+      irrelevant.push({ ...candidate, reason: 'UNVERIFIED_DESIGN_DESCRIPTOR',
+        tokens: unverifiedDesignDescriptors(candidate, facts) });
     } else if (!isRelevant(candidate, facts, configuration, observations.queryContexts || [])) {
       irrelevant.push({ ...candidate, reason: 'IRRELEVANT_TO_PRODUCT_TRUTH_ANCHORS' });
     } else safe.push(candidate);
@@ -451,5 +493,5 @@ async function buildIntelligence({ research, productTruth, configuration = {}, m
 }
 
 module.exports = Object.freeze({ ENGINE_ID, buildIntelligence, candidateCorpus, engineBindingHash, factsFromSnapshot,
-  productTypeConflict, unverifiedAppearanceTokens, unverifiedProductDescriptors, languageOfPhrase,
+  productTypeConflict, unverifiedAppearanceTokens, unverifiedProductDescriptors, unverifiedDesignDescriptors, languageOfPhrase,
   languageCompatible, resolveListingLanguage, containsCompetitorShop, tagVariants, composeEtsyTitle, corpusFromMasterArtifact });

@@ -53,6 +53,7 @@ const PRODUCT_NOUN_GROUPS = Object.freeze({
 const APPEARANCE_TOKENS = new Set(['colorful','multicolor','multicolored','red','blue','green','yellow','pink','purple',
   'orange','black','white','brown','gray','grey','rojo','roja','azul','verde','amarillo','amarilla','rosa','morado',
   'morada','negro','negra','blanco','blanca','marron','gris']);
+const DESIGN_DESCRIPTOR_TOKENS = new Set(['heart','shaped','shape','round','oval','square','rectangle','watercolor','3d']);
 const SAFE_INTENT_TOKENS = new Set(['dad','daddy','father','mom','mommy','mother','mama','family','wife','husband',
   'son','daughter','hija','hijo','sister','brother','abuela','abuelo','birthday','cumpleanos','christmas','navidad',
   'anniversary','wedding','graduation','love','amor','memorial','gift','gifts','regalo','present']);
@@ -171,6 +172,12 @@ function unverifiedProductDescriptors(candidate, facts) {
   const verified = tokens(Object.values(facts).map(text).join(' '));
   return [...tokens(candidate.phrase)].filter(token => !verified.has(token)
     && !PRODUCT_NOUN_TOKENS.has(token) && !SAFE_INTENT_TOKENS.has(token));
+}
+
+function unverifiedDesignDescriptors(candidate, facts) {
+  const verified = tokens([facts.productName, facts.productType, facts.style, facts.design, facts.shape,
+    facts.features, facts.capabilities, facts.personalization].map(factText).join(' '));
+  return [...tokens(candidate.phrase)].filter(token => DESIGN_DESCRIPTOR_TOKENS.has(token) && !verified.has(token));
 }
 
 function isRelevant(candidate, facts, configuration, queryContexts) {
@@ -422,6 +429,9 @@ async function buildIntelligence({ research, productTruth, configuration = {}, m
     } else if (unverifiedProductDescriptors(candidate, facts).length) {
       irrelevant.push({ ...candidate, reason: 'UNVERIFIED_PRODUCT_DESCRIPTOR',
         tokens: unverifiedProductDescriptors(candidate, facts) });
+    } else if (unverifiedDesignDescriptors(candidate, facts).length) {
+      irrelevant.push({ ...candidate, reason: 'UNVERIFIED_DESIGN_DESCRIPTOR',
+        tokens: unverifiedDesignDescriptors(candidate, facts) });
     } else if (!isRelevant(candidate, facts, configuration, observations.queryContexts || [])) {
       irrelevant.push({ ...candidate, reason: 'IRRELEVANT_TO_PRODUCT_TRUTH_ANCHORS' });
     } else safe.push(candidate);
@@ -478,5 +488,5 @@ async function buildIntelligence({ research, productTruth, configuration = {}, m
 }
 
 module.exports = Object.freeze({ ENGINE_ID, buildIntelligence, candidateCorpus, engineBindingHash, factsFromSnapshot,
-  productTypeConflict, unverifiedAppearanceTokens, unverifiedProductDescriptors, languageOfPhrase,
+  productTypeConflict, unverifiedAppearanceTokens, unverifiedProductDescriptors, unverifiedDesignDescriptors, languageOfPhrase,
   languageCompatible, resolveListingLanguage, containsCompetitorShop, tagVariants, composeEtsyTitle, corpusFromMasterArtifact });

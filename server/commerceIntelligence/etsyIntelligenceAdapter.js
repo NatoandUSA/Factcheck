@@ -16,6 +16,17 @@ function factsFromSnapshot(snapshot) {
     .map(([key, assertion]) => [key, assertion?.value])));
 }
 function text(value) { return Array.isArray(value) ? value.map(text).filter(Boolean).join(', ') : value == null ? '' : String(value).trim(); }
+function factText(value) {
+  if (Array.isArray(value)) return value.map(factText).filter(Boolean).join(', ');
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value).map(([key, child]) => [key, factText(child)]).filter(([, child]) => child);
+    if (!entries.length) return '';
+    const type = entries.find(([key]) => key === 'type')?.[1] || '';
+    const rest = entries.filter(([key]) => key !== 'type').map(([key, child]) => `${key}: ${child}`);
+    return [type, ...rest].filter(Boolean).join('; ');
+  }
+  return value == null ? '' : String(value).trim();
+}
 function fold(value) { return text(value).normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase(); }
 function titleCase(value) {
   return text(value).replace(/(^|[\s,])([a-záéíóúñ])/g, (_, prefix, letter) => `${prefix}${letter.toUpperCase()}`);
@@ -25,7 +36,7 @@ const CURRENCY_OR_METRIC = /(?:[$€£¥₫₹₱₩₽฿]|\b\d+(?:[.,]\d+)?\s*
 const STOP_TOKENS = new Set(['the','and','for','with','from','this','that','para','con','del','las','los','gift','gifts','regalo','custom','option','available']);
 const PRODUCT_NOUN_GROUPS = Object.freeze({
   NECKLACE: ['necklace','collar','pendant','cadena'],
-  BRACELET: ['bracelet','bangle','pulsera'], RING: ['ring','anillo'], EARRING: ['earring','earrings','pendientes'],
+  RING: ['ring','anillo'], EARRING: ['earring','earrings','pendientes'],
   APPAREL: ['sweatshirt','sweater','hoodie','shirt','camisa','jacket'], BLANKET: ['blanket','manta'],
   HAT: ['hat','cap','gorra'], LAMP: ['lamp','light','lampara'], DRINKWARE: ['mug','cup','tumbler','vaso'],
   GAME: ['game','printable','pdf','mystery'], BAG: ['bag','backpack','mochila'],
@@ -34,6 +45,8 @@ const PRODUCT_NOUN_GROUPS = Object.freeze({
   ORNAMENT: ['ornament','decoration'], KEYCHAIN: ['keychain','keyring','llavero'],
   WALLET: ['wallet','bifold','cartera'], WATCH: ['watch','reloj'], PHONE_CASE: ['phonecase','case'],
   CANDLE: ['candle','vela'], FOOTWEAR: ['sock','socks','shoe','shoes','slipper','slippers'],
+  SUNCATCHER: ['suncatcher'], MEMORIAL_JAR: ['jar','urn'], FRAME: ['frame'], STONE: ['stone'],
+  WIND_CHIME: ['windchime','chime','chimes'], BRACELET: ['bracelet','bangle','pulsera'],
   HOME_TEXTILE: ['towel','apron'], PAPER: ['journal','notebook','card','tarjeta'],
   TOY: ['puzzle','toy','juguete'], BOTTLE: ['bottle','flask','botella']
 });
@@ -227,7 +240,7 @@ function descriptionFromTruth(facts, title) {
     ['Size', facts.sizes || facts.dimensions], ['Included', facts.includedItems],
     ['Format', facts.fileFormat], ['Players', facts.playerCount], ['Age', facts.minimumAge],
     ['Duration', facts.duration], ['Packaging', facts.packaging], ['Care', facts.care]
-  ]) if (text(value)) lines.push(`${label}: ${text(value)}`);
+  ]) if (factText(value)) lines.push(`${label}: ${factText(value)}`);
   return lines.join('\n\n');
 }
 
@@ -283,7 +296,21 @@ function composeEtsyTitle(safe, facts, language = 'EN') {
   if (Array.from(proposed).length > ETSY_TITLE_LIMIT || proposed.split(/\s+/).filter(Boolean).length > 15) {
     return titleCase(identity);
   }
-  if (language !== 'ES') return proposed;
+  if (language !== 'ES') {
+    const clauses = [proposed];
+    const covered = tokens(proposed);
+    for (const candidate of safe) {
+      const phrase = text(candidate.phrase);
+      const roots = [...tokens(phrase)];
+      if (!phrase || !roots.length || roots.every(token => covered.has(token))) continue;
+      const next = `${clauses.join(' · ')} · ${titleCase(phrase)}`;
+      if (Array.from(next).length > ETSY_TITLE_LIMIT || next.split(/\s+/).filter(Boolean).length > 15) continue;
+      clauses.push(titleCase(phrase));
+      roots.forEach(token => covered.add(token));
+      if (clauses.length >= 3) break;
+    }
+    return clauses.join(' · ');
+  }
   const clauses = [proposed];
   const recipient = spanishCompatible(facts.recipient || facts.audience);
   if (recipient && !fold(proposed).includes(fold(recipient))) clauses.push(`para ${recipient}`);
@@ -343,7 +370,7 @@ function naturalDescription(facts, title, language) {
     ['Allergens', facts.allergens], ['Instructions', facts.instructions], ['Warranty', facts.warranty],
     ['Safety', facts.safetyWarnings || facts.safety], ['Players', facts.playerCount], ['Age', facts.minimumAge],
     ['Duration', facts.duration], ['Packaging', facts.packaging], ['Care', facts.care]]) {
-    const rendered = es ? spanishCompatible(value) : text(value);
+    const rendered = es ? spanishCompatible(value) : factText(value);
     if (rendered && !(label === 'Personalization' && /^(?:yes|true|sí|si)$/i.test(rendered)))
       details.push(`${es ? labelsEs[label] : label}: ${rendered}`);
   }

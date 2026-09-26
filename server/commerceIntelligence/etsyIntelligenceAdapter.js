@@ -110,8 +110,9 @@ function tagVariants(value) {
     .replace(/[^\p{L}\p{N}\s'-]+/gu, ' ').replace(/(^|\s)['-]+|['-]+(?=\s|$)/g, ' ')
     .replace(/\s+/g, ' ').trim()).filter(Boolean);
   const variants = [];
-  const badStart = new Set(['and','con','de','del','en','from','of','the']);
-  const badEnd = new Set(['a','and','con','de','del','en','for','from','mi','of','para','to']);
+  const badStart = new Set(['and','con','de','del','en','from','of','the','shaped']);
+  const badEnd = new Set(['a','and','con','de','del','en','for','from','mi','of','para','to',
+    'custom','personalized','personalised','personalizado','personalizada']);
   for (const phrase of segments) {
     const words = phrase.split(' ');
     const meaningful = tokens(phrase).size > 0 && !badStart.has(fold(words[0])) && !badEnd.has(fold(words.at(-1)));
@@ -155,6 +156,11 @@ function unverifiedAppearanceTokens(candidate, facts) {
 }
 
 function unverifiedProductDescriptors(candidate, facts) {
+  const phrase = fold(candidate.phrase);
+  const verifiedText = fold(Object.values(facts).map(text).join(' '));
+  const explicit = [];
+  if (/\bheart[ -]+shaped\b/.test(phrase) && !/\bheart[ -]+shaped\b/.test(verifiedText)) explicit.push('heart shaped');
+  if (explicit.length) return explicit;
   const candidateGroups = productGroups(candidate.phrase);
   if (!candidateGroups.size) return [];
   const verified = tokens(Object.values(facts).map(text).join(' '));
@@ -307,7 +313,9 @@ function composeEtsyTitle(safe, facts, language = 'EN') {
   const ranked = safe.map(candidate => {
     const phrase = text(candidate.phrase);
     const words = phrase.split(/\s+/).filter(Boolean);
-    if (!phrase || !languageCompatible(phrase, 'EN') || words.length > 5 || Array.from(phrase).length > 40) return null;
+    const intent = candidateIntent(candidate);
+    if (!['GIFT_INTENT','RECIPIENT','OCCASION'].includes(intent)
+      || !phrase || !languageCompatible(phrase, 'EN') || words.length > 5 || Array.from(phrase).length > 40) return null;
     const phraseTokens = [...tokens(phrase)];
     const missing = phraseTokens.filter(token => !identityTokens.has(token));
     if (!missing.length) return null;

@@ -188,6 +188,9 @@ async function main() {
   check(!/jar|wind chime|suncatcher|frame|stone/.test(memorialVisible)
     && memorial.output.keywordAllocation.irrelevant.filter(item => item.reason === 'PRODUCT_TYPE_CONFLICT').length >= 5,
   'memorial competitor product forms cannot contaminate a verified necklace listing');
+  check(!/heart|shaped|watercolor|\b3d\b/.test(memorialVisible)
+    && memorial.output.keywordAllocation.irrelevant.some(item => item.reason === 'UNVERIFIED_DESIGN_DESCRIPTOR'),
+  'unverified competitor design descriptors cannot become Etsy title or tag claims');
   check(/Packaging: gift box; dimensions: 8\*8\*3/.test(memorial.output.listingDraft.etsyDescription)
     && !/\[object Object\]/.test(memorial.output.listingDraft.etsyDescription),
   'structured packaging Product Truth renders as buyer-readable text instead of object coercion');

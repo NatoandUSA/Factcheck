@@ -135,9 +135,10 @@ async function main() {
     && petDraft.etsyTitle.length <= 140 && petDraft.etsyTitle.split(/\s+/).length <= 15,
   'English Etsy title adds concise safe buyer-intent clauses instead of stopping at Product Truth identity');
   check(!/wind|chime|jar|heart shaped/i.test(JSON.stringify(petDraft.etsyTags))
-    && petDraft.etsyTags.some(tag => /pet memorial gift/i.test(tag))
+    && petDraft.etsyTags.some(tag => /pet memorial/i.test(tag))
+    && petDraft.etsyTags.some(tag => /memorial gift/i.test(tag))
     && petDraft.etsyTags.some(tag => /pet loss gift/i.test(tag)),
-  'Etsy tags keep safe memorial intent while excluding sibling products and unsupported shape claims');
+  'Etsy tags preserve pet-memorial gift intent semantically while excluding sibling products and unsupported shape claims');
   check(petMemorial.output.keywordAllocation.irrelevant.some(item => item.phrase === 'Pet Memorial Wind Chime Gift'
     && item.reason === 'PRODUCT_TYPE_CONFLICT')
     && petMemorial.output.keywordAllocation.irrelevant.some(item => item.phrase === 'Custom Pet Fur Memorial Jar'

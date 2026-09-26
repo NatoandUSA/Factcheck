@@ -42,8 +42,20 @@ function physicalPrompts(facts, marketplace) {
   const occasion = promptFact(facts.occasion);
   const materials = promptFact(facts.materials || facts.composition);
   const dimensions = promptFact(facts.sizes || facts.dimensions);
-  const personalization = promptFact(facts.personalization);
-  const personalizationSpecified = personalization && !/^(?:yes|true|si|sí|có|personalized|personalizado)$/i.test(personalization);
+  const personalizationValue = facts.personalization;
+  const personalizationRecord = personalizationValue && typeof personalizationValue === 'object' && !Array.isArray(personalizationValue)
+    ? personalizationValue : null;
+  const personalizationMethod = personalizationRecord ? promptFact(personalizationRecord.method) : '';
+  const personalizationArea = personalizationRecord
+    ? promptFact(personalizationRecord.area || personalizationRecord.location || personalizationRecord.placement) : '';
+  const personalizationFields = personalizationRecord
+    ? promptFact(personalizationRecord.fields || personalizationRecord.options) : '';
+  const personalizationSpecified = Boolean(personalizationMethod && personalizationArea);
+  const personalizationDetail = [
+    personalizationMethod && `method: ${personalizationMethod}`,
+    personalizationArea && `area: ${personalizationArea}`,
+    personalizationFields && `fields: ${personalizationFields}`
+  ].filter(Boolean).join('; ');
   const packaging = promptFact(facts.packaging);
   const base = referenceRule(identity);
   const mainRatio = marketplace === 'ETSY' ? '1:1' : '1:1';
@@ -56,7 +68,7 @@ function physicalPrompts(facts, marketplace) {
       ? `${base} Produce a macro detail showing only this verified material information: ${materials}. Preserve the real texture and finish. No added text.` : '',
     materials ? [] : ['materials']),
     prompt('personalization_detail', 'Personalization detail', '1:1', personalizationSpecified
-      ? `${base} Show a close detail of the verified personalization area and method: ${personalization}. Preserve spelling and layout from the supplied personalization reference. No added text.` : '',
+      ? `${base} Show a close detail using only this verified personalization method and area: ${personalizationDetail}. Preserve spelling and layout from the supplied personalization reference. No added text.` : '',
     personalizationSpecified ? [] : ['personalization_method_and_area']),
     prompt('scale_dimensions', 'Scale and dimensions', '4:5', dimensions
       ? `${base} Create a clean scale image using only these verified measurements: ${dimensions}. Any dimension labels must reproduce those values exactly. Do not infer measurements.` : '',

@@ -171,6 +171,7 @@ async function main() {
     } } }, configuration: { seedPhrase: 'pet memorial gift', listingLanguage: 'EN' },
     masterKeywordArtifact: master([
       'pet memorial gift','pet loss gift','custom pet memorial','dog memorial gift',
+      'Personalised Heart Shaped Pet Memorial with Photo',
       'Pet Fur Memorial Jar','Memorial Wind Chime','Custom Pet Portrait Suncatcher',
       'Personalized Pet Memorial Frame','Personalized Pet Memorial Stone'
     ], 8)

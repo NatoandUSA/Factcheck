@@ -43,9 +43,9 @@ const structuredPackaging = generateImagePromptSuite({ asserted: {
   productType: asserted('Necklace'), packaging: asserted({ type: 'gift box', dimensions: '8*8*3' }) } }, 'ETSY');
 const structuredPackagingPrompt = structuredPackaging.prompts.find(item => item.id === 'packaging_contents');
 check(structuredPackagingPrompt.ready
-  && /gift box; dimensions: 8\*8\*3/i.test(structuredPackagingPrompt.prompt)
-  && !/\[object Object\]/.test(structuredPackagingPrompt.prompt),
-'structured packaging Product Truth renders deterministically in image prompts');
+  && /gift box/i.test(structuredPackagingPrompt.prompt)
+  && !/8\*8\*3|\[object Object\]/.test(structuredPackagingPrompt.prompt),
+'structured packaging prompt keeps verified type and hides dimensions whose unit is not verified');
 
 assert.doesNotThrow(() => evaluateListingGuard({ listing: { amazonTitle: 'Custom Necklace',
   imagePrompts: physical }, verifiedFacts: { productType: 'Custom Necklace',

@@ -99,6 +99,63 @@ async function main() {
   'unsupported style descriptors cannot enter copy until Product Truth supplies them');
   check(adapter.unverifiedProductDescriptors({ phrase: 'Floral Striped Pillow' }, { productType: 'Personalized Pillow',
     style: 'floral striped' }).length === 0, 'Product Truth style fields can explicitly unlock matching descriptors');
+
+  const petKeywords = [
+    ['pet memorial necklace','PRODUCT_OR_MODIFIER'],
+    ['pet memorial gift','GIFT_INTENT'],
+    ['Pet Sympathy Gift','GIFT_INTENT'],
+    ['pet loss gift','GIFT_INTENT'],
+    ['memorial necklace','PRODUCT_OR_MODIFIER'],
+    ['custom pet necklace','PERSONALIZATION'],
+    ['Pet Memorial Wind Chime Gift','GIFT_INTENT'],
+    ['Custom Pet Fur Memorial Jar','PERSONALIZATION'],
+    ['Personalised Heart Shaped Pet Memorial with Photo','PERSONALIZATION'],
+    ['pet photo','PRODUCT_OR_MODIFIER'],
+    ['memorial keepsake','PRODUCT_OR_MODIFIER']
+  ];
+  const petMaster = { id: 8, kind: 'ETSY_MASTER_KEYWORDS', artifactHash: '8'.repeat(64), revisionNumber: 1,
+    payload: { keywords: petKeywords.map(([phrase, intent], index) => ({
+      keywordId: `PET-KW-${index + 1}`, phrase, priorityRank: index + 1, score: 100 - index,
+      tier: 'PRIMARY', intent, semanticCluster: phrase.toLowerCase(), listingSpread: 2,
+      provenance: [{ sourceType: 'TEST', evidenceTier: 'E1_OBSERVED_PUBLIC', confidence: 0.8 }]
+    })) } };
+  const petMemorial = await adapter.buildIntelligence({
+    research: { observations: { marketplace: 'ETSY', queryContexts: ['pet memorial gift'], sellers: [] } },
+    productTruth: { snapshot: { asserted: {
+      productName: asserted('Pet memorial necklace'), productType: asserted('Necklace'),
+      materials: asserted(['Silver']), personalization: asserted(['pet name','photo','date','custom message','breed']),
+      includedItems: asserted(['1 necklace','message card','gift box']),
+      packaging: asserted({ dimensions: '8*8*3', type: 'gift box' })
+    } } }, configuration: { seedPhrase: 'pet memorial gift', listingLanguage: 'EN' },
+    masterKeywordArtifact: petMaster
+  });
+  const petDraft = petMemorial.output.listingDraft;
+  check(/Pet Sympathy Gift/.test(petDraft.etsyTitle) && /Pet Loss Gift/.test(petDraft.etsyTitle)
+    && petDraft.etsyTitle.length > 'Personalized Pet Memorial Necklace'.length
+    && petDraft.etsyTitle.length <= 140 && petDraft.etsyTitle.split(/\s+/).length <= 15,
+  'English Etsy title adds concise safe buyer-intent clauses instead of stopping at Product Truth identity');
+  check(!/wind|chime|jar|heart shaped/i.test(JSON.stringify(petDraft.etsyTags))
+    && petDraft.etsyTags.some(tag => /pet memorial gift/i.test(tag))
+    && petDraft.etsyTags.some(tag => /pet loss gift/i.test(tag)),
+  'Etsy tags keep safe memorial intent while excluding sibling products and unsupported shape claims');
+  check(petMemorial.output.keywordAllocation.irrelevant.some(item => item.phrase === 'Pet Memorial Wind Chime Gift'
+    && item.reason === 'PRODUCT_TYPE_CONFLICT')
+    && petMemorial.output.keywordAllocation.irrelevant.some(item => item.phrase === 'Custom Pet Fur Memorial Jar'
+      && item.reason === 'PRODUCT_TYPE_CONFLICT')
+    && petMemorial.output.keywordAllocation.irrelevant.some(item => item.phrase === 'Personalised Heart Shaped Pet Memorial with Photo'
+      && item.reason === 'UNVERIFIED_PRODUCT_DESCRIPTOR'),
+  'pet-memorial competitor product forms are dispositioned instead of leaking into listing copy');
+  check(/Packaging: Type: gift box/.test(petDraft.etsyDescription)
+    && !/\[object Object\]|8\*8\*3/.test(petDraft.etsyDescription),
+  'structured packaging renders buyer-safe text and suppresses unitless dimensions');
+  const petPersonalizationPrompt = petDraft.imagePrompts.prompts.find(item => item.id === 'personalization_detail');
+  const petPackagingPrompt = petDraft.imagePrompts.prompts.find(item => item.id === 'packaging_contents');
+  check(!petPersonalizationPrompt.ready && petPersonalizationPrompt.status === 'OWNER_FACT_REQUIRED'
+    && petPersonalizationPrompt.missingInputs.includes('personalization_method_and_area'),
+  'personalization options alone do not unlock a method-and-area image prompt');
+  check(petPackagingPrompt.ready && /Type: gift box/i.test(petPackagingPrompt.prompt)
+    && !/\[object Object\]|8\*8\*3/.test(petPackagingPrompt.prompt),
+  'packaging image prompt renders structured facts without unitless-dimension leakage');
   const automaticSpanish = await adapter.buildIntelligence({
     research: { observations: { marketplace: 'ETSY', queryContexts: ['para mi hija'], sellers: [
       { listingId: 'auto-es-1', sourceRank: 1, title: 'Collar para mi hija',
